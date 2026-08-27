@@ -748,7 +748,7 @@ export class MarketChartPage implements OnInit {
     if (wanted && available.includes(wanted)) {
       this.interval.set(wanted);
     } else if (available.length && !available.includes(this.interval())) {
-      this.interval.set(available.includes('1h') ? '1h' : available[0]!);
+      this.interval.set(available.includes('1h') ? '1h' : available[0]);
     }
 
     const botId = query.get('bot');
@@ -841,7 +841,9 @@ export class MarketChartPage implements OnInit {
       // Nunca sobre una serie vacia: mientras la carga completa esta en vuelo,
       // fusionar las dos velas pintaria un grafico de dos barras y, al llegar
       // la serie, un salto. Se espera a tenerla.
-      this.candles.update((prev) => (prev.length ? this.data.merge(prev, tail, this.keepBars()) : prev));
+      this.candles.update((prev) =>
+        prev.length ? this.data.merge(prev, tail, this.keepBars()) : prev,
+      );
     } catch {
       /* el gráfico sigue con lo que tiene; el stream manda */
     }
@@ -891,8 +893,8 @@ export class MarketChartPage implements OnInit {
       const desde = Date.now() - 86_400_000;
       const ventana = velas.filter((c) => c.t >= desde);
       if (ventana.length === 0) return;
-      let high = ventana[0]!.h;
-      let low = ventana[0]!.l;
+      let high = ventana[0].h;
+      let low = ventana[0].l;
       for (const c of ventana) {
         if (Number(c.h) > Number(high)) high = c.h;
         if (Number(c.l) < Number(low)) low = c.l;
@@ -992,7 +994,7 @@ export class MarketChartPage implements OnInit {
       // —`bucketOf` coloca los marcadores de ejecución por bisección sobre los
       // tiempos de las barras y los pondría al lado equivocado—.
       const span = candleSpanMs(this.interval());
-      const hueco = data.length > 0 && data[0]!.t > prev[prev.length - 1]!.t + span;
+      const hueco = data.length > 0 && data[0].t > prev[prev.length - 1].t + span;
       if (hueco) {
         this.candles.set(data);
         this.resetHistoryPaging();

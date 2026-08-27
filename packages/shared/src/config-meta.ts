@@ -13,14 +13,7 @@ export const Mutability = { HOT: 'HOT', WARM: 'WARM', COLD: 'COLD' } as const;
 export type Mutability = (typeof Mutability)[keyof typeof Mutability];
 
 export type FieldKind =
-  | 'number'
-  | 'percent'
-  | 'money'
-  | 'integer'
-  | 'boolean'
-  | 'enum'
-  | 'price'
-  | 'text';
+  'number' | 'percent' | 'money' | 'integer' | 'boolean' | 'enum' | 'price' | 'text';
 
 /**
  * Sección del formulario en la que cae el campo. La app agrupa por aquí, así que

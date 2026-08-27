@@ -40,9 +40,7 @@ export function checkInterval<T extends CandleInterval>(
   // que incumple una regla conocida de antemano. Así no se reintenta sola.
   throw new ExchangeError(
     'RULES',
-    `${venue} no sirve velas de ${interval}. Intervalos disponibles: ` +
-      intervals.join(', ') +
-      '.',
+    `${venue} no sirve velas de ${interval}. Intervalos disponibles: ` + intervals.join(', ') + '.',
     venue,
   );
 }

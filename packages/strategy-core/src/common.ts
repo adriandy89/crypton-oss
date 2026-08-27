@@ -205,9 +205,7 @@ export function validateCommon(config: CommonBotConfig, market: MarketSpec): Val
     );
   } else if (lev > 10) {
     const move = (100 / lev).toFixed(1);
-    issues.push(
-      warn('leverage', lev + 'x liquida con un movimiento adverso de ~' + move + ' %.'),
-    );
+    issues.push(warn('leverage', lev + 'x liquida con un movimiento adverso de ~' + move + ' %.'));
   }
 
   const total = D(config.totalInvestment ?? 0);
@@ -233,7 +231,9 @@ export function validateCommon(config: CommonBotConfig, market: MarketSpec): Val
   }
 
   if (!market.active) {
-    issues.push(err('symbol', 'El mercado ' + market.symbol + ' no esta activo en ' + market.venue));
+    issues.push(
+      err('symbol', 'El mercado ' + market.symbol + ' no esta activo en ' + market.venue),
+    );
   }
 
   return issues;
@@ -395,4 +395,5 @@ export const positionSize = (ctx: { position: { qty: string } | null }): Decimal
  * Config con acceso indexado. Las estrategias declaran su propia interfaz y la
  * validan; este alias solo evita castings ruidosos en los puntos de entrada.
  */
+// eslint-disable-next-line @typescript-eslint/no-explicit-any -- valvula de escape documentada arriba
 export type AnyConfig = BotConfig & Record<string, any>;

@@ -99,7 +99,8 @@ export const MARKET_MAKER_GUIDE: StrategyGuide<MarketMakerConfig> = {
     },
     sellDistanceBps: {
       what: 'A cuantos puntos básicos por encima del precio medio se coloca la venta.',
-      affects: 'El espejo de la distancia de compra. Las dos juntas definen lo que cobras por vuelta completa.',
+      affects:
+        'El espejo de la distancia de compra. Las dos juntas definen lo que cobras por vuelta completa.',
       tip: 'Simétricas si quieres neutralidad de verdad.',
     },
     minAllowedDistanceBps: {
@@ -234,7 +235,8 @@ export const MARKET_MAKER_GUIDE: StrategyGuide<MarketMakerConfig> = {
     },
     priceCeiling: {
       what: 'Por encima de este precio el bot solo reduce, no abre.',
-      affects: 'Desactiva el lado vendedor cuando el precio sube por encima de donde ya no quieres seguir vendiendo.',
+      affects:
+        'Desactiva el lado vendedor cuando el precio sube por encima de donde ya no quieres seguir vendiendo.',
     },
   },
 };

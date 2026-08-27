@@ -37,10 +37,7 @@ export class AdvisorController {
       'contra la spec del mercado y los límites del usuario, con el peor caso ' +
       'calculado. No crea nada: rellena el formulario.',
   })
-  suggest(
-    @GetUserInfo() user: SessionUser,
-    @Body() dto: RecommendDto,
-  ): Promise<RecommendationSet> {
+  suggest(@GetUserInfo() user: SessionUser, @Body() dto: RecommendDto): Promise<RecommendationSet> {
     return this.advisor.suggest(user.id, dto);
   }
 }

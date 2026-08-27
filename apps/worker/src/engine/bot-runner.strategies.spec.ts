@@ -796,7 +796,7 @@ describe('Market Maker V2 en el simulador', () => {
     await settle();
 
     expect(h.fairFeed.acquired).toHaveLength(1);
-    expect(h.fairFeed.acquired[0]!.source).toBe('BINANCE');
+    expect(h.fairFeed.acquired[0].source).toBe('BINANCE');
     expect((await book(h.sim)).length).toBeGreaterThan(0);
 
     await h.runner.dispose();
@@ -817,10 +817,7 @@ describe('Market Maker V2 en el simulador', () => {
     expect(h.fairFeed.acquired).toHaveLength(0);
     expect((await book(h.sim)).length).toBeGreaterThan(0);
 
-    await h.runner.reloadConfig(
-      { ...CONFIG, priceSource: 'BINANCE' } as never,
-      'HOT',
-    );
+    await h.runner.reloadConfig({ ...CONFIG, priceSource: 'BINANCE' } as never, 'HOT');
     await settle(150);
 
     expect(h.fairFeed.acquired).toHaveLength(1);
@@ -842,7 +839,7 @@ describe('Market Maker V2 en el simulador', () => {
 
     await h.runner.start();
     await settle();
-    const primera = [...h.fairFeed.live][0]!;
+    const primera = [...h.fairFeed.live][0];
 
     await h.runner.reloadConfig(
       { ...CONFIG, priceSource: 'BINANCE', sourceSymbolOverride: 'WBTCUSDT' } as never,
@@ -852,7 +849,7 @@ describe('Market Maker V2 en el simulador', () => {
 
     expect(h.fairFeed.released).toContain(primera);
     expect(h.fairFeed.live.size).toBe(1);
-    expect(h.fairFeed.acquired[1]!.override).toBe('WBTCUSDT');
+    expect(h.fairFeed.acquired[1].override).toBe('WBTCUSDT');
 
     await h.runner.dispose();
   });

@@ -36,13 +36,9 @@ export class TokenService {
     // Sin default: un secreto de firma ausente debe impedir el arranque, no
     // degradarse a uno público. Ver `requireSecret`.
     this.accessSecret = requireSecret(config, 'JWT_ACCESS_SECRET');
-    this.accessTtlSec = this.ttlToSeconds(
-      config.get<string>('JWT_ACCESS_TTL', '15m'),
-    );
+    this.accessTtlSec = this.ttlToSeconds(config.get<string>('JWT_ACCESS_TTL', '15m'));
     this.refreshSecret = requireSecret(config, 'JWT_REFRESH_SECRET');
-    this.refreshTtlSec = this.ttlToSeconds(
-      config.get<string>('JWT_REFRESH_TTL', '30d'),
-    );
+    this.refreshTtlSec = this.ttlToSeconds(config.get<string>('JWT_REFRESH_TTL', '30d'));
   }
 
   private ttlToSeconds(ttl: string): number {
@@ -73,9 +69,7 @@ export class TokenService {
   }
 
   /** New family (used at signin). */
-  async issuePair(
-    user: SessionUser,
-  ): Promise<{ accessToken: string; refreshToken: string }> {
+  async issuePair(user: SessionUser): Promise<{ accessToken: string; refreshToken: string }> {
     const fam = randomUUID();
     await this.cache.set(famKey(fam), user.id, this.refreshTtlSec);
     await this.cache.sAdd(userFamsKey(user.id), fam);
@@ -97,9 +91,7 @@ export class TokenService {
    * Rotate a refresh token. Returns the verified user id + family so the
    * caller can re-load fresh claims and call reissue().
    */
-  async consumeRefresh(
-    refreshToken: string,
-  ): Promise<{ sub: string; fam: string }> {
+  async consumeRefresh(refreshToken: string): Promise<{ sub: string; fam: string }> {
     let payload: RefreshPayload;
     try {
       payload = await this.jwt.verifyAsync<RefreshPayload>(refreshToken, {
@@ -108,9 +100,7 @@ export class TokenService {
     } catch {
       throw new UnauthorizedException('invalid_refresh');
     }
-    const stored = await this.cache.getDel<{ sub: string; fam: string }>(
-      rtKey(payload.jti),
-    );
+    const stored = await this.cache.getDel<{ sub: string; fam: string }>(rtKey(payload.jti));
     if (!stored) {
       // jti unknown/already used: if the family is still alive this is reuse — kill it all.
       if (await this.cache.exists(famKey(payload.fam))) {

@@ -1,0 +1,9 @@
+{
+  // Para lintar, no para compilar. Amplia el de compilacion con los ficheros que
+  // este deja fuera —`prisma.config.ts` y la semilla— porque son codigo escrito a
+  // mano y merecen revision, aunque no entren en dist/. `generated/` no aparece:
+  // lo emite Prisma y el eslint.config lo ignora aparte.
+  "extends": "./tsconfig.json",
+  "include": ["src/**/*.ts", "prisma/**/*.ts", "prisma.config.ts"],
+  "exclude": ["node_modules", "dist", "generated"]
+}

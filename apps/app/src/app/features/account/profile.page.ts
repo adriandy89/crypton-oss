@@ -158,8 +158,8 @@ const ZONAS = [
             </ion-select>
           </ion-item>
           <ion-note class="aviso">
-            La moneda cambia cómo se muestran los importes, no con qué opera el
-            bot: eso lo decide el mercado que elijas.
+            La moneda cambia cómo se muestran los importes, no con qué opera el bot: eso lo decide
+            el mercado que elijas.
           </ion-note>
         </ion-list>
 
@@ -179,7 +179,11 @@ const ZONAS = [
 
         <div class="acciones">
           <ion-button expand="block" [disabled]="!puedeGuardar()" (click)="guardar()">
-            @if (guardando()) { <ion-spinner name="crescent" /> } @else { Guardar cambios }
+            @if (guardando()) {
+              <ion-spinner name="crescent" />
+            } @else {
+              Guardar cambios
+            }
           </ion-button>
           @if (cambiado() && !nombreValido()) {
             <ion-note class="error">El nombre no puede quedarse vacío.</ion-note>

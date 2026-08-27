@@ -347,9 +347,9 @@ describe('Lighter WebSocket — los casos que el venue no deja provocar', () => 
 
     dos.unsubscribe();
     await ESPERA(200);
-    expect(
-      recibidos.some((r) => r.includes('"unsubscribe"') && r.includes('candle/1/1m')),
-    ).toBe(true);
+    expect(recibidos.some((r) => r.includes('"unsubscribe"') && r.includes('candle/1/1m'))).toBe(
+      true,
+    );
   });
 
   /** El venue manda los errores SIN campo `type`. Un enrutador por `type` los tira. */

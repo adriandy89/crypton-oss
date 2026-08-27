@@ -42,20 +42,23 @@ function laAceptaElVenue(market: MarketSpec, priceCrudo: string, qty: string): b
   return true;
 }
 
-const salida = (qty: string, price: string): DesiredOrder =>
-  ({
-    clientOrderId: 'tp',
-    levelKind: 'TAKE_PROFIT',
-    levelIndex: 0,
-    side: 'SELL',
-    type: 'LIMIT',
-    price,
-    qty,
-    reduceOnly: true,
-  }) as DesiredOrder;
+const salida = (qty: string, price: string): DesiredOrder => ({
+  clientOrderId: 'tp',
+  levelKind: 'TAKE_PROFIT',
+  levelIndex: 0,
+  side: 'SELL',
+  type: 'LIMIT',
+  price,
+  qty,
+  reduceOnly: true,
+});
 
-const entrada = (qty: string, price: string): DesiredOrder =>
-  ({ ...salida(qty, price), levelKind: 'SAFETY', side: 'BUY', reduceOnly: false }) as DesiredOrder;
+const entrada = (qty: string, price: string): DesiredOrder => ({
+  ...salida(qty, price),
+  levelKind: 'SAFETY',
+  side: 'BUY',
+  reduceOnly: false,
+});
 
 /** La cantidad más pequeña que ese venue sí aceptaría a ese precio. */
 function minimoViable(market: MarketSpec, price: string): string {

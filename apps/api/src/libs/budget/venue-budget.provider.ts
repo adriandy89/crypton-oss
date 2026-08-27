@@ -1,10 +1,6 @@
 import { Injectable, Logger } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
-import {
-  MemoryVenueBudget,
-  RedisVenueBudget,
-  type VenueBudget,
-} from '@crypton/exchange-core';
+import { MemoryVenueBudget, RedisVenueBudget, type VenueBudget } from '@crypton/exchange-core';
 import { BusService } from '../bus';
 
 /**

@@ -11,7 +11,7 @@ import { createPublicAdapter } from './factory';
 
 /** ConfigService de mentira: un mapa con el mismo contrato de `get`. */
 const config = (valores: Record<string, string>): ConfigLike => ({
-  get: <T = string,>(key: string, fallback?: T): T =>
+  get: <T = string>(key: string, fallback?: T): T =>
     (valores[key] as unknown as T) ?? (fallback as T),
 });
 

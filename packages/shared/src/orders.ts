@@ -124,12 +124,7 @@ export interface Fill {
  * venue castiga.
  */
 export type ExchangeErrorKind =
-  | 'RETRYABLE'
-  | 'THROTTLED'
-  | 'RULES'
-  | 'INSUFFICIENT_FUNDS'
-  | 'AUTH'
-  | 'FATAL';
+  'RETRYABLE' | 'THROTTLED' | 'RULES' | 'INSUFFICIENT_FUNDS' | 'AUTH' | 'FATAL';
 
 export class ExchangeError extends Error {
   constructor(

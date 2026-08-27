@@ -25,9 +25,15 @@ export async function getJson<T>(url: string, timeoutMs: number, signal?: AbortS
   } catch (e) {
     if (e instanceof ExchangeError) throw e;
     if ((e as Error).name === 'AbortError') {
-      throw new ExchangeError('RETRYABLE', `La fuente de histórico no respondió en ${timeoutMs} ms.`);
+      throw new ExchangeError(
+        'RETRYABLE',
+        `La fuente de histórico no respondió en ${timeoutMs} ms.`,
+      );
     }
-    throw new ExchangeError('RETRYABLE', `No se pudo hablar con la fuente de histórico: ${(e as Error).message}`);
+    throw new ExchangeError(
+      'RETRYABLE',
+      `No se pudo hablar con la fuente de histórico: ${(e as Error).message}`,
+    );
   } finally {
     clearTimeout(timer);
     signal?.removeEventListener('abort', onAbort);
@@ -53,7 +59,10 @@ export function historyHttpError(status: number, url: string): ExchangeError {
   // 429 avisa, 418 es el baneo automático que llega tras ignorarlo, 403 es el
   // WAF. Los tres se arreglan esperando.
   if (status === 429 || status === 418 || status === 403) {
-    return new ExchangeError('THROTTLED', `${host} está limitando nuestras peticiones (HTTP ${status}).`);
+    return new ExchangeError(
+      'THROTTLED',
+      `${host} está limitando nuestras peticiones (HTTP ${status}).`,
+    );
   }
 
   if (status === 400 || status === 404) {

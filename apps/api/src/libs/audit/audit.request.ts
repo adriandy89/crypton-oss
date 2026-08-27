@@ -79,8 +79,7 @@ export function pickFields(
 /** Recorta valores largos y aplana lo que no sea primitivo. */
 function clamp(value: unknown): unknown {
   if (value === null || value === undefined) return value;
-  if (typeof value === 'string')
-    return value.length > 200 ? value.slice(0, 200) + '…' : value;
+  if (typeof value === 'string') return value.length > 200 ? value.slice(0, 200) + '…' : value;
   if (typeof value === 'number' || typeof value === 'boolean') return value;
   // Objetos y arrays: se guarda su forma, no su contenido. Un campo declarado
   // que resulta ser un objeto anidado podría traer cualquier cosa dentro.

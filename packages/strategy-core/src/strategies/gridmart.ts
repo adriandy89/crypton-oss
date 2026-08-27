@@ -263,12 +263,16 @@ export const gridmart: Strategy<GridMartConfig> = {
 
       const corePct = D(cfg.corePctSoldAtLevel1 ?? 0);
       if (!corePct.isFinite() || corePct.lte(0) || corePct.gt(100)) {
-        issues.push(err('corePctSoldAtLevel1', 'El porcentaje del núcleo debe estar entre 0 y 100.'));
+        issues.push(
+          err('corePctSoldAtLevel1', 'El porcentaje del núcleo debe estar entre 0 y 100.'),
+        );
       }
 
       const discount = D(cfg.gridRebuyDiscountPct ?? 0);
       if (!discount.isFinite() || discount.lte(0)) {
-        issues.push(err('gridRebuyDiscountPct', 'El descuento de recompra debe ser mayor que cero.'));
+        issues.push(
+          err('gridRebuyDiscountPct', 'El descuento de recompra debe ser mayor que cero.'),
+        );
       }
 
       // Si la recompra queda más lejos que el escalón que la generó, cada venta
@@ -282,7 +286,10 @@ export const gridmart: Strategy<GridMartConfig> = {
       // `/bots/preview`, escondido un nivel mas abajo.
       if (!firstSep.isFinite() || firstSep.lte(0)) {
         issues.push(
-          err('gridSellInitialSeparationPct', 'La separación del primer escalón debe ser mayor que cero.'),
+          err(
+            'gridSellInitialSeparationPct',
+            'La separación del primer escalón debe ser mayor que cero.',
+          ),
         );
       }
       if (firstSep.gt(0) && discount.gt(firstSep)) {

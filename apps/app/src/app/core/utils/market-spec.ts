@@ -1,4 +1,4 @@
-import type { MarketSpec, Venue as SharedVenue } from '@crypton/shared';
+import type { MarketSpec } from '@crypton/shared';
 import type { Market } from '../models';
 
 /**
@@ -16,7 +16,7 @@ import type { Market } from '../models';
  */
 export function toMarketSpec(m: Market): MarketSpec {
   return {
-    venue: m.venue as SharedVenue,
+    venue: m.venue,
     symbol: m.symbol,
     canonical: m.canonical,
     base: m.base,

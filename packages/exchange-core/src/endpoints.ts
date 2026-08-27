@@ -20,35 +20,33 @@ export interface VenueEndpoints {
  * booleano. Están aquí igualmente para que la tabla esté completa y para poder
  * comprobarlas de un vistazo.
  */
-export const VENUE_ENDPOINTS: Record<
-  Venue,
-  { mainnet: VenueEndpoints; testnet: VenueEndpoints }
-> = {
-  [Venue.HYPERLIQUID]: {
-    mainnet: { rest: 'https://api.hyperliquid.xyz', ws: 'wss://api.hyperliquid.xyz/ws' },
-    testnet: {
-      rest: 'https://api.hyperliquid-testnet.xyz',
-      ws: 'wss://api.hyperliquid-testnet.xyz/ws',
+export const VENUE_ENDPOINTS: Record<Venue, { mainnet: VenueEndpoints; testnet: VenueEndpoints }> =
+  {
+    [Venue.HYPERLIQUID]: {
+      mainnet: { rest: 'https://api.hyperliquid.xyz', ws: 'wss://api.hyperliquid.xyz/ws' },
+      testnet: {
+        rest: 'https://api.hyperliquid-testnet.xyz',
+        ws: 'wss://api.hyperliquid-testnet.xyz/ws',
+      },
     },
-  },
-  [Venue.LIGHTER]: {
-    mainnet: {
-      rest: 'https://mainnet.zklighter.elliot.ai',
-      ws: 'wss://mainnet.zklighter.elliot.ai/stream',
+    [Venue.LIGHTER]: {
+      mainnet: {
+        rest: 'https://mainnet.zklighter.elliot.ai',
+        ws: 'wss://mainnet.zklighter.elliot.ai/stream',
+      },
+      testnet: {
+        rest: 'https://testnet.zklighter.elliot.ai',
+        ws: 'wss://testnet.zklighter.elliot.ai/stream',
+      },
     },
-    testnet: {
-      rest: 'https://testnet.zklighter.elliot.ai',
-      ws: 'wss://testnet.zklighter.elliot.ai/stream',
+    [Venue.ASTER]: {
+      mainnet: { rest: 'https://fapi.asterdex.com', ws: 'wss://fstream.asterdex.com' },
+      testnet: {
+        rest: 'https://fapi.asterdex-testnet.com',
+        ws: 'wss://fstream5.asterdex-testnet.com',
+      },
     },
-  },
-  [Venue.ASTER]: {
-    mainnet: { rest: 'https://fapi.asterdex.com', ws: 'wss://fstream.asterdex.com' },
-    testnet: {
-      rest: 'https://fapi.asterdex-testnet.com',
-      ws: 'wss://fstream5.asterdex-testnet.com',
-    },
-  },
-};
+  };
 
 /**
  * URLs de un venue en la red pedida.

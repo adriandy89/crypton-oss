@@ -31,6 +31,7 @@ export class RecommendDto {
   @IsString()
   @IsNotEmpty()
   @MaxLength(32)
+  // eslint-disable-next-line no-control-regex -- el rango de control esta a proposito: es el saneado que rechaza caracteres de control en un simbolo
   @Matches(/^[^\s,:|\u0000-\u001f]+$/)
   symbol: string;
 

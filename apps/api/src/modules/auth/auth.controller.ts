@@ -9,12 +9,7 @@ import {
   Res,
   UseGuards,
 } from '@nestjs/common';
-import {
-  ApiBearerAuth,
-  ApiExcludeEndpoint,
-  ApiOperation,
-  ApiTags,
-} from '@nestjs/swagger';
+import { ApiBearerAuth, ApiExcludeEndpoint, ApiOperation, ApiTags } from '@nestjs/swagger';
 import { Throttle } from '@nestjs/throttler';
 import type { Response } from 'express';
 import { AuthService } from './auth.service';
@@ -84,10 +79,7 @@ export class AuthController {
       'a pedir credenciales de verdad, y a la vuelta se comprueba que es la misma cuenta.',
   })
   @Throttle({ default: { limit: 10, ttl: 60_000 } })
-  startStepUp(
-    @GetUserInfo() user: SessionUser,
-    @Body() dto: StartGoogleAuthDto,
-  ) {
+  startStepUp(@GetUserInfo() user: SessionUser, @Body() dto: StartGoogleAuthDto) {
     return this.auth.start({
       platform: dto.platform,
       ticketChallenge: dto.challenge,
@@ -152,8 +144,7 @@ export class AuthController {
   @ApiBearerAuth()
   @ApiOperation({
     summary: 'Cierra la sesión en todos los dispositivos',
-    description:
-      'Invalida todos los refresh tokens del usuario y la reautenticación reciente.',
+    description: 'Invalida todos los refresh tokens del usuario y la reautenticación reciente.',
   })
   async signOutEverywhere(@GetUserInfo() user: SessionUser): Promise<void> {
     await this.auth.signOutEverywhere(user.id);
@@ -172,12 +163,9 @@ export class AuthController {
   @ApiBearerAuth()
   @ApiOperation({
     summary: 'Si hay una reautenticación reciente todavía válida',
-    description:
-      'La app lo consulta para no mandar al usuario a Google dos veces seguidas.',
+    description: 'La app lo consulta para no mandar al usuario a Google dos veces seguidas.',
   })
-  async stepUpState(
-    @GetUserInfo() user: SessionUser,
-  ): Promise<{ fresh: boolean }> {
+  async stepUpState(@GetUserInfo() user: SessionUser): Promise<{ fresh: boolean }> {
     return { fresh: await this.auth.hasFreshStepUp(user.id) };
   }
 }

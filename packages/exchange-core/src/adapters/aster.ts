@@ -12,11 +12,9 @@ import {
   type MarginAction,
   type MarginMode,
   type MarketSpec,
-  type ModifyRequest,
   type OrderAck,
   type OrderSide,
   type OrderStatus as OrderStatusT,
-  type OrderType,
   type OrderUpdate,
   type PlaceOrderRequest,
   type Position,
@@ -269,10 +267,12 @@ export class AsterAdapter implements ExchangeAdapter {
     // a la cancelación de un pánico.
     this.cooldown.comprobar();
     await this.budget.take(this.venue, 1, 'write', this.testnet);
-    return this.limiter.run(() => this.http<T>(method, path + '?' + query)).catch((e) => {
-      this.cooldown.registrar(e);
-      throw e;
-    });
+    return this.limiter
+      .run(() => this.http<T>(method, path + '?' + query))
+      .catch((e) => {
+        this.cooldown.registrar(e);
+        throw e;
+      });
   }
 
   private async publicRequest<T>(
@@ -869,9 +869,7 @@ export class AsterAdapter implements ExchangeAdapter {
    * está en `sharedStream` (`../ws`); aquí solo se le pasa el aviso de cierre
    * del adaptador.
    */
-  private sharedSocket<T>(
-    open: (emit: (value: T) => void) => { stop: () => void },
-  ): Observable<T> {
+  private sharedSocket<T>(open: (emit: (value: T) => void) => { stop: () => void }): Observable<T> {
     return sharedStream<T>(open, this.closed$);
   }
 
@@ -919,6 +917,7 @@ export class AsterAdapter implements ExchangeAdapter {
    * de que el ping llegue: perder el listenKey significa dejar de enterarse de
    * los fills, y un bot que no ve sus fills opera a ciegas.
    */
+  // eslint-disable-next-line @typescript-eslint/require-await -- la firma asincrona es parte del contrato del adaptador
   private async ensureUserStream(): Promise<void> {
     if (this.userStreamStarted) return;
     this.userStreamStarted = true;
@@ -938,17 +937,14 @@ export class AsterAdapter implements ExchangeAdapter {
       { stream: 'fills' },
     );
 
-    this.keepAlive = setInterval(
-      () => {
-        if (this.closed) return;
-        void this.signedRequest('PUT', '/fapi/v3/listenKey').catch((e) => {
-          // Perder el listenKey es dejar de ver los fills. Se avisa para que el
-          // motor sepa que a partir de aquí depende del respaldo por REST.
-          this.health$.next({ stream: 'fills', status: 'DOWN', detail: messageOf(e) });
-        });
-      },
-      30 * 60_000,
-    );
+    this.keepAlive = setInterval(() => {
+      if (this.closed) return;
+      void this.signedRequest('PUT', '/fapi/v3/listenKey').catch((e) => {
+        // Perder el listenKey es dejar de ver los fills. Se avisa para que el
+        // motor sepa que a partir de aquí depende del respaldo por REST.
+        this.health$.next({ stream: 'fills', status: 'DOWN', detail: messageOf(e) });
+      });
+    }, 30 * 60_000);
   }
 
   private handleUserEvent(raw: string): void {
@@ -1004,6 +1000,7 @@ export class AsterAdapter implements ExchangeAdapter {
     }
   }
 
+  // eslint-disable-next-line @typescript-eslint/require-await -- idem: ExchangeAdapter.close() devuelve promesa
   async close(): Promise<void> {
     if (this.closed) return;
     this.closed = true;
@@ -1032,7 +1029,7 @@ export class AsterAdapter implements ExchangeAdapter {
       clientOrderId: o.clientOrderId ?? null,
       venueOrderId: String(o.orderId),
       side: o.side as OrderSide,
-      type: (o.type === 'MARKET' ? 'MARKET' : 'LIMIT') as OrderType,
+      type: o.type === 'MARKET' ? 'MARKET' : 'LIMIT',
       price: D(o.price).toFixed(),
       qty: D(o.origQty).toFixed(),
       filledQty: D(o.executedQty).toFixed(),

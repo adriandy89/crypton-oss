@@ -1,20 +1,7 @@
-import {
-  Body,
-  Controller,
-  Delete,
-  Get,
-  HttpCode,
-  Patch,
-  UseGuards,
-} from '@nestjs/common';
+import { Body, Controller, Delete, Get, HttpCode, Patch, UseGuards } from '@nestjs/common';
 import { ApiBearerAuth, ApiOperation, ApiTags } from '@nestjs/swagger';
 import { Audit } from 'src/libs';
-import {
-  AuthService,
-  GetUserInfo,
-  JwtAuthGuard,
-  type SessionUser,
-} from '../auth';
+import { AuthService, GetUserInfo, JwtAuthGuard, type SessionUser } from '../auth';
 import { DeleteAccountDto, UpdateProfileDto } from './dtos';
 import { UsersService } from './users.service';
 
@@ -58,10 +45,7 @@ export class UsersController {
     description:
       'Irreversible. Exige haberse reautenticado con Google y escribir ELIMINAR. Se rechaza con 409 mientras queden bots vivos: sus órdenes están en el venue, y borrar la cuenta se llevaría también la credencial — no quedaría forma de cancelarlas. Usa antes el kill-switch.',
   })
-  async remove(
-    @GetUserInfo() user: SessionUser,
-    @Body() _dto: DeleteAccountDto,
-  ) {
+  async remove(@GetUserInfo() user: SessionUser, @Body() _dto: DeleteAccountDto) {
     // Reautenticación antes de una acción irreversible: un token de acceso
     // robado dura 15 minutos y no se revalida contra la base de datos, así que
     // por sí solo no puede bastar para vaciar una cuenta.

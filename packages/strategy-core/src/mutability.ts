@@ -37,6 +37,10 @@ function sameValue(a: unknown, b: unknown): boolean {
   const na = Number(a);
   const nb = Number(b);
   if (Number.isFinite(na) && Number.isFinite(nb)) return na === nb;
+  // Ultimo escalon, con null, booleanos y numeros ya descartados arriba: lo que
+  // queda de un config son cadenas y enums. Dos objetos distintos se verian
+  // iguales aqui, pero un config no los contiene.
+  // eslint-disable-next-line @typescript-eslint/no-base-to-string
   return String(a) === String(b);
 }
 
@@ -92,9 +96,7 @@ export function diffConfig(
 }
 
 /** Los campos de una estrategia agrupados por mutabilidad, para pintar la UI. */
-export function fieldsByMutability(
-  strategy: Strategy<BotConfig>,
-): Record<Mutability, FieldMeta[]> {
+export function fieldsByMutability(strategy: Strategy<BotConfig>): Record<Mutability, FieldMeta[]> {
   const out: Record<Mutability, FieldMeta[]> = {
     [Mutability.HOT]: [],
     [Mutability.WARM]: [],

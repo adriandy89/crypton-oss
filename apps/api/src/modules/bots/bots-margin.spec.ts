@@ -20,10 +20,7 @@ const BOT_ID = '22222222-2222-2222-2222-222222222222';
 const ACCOUNT_ID = '11111111-1111-1111-1111-111111111111';
 const USER_ID = 'u1';
 
-function build(
-  botOver: Record<string, unknown> = {},
-  available: string | null = '1000',
-) {
+function build(botOver: Record<string, unknown> = {}, available: string | null = '1000') {
   const bot = {
     id: BOT_ID,
     user_id: USER_ID,
@@ -68,9 +65,7 @@ function build(
   const adapter = {
     getBalances: jest
       .fn()
-      .mockResolvedValue([
-        { asset: 'USDC', total: available, available, used: '0' },
-      ]),
+      .mockResolvedValue([{ asset: 'USDC', total: available, available, used: '0' }]),
     getPositions: jest.fn().mockResolvedValue([]),
     close: jest.fn().mockResolvedValue(undefined),
   };
@@ -98,9 +93,7 @@ function build(
 /** Igual que `build`, pero el venue no responde al saldo. */
 function buildVenueCaido() {
   const b = build();
-  jest
-    .spyOn(b.service as never, 'fetchWallet')
-    .mockRejectedValue(new Error('venue caido'));
+  jest.spyOn(b.service as never, 'fetchWallet').mockRejectedValue(new Error('venue caido'));
   return b;
 }
 
@@ -136,18 +129,16 @@ describe('BotsService.command — ADJUST_MARGIN', () => {
     // que engordar, y el venue lo diría con su propio vocabulario.
     const { service, db } = build({ margin_mode: 'CROSS' });
 
-    await expect(service.command(USER_ID, BOT_ID, ajuste())).rejects.toThrow(
-      ConflictException,
-    );
+    await expect(service.command(USER_ID, BOT_ID, ajuste())).rejects.toThrow(ConflictException);
     expect(db.botCommand.create).not.toHaveBeenCalled();
   });
 
   it('rechaza aportar más margen del libre que hay', async () => {
     const { service } = build({}, '50');
 
-    await expect(
-      service.command(USER_ID, BOT_ID, ajuste({ marginAmount: '100' })),
-    ).rejects.toThrow(/No tienes tanto margen libre/i);
+    await expect(service.command(USER_ID, BOT_ID, ajuste({ marginAmount: '100' }))).rejects.toThrow(
+      /No tienes tanto margen libre/i,
+    );
   });
 
   it('un saldo de CERO sigue rechazando: es un cero legítimo', async () => {
@@ -155,9 +146,9 @@ describe('BotsService.command — ADJUST_MARGIN', () => {
     // no un fallo de lectura, y ahí el aporte no puede salir.
     const { service } = build({}, null);
 
-    await expect(
-      service.command(USER_ID, BOT_ID, ajuste({ marginAmount: '100' })),
-    ).rejects.toThrow(/No tienes tanto margen libre/i);
+    await expect(service.command(USER_ID, BOT_ID, ajuste({ marginAmount: '100' }))).rejects.toThrow(
+      /No tienes tanto margen libre/i,
+    );
   });
 
   it('si el venue NO CONTESTA, no bloquea el aporte', async () => {
@@ -184,11 +175,7 @@ describe('BotsService.command — ADJUST_MARGIN', () => {
     // Quien sabe si la retirada rompe el margen de mantenimiento es el venue.
     const { service, db } = build({}, '0');
 
-    await service.command(
-      USER_ID,
-      BOT_ID,
-      ajuste({ marginAction: 'REMOVE', confirm: true }),
-    );
+    await service.command(USER_ID, BOT_ID, ajuste({ marginAction: 'REMOVE', confirm: true }));
 
     expect(db.botCommand.create).toHaveBeenCalledWith(
       expect.objectContaining({
@@ -211,24 +198,16 @@ describe('BotsService.command — ADJUST_MARGIN', () => {
     // Es la mitad del contrato que la pantalla promete: el aporte solo mueve la
     // liquidación, y el ROI se sigue calculando sobre el capital de antes.
     const { service } = build();
-    const subir = jest
-      .spyOn(service, 'updateConfig')
-      .mockResolvedValue({} as never);
+    const subir = jest.spyOn(service, 'updateConfig').mockResolvedValue({} as never);
 
-    await service.command(
-      USER_ID,
-      BOT_ID,
-      ajuste({ countAsBotCapital: false }),
-    );
+    await service.command(USER_ID, BOT_ID, ajuste({ countAsBotCapital: false }));
 
     expect(subir).not.toHaveBeenCalled();
   });
 
   it('el interruptor encendido suma el aporte al capital asignado', async () => {
     const { service } = build();
-    const subir = jest
-      .spyOn(service, 'updateConfig')
-      .mockResolvedValue({} as never);
+    const subir = jest.spyOn(service, 'updateConfig').mockResolvedValue({} as never);
 
     await service.command(USER_ID, BOT_ID, ajuste({ countAsBotCapital: true }));
 
@@ -245,9 +224,7 @@ describe('BotsService.command — ADJUST_MARGIN', () => {
   it('retirar nunca sube el capital asignado, aunque lo pidan', async () => {
     // Sería contabilizar como aportación un dinero que acaba de salir.
     const { service } = build();
-    const subir = jest
-      .spyOn(service, 'updateConfig')
-      .mockResolvedValue({} as never);
+    const subir = jest.spyOn(service, 'updateConfig').mockResolvedValue({} as never);
 
     await service.command(
       USER_ID,

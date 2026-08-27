@@ -29,18 +29,11 @@ const rapido = { handle: () => of('pronto') };
 const correr = (ctx: never, next: { handle: () => unknown }) =>
   new Promise<string>((resolve) => {
     (
-      new TimeoutInterceptor(new Reflector()).intercept(
-        ctx,
-        next as never,
-      ) as never as {
+      new TimeoutInterceptor(new Reflector()).intercept(ctx, next as never) as never as {
         pipe: (...a: unknown[]) => { subscribe: (o: unknown) => void };
       }
     )
-      .pipe(
-        catchError((e: unknown) =>
-          of(e instanceof TimeoutError ? 'CORTADO' : 'otro error'),
-        ),
-      )
+      .pipe(catchError((e: unknown) => of(e instanceof TimeoutError ? 'CORTADO' : 'otro error')))
       .subscribe({ next: (v: unknown) => resolve(String(v)) });
   });
 
@@ -81,9 +74,7 @@ describe('TimeoutInterceptor — de donde sale la decision', () => {
     // perfectamente valida que no casaba con la comparacion exacta, y ese
     // cliente se habria llevado un corte en mitad del flujo.
     let terminado = false;
-    void correr(contexto(true, 'text/event-stream, */*'), nunca).then(
-      () => (terminado = true),
-    );
+    void correr(contexto(true, 'text/event-stream, */*'), nunca).then(() => (terminado = true));
     await jest.advanceTimersByTimeAsync(190_000);
     expect(terminado).toBe(false);
   });

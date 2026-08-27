@@ -238,10 +238,7 @@ export const gridClassic: Strategy<GridClassicConfig> = {
 
     if (cfg.preloadInventory) {
       issues.push(
-        warn(
-          'preloadInventory',
-          'Con precarga, el bot abre posición a mercado nada más arrancar.',
-        ),
+        warn('preloadInventory', 'Con precarga, el bot abre posición a mercado nada más arrancar.'),
       );
     }
     return toResult(issues);

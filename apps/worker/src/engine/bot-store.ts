@@ -9,23 +9,8 @@ import {
   type OrderAck,
   type VenueOrder,
 } from '@crypton/shared';
-import {
-  ENTRY_KINDS,
-  QTY_EPSILON,
-  botShortId,
-  cycleAfterFill,
-  parseCoid,
-} from '@crypton/strategy-core';
-import type {
-  BotStatus,
-  Direction,
-  LevelKind,
-  MarginMode,
-  OrderKind,
-  OrderSide,
-  StrategyKind,
-  Venue,
-} from '@crypton/db';
+import { ENTRY_KINDS, QTY_EPSILON, botShortId, cycleAfterFill } from '@crypton/strategy-core';
+import type { BotStatus, Direction, LevelKind, MarginMode, StrategyKind, Venue } from '@crypton/db';
 import { BUS_CHANNELS, BusService, DbService } from '../libs';
 
 /**
@@ -335,8 +320,8 @@ export class BotStore {
       level_kind: order.levelKind as LevelKind,
       level_index: order.levelIndex,
       cycle_seq: cycleSeq,
-      side: order.side as OrderSide,
-      kind: order.type as OrderKind,
+      side: order.side,
+      kind: order.type,
       price: order.price,
       qty: order.qty,
       reduce_only: order.reduceOnly,
@@ -460,7 +445,7 @@ export class BotStore {
         data: {
           bot_order_id: order.id,
           venue_fill_id: fill.venueFillId,
-          side: fill.side as OrderSide,
+          side: fill.side,
           price: fill.price,
           qty: fill.qty,
           fee: fill.fee,
@@ -551,7 +536,7 @@ export class BotStore {
             // cuenta como entrada ni marca índice.
             level_index: 0,
             cycle_seq: cycleSeq,
-            side: fill.side as OrderSide,
+            side: fill.side,
             kind: 'MARKET',
             price: fill.price,
             qty: fill.qty,
@@ -568,7 +553,7 @@ export class BotStore {
           data: {
             bot_order_id: order.id,
             venue_fill_id: fill.venueFillId,
-            side: fill.side as OrderSide,
+            side: fill.side,
             price: fill.price,
             qty: fill.qty,
             fee: fill.fee,

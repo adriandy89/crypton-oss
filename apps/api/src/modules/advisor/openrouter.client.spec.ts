@@ -43,19 +43,15 @@ describe('cliente del modelo', () => {
 
     it('con el interruptor encendido pero sin clave, tampoco', () => {
       // Es el despiste tipico al desplegar. Tiene que degradar, no reventar.
-      expect(
-        new OpenRouterClient(configCon({ AI_ADVISOR_ENABLE: 'true' }))
-          .available,
-      ).toBe(false);
+      expect(new OpenRouterClient(configCon({ AI_ADVISOR_ENABLE: 'true' })).available).toBe(false);
     });
 
     it('con clave pero con el interruptor apagado, tampoco', () => {
       // El interruptor manda sobre la clave, y no al reves: es la forma de
       // apagar el gasto sin tener que borrar el secreto del despliegue.
-      expect(
-        new OpenRouterClient(configCon({ OPENROUTER_API_KEY: 'sk-or-x' }))
-          .available,
-      ).toBe(false);
+      expect(new OpenRouterClient(configCon({ OPENROUTER_API_KEY: 'sk-or-x' })).available).toBe(
+        false,
+      );
     });
 
     it('con las dos cosas si esta disponible', () => {
@@ -94,11 +90,7 @@ describe('cliente del modelo', () => {
 
     it('acepta la respuesta buena', () => {
       const bueno = JSON.stringify({
-        propuestas: [
-          perilla('PRUDENTE'),
-          perilla('EQUILIBRADA'),
-          perilla('AGRESIVA'),
-        ],
+        propuestas: [perilla('PRUDENTE'), perilla('EQUILIBRADA'), perilla('AGRESIVA')],
       });
       const r = parse(c, bueno) as unknown[];
       expect(r).toHaveLength(3);
@@ -116,21 +108,13 @@ describe('cliente del modelo', () => {
       [
         'un perfil repetido',
         JSON.stringify({
-          propuestas: [
-            perilla('PRUDENTE'),
-            perilla('PRUDENTE'),
-            perilla('AGRESIVA'),
-          ],
+          propuestas: [perilla('PRUDENTE'), perilla('PRUDENTE'), perilla('AGRESIVA')],
         }),
       ],
       [
         'un perfil inventado',
         JSON.stringify({
-          propuestas: [
-            perilla('TEMERARIA'),
-            perilla('EQUILIBRADA'),
-            perilla('AGRESIVA'),
-          ],
+          propuestas: [perilla('TEMERARIA'), perilla('EQUILIBRADA'), perilla('AGRESIVA')],
         }),
       ],
       [
@@ -236,21 +220,23 @@ describe('cliente del modelo', () => {
       // Un `undefined` o una referencia circular en el esquema haria que
       // `JSON.stringify` lanzara o dejara huecos, con el mismo final silencioso.
       const c = new OpenRouterClient(configCon({}));
-      const cuerpo = (
-        c as unknown as { body(a: string, b: string, f: unknown): unknown }
-      ).body('GRIDMART', 'BTC', {
-        mark: 64000,
-        volAnnualPct: 70,
-        atrPct1h: 0.6,
-        atrPct1d: 4,
-        rangePct30: 30,
-        posInRange: 0.5,
-        trendPct: 1,
-        trend: 'LATERAL',
-        efficiency: 0.3,
-        worstDayPct: -7,
-        tickBps: 1,
-      });
+      const cuerpo = (c as unknown as { body(a: string, b: string, f: unknown): unknown }).body(
+        'GRIDMART',
+        'BTC',
+        {
+          mark: 64000,
+          volAnnualPct: 70,
+          atrPct1h: 0.6,
+          atrPct1d: 4,
+          rangePct30: 30,
+          posInRange: 0.5,
+          trendPct: 1,
+          trend: 'LATERAL',
+          efficiency: 0.3,
+          worstDayPct: -7,
+          tickBps: 1,
+        },
+      );
       const texto = JSON.stringify(cuerpo);
       expect(JSON.parse(texto)).toEqual(cuerpo);
       // El tope debe ser ESTRICTAMENTE mayor que el presupuesto de razonamiento
@@ -259,9 +245,9 @@ describe('cliente del modelo', () => {
       expect(b.max_tokens).toBeGreaterThan(b.max_tokens * 0.2);
       // Sin esto, alrededor de un tercio de las peticiones podria acabar en un
       // proveedor que ignora el esquema.
-      expect(
-        (cuerpo as { provider: { require_parameters: boolean } }).provider,
-      ).toEqual({ require_parameters: true });
+      expect((cuerpo as { provider: { require_parameters: boolean } }).provider).toEqual({
+        require_parameters: true,
+      });
     });
   });
 
@@ -281,16 +267,8 @@ describe('cliente del modelo', () => {
     });
 
     it('cada perilla es una enumeracion cerrada', () => {
-      const props = (knobsSchema() as any).properties.propuestas.items
-        .properties;
-      for (const clave of [
-        'profile',
-        'leverage',
-        'coverage',
-        'spread',
-        'sizeGrowth',
-        'cadence',
-      ]) {
+      const props = (knobsSchema() as any).properties.propuestas.items.properties;
+      for (const clave of ['profile', 'leverage', 'coverage', 'spread', 'sizeGrowth', 'cadence']) {
         expect(Array.isArray(props[clave].enum)).toBe(true);
         expect(props[clave].enum.length).toBeGreaterThan(1);
       }

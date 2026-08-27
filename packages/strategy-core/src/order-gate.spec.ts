@@ -26,18 +26,17 @@ const LIGHTER_BTC: MarketSpec = {
   active: true,
 };
 
-const orden = (o: Partial<DesiredOrder>): DesiredOrder =>
-  ({
-    clientOrderId: 'c1',
-    levelKind: 'TAKE_PROFIT',
-    levelIndex: 0,
-    side: 'SELL',
-    type: 'LIMIT',
-    price: '79743.1',
-    qty: '0.00001',
-    reduceOnly: true,
-    ...o,
-  }) as DesiredOrder;
+const orden = (o: Partial<DesiredOrder>): DesiredOrder => ({
+  clientOrderId: 'c1',
+  levelKind: 'TAKE_PROFIT',
+  levelIndex: 0,
+  side: 'SELL',
+  type: 'LIMIT',
+  price: '79743.1',
+  qty: '0.00001',
+  reduceOnly: true,
+  ...o,
+});
 
 describe('la puerta de salida de órdenes', () => {
   describe('el caso que pausó un bot de verdad', () => {

@@ -684,11 +684,7 @@ class AccountHandle implements ExchangeAdapter {
     return this.entry.adapter.getTickers();
   }
 
-  getCandles(
-    symbol: string,
-    interval: CandleInterval,
-    query: CandleQuery,
-  ): Promise<Candle[]> {
+  getCandles(symbol: string, interval: CandleInterval, query: CandleQuery): Promise<Candle[]> {
     return this.entry.adapter.getCandles(symbol, interval, query);
   }
 
@@ -781,6 +777,11 @@ class AccountHandle implements ExchangeAdapter {
    * doble restaría una referencia que pertenece a OTRO bot — su cuenta se
    * cerraría con él dentro.
    */
+  // Hoy no espera nada, pero devolver promesa es parte del contrato: quien lo
+  // llama hace `await ... .catch()`, y quitar el `async` cambiaria la firma de
+  // un metodo de ciclo de vida que otras implementaciones si necesitan
+  // asincrono.
+  // eslint-disable-next-line @typescript-eslint/require-await
   async close(): Promise<void> {
     if (this.released) return;
     this.released = true;

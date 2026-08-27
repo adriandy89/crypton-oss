@@ -21,7 +21,14 @@ const MARKET: MarketSpec = {
   active: true,
 };
 
-const vela = (o: string, h: string, l: string, c: string): Candle => ({ t: T0, o, h, l, c, v: '1' });
+const vela = (o: string, h: string, l: string, c: string): Candle => ({
+  t: T0,
+  o,
+  h,
+  l,
+  c,
+  v: '1',
+});
 
 describe('tickPath', () => {
   it('emite cuatro precios por vela', () => {
@@ -42,35 +49,35 @@ describe('tickPath', () => {
 
   it('empieza en la apertura y acaba en el cierre', () => {
     const pasos = tickPath(vela('100', '110', '90', '105'), '15m', BarPath.NEAREST_FIRST);
-    expect(pasos[0]!.price.toFixed()).toBe('100');
-    expect(pasos[0]!.role).toBe('open');
-    expect(pasos[3]!.price.toFixed()).toBe('105');
-    expect(pasos[3]!.role).toBe('close');
+    expect(pasos[0].price.toFixed()).toBe('100');
+    expect(pasos[0].role).toBe('open');
+    expect(pasos[3].price.toFixed()).toBe('105');
+    expect(pasos[3].role).toBe('close');
   });
 
   describe('NEAREST_FIRST: el extremo más cercano a la apertura va primero', () => {
     it('apertura cerca del máximo ⇒ máximo primero', () => {
       const pasos = tickPath(vela('108', '110', '90', '95'), '15m', BarPath.NEAREST_FIRST);
-      expect(pasos[1]!.role).toBe('high');
-      expect(pasos[2]!.role).toBe('low');
+      expect(pasos[1].role).toBe('high');
+      expect(pasos[2].role).toBe('low');
     });
 
     it('apertura cerca del mínimo ⇒ mínimo primero', () => {
       const pasos = tickPath(vela('92', '110', '90', '105'), '15m', BarPath.NEAREST_FIRST);
-      expect(pasos[1]!.role).toBe('low');
-      expect(pasos[2]!.role).toBe('high');
+      expect(pasos[1].role).toBe('low');
+      expect(pasos[2].role).toBe('high');
     });
   });
 
   describe('PESSIMISTIC: primero el extremo que más duele', () => {
     it('vela alcista ⇒ primero el mínimo', () => {
       const pasos = tickPath(vela('100', '110', '90', '108'), '15m', BarPath.PESSIMISTIC);
-      expect(pasos[1]!.role).toBe('low');
+      expect(pasos[1].role).toBe('low');
     });
 
     it('vela bajista ⇒ primero el máximo', () => {
       const pasos = tickPath(vela('100', '110', '90', '92'), '15m', BarPath.PESSIMISTIC);
-      expect(pasos[1]!.role).toBe('high');
+      expect(pasos[1].role).toBe('high');
     });
   });
 });

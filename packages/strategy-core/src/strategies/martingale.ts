@@ -283,8 +283,6 @@ export const martingale: Strategy<MartingaleConfig> = {
   plan(ctx: BotContext): DesiredState {
     const cfg = ctx.config as unknown as MartingaleConfig;
     const seq = Number(ctx.cycle.scratch['cycleSeq'] ?? 0);
-    const pd = ctx.market.priceDecimals;
-    const qd = ctx.market.qtyDecimals;
     const mark = D(ctx.ticker.mark);
     const pos = positionSize(ctx);
 
@@ -295,7 +293,11 @@ export const martingale: Strategy<MartingaleConfig> = {
     if (pos.lte(0)) {
       if (ctx.cycle.cooldownUntil && ctx.now < ctx.cycle.cooldownUntil) {
         const secs = Math.ceil((ctx.cycle.cooldownUntil - ctx.now) / 1000);
-        return { orders: [], immediate: [], note: 'En cooldown, ' + secs + ' s para el próximo ciclo.' };
+        return {
+          orders: [],
+          immediate: [],
+          note: 'En cooldown, ' + secs + ' s para el próximo ciclo.',
+        };
       }
 
       const base = scaledLadder({

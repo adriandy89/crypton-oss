@@ -30,12 +30,7 @@ export const PAPER_DEFAULT_BALANCE = '10000';
  * Cambiar el capital o reiniciar con un bot en marcha dejaría al simulador del
  * worker y a la base contando cosas distintas.
  */
-const LIVE_BOT_STATUSES = [
-  'STARTING',
-  'RUNNING',
-  'PAUSED',
-  'STOPPING',
-] as const;
+const LIVE_BOT_STATUSES = ['STARTING', 'RUNNING', 'PAUSED', 'STOPPING'] as const;
 
 /**
  * Alta, verificación y borrado de credenciales de exchange.
@@ -144,8 +139,7 @@ export class ExchangeAccountsService {
     });
     if (duplicate) {
       throw new ConflictException(
-        `Ya tienes una conexión con esa etiqueta en ${dto.venue}` +
-          (testnet ? ' (testnet).' : '.'),
+        `Ya tienes una conexión con esa etiqueta en ${dto.venue}` + (testnet ? ' (testnet).' : '.'),
       );
     }
 
@@ -164,8 +158,7 @@ export class ExchangeAccountsService {
 
     if (!verification.ok) {
       throw new BadRequestException(
-        'No se ha podido verificar la credencial: ' +
-          (verification.detail ?? 'motivo desconocido'),
+        'No se ha podido verificar la credencial: ' + (verification.detail ?? 'motivo desconocido'),
       );
     }
 
@@ -187,9 +180,7 @@ export class ExchangeAccountsService {
       },
     });
 
-    this.logger.log(
-      `Conexión ${dto.venue} verificada para el usuario ${userId}`,
-    );
+    this.logger.log(`Conexión ${dto.venue} verificada para el usuario ${userId}`);
     return this.toPublic(account);
   }
 
@@ -200,9 +191,7 @@ export class ExchangeAccountsService {
     // nombra por lo que es —«simulación»— e ignora este campo, así que cambiarla
     // no se vería y solo serviría para que dejara de reconocerse a sí misma.
     if (dto.label !== undefined && current.paper) {
-      throw new BadRequestException(
-        'La conexión de simulación no se renombra.',
-      );
+      throw new BadRequestException('La conexión de simulación no se renombra.');
     }
 
     if (dto.paperBalance !== undefined) {
@@ -216,11 +205,7 @@ export class ExchangeAccountsService {
       // primer tick. El tope de arriba no es una opinión sobre cuánto se puede
       // simular, es lo que cabe en la columna.
       const capital = Number(dto.paperBalance);
-      if (
-        !Number.isFinite(capital) ||
-        capital <= 0 ||
-        capital > 1_000_000_000
-      ) {
+      if (!Number.isFinite(capital) || capital <= 0 || capital > 1_000_000_000) {
         throw new BadRequestException(
           'El capital de partida tiene que ser mayor que cero y como mucho 1.000.000.000.',
         );
@@ -235,20 +220,15 @@ export class ExchangeAccountsService {
       where: { id },
       data: {
         ...(dto.label !== undefined ? { label: dto.label } : {}),
-        ...(dto.builderApproved !== undefined
-          ? { builder_approved: dto.builderApproved }
-          : {}),
-        ...(dto.paperBalance !== undefined
-          ? { paper_balance: dto.paperBalance }
-          : {}),
+        ...(dto.builderApproved !== undefined ? { builder_approved: dto.builderApproved } : {}),
+        ...(dto.paperBalance !== undefined ? { paper_balance: dto.paperBalance } : {}),
       },
     });
 
     // Cambiar el capital de partida es empezar de cero: el estado guardado
     // arrastra el saldo viejo, y conservarlo convertiría «simular con 500» en
     // «simular con 500 más lo que ya llevabas».
-    if (dto.paperBalance !== undefined)
-      await this.resetPaperState(id, dto.paperBalance);
+    if (dto.paperBalance !== undefined) await this.resetPaperState(id, dto.paperBalance);
 
     return this.toPublic(account);
   }
@@ -268,10 +248,7 @@ export class ExchangeAccountsService {
       );
     }
     await this.assertPaperIdle(id);
-    await this.resetPaperState(
-      id,
-      account.paper_balance?.toFixed() ?? PAPER_DEFAULT_BALANCE,
-    );
+    await this.resetPaperState(id, account.paper_balance?.toFixed() ?? PAPER_DEFAULT_BALANCE);
     this.logger.log(`Simulación reiniciada en la conexión ${id.slice(0, 8)}`);
     return this.toPublic(account);
   }
@@ -307,10 +284,7 @@ export class ExchangeAccountsService {
       where: {
         exchange_account_id: id,
         dry_run: true,
-        OR: [
-          { paper_state: { isNot: null } },
-          { status: { in: [...LIVE_BOT_STATUSES] } },
-        ],
+        OR: [{ paper_state: { isNot: null } }, { status: { in: [...LIVE_BOT_STATUSES] } }],
       },
       select: { id: true, paper_state: { select: { epoch: true } } },
     });
@@ -468,9 +442,7 @@ export class ExchangeAccountsService {
       !account.enc_tag ||
       !account.enc_key_id
     ) {
-      throw new BadRequestException(
-        'Esa conexión no tiene credencial guardada.',
-      );
+      throw new BadRequestException('Esa conexión no tiene credencial guardada.');
     }
 
     const sealed: SealedPayload = {
@@ -517,8 +489,7 @@ export class ExchangeAccountsService {
         ? this.config.get<string>('BUILDER_ADDRESS') || undefined
         : undefined,
       builderFeeTenthBps: builderApproved
-        ? Number(this.config.get<string>('BUILDER_FEE_TENTH_BPS', '0')) ||
-          undefined
+        ? Number(this.config.get<string>('BUILDER_FEE_TENTH_BPS', '0')) || undefined
         : undefined,
     });
   }
@@ -527,17 +498,13 @@ export class ExchangeAccountsService {
     switch (dto.venue) {
       case Venue.HYPERLIQUID:
         if (!dto.hyperliquid)
-          throw new BadRequestException(
-            'Faltan las credenciales de Hyperliquid.',
-          );
+          throw new BadRequestException('Faltan las credenciales de Hyperliquid.');
         return { venue: 'HYPERLIQUID', ...dto.hyperliquid };
       case Venue.LIGHTER:
-        if (!dto.lighter)
-          throw new BadRequestException('Faltan las credenciales de Lighter.');
+        if (!dto.lighter) throw new BadRequestException('Faltan las credenciales de Lighter.');
         return { venue: 'LIGHTER', ...dto.lighter };
       case Venue.ASTER:
-        if (!dto.aster)
-          throw new BadRequestException('Faltan las credenciales de Aster.');
+        if (!dto.aster) throw new BadRequestException('Faltan las credenciales de Aster.');
         return { venue: 'ASTER', ...dto.aster };
       default:
         throw new BadRequestException('Venue no soportado.');

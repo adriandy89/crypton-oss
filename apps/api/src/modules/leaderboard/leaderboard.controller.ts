@@ -39,29 +39,21 @@ export class LeaderboardController {
     description:
       'Se comparte la FORMA de la estrategia con los importes convertidos a proporcion del capital. Ni la cuenta del autor ni cuanto dinero mueve.',
   })
-  share(
-    @GetUserInfo() user: SessionUser,
-    @Param() { id }: IdParamDto,
-    @Body() dto: ShareBotDto,
-  ) {
+  share(@GetUserInfo() user: SessionUser, @Param() { id }: IdParamDto, @Body() dto: ShareBotDto) {
     return this.leaderboard.share(user.id, id, dto);
   }
 
   @Delete('bots/:id/share')
   @HttpCode(204)
   @ApiOperation({ summary: 'Deja de listar el bot en el ranking' })
-  async unshare(
-    @GetUserInfo() user: SessionUser,
-    @Param() { id }: IdParamDto,
-  ): Promise<void> {
+  async unshare(@GetUserInfo() user: SessionUser, @Param() { id }: IdParamDto): Promise<void> {
     await this.leaderboard.unshare(user.id, id);
   }
 
   @Post('leaderboard/copy')
   @HttpCode(200)
   @ApiOperation({
-    summary:
-      'Resuelve un codigo compartido a una configuracion lista para crear',
+    summary: 'Resuelve un codigo compartido a una configuracion lista para crear',
     description:
       'Devuelve la config dimensionada al capital y al mercado de quien copia. No crea el bot: precarga el asistente.',
   })

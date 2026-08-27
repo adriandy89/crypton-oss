@@ -1,0 +1,47 @@
+{
+  // ─────────────────────────────────────────────────────────────────────────
+  // ESLint en un monorepo con analisis DE TIPOS: hay que acotarlo o se come el
+  // editor.
+  //
+  // Hay ocho eslint.config.mjs y todos usan `recommendedTypeChecked`, o sea que
+  // cada uno levanta un programa de TypeScript entero. Sin acotar, la extension
+  // arranca desde la raiz e intenta cargarlos todos a la vez —unos 380 ficheros
+  // en ocho programas, ademas del servidor de TS y del de Angular— y la ventana
+  // se cae. Con esto analiza solo el paquete del fichero abierto.
+  // ─────────────────────────────────────────────────────────────────────────
+  "eslint.workingDirectories": [{ "mode": "auto" }],
+
+  // Al guardar, no en cada pulsacion. El analisis con tipos es caro: hacerlo
+  // mientras escribes es lo que dispara la memoria.
+  "eslint.run": "onSave",
+
+  // Margen para el servidor de ESLint. El de por defecto se queda corto con
+  // programas de este tamano y muere sin decir por que.
+  "eslint.execArgv": ["--max-old-space-size=4096"],
+
+  "eslint.validate": ["javascript", "typescript", "html"],
+
+  // Que no vigile ni indexe lo que se genera: son decenas de miles de ficheros
+  // que no se editan nunca.
+  "files.watcherExclude": {
+    "**/node_modules/**": true,
+    "**/dist/**": true,
+    "**/www/**": true,
+    "**/.angular/**": true,
+    "**/.astro/**": true,
+    "**/generated/**": true,
+    "**/coverage/**": true
+  },
+  "search.exclude": {
+    "**/node_modules": true,
+    "**/dist": true,
+    "**/www": true,
+    "**/.angular": true,
+    "**/.astro": true,
+    "**/generated": true,
+    "**/coverage": true,
+    "**/pnpm-lock.yaml": true
+  },
+
+  "editor.defaultFormatter": "esbenp.prettier-vscode"
+}

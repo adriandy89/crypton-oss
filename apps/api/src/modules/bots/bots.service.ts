@@ -28,20 +28,8 @@ import type { DryRunState } from '@crypton/exchange-core';
  */
 type PaperPosition = DryRunState['positions'][number];
 import { diffConfig, getStrategy } from '@crypton/strategy-core';
-import {
-  BotStatus,
-  Direction,
-  MarginMode,
-  StrategyKind,
-  Venue,
-} from '@crypton/db';
-import {
-  BUS_CHANNELS,
-  BusService,
-  CacheService,
-  DbService,
-  VenueBudgetProvider,
-} from 'src/libs';
+import { BotStatus, MarginMode, StrategyKind, Venue } from '@crypton/db';
+import { BUS_CHANNELS, BusService, CacheService, DbService, VenueBudgetProvider } from 'src/libs';
 import { ExchangeAccountsService } from '../exchange-accounts';
 import { MarketsService } from '../markets';
 import { RiskService } from '../risk';
@@ -111,10 +99,7 @@ function isAuthError(e: unknown): boolean {
 function withTimeout<T>(work: Promise<T>, ms: number): Promise<T> {
   let timer: NodeJS.Timeout;
   const clock = new Promise<never>((_, reject) => {
-    timer = setTimeout(
-      () => reject(new Error(`El exchange no respondió en ${ms} ms.`)),
-      ms,
-    );
+    timer = setTimeout(() => reject(new Error(`El exchange no respondió en ${ms} ms.`)), ms);
   });
   return Promise.race([work, clock]).finally(() => clearTimeout(timer));
 }
@@ -167,10 +152,7 @@ export class BotsService {
     // `strategy.preview()` y salia como un 500 con `[DecimalError] Invalid
     // argument: undefined`. `create()` ya validaba; este camino —el del
     // asistente, el unico que usa un humano— era justo el que no lo hacia.
-    const validation = strategy.validate(
-      dto.config as unknown as BotConfig,
-      market,
-    );
+    const validation = strategy.validate(dto.config as unknown as BotConfig, market);
     if (!validation.ok) {
       throw new BadRequestException({
         message: 'La configuración no es válida.',
@@ -179,19 +161,14 @@ export class BotsService {
     }
 
     const refPrice =
-      dto.refPrice ??
-      (await this.referencePrice(userId, dto.venue, dto.symbol, testnet));
+      dto.refPrice ?? (await this.referencePrice(userId, dto.venue, dto.symbol, testnet));
     if (!refPrice || D(refPrice).lte(0)) {
       throw new BadRequestException(
         'No hay precio de referencia para ese mercado. Vuelve a intentarlo en unos segundos.',
       );
     }
 
-    return strategy.preview(
-      dto.config as unknown as BotConfig,
-      market,
-      refPrice,
-    );
+    return strategy.preview(dto.config as unknown as BotConfig, market, refPrice);
   }
 
   // ═══════════════════════════════════════════════════════════════
@@ -210,10 +187,7 @@ export class BotsService {
    *
    * NUNCA lanza por culpa del venue. Ver `readWallet`.
    */
-  async capital(
-    userId: string,
-    dto: CapitalQueryDto,
-  ): Promise<CapitalSnapshot> {
+  async capital(userId: string, dto: CapitalQueryDto): Promise<CapitalSnapshot> {
     const account = await this.db.exchangeAccount.findFirst({
       where: { id: dto.exchangeAccountId, user_id: userId },
       select: { id: true },
@@ -222,14 +196,12 @@ export class BotsService {
 
     // Las tres en paralelo: la del venue es la lenta y las de Postgres son
     // milisegundos, asi que encadenarlas solo sumaria latencia.
-    const [wallet, committed, limits, currentTotalNotional] = await Promise.all(
-      [
-        this.readWallet(userId, dto.exchangeAccountId, dto.symbol, dto.botId),
-        this.committedByBots(dto.exchangeAccountId),
-        this.risk.get(userId),
-        this.risk.currentTotalNotional(userId),
-      ],
-    );
+    const [wallet, committed, limits, currentTotalNotional] = await Promise.all([
+      this.readWallet(userId, dto.exchangeAccountId, dto.symbol, dto.botId),
+      this.committedByBots(dto.exchangeAccountId),
+      this.risk.get(userId),
+      this.risk.currentTotalNotional(userId),
+    ]);
 
     return {
       ...wallet,
@@ -327,27 +299,17 @@ export class BotsService {
 
     const run = this.fetchWallet(userId, accountId, symbol)
       .then(async (fresh) => {
-        await this.cache
-          .set(key, fresh, WALLET_TTL_SECONDS)
-          .catch(() => undefined);
-        await this.cache
-          .set(lastKey, fresh, WALLET_LAST_TTL_SECONDS)
-          .catch(() => undefined);
+        await this.cache.set(key, fresh, WALLET_TTL_SECONDS).catch(() => undefined);
+        await this.cache.set(lastKey, fresh, WALLET_LAST_TTL_SECONDS).catch(() => undefined);
         return fresh;
       })
       .catch(async (e: unknown) => {
         // El mensaje crudo del venue NO se registra: puede llevar el indice o la
         // direccion de la cuenta.
-        const reason: 'CREDENTIAL' | 'VENUE' = isAuthError(e)
-          ? 'CREDENTIAL'
-          : 'VENUE';
-        this.logger.warn(
-          `No se pudo leer el saldo de la conexión ${accountId} (${reason}).`,
-        );
+        const reason: 'CREDENTIAL' | 'VENUE' = isAuthError(e) ? 'CREDENTIAL' : 'VENUE';
+        this.logger.warn(`No se pudo leer el saldo de la conexión ${accountId} (${reason}).`);
 
-        const last = await this.cache
-          .get<WalletRead>(lastKey)
-          .catch(() => null);
+        const last = await this.cache.get<WalletRead>(lastKey).catch(() => null);
         const unavailable = { reason, message: UNAVAILABLE_MESSAGE[reason] };
         if (last) return { ...last, stale: true, unavailable };
 
@@ -446,9 +408,7 @@ export class BotsService {
       if (qty.isZero()) continue;
 
       const entrada = D(p.entryPrice);
-      const mark = D(
-        (await this.markPrice(account.venue, p.symbol)) ?? p.entryPrice,
-      );
+      const mark = D((await this.markPrice(account.venue, p.symbol)) ?? p.entryPrice);
       const lev = p.leverage || 1;
 
       used = used.plus(qty.abs().mul(mark).div(lev)).plus(p.extraMargin);
@@ -476,11 +436,7 @@ export class BotsService {
         // la cuenta entera, y una segunda implementación de esa regla es una que
         // algún día dice otro precio que la del motor.
         liquidationPrice:
-          liquidationOfPosition(
-            { ...p, qty: p.qty },
-            posiciones,
-            equity,
-          )?.toFixed() ?? null,
+          liquidationOfPosition({ ...p, qty: p.qty }, posiciones, equity)?.toFixed() ?? null,
         marginUsed: margen.toFixed(),
       };
     }
@@ -498,10 +454,7 @@ export class BotsService {
   }
 
   /** Precio de marca de la instantánea de tickers. `null` si aún no hay. */
-  private async markPrice(
-    venue: Venue,
-    symbol: string,
-  ): Promise<string | null> {
+  private async markPrice(venue: Venue, symbol: string): Promise<string | null> {
     // Siempre mainnet: una conexión de simulación no vive en otro sitio.
     const tickers = await this.cache
       .get<{ symbol: string; mark?: string; last?: string }[]>(
@@ -541,8 +494,7 @@ export class BotsService {
 
       // Aster filtra los saldos a cero, asi que una cartera vacia devuelve `[]`
       // y no una fila de ceros: eso es un saldo de 0, no un fallo.
-      const balance =
-        balances.value.find((b) => b.asset === 'USDC') ?? balances.value[0];
+      const balance = balances.value.find((b) => b.asset === 'USDC') ?? balances.value[0];
 
       return {
         asset: balance?.asset ?? 'USDC',
@@ -552,10 +504,7 @@ export class BotsService {
         at: Date.now(),
         stale: false,
         unavailable: null,
-        position:
-          positions.status === 'fulfilled'
-            ? (positions.value[0] ?? null)
-            : null,
+        position: positions.status === 'fulfilled' ? (positions.value[0] ?? null) : null,
       };
     } finally {
       await adapter.close().catch(() => undefined);
@@ -717,9 +666,7 @@ export class BotsService {
       dryRun: bot.dry_run,
       realizedPnl: realized.toFixed(),
       unrealizedPnl: unrealized.toFixed(),
-      roiPct: invested.gt(0)
-        ? realized.plus(unrealized).div(invested).mul(100).toFixed(2)
-        : '0.00',
+      roiPct: invested.gt(0) ? realized.plus(unrealized).div(invested).mul(100).toFixed(2) : '0.00',
       positionQty: snapshot?.position_qty?.toString() ?? '0',
       averageEntry: snapshot?.average_entry?.toString() ?? null,
       liquidationPrice: snapshot?.liquidation_price?.toString() ?? null,
@@ -734,8 +681,7 @@ export class BotsService {
     const account = await this.db.exchangeAccount.findFirst({
       where: { id: dto.exchangeAccountId, user_id: userId },
     });
-    if (!account)
-      throw new NotFoundException('Conexión de exchange no encontrada.');
+    if (!account) throw new NotFoundException('Conexión de exchange no encontrada.');
     if (account.status === 'REVOKED') {
       throw new BadRequestException('Esa conexión está revocada.');
     }
@@ -755,11 +701,7 @@ export class BotsService {
 
     // La red sale de la cuenta y de ningun otro sitio: es lo que impide que un
     // cliente pida un bot de mainnet sobre una credencial de testnet, o al reves.
-    const market = await this.markets.getSpec(
-      account.venue,
-      dto.symbol,
-      account.testnet,
-    );
+    const market = await this.markets.getSpec(account.venue, dto.symbol, account.testnet);
     const strategy = getStrategy(dto.strategy);
     const config = {
       ...dto.config,
@@ -782,12 +724,7 @@ export class BotsService {
 
     // El preview también valida: si algún nivel es imposible en este venue, el
     // bot no llega a crearse. Vale más un error ahora que veinte rechazos luego.
-    const refPrice = await this.referencePrice(
-      userId,
-      account.venue,
-      dto.symbol,
-      account.testnet,
-    );
+    const refPrice = await this.referencePrice(userId, account.venue, dto.symbol, account.testnet);
     const preview = strategy.preview(config, market, refPrice);
     if (!preview.valid) {
       throw new BadRequestException({
@@ -835,8 +772,7 @@ export class BotsService {
       return created;
     });
 
-    if (dto.startActive)
-      await this.command(userId, bot.id, { command: 'START' });
+    if (dto.startActive) await this.command(userId, bot.id, { command: 'START' });
     return this.detail(userId, bot.id);
   }
 
@@ -941,9 +877,7 @@ export class BotsService {
         data: {
           config_version: version,
           leverage: Number(next.leverage ?? bot.leverage),
-          total_investment: String(
-            next.totalInvestment ?? bot.total_investment,
-          ),
+          total_investment: String(next.totalInvestment ?? bot.total_investment),
         },
       });
       await tx.botEvent.create({
@@ -998,9 +932,7 @@ export class BotsService {
     }
 
     const margin =
-      dto.command === 'ADJUST_MARGIN'
-        ? await this.checkMarginAdjustment(userId, bot, dto)
-        : null;
+      dto.command === 'ADJUST_MARGIN' ? await this.checkMarginAdjustment(userId, bot, dto) : null;
 
     if (dto.command === 'START') {
       if (LIVE_STATUSES.includes(bot.status)) {
@@ -1054,9 +986,7 @@ export class BotsService {
             // cuánto colateral mover y en qué sentido. Mandárselo invitaría a
             // que algún día el worker tocase `totalInvestment` por su cuenta,
             // que es de quien tiene el lease de la configuración, no del tick.
-            payload: margin
-              ? { amount: margin.amount, action: margin.action }
-              : undefined,
+            payload: margin ? { amount: margin.amount, action: margin.action } : undefined,
           },
         }),
         this.db.botEvent.create({
@@ -1130,9 +1060,7 @@ export class BotsService {
     dto: BotCommandDto,
   ): Promise<MarginAdjustment> {
     if (!dto.marginAmount || !dto.marginAction) {
-      throw new BadRequestException(
-        'Indica el importe y si quieres aportar o retirar margen.',
-      );
+      throw new BadRequestException('Indica el importe y si quieres aportar o retirar margen.');
     }
 
     // En cruzado esto no existe: el colateral es de toda la cuenta y no hay una
@@ -1163,12 +1091,7 @@ export class BotsService {
     if (dto.marginAction === 'ADD') {
       // Con el bot: si la conexión es de simulación, el margen libre que cuenta
       // es el de SU sandbox, no un saldo de cuenta que ya no existe.
-      const wallet = await this.readWallet(
-        userId,
-        bot.exchange_account_id,
-        bot.symbol,
-        bot.id,
-      );
+      const wallet = await this.readWallet(userId, bot.exchange_account_id, bot.symbol, bot.id);
       // `unavailable` y no `available == null`: la señal de «no se pudo leer»
       // es aquella. Un `available` ausente en la respuesta del venue es un
       // saldo de CERO legítimo —Aster filtra los saldos a cero y devuelve `[]`—
@@ -1194,8 +1117,7 @@ export class BotsService {
       action: dto.marginAction,
       // Retirar no puede subir el capital asignado: sería contabilizar como
       // aportación un dinero que acaba de salir de la posición.
-      countAsBotCapital:
-        dto.marginAction === 'ADD' && dto.countAsBotCapital === true,
+      countAsBotCapital: dto.marginAction === 'ADD' && dto.countAsBotCapital === true,
     };
   }
 
@@ -1208,11 +1130,7 @@ export class BotsService {
    * retiende la escalera — y por eso es un interruptor y no el comportamiento
    * por defecto.
    */
-  private async raiseAssignedCapital(
-    userId: string,
-    botId: string,
-    amount: string,
-  ) {
+  private async raiseAssignedCapital(userId: string, botId: string, amount: string) {
     const bot = await this.db.bot.findUniqueOrThrow({
       where: { id: botId },
       select: { config_version: true },
@@ -1360,10 +1278,7 @@ export class BotsService {
    * eficiencia, no tiene eficiencia todavía, y pintar un cero haría creer que
    * está funcionando mal.
    */
-  async marketMakerStats(
-    userId: string,
-    id: string,
-  ): Promise<MarketMakerStats> {
+  async marketMakerStats(userId: string, id: string): Promise<MarketMakerStats> {
     const bot = await this.mustOwn(userId, id);
 
     const [stats, snapshot] = await Promise.all([
@@ -1385,18 +1300,10 @@ export class BotsService {
     // que dejarlo correr haría que la rentabilidad de un bot detenido se fuera
     // acercando a cero sola, día tras día, sin que hubiera pasado nada.
     const startedAt = bot.started_at ?? bot.created_at;
-    const hasta =
-      bot.stopped_at && bot.stopped_at > startedAt
-        ? bot.stopped_at
-        : new Date();
-    const uptimeSeconds = Math.max(
-      0,
-      Math.floor((hasta.getTime() - startedAt.getTime()) / 1000),
-    );
+    const hasta = bot.stopped_at && bot.stopped_at > startedAt ? bot.stopped_at : new Date();
+    const uptimeSeconds = Math.max(0, Math.floor((hasta.getTime() - startedAt.getTime()) / 1000));
 
-    const efficiencyPct = peakMargin.gt(0)
-      ? gross.div(peakMargin).mul(100)
-      : null;
+    const efficiencyPct = peakMargin.gt(0) ? gross.div(peakMargin).mul(100) : null;
 
     // La APR necesita las dos cosas: capital de referencia y tiempo corrido.
     // Anualizar los primeros minutos de un bot da cifras de tres dígitos que no
@@ -1493,9 +1400,7 @@ export class BotsService {
     // camino que ya no debería existir— y, si no había, se abría un adaptador
     // autenticado para leer un número público.
     const shared = await this.bus
-      .cacheGet<{ mark?: string }>(
-        `crypton:px:${venueKey(venue, testnet)}:${symbol}`,
-      )
+      .cacheGet<{ mark?: string }>(`crypton:px:${venueKey(venue, testnet)}:${symbol}`)
       .catch(() => null);
     if (shared?.mark) return shared.mark;
 

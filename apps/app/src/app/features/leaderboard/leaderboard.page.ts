@@ -55,7 +55,7 @@ import { UiCardComponent, UiEmptyStateComponent, UiStatComponent } from '../../s
     IonSegmentButton,
     IonSelect,
     IonSelectOption,
-      IonButton,
+    IonButton,
     IonIcon,
     IonSpinner,
     UiCardComponent,
@@ -101,7 +101,7 @@ export class LeaderboardPage implements OnInit {
     } catch (e) {
       await this.toast.error(errorText(e));
     } finally {
-      if (event) (event.target as HTMLIonRefresherElement).complete();
+      if (event) void (event.target as HTMLIonRefresherElement).complete();
     }
   }
 
@@ -202,5 +202,4 @@ export class LeaderboardPage implements OnInit {
       await this.toast.error(errorText(e));
     }
   }
-
 }

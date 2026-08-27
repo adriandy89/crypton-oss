@@ -5,7 +5,14 @@ import { closeOutline, helpCircleOutline, warningOutline } from 'ionicons/icons'
 import { getStrategy } from '@crypton/strategy-core';
 import type { FieldMeta, StrategyKind } from '../../core/models';
 import { optionDoc, strategyGuide } from '../../core/content';
-import { fieldHelp, fieldLabel, groupLabel, optionLabel, strategyLabel } from '../../core/utils';
+import {
+  fieldHelp,
+  fieldLabel,
+  groupLabel,
+  optionLabel,
+  strategyLabel,
+  textoDeConfig,
+} from '../../core/utils';
 import { UiBadgeComponent } from './ui-badge.component';
 import { UiCollapsibleComponent } from './ui-collapsible.component';
 import { UiMutabilityBadgeComponent } from './ui-mutability-badge.component';
@@ -92,7 +99,9 @@ interface OptionGroup {
           @if (guide(); as g) {
             <p class="lead">{{ g.headline }}</p>
             <div class="tags">
-              <ui-badge size="sm" [tone]="riskTone()" caps>riesgo {{ g.risk.toLowerCase() }}</ui-badge>
+              <ui-badge size="sm" [tone]="riskTone()" caps
+                >riesgo {{ g.risk.toLowerCase() }}</ui-badge
+              >
               <ui-badge size="sm" tone="neutral" caps square>{{ rows().length }} opciones</ui-badge>
             </div>
 
@@ -191,8 +200,8 @@ interface OptionGroup {
           </section>
 
           <p class="warn">
-            Operas derivados con apalancamiento en un exchange descentralizado. Puedes perder todo el
-            margen asignado al bot. Prueba primero en modo simulación.
+            Operas derivados con apalancamiento en un exchange descentralizado. Puedes perder todo
+            el margen asignado al bot. Prueba primero en modo simulación.
           </p>
         </ion-content>
       </ng-template>
@@ -278,7 +287,7 @@ export class UiStrategyHelpComponent {
     const given = this.fields();
     if (given.length) return given;
     try {
-      return getStrategy(this.kind()).meta.fields as readonly FieldMeta[];
+      return getStrategy(this.kind()).meta.fields;
     } catch {
       return [];
     }
@@ -335,7 +344,7 @@ export class UiStrategyHelpComponent {
       facts.push(options.map((o) => optionLabel(o, field.labelKey)).join(' / '));
     }
     if (field.default !== undefined && field.default !== null && field.default !== '') {
-      const raw = String(field.default);
+      const raw = textoDeConfig(field.default);
       facts.push('Por defecto ' + (field.kind === 'enum' ? optionLabel(raw, field.labelKey) : raw));
     }
     facts.push(field.required ? 'Obligatorio' : 'Opcional');

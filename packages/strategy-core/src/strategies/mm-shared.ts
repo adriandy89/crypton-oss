@@ -71,9 +71,7 @@ export function inventoryOf(ctx: BotContext, mid: Decimal, maxPositionValue: Num
   const qty = ctx.position ? D(ctx.position.qty) : D(0);
   const exposure = qty.mul(mid);
   const maxPos = D(maxPositionValue ?? 0);
-  const ratio = maxPos.gt(0)
-    ? Decimal.max(D(-1), Decimal.min(D(1), exposure.div(maxPos)))
-    : D(0);
+  const ratio = maxPos.gt(0) ? Decimal.max(D(-1), Decimal.min(D(1), exposure.div(maxPos))) : D(0);
   return { qty, exposure, ratio, loadPct: ratio.abs().mul(100) };
 }
 
@@ -303,8 +301,7 @@ export function sampleVolatility(
   // así que muestrear en cada tick daría una estimación más fina de un número
   // que nadie va a usar, a cambio de una escritura en la base por tick.
   if (record) kept.push([now, mid.toString()]);
-  const trimmed =
-    kept.length > MAX_VOL_SAMPLES ? kept.slice(kept.length - MAX_VOL_SAMPLES) : kept;
+  const trimmed = kept.length > MAX_VOL_SAMPLES ? kept.slice(kept.length - MAX_VOL_SAMPLES) : kept;
   const samples = record ? trimmed : null;
 
   if (trimmed.length < 2) return { volBps: D(0), samples };
@@ -358,8 +355,7 @@ export function activationGate(
   const trigger = cfg.activationPrice ? D(cfg.activationPrice) : null;
   if (trigger == null || !trigger.isFinite() || trigger.lte(0)) return { armed: true };
 
-  const crossed =
-    mode === ActivationMode.PRICE_ABOVE ? mid.gte(trigger) : mid.lte(trigger);
+  const crossed = mode === ActivationMode.PRICE_ABOVE ? mid.gte(trigger) : mid.lte(trigger);
 
   if (!crossed) {
     const dir = mode === ActivationMode.PRICE_ABOVE ? 'suba a' : 'baje a';

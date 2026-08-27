@@ -1,12 +1,5 @@
 import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
-import {
-  IsIn,
-  IsOptional,
-  IsString,
-  Length,
-  MaxLength,
-  Matches,
-} from 'class-validator';
+import { IsIn, IsOptional, IsString, Length, MaxLength, Matches } from 'class-validator';
 
 /** Monedas en las que se pueden mostrar los importes. */
 export const DISPLAY_CURRENCIES = ['USD', 'EUR', 'GBP'] as const;

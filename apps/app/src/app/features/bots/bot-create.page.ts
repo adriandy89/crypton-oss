@@ -58,6 +58,7 @@ import {
   strategyBlurb,
   strategyLabel,
   toMarketSpec,
+  textoDeConfig,
 } from '../../core/utils';
 import {
   UiAmountFieldComponent,
@@ -178,17 +179,15 @@ export class BotCreatePage implements OnInit, OnDestroy {
    * testnet — y el error saldría al final, al crear el bot.
    */
   readonly accounts = computed<ExchangeAccount[]>(() =>
-    this.accountsSvc
-      .accounts()
-      .filter(
-        (a) =>
-          ['VERIFIED', 'ACTIVE'].includes(a.status) &&
-          // La de SIMULACION se ofrece siempre. Es de mainnet por construccion
-          // —simular sobre el libro de una testnet no dice gran cosa—, asi que
-          // el filtro de red la habria escondido justo con la lente puesta en
-          // testnet, que es cuando mas se esta probando.
-          (a.paper || a.testnet === this.testnet()),
-      ),
+    this.accountsSvc.accounts().filter(
+      (a) =>
+        ['VERIFIED', 'ACTIVE'].includes(a.status) &&
+        // La de SIMULACION se ofrece siempre. Es de mainnet por construccion
+        // —simular sobre el libro de una testnet no dice gran cosa—, asi que
+        // el filtro de red la habria escondido justo con la lente puesta en
+        // testnet, que es cuando mas se esta probando.
+        (a.paper || a.testnet === this.testnet()),
+    ),
   );
 
   /** La conexion de simulacion elegida, si lo es. Null cuando se opera de verdad. */
@@ -302,7 +301,7 @@ export class BotCreatePage implements OnInit, OnDestroy {
     // que con otra cifra dejan de valer. Y sin esto pasaba algo peor que
     // enseñarlas viejas: aplicarlas devolvia el capital al valor con el que se
     // pidieron, deshaciendo en silencio lo que el usuario acababa de escribir.
-    const capital = this.config()[CAPITAL_FIELD] ?? '';
+    const capital = textoDeConfig(this.config()[CAPITAL_FIELD]);
     return `${cuenta.venue}|${cuenta.testnet}|${par}|${kind}|${capital}`;
   });
   readonly money = money;
@@ -730,7 +729,7 @@ export class BotCreatePage implements OnInit, OnDestroy {
     const issues = this.issuesByField();
     if (issues.size > 0) {
       return issues.size === 1
-        ? [...issues.values()][0]!
+        ? [...issues.values()][0]
         : `Hay ${issues.size} campos con valores que no valen.`;
     }
     return '';
@@ -910,7 +909,10 @@ export class BotCreatePage implements OnInit, OnDestroy {
    * ser un atajo para saltarse la única pantalla que enseña cuánto se arriesga.
    */
   private async applyCopiedConfig(): Promise<void> {
-    const state = this.router.getCurrentNavigation()?.extras.state ?? history.state;
+    // El estado de navegacion llega sin tipar: anclarlo aqui evita que el
+    // `any` se propague por los seis accesos de abajo.
+    const state = (this.router.getCurrentNavigation()?.extras.state ??
+      (history.state as unknown)) as Record<string, unknown> | undefined;
     if (!state?.['config'] || !state?.['strategy']) return;
 
     this.copiedFrom.set((state['copiedFrom'] as string) ?? null);
@@ -952,15 +954,13 @@ export class BotCreatePage implements OnInit, OnDestroy {
     // ese venue tuviera «dos» y dejara de preseleccionarse. Si no hay ninguna
     // real, se cae a la simulada, que es la eleccion correcta ahi.
     const reales = this.accounts().filter((a) => a.venue === venue && !a.paper);
-    const candidates = reales.length
-      ? reales
-      : this.accounts().filter((a) => a.venue === venue);
+    const candidates = reales.length ? reales : this.accounts().filter((a) => a.venue === venue);
     if (candidates.length === 0) return;
 
     this.symbol.set(symbol);
     if (candidates.length !== 1) return;
 
-    await this.selectAccount(candidates[0]!.id, { keepSymbol: true });
+    await this.selectAccount(candidates[0].id, { keepSymbol: true });
     if (this.markets().some((m) => m.symbol === symbol)) this.step.set('strategy');
   }
 

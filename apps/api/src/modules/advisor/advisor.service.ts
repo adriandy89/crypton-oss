@@ -23,11 +23,7 @@ import {
   type Profile,
 } from './build';
 import { OpenRouterClient } from './openrouter.client';
-import {
-  buildFeatures,
-  featuresBucket,
-  type MarketFeatures,
-} from './market-features';
+import { buildFeatures, featuresBucket, type MarketFeatures } from './market-features';
 import { PROMPT_VERSION } from './prompt';
 import { coerceConfig, enforceCouplings } from './sanitize';
 
@@ -140,17 +136,8 @@ export class AdvisorService {
     },
   ): Promise<RecommendationSet> {
     const testnet = input.testnet === true;
-    const market = await this.markets.getSpec(
-      input.venue,
-      input.symbol,
-      testnet,
-    );
-    const features = await this.features(
-      input.venue,
-      input.symbol,
-      testnet,
-      market,
-    );
+    const market = await this.markets.getSpec(input.venue, input.symbol, testnet);
+    const features = await this.features(input.venue, input.symbol, testnet, market);
 
     const vacio: RecommendationSet = {
       strategy: input.strategy,
@@ -185,21 +172,14 @@ export class AdvisorService {
     // «4.182e-7», y ese texto viaja a la app, entra en `D()` y se compara con
     // precios escritos con todos sus ceros. Con los decimales del mercado se
     // queda en «0.00000042».
-    const refPrice = features.mark.toFixed(
-      Math.min(Math.max(market.priceDecimals, 0), 12),
-    );
+    const refPrice = features.mark.toFixed(Math.min(Math.max(market.priceDecimals, 0), 12));
     const profiles: RecommendedProfile[] = [];
     const descartes: Descarte[] = [];
 
     // Las perillas: del modelo si esta disponible, de las reglas si no. Las dos
     // ramas entran por la MISMA cadena de validacion, que es lo que convierte
     // «la IA no puede proponer algo peligroso» en estructura y no en confianza.
-    const deIA = await this.knobsDeIA(
-      userId,
-      input.strategy,
-      input.symbol,
-      features,
-    );
+    const deIA = await this.knobsDeIA(userId, input.strategy, input.symbol, features);
 
     for (const profile of PROFILES) {
       const delModelo = deIA.knobs?.find((k) => k.knobs.profile === profile);
@@ -314,9 +294,7 @@ export class AdvisorService {
       return 'VALIDACION';
     }
     if (!preview.valid || preview.levels.some((l) => l.violations.length > 0)) {
-      this.logger.debug(
-        `Descartado ${kind}/${knobs.profile}: niveles con violaciones`,
-      );
+      this.logger.debug(`Descartado ${kind}/${knobs.profile}: niveles con violaciones`);
       return 'VENUE';
     }
 
@@ -338,9 +316,7 @@ export class AdvisorService {
       },
       // Lo que dijo el modelo, si lo dijo; si no, la explicacion por reglas.
       rationale: rationaleIA?.trim() || this.rationale(knobs, ctx),
-      warnings: validacion.issues
-        .filter((i) => i.severity === 'WARNING')
-        .map((i) => i.message),
+      warnings: validacion.issues.filter((i) => i.severity === 'WARNING').map((i) => i.message),
     };
   }
 
@@ -376,12 +352,10 @@ export class AdvisorService {
       .catch(() => null);
     if (cacheado) return { knobs: cacheado, cupoAgotado: false };
 
-    if (!(await this.consumeCupo(userId)))
-      return { knobs: null, cupoAgotado: true };
+    if (!(await this.consumeCupo(userId))) return { knobs: null, cupoAgotado: true };
 
     const fresco = await this.modelo.knobsFor(strategy, symbol, features);
-    if (fresco)
-      await this.cache.set(clave, fresco, KNOBS_TTL).catch(() => undefined);
+    if (fresco) await this.cache.set(clave, fresco, KNOBS_TTL).catch(() => undefined);
     return { knobs: fresco, cupoAgotado: false };
   }
 
@@ -400,9 +374,7 @@ export class AdvisorService {
    * ilimitado. El usuario no se queda sin nada, se queda con las reglas.
    */
   private async consumeCupo(userId: string): Promise<boolean> {
-    const crudo = (this.config.get<string>('AI_ADVISOR_DAILY_LIMIT', '') ?? '')
-      .toString()
-      .trim();
+    const crudo = (this.config.get<string>('AI_ADVISOR_DAILY_LIMIT', '') ?? '').toString().trim();
 
     // Vacio significa «sin configurar», NO cero.
     //
@@ -433,9 +405,7 @@ export class AdvisorService {
       .catch(() => -1);
 
     if (usados < 0) {
-      this.logger.warn(
-        'No se ha podido contabilizar el cupo del asistente: se usan reglas.',
-      );
+      this.logger.warn('No se ha podido contabilizar el cupo del asistente: se usan reglas.');
       return false;
     }
     return usados <= tope;
@@ -469,11 +439,7 @@ export class AdvisorService {
     if (100 / lev - 0.5 < 5) return false;
 
     const notional = ctx.totalInvestment * lev;
-    if (
-      limites.maxNotionalPerBot != null &&
-      notional > limites.maxNotionalPerBot
-    )
-      return false;
+    if (limites.maxNotionalPerBot != null && notional > limites.maxNotionalPerBot) return false;
     if (
       limites.maxTotalNotional != null &&
       limites.notionalActual + notional > limites.maxTotalNotional
@@ -486,8 +452,7 @@ export class AdvisorService {
     // venue, no la cartera, asi que una configuracion que pide 120 de margen con
     // 50 de capital pasa las dos y solo se detecta aqui.
     const margen = Number(preview.worstCaseMargin);
-    if (Number.isFinite(margen) && margen > ctx.totalInvestment * 1.02)
-      return false;
+    if (Number.isFinite(margen) && margen > ctx.totalInvestment * 1.02) return false;
 
     return true;
   }
@@ -500,12 +465,8 @@ export class AdvisorService {
       ]);
       return {
         maxLeverage: l.max_leverage ?? null,
-        maxNotionalPerBot: l.max_notional_per_bot
-          ? Number(l.max_notional_per_bot)
-          : null,
-        maxTotalNotional: l.max_total_notional
-          ? Number(l.max_total_notional)
-          : null,
+        maxNotionalPerBot: l.max_notional_per_bot ? Number(l.max_notional_per_bot) : null,
+        maxTotalNotional: l.max_total_notional ? Number(l.max_total_notional) : null,
         notionalActual: actual ? Number(actual) : 0,
       };
     } catch {
@@ -524,9 +485,7 @@ export class AdvisorService {
   private rationale(knobs: Knobs, ctx: BuildContext): string {
     const f = ctx.features;
     const mercado =
-      f.trend === 'LATERAL'
-        ? 'El par se mueve de lado'
-        : `El par viene ${f.trend.toLowerCase()}`;
+      f.trend === 'LATERAL' ? 'El par se mueve de lado' : `El par viene ${f.trend.toLowerCase()}`;
     const movimiento = `con un recorrido diario del ${f.atrPct1d} %`;
     switch (knobs.profile) {
       case 'PRUDENTE':
@@ -564,8 +523,7 @@ export class AdvisorService {
 
     const cuenta = (d: Descarte) => descartes.filter((x) => x === d).length;
     const dominante: Descarte =
-      cuenta('LIMITES') >= cuenta('VENUE') &&
-      cuenta('LIMITES') >= cuenta('VALIDACION')
+      cuenta('LIMITES') >= cuenta('VENUE') && cuenta('LIMITES') >= cuenta('VALIDACION')
         ? 'LIMITES'
         : cuenta('VENUE') >= cuenta('VALIDACION')
           ? 'VENUE'
@@ -615,9 +573,7 @@ export class AdvisorService {
       const mark = ticker?.last ?? velas1h[velas1h.length - 1]?.c ?? '0';
       return buildFeatures(velas1h, velas1d, market, mark);
     } catch (e) {
-      this.logger.debug(
-        `Sin rasgos de mercado para ${venue}:${symbol}: ${String(e)}`,
-      );
+      this.logger.debug(`Sin rasgos de mercado para ${venue}:${symbol}: ${String(e)}`);
       return null;
     }
   }

@@ -226,8 +226,7 @@ export const FIELD_LABELS: Record<string, string> = {
   'strategy.mmv2.minProfitMarginBpsHelp':
     'Lo que debe quedar limpio tras comisiones. Por debajo de esto el bot no cotiza.',
   'strategy.mmv2.postOnly': 'Solo post-only',
-  'strategy.mmv2.postOnlyHelp':
-    'Intenta colocar órdenes limit que no tomen liquidez de inmediato.',
+  'strategy.mmv2.postOnlyHelp': 'Intenta colocar órdenes limit que no tomen liquidez de inmediato.',
   'strategy.mmv2.defensiveThresholdPct': 'Umbral defensivo',
   'strategy.mmv2.defensiveThresholdPctHelp':
     'Ocupación del tope a la que el bot empieza a alejar el lado que añade.',
@@ -253,7 +252,8 @@ export const FIELD_LABELS: Record<string, string> = {
   'strategy.mmv2.dynamicSpreadHelp':
     'Ensancha la cotización con la volatilidad realizada y la anchura del libro.',
   'strategy.mmv2.volatilitySampleSeconds': 'Muestra de volatilidad',
-  'strategy.mmv2.volatilitySampleSecondsHelp': 'Ventana sobre la que se mide el recorrido del precio.',
+  'strategy.mmv2.volatilitySampleSecondsHelp':
+    'Ventana sobre la que se mide el recorrido del precio.',
   'strategy.mmv2.orderBookMarginBps': 'Margen del libro de órdenes',
   'strategy.mmv2.orderBookMarginBpsHelp': 'Se suma siempre, haya volatilidad o no.',
   'strategy.mmv2.volatilityMultiplier': 'Multiplicador de volatilidad',

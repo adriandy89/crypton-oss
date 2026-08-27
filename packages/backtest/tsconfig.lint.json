@@ -1,0 +1,8 @@
+{
+  // Igual que el de compilacion pero SIN excluir los specs: eslint con tipos
+  // necesita que todo fichero que analiza pertenezca a algun proyecto, y los
+  // specs quedan fuera de tsconfig.json a proposito (no deben acabar en dist/).
+  "extends": "./tsconfig.json",
+  "include": ["src/**/*.ts"],
+  "exclude": ["node_modules", "dist"]
+}

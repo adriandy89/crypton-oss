@@ -104,7 +104,7 @@ export class MemoryVenueBudget implements VenueBudget {
   private readonly writeReserve: number;
 
   constructor(opts: VenueBudgetOptions = {}) {
-    this.rate = { ...DEFAULT_RATE, ...(opts.ratePerSecond ?? {}) } as Record<Venue, number>;
+    this.rate = { ...DEFAULT_RATE, ...(opts.ratePerSecond ?? {}) };
     this.burstSeconds = opts.burstSeconds ?? 2;
     this.writeReserve = opts.writeReserve ?? 0.2;
   }
@@ -228,7 +228,7 @@ export class RedisVenueBudget implements VenueBudget {
     private readonly egressId: string,
     opts: VenueBudgetOptions = {},
   ) {
-    this.rate = { ...DEFAULT_RATE, ...(opts.ratePerSecond ?? {}) } as Record<Venue, number>;
+    this.rate = { ...DEFAULT_RATE, ...(opts.ratePerSecond ?? {}) };
     this.burstSeconds = opts.burstSeconds ?? 2;
     this.writeReserve = opts.writeReserve ?? 0.2;
     this.fallback = new MemoryVenueBudget(opts);

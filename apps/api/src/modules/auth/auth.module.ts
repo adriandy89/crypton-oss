@@ -8,10 +8,7 @@ import { JwtStrategy } from './strategies';
 import { TokenService } from './token.service';
 
 @Module({
-  imports: [
-    PassportModule.register({ defaultStrategy: 'jwt' }),
-    JwtModule.register({}),
-  ],
+  imports: [PassportModule.register({ defaultStrategy: 'jwt' }), JwtModule.register({})],
   controllers: [AuthController],
   providers: [AuthService, TokenService, GoogleService, JwtStrategy],
   exports: [AuthService, TokenService],

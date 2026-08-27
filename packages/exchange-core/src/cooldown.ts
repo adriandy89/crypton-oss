@@ -91,7 +91,7 @@ export class VenueCooldown {
     // «418» suelto en el texto: un precio de 77418 o un nonce en base64 lo
     // contienen por casualidad, y eso convertiria un corte de un minuto en dos.
     // Es el mismo fallo que ya tenia la clasificacion de errores.
-    const esVeto = statusDe(e) === 418 || /HTTP 418|VETADO/.test(texto);
+    const esVeto = statusDe(e) === 418 || /HTTP 418|VETADO/.test(texto);
     this.iniciar(esVeto ? BAN_MS : CORTE_MS, texto.slice(0, 200));
   }
 }

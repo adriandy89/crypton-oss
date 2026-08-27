@@ -190,7 +190,10 @@ export const tdca: Strategy<TdcaConfig> = {
 
     if (Number(cfg.leverage) > 3) {
       issues.push(
-        warn('leverage', 'TDCA promedia sin límite de recorrido: por encima de 3x el margen se agota rápido.'),
+        warn(
+          'leverage',
+          'TDCA promedia sin límite de recorrido: por encima de 3x el margen se agota rápido.',
+        ),
       );
     }
     return toResult(issues);
@@ -241,8 +244,6 @@ export const tdca: Strategy<TdcaConfig> = {
   plan(ctx: BotContext): DesiredState {
     const cfg = ctx.config as unknown as TdcaConfig;
     const seq = Number(ctx.cycle.scratch['cycleSeq'] ?? 0);
-    const pd = ctx.market.priceDecimals;
-    const qd = ctx.market.qtyDecimals;
     const mark = D(ctx.ticker.mark);
     const pos = positionSize(ctx);
 

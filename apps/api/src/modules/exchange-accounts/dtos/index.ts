@@ -21,8 +21,7 @@ const EVM_ADDRESS = /^0x[0-9a-fA-F]{40}$/;
  * propio porque es EL error que arruina a un usuario: una seed da control total
  * de los fondos, mientras que una clave de API wallet solo permite operar.
  */
-const looksLikeSeedPhrase = (value: string): boolean =>
-  value.trim().split(/\s+/).length >= 12;
+const looksLikeSeedPhrase = (value: string): boolean => value.trim().split(/\s+/).length >= 12;
 
 export class HyperliquidCredentialsDto {
   @IsString()

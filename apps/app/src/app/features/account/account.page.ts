@@ -389,7 +389,7 @@ export class AccountPage implements OnInit {
    */
   async reload(event: CustomEvent): Promise<void> {
     await this.cargar({ force: true });
-    (event.target as HTMLIonRefresherElement).complete();
+    void (event.target as HTMLIonRefresherElement).complete();
   }
 
   /**

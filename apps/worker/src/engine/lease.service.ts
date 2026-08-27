@@ -87,8 +87,8 @@ export class LeaseService implements OnModuleInit, OnApplicationShutdown {
     this.client = createClient({
       url: this.config.get<string>('REDIS_URL', 'redis://localhost:6379'),
       password: this.config.get<string>('REDIS_PASSWORD'),
-    }) as RedisClientType;
-    this.client.on('error', (e) => this.logger.error('Redis (lease): ' + e.message));
+    });
+    this.client.on('error', (e: Error) => this.logger.error('Redis (lease): ' + e.message));
     await this.client.connect();
 
     // Se renueva a un tercio del TTL: deja margen para dos fallos seguidos de

@@ -253,7 +253,8 @@ export const neutralGrid: Strategy<NeutralGridConfig> = {
     }
 
     const levels = Math.floor(cfg.gridLevels ?? 0);
-    if (levels < 4) issues.push(err('gridLevels', 'Una retícula neutral necesita al menos 4 niveles.'));
+    if (levels < 4)
+      issues.push(err('gridLevels', 'Una retícula neutral necesita al menos 4 niveles.'));
 
     if (upper.gt(lower) && levels >= 4) {
       const step = upper.minus(lower).div(levels - 1);
@@ -307,8 +308,6 @@ export const neutralGrid: Strategy<NeutralGridConfig> = {
   plan(ctx: BotContext): DesiredState {
     const cfg = ctx.config as unknown as NeutralGridConfig;
     const seq = Number(ctx.cycle.scratch['cycleSeq'] ?? 0);
-    const pd = ctx.market.priceDecimals;
-    const qd = ctx.market.qtyDecimals;
     const mark = D(ctx.ticker.mark);
 
     const lines = buildLines(cfg);
@@ -318,7 +317,9 @@ export const neutralGrid: Strategy<NeutralGridConfig> = {
     // el día cancelando y recolocando la misma orden.
     const stepAvg =
       lines.length > 1
-        ? D(cfg.upperPrice).minus(cfg.lowerPrice).div(lines.length - 1)
+        ? D(cfg.upperPrice)
+            .minus(cfg.lowerPrice)
+            .div(lines.length - 1)
         : D(ctx.market.tickSize);
     const deadband = stepAvg.div(2);
 

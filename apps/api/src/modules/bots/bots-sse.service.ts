@@ -165,11 +165,7 @@ export class BotsSseService implements OnModuleInit {
     };
   }
 
-  remove(
-    userId: string,
-    owned: Subject<MessageEvent>,
-    streamId?: string,
-  ): void {
+  remove(userId: string, owned: Subject<MessageEvent>, streamId?: string): void {
     if (streamId) this.dropConnection(streamId);
     const set = this.subjects.get(userId);
     if (!set) return;
@@ -239,13 +235,8 @@ export class BotsSseService implements OnModuleInit {
    */
   private evictOldest(userId: string): void {
     const suyas = [...this.connections].filter(([, c]) => c.userId === userId);
-    for (const [id, conn] of suyas.slice(
-      0,
-      suyas.length - MAX_CONNECTIONS_PER_USER + 1,
-    )) {
-      this.logger.warn(
-        `Demasiadas conexiones de ${userId}: se cierra la mas antigua`,
-      );
+    for (const [id, conn] of suyas.slice(0, suyas.length - MAX_CONNECTIONS_PER_USER + 1)) {
+      this.logger.warn(`Demasiadas conexiones de ${userId}: se cierra la mas antigua`);
       this.dropConnection(id);
       const set = this.subjects.get(userId);
       set?.delete(conn.subject);

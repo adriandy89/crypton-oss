@@ -27,9 +27,7 @@ const SECRET = {
 };
 
 describe('EnvelopeService', () => {
-  const service = new EnvelopeService(
-    config({ CREDENTIALS_MASTER_KEY: KEY_A }),
-  );
+  const service = new EnvelopeService(config({ CREDENTIALS_MASTER_KEY: KEY_A }));
 
   it('descifra exactamente lo que se cifro', () => {
     const sealed = service.seal(SECRET);
@@ -79,24 +77,18 @@ describe('EnvelopeService', () => {
   });
 
   it('una clave maestra distinta no puede abrir el sobre', () => {
-    const other = new EnvelopeService(
-      config({ CREDENTIALS_MASTER_KEY: KEY_B }),
-    );
+    const other = new EnvelopeService(config({ CREDENTIALS_MASTER_KEY: KEY_B }));
     const sealed = service.seal(SECRET);
     expect(() => other.open(sealed)).toThrow();
   });
 
   it('acepta una clave maestra que no sea hexadecimal (comodidad de desarrollo)', () => {
-    const dev = new EnvelopeService(
-      config({ CREDENTIALS_MASTER_KEY: 'clave-de-desarrollo' }),
-    );
+    const dev = new EnvelopeService(config({ CREDENTIALS_MASTER_KEY: 'clave-de-desarrollo' }));
     expect(dev.open(dev.seal(SECRET))).toEqual(SECRET);
   });
 
   it('exige que la clave maestra este configurada', () => {
-    expect(() => new EnvelopeService(config({}))).toThrow(
-      /CREDENTIALS_MASTER_KEY/,
-    );
+    expect(() => new EnvelopeService(config({}))).toThrow(/CREDENTIALS_MASTER_KEY/);
   });
 
   describe('rotacion de clave', () => {

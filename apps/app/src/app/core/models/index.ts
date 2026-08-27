@@ -35,14 +35,7 @@ export type {
 export type Venue = 'HYPERLIQUID' | 'LIGHTER' | 'ASTER';
 
 export type BotStatus =
-  | 'DRAFT'
-  | 'STARTING'
-  | 'RUNNING'
-  | 'PAUSED'
-  | 'STOPPING'
-  | 'STOPPED'
-  | 'ERROR'
-  | 'LIQUIDATED';
+  'DRAFT' | 'STARTING' | 'RUNNING' | 'PAUSED' | 'STOPPING' | 'STOPPED' | 'ERROR' | 'LIQUIDATED';
 
 export type StrategyKind =
   | 'GRID_CLASSIC'
@@ -399,11 +392,7 @@ export interface MarginAdjustment {
 }
 
 /** Comandos que cierran posición a mercado: la UI pide confirmar siempre. */
-export const DESTRUCTIVE_COMMANDS: readonly BotCommand[] = [
-  'STOP_AND_CLOSE',
-  'CLOSE_NOW',
-  'PANIC',
-];
+export const DESTRUCTIVE_COMMANDS: readonly BotCommand[] = ['STOP_AND_CLOSE', 'CLOSE_NOW', 'PANIC'];
 
 /** Mensaje que llega por el flujo SSE de la API. */
 export interface BotStreamEvent {

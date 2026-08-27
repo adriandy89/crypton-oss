@@ -11,11 +11,7 @@ import { D, type BotConfig } from '@crypton/shared';
 import { getStrategy } from '@crypton/strategy-core';
 import { LeaderboardPeriod, StrategyKind, Venue } from '@crypton/db';
 import { CacheService, DbService } from 'src/libs';
-import {
-  expandFromShare,
-  sanitizeForShare,
-  type SharedConfig,
-} from './share-codec';
+import { expandFromShare, sanitizeForShare, type SharedConfig } from './share-codec';
 import type { ListLeaderboardDto, ShareBotDto } from './dtos';
 
 /** Cuánto tiempo debe llevar vivo un bot para entrar en el ranking. */
@@ -225,16 +221,12 @@ export class LeaderboardService {
 
     const blob = share.config_blob as unknown as SharedConfig;
     if (blob.v !== 1) {
-      throw new ConflictException(
-        'Ese bot se publicó con un formato que ya no se soporta.',
-      );
+      throw new ConflictException('Ese bot se publicó con un formato que ya no se soporta.');
     }
 
     const invested = D(input.totalInvestment);
     if (!invested.isFinite() || invested.lte(0)) {
-      throw new BadRequestException(
-        'Indica cuánto capital quieres asignar al bot.',
-      );
+      throw new BadRequestException('Indica cuánto capital quieres asignar al bot.');
     }
 
     const config = expandFromShare(blob, input);
@@ -280,10 +272,7 @@ export class LeaderboardService {
     // Una sola réplica recalcula. `@Cron` dispara en todas, y varias
     // recalculando a la vez escriben las MISMAS filas de `leaderboard_entries`
     // pisándose entre ellas.
-    if (
-      !(await this.cache.setnx('lock:leaderboard-recompute', Date.now(), 900))
-    )
-      return;
+    if (!(await this.cache.setnx('lock:leaderboard-recompute', Date.now(), 900))) return;
 
     for (const period of Object.values(LeaderboardPeriod)) {
       try {
@@ -336,9 +325,7 @@ export class LeaderboardService {
     }[] = [];
 
     for (const bot of candidates) {
-      const uptime = Math.floor(
-        (Date.now() - bot.started_at!.getTime()) / 1000,
-      );
+      const uptime = Math.floor((Date.now() - bot.started_at!.getTime()) / 1000);
       if (uptime < MIN_UPTIME_SECONDS) continue;
 
       const [cycles, snapshot] = await Promise.all([

@@ -11,7 +11,6 @@ import {
   type CycleState,
   type DesiredOrder,
   type DesiredState,
-  type Direction,
   type Fill,
   type MarginAdjustment,
   type MarketSpec,
@@ -21,15 +20,11 @@ import {
 } from '@crypton/shared';
 import { codecFor, shortMessage, type ExchangeAdapter } from '@crypton/exchange-core';
 import {
-  exitSide,
   getStrategy,
   liquidationDistancePct,
   makeCoid,
-  px,
-  qy,
   reconcile,
   revisarOrden,
-  stopLossPrice,
   withStopLoss,
   type ReconcilePlan,
   type Strategy,
@@ -737,8 +732,7 @@ export class BotRunner {
     // o aumentar, la posición puede crecer, y una salida por debajo del mínimo
     // es cuestión de esperar, no una avería.
     this.entradasVivas =
-      desired.orders.some((o) => !o.reduceOnly) ||
-      desired.immediate.some((o) => !o.reduceOnly);
+      desired.orders.some((o) => !o.reduceOnly) || desired.immediate.some((o) => !o.reduceOnly);
 
     const { adapter, bot, store } = this.deps;
 
@@ -849,12 +843,11 @@ export class BotRunner {
       // cantidad cambia, la forma cambia y se vuelve a intentar sola. Es lo que
       // hace que esto se cure sin intervención.
       this.quarantine.set(order.clientOrderId, shape);
-      await this.event(
-        veredicto.tipo,
-        veredicto.severidad,
-        veredicto.mensaje,
-        { clientOrderId: order.clientOrderId, qty: order.qty, price: order.price },
-      );
+      await this.event(veredicto.tipo, veredicto.severidad, veredicto.mensaje, {
+        clientOrderId: order.clientOrderId,
+        qty: order.qty,
+        price: order.price,
+      });
       return;
     }
 
@@ -1476,7 +1469,9 @@ export class BotRunner {
   private async checkCycleAgainstVenue(position: Position | null): Promise<void> {
     const repair = await this.deps.store.repairCycleFromVenue(
       this.botId,
-      D(position?.qty ?? 0).abs().toFixed(),
+      D(position?.qty ?? 0)
+        .abs()
+        .toFixed(),
       this.strategy.recycleLevelOnExit === true,
     );
     if (!repair) return;
@@ -1556,9 +1551,7 @@ export class BotRunner {
     // seguía corriendo con el viejo para siempre.
     const lev = Number(this.config.leverage ?? 1);
     if (g.maxLeverage != null && Number.isFinite(lev) && lev > g.maxLeverage) {
-      return pauseBreach(
-        `apalancamiento ${lev}× por encima de tu límite (${g.maxLeverage}×)`,
-      );
+      return pauseBreach(`apalancamiento ${lev}× por encima de tu límite (${g.maxLeverage}×)`);
     }
 
     if (position) {
@@ -1648,10 +1641,7 @@ export class BotRunner {
     // leía nadie: salía en el formulario y no cortaba nada.
     const dailyPct = this.config.maxDailyLossPct;
     if (dailyPct) {
-      const today = await this.deps.store.todayRealizedPnlForBot(
-        this.botId,
-        this.deps.bot.user_id,
-      );
+      const today = await this.deps.store.todayRealizedPnlForBot(this.botId, this.deps.bot.user_id);
       const loss = this.deps.store.drawdownPct(
         this.deps.bot.total_investment.toString(),
         today.toFixed(),
@@ -1778,8 +1768,8 @@ export class BotRunner {
     // `VENUE_MID` o `VENUE_MARK`, `resolveAnchor` corta antes de mirar
     // `ctx.fairPrice`. Sin esta línea, esa combinación abría un feed y sondeaba
     // Binance cada dos segundos durante toda la vida del bot para TIRAR el dato.
-    const origin = (this.config.fairPriceOrigin as FairPriceOrigin | undefined) ??
-      FairPriceOrigin.SOURCE_GLOBAL;
+    const origin =
+      (this.config.fairPriceOrigin as FairPriceOrigin | undefined) ?? FairPriceOrigin.SOURCE_GLOBAL;
     if (origin !== FairPriceOrigin.SOURCE_GLOBAL) return null;
 
     return {
@@ -1878,7 +1868,7 @@ export class BotRunner {
         previous === undefined
           ? `No se pudo fijar el apalancamiento: ${err.message}`
           : `No se pudo cambiar el apalancamiento a ${leverage}×: ${err.message}. ` +
-            'El exchange sigue con el anterior; párate y arranca de nuevo para aplicarlo.',
+              'El exchange sigue con el anterior; párate y arranca de nuevo para aplicarlo.',
       );
     }
   }
@@ -2067,7 +2057,9 @@ export class BotRunner {
           D(position?.marginUsed ?? 0),
         );
       } catch (e) {
-        this.logger.warn(`No se pudieron actualizar las marcas de market making: ${(e as Error).message}`);
+        this.logger.warn(
+          `No se pudieron actualizar las marcas de market making: ${(e as Error).message}`,
+        );
       }
     }
 

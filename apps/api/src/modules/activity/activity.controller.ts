@@ -1,20 +1,8 @@
-import {
-  Controller,
-  Get,
-  NotFoundException,
-  Query,
-  UseGuards,
-} from '@nestjs/common';
+import { Controller, Get, Query, UseGuards } from '@nestjs/common';
 import { ApiBearerAuth, ApiOperation, ApiTags } from '@nestjs/swagger';
 import { ActorKind, AuditOutcome } from '@crypton/shared';
 import { AuditService } from 'src/libs';
-import {
-  GetUserInfo,
-  JwtAuthGuard,
-  Roles,
-  RolesGuard,
-  type SessionUser,
-} from '../auth';
+import { GetUserInfo, JwtAuthGuard, Roles, RolesGuard, type SessionUser } from '../auth';
 import { ActivityService } from './activity.service';
 import { ActivityQueryDto } from './dtos';
 
@@ -44,10 +32,7 @@ export class ActivityController {
       'motor, mas todos los fallos HTTP. Complementa `GET /bots/:id/events`, ' +
       'que sigue siendo la bitacora de cada bot.',
   })
-  async list(
-    @GetUserInfo() user: SessionUser,
-    @Query() query: ActivityQueryDto,
-  ) {
+  async list(@GetUserInfo() user: SessionUser, @Query() query: ActivityQueryDto) {
     const page = await this.activity.list(query);
 
     // La lectura se audita a si misma, y hay que hacerlo a mano: es un GET, asi
@@ -71,8 +56,7 @@ export class ActivityController {
   @Get('summary')
   @ApiOperation({
     summary: 'Resumen por accion de las ultimas horas (solo ADMIN)',
-    description:
-      'Cuantas veces ocurrio cada accion y como acabo. Es la vista de «esta todo bien».',
+    description: 'Cuantas veces ocurrio cada accion y como acabo. Es la vista de «esta todo bien».',
   })
   summary(@Query('hours') hours?: string) {
     const window = Math.min(Math.max(Number(hours) || 24, 1), 720);

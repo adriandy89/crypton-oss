@@ -1,9 +1,4 @@
-import {
-  CallHandler,
-  ExecutionContext,
-  Injectable,
-  NestInterceptor,
-} from '@nestjs/common';
+import { CallHandler, ExecutionContext, Injectable, NestInterceptor } from '@nestjs/common';
 // El barril de `@nestjs/common` no reexporta las constantes internas: hay que
 // entrar a `constants`, que es donde `@Sse()` deja su marca.
 import { SSE_METADATA } from '@nestjs/common/constants';
@@ -38,10 +33,7 @@ export class TimeoutInterceptor implements NestInterceptor {
     // `Accept: text/event-stream, */*` —perfectamente válido— no casaba con la
     // comparación exacta y se habría llevado un corte a los ochenta segundos en
     // mitad del flujo.
-    const isSse = this.reflector.get<boolean>(
-      SSE_METADATA,
-      context.getHandler(),
-    );
+    const isSse = this.reflector.get<boolean>(SSE_METADATA, context.getHandler());
     if (isSse) return next.handle();
     return next.handle().pipe(timeout(80_000));
   }

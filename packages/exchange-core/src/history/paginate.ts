@@ -110,7 +110,7 @@ export async function paginateHistory(req: PaginateRequest): Promise<PaginateRes
     pages += 1;
     req.onPage?.(page.length, bars.length);
 
-    const siguiente = page[page.length - 1]!.t + span;
+    const siguiente = page[page.length - 1].t + span;
     // GUARDIA: una página que no avanza es un bucle infinito.
     if (siguiente <= cursor) break;
     cursor = siguiente;
@@ -125,7 +125,7 @@ function gapsOf(candles: Candle[], span: number): { barsMissing: number; largest
   let barsMissing = 0;
   let largestGapMs = 0;
   for (let i = 1; i < candles.length; i++) {
-    const hueco = candles[i]!.t - candles[i - 1]!.t;
+    const hueco = candles[i].t - candles[i - 1].t;
     if (hueco > span) {
       barsMissing += Math.round(hueco / span) - 1;
       if (hueco > largestGapMs) largestGapMs = hueco;

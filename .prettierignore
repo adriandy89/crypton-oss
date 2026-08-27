@@ -1,0 +1,12 @@
+# Salida de compilacion y codigo generado: no se formatea lo que no se escribe.
+dist/
+www/
+out-tsc/
+.angular/
+.astro/
+.wrangler/
+generated/
+coverage/
+
+# Lockfile: lo gestiona pnpm.
+pnpm-lock.yaml

@@ -31,9 +31,7 @@ export class ActivityService {
   }
 
   /** Las acciones más frecuentes de una ventana. El resumen de «qué está pasando». */
-  async summary(
-    hours: number,
-  ): Promise<{ action: string; outcome: string; count: number }[]> {
+  async summary(hours: number): Promise<{ action: string; outcome: string; count: number }[]> {
     const since = new Date(Date.now() - hours * 3_600_000);
     const grouped = await this.db.activityLog.groupBy({
       by: ['action', 'outcome'],

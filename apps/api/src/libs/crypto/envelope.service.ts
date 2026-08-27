@@ -1,14 +1,5 @@
-import {
-  createCipheriv,
-  createDecipheriv,
-  createHash,
-  randomBytes,
-} from 'node:crypto';
-import {
-  Injectable,
-  InternalServerErrorException,
-  Logger,
-} from '@nestjs/common';
+import { createCipheriv, createDecipheriv, createHash, randomBytes } from 'node:crypto';
+import { Injectable, InternalServerErrorException, Logger } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 
 /**
@@ -64,17 +55,13 @@ export class EnvelopeService {
       this.masterKeys.set(id.trim(), this.deriveKey(value.trim()));
     }
     if (this.masterKeys.size === 0) {
-      throw new Error(
-        'CREDENTIALS_MASTER_KEY no contiene ninguna clave válida.',
-      );
+      throw new Error('CREDENTIALS_MASTER_KEY no contiene ninguna clave válida.');
     }
 
     const active = config.get<string>('CREDENTIALS_ACTIVE_KEY_ID', '');
     this.activeKeyId = active || [...this.masterKeys.keys()][0];
     if (!this.masterKeys.has(this.activeKeyId)) {
-      throw new Error(
-        'CREDENTIALS_ACTIVE_KEY_ID no coincide con ninguna clave configurada.',
-      );
+      throw new Error('CREDENTIALS_ACTIVE_KEY_ID no coincide con ninguna clave configurada.');
     }
     this.logger.log(
       `Cifrado de credenciales listo (${this.masterKeys.size} clave/s, activa: ${this.activeKeyId})`,
@@ -137,16 +124,9 @@ export class EnvelopeService {
 
       const dekDecipher = createDecipheriv(ALGORITHM, master, dekIv);
       dekDecipher.setAuthTag(dekTag);
-      const dek = Buffer.concat([
-        dekDecipher.update(dekCipher),
-        dekDecipher.final(),
-      ]);
+      const dek = Buffer.concat([dekDecipher.update(dekCipher), dekDecipher.final()]);
 
-      const decipher = createDecipheriv(
-        ALGORITHM,
-        dek,
-        Buffer.from(sealed.encIv, 'base64'),
-      );
+      const decipher = createDecipheriv(ALGORITHM, dek, Buffer.from(sealed.encIv, 'base64'));
       decipher.setAuthTag(Buffer.from(sealed.encTag, 'base64'));
       const plaintext = Buffer.concat([
         decipher.update(Buffer.from(sealed.encPayload, 'base64')),
@@ -156,13 +136,8 @@ export class EnvelopeService {
     } catch (e) {
       // El mensaje se queda deliberadamente vago: distinguir "clave incorrecta"
       // de "datos manipulados" da información a quien esté probando.
-      this.logger.error(
-        'Fallo al descifrar una credencial',
-        (e as Error).message,
-      );
-      throw new InternalServerErrorException(
-        'No se pudo descifrar la credencial.',
-      );
+      this.logger.error('Fallo al descifrar una credencial', (e as Error).message);
+      throw new InternalServerErrorException('No se pudo descifrar la credencial.');
     }
   }
 

@@ -40,14 +40,9 @@ export function externalSymbol(base: string, override?: string | null): string {
  * símbolo), lo pidan uno o mil bots — el mismo principio que el feed de precios
  * del venue.
  */
-export function fairPriceKey(
-  source: string,
-  marketType: string,
-  symbol: string,
-): string {
+export function fairPriceKey(source: string, marketType: string, symbol: string): string {
   return source + ':' + marketType + ':' + symbol.toUpperCase();
 }
 
 /** Clave de Redis donde el worker deja el último precio de una fuente externa. */
-export const fairPriceRedisKey = (feedKey: string): string =>
-  'crypton:fx:' + feedKey.toLowerCase();
+export const fairPriceRedisKey = (feedKey: string): string => 'crypton:fx:' + feedKey.toLowerCase();

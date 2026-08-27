@@ -1,12 +1,5 @@
 import { Type } from 'class-transformer';
-import {
-  IsInt,
-  IsNumberString,
-  IsOptional,
-  Matches,
-  Max,
-  Min,
-} from 'class-validator';
+import { IsInt, IsNumberString, IsOptional, Matches, Max, Min } from 'class-validator';
 
 /**
  * Un tope tiene que ser MAYOR QUE CERO, y omitirlo es como se dice «sin límite».

@@ -21,7 +21,12 @@ import { addIcons } from 'ionicons';
 import { playOutline, trashOutline, warningOutline } from 'ionicons/icons';
 import type { BacktestResult, BacktestSource, Candle, CandleInterval } from '@crypton/shared';
 import { candleSpanMs } from '@crypton/shared';
-import { BacktestsService, BotsService, ToastService, type BacktestSummary } from '../../core/services';
+import {
+  BacktestsService,
+  BotsService,
+  ToastService,
+  type BacktestSummary,
+} from '../../core/services';
 import { errorText, intervalLabel, money, pct, signed } from '../../core/utils';
 import { PriceChartComponent, buildFillMarkers, type OverlayMarker } from '../../shared/chart';
 import {

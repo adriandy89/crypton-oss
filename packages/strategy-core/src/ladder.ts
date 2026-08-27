@@ -12,7 +12,9 @@ import type { Direction } from '@crypton/shared';
 export function arithmeticPrices(lower: Numeric, upper: Numeric, levels: number): Decimal[] {
   if (levels < 2) return [D(lower)];
   const lo = D(lower);
-  const step = D(upper).minus(lo).div(levels - 1);
+  const step = D(upper)
+    .minus(lo)
+    .div(levels - 1);
   return Array.from({ length: levels }, (_, i) => lo.plus(step.mul(i)));
 }
 
@@ -21,7 +23,9 @@ export function geometricPrices(lower: Numeric, upper: Numeric, levels: number):
   if (levels < 2) return [D(lower)];
   const lo = D(lower);
   // ratio = (upper/lower)^(1/(levels-1)), vía exponencial para no perder precisión.
-  const ratio = D(upper).div(lo).pow(D(1).div(levels - 1));
+  const ratio = D(upper)
+    .div(lo)
+    .pow(D(1).div(levels - 1));
   return Array.from({ length: levels }, (_, i) => lo.mul(ratio.pow(i)));
 }
 

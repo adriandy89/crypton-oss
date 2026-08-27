@@ -43,12 +43,8 @@ export class UsersService {
       data: {
         ...(dto.name !== undefined ? { name: dto.name.trim() } : {}),
         ...(dto.bio !== undefined ? { bio: dto.bio.trim() || null } : {}),
-        ...(dto.country !== undefined
-          ? { country: dto.country.toUpperCase() || null }
-          : {}),
-        ...(dto.timezone !== undefined
-          ? { timezone: dto.timezone || null }
-          : {}),
+        ...(dto.country !== undefined ? { country: dto.country.toUpperCase() || null } : {}),
+        ...(dto.timezone !== undefined ? { timezone: dto.timezone || null } : {}),
         ...(dto.displayCurrency !== undefined
           ? { display_currency: dto.displayCurrency || null }
           : {}),

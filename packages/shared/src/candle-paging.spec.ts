@@ -67,7 +67,7 @@ describe('applyHistoryPage', () => {
 
   it('el solape de una vela no duplica y deja la serie ascendente', () => {
     const state = inicial();
-    const primera = state.bars[0]!.t;
+    const primera = state.bars[0].t;
     // El `endTime` del venue es inclusivo, así que vuelve la vela frontera.
     const page = serie(primera, 300);
 
@@ -82,7 +82,7 @@ describe('applyHistoryPage', () => {
 
   it('una página exactamente contigua, sin solape, también encaja', () => {
     const state = inicial();
-    const page = serie(state.bars[0]!.t - SPAN, 300);
+    const page = serie(state.bars[0].t - SPAN, 300);
 
     const next = applyHistoryPage(state, page, LIMITS);
 
@@ -94,7 +94,7 @@ describe('applyHistoryPage', () => {
     // Pegarla movería los marcadores de ejecución al lado equivocado del hueco:
     // `bucketOf` los coloca por bisección sobre los timestamps de las barras.
     const state = inicial();
-    const page = serie(state.bars[0]!.t - 10 * SPAN, 300);
+    const page = serie(state.bars[0].t - 10 * SPAN, 300);
 
     const next = applyHistoryPage(state, page, LIMITS);
 
@@ -116,7 +116,7 @@ describe('applyHistoryPage', () => {
     // La cola lleva la vela en formación y los precios más frescos; una página
     // de pasado no sabe nada de eso.
     const state = historyStateOf(serie(T0, 10));
-    const viva = state.bars[0]!;
+    const viva = state.bars[0];
     const page = serie(viva.t, 10).map((c) => ({ ...c, c: '999' }));
 
     const next = applyHistoryPage(state, page, LIMITS);
@@ -138,7 +138,7 @@ describe('applyHistoryPage', () => {
       const state = historyStateOf(serie(T0, 300));
       const ultima = state.bars.at(-1)!.t;
 
-      const next = applyHistoryPage(state, serie(state.bars[0]!.t - SPAN, 300), limits);
+      const next = applyHistoryPage(state, serie(state.bars[0].t - SPAN, 300), limits);
 
       expect(next.capped).toBe(true);
       expect(next.bars).toHaveLength(600);
@@ -172,7 +172,7 @@ describe('applyHistoryPage', () => {
     expect(new Set(tiempos).size).toBe(tiempos.length);
     // Y estrictamente contiguas: un hueco aquí sería un fallo de paginación.
     for (let i = 1; i < tiempos.length; i++) {
-      expect(tiempos[i]! - tiempos[i - 1]!).toBe(SPAN);
+      expect(tiempos[i] - tiempos[i - 1]).toBe(SPAN);
     }
   });
 });

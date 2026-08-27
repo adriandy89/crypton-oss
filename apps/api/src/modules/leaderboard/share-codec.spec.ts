@@ -158,11 +158,7 @@ describe('sanitizeForShare', () => {
   });
 
   it('no revienta si el capital original era cero', () => {
-    const zero = sanitizeForShare(
-      { ...ORIGINAL, totalInvestment: '0' },
-      FIELDS,
-      'MARTINGALE',
-    );
+    const zero = sanitizeForShare({ ...ORIGINAL, totalInvestment: '0' }, FIELDS, 'MARTINGALE');
     expect(zero.ratios['amountPerBuy']).toBe('0');
   });
 });

@@ -52,12 +52,7 @@ const markets = {
 const config = { get: () => undefined };
 
 const svc = () =>
-  new BacktestsService(
-    db as never,
-    cache as never,
-    markets as never,
-    config as never,
-  );
+  new BacktestsService(db as never, cache as never, markets as never, config as never);
 
 const dto = (over: Partial<CreateBacktestDto> = {}): CreateBacktestDto => ({
   botId: bot.id,
@@ -121,9 +116,9 @@ describe('BacktestsService — validación', () => {
 
   it('un rango invertido se rechaza', async () => {
     const ahora = Date.now();
-    await expect(
-      svc().run(dto({ fromMs: ahora, toMs: ahora - SPAN_1H }), 'admin'),
-    ).rejects.toThrow(/antes de acabar/);
+    await expect(svc().run(dto({ fromMs: ahora, toMs: ahora - SPAN_1H }), 'admin')).rejects.toThrow(
+      /antes de acabar/,
+    );
   });
 
   it('un rango de menos de diez velas se rechaza', async () => {
@@ -137,9 +132,9 @@ describe('BacktestsService — validación', () => {
     // Un «demasiadas velas» a secas obliga al usuario a adivinar.
     const ahora = Date.now();
     const largo = ahora - (MAX_BARS + 5_000) * SPAN_1H;
-    await expect(
-      svc().run(dto({ fromMs: largo, toMs: ahora }), 'admin'),
-    ).rejects.toThrow(/Con velas de/);
+    await expect(svc().run(dto({ fromMs: largo, toMs: ahora }), 'admin')).rejects.toThrow(
+      /Con velas de/,
+    );
   });
 
   it('un intervalo que la fuente no sirve se rechaza con la lista', async () => {
@@ -195,9 +190,7 @@ describe('BacktestsService — validación', () => {
 
     // Llega hasta la descarga —que es donde falla por falta de velas— en vez de
     // rebotar con un 409.
-    await expect(svc().run(dto(), 'admin')).rejects.toThrow(
-      /no tiene histórico/,
-    );
+    await expect(svc().run(dto(), 'admin')).rejects.toThrow(/no tiene histórico/);
   });
 
   it('el cerrojo se suelta si la ejecución falla una vez tomado', async () => {
@@ -209,9 +202,7 @@ describe('BacktestsService — validación', () => {
       json: async () => [],
     });
 
-    await expect(svc().run(dto(), 'admin')).rejects.toThrow(
-      /no tiene histórico/,
-    );
+    await expect(svc().run(dto(), 'admin')).rejects.toThrow(/no tiene histórico/);
     expect(cache.setnx).toHaveBeenCalled();
     expect(cache.getDel).toHaveBeenCalledWith('lock:backtest:run');
   });

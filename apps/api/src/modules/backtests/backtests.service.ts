@@ -21,12 +21,7 @@ import {
   paginateHistory,
   type HistoryProvider,
 } from '@crypton/exchange-core';
-import {
-  aggregateCandles,
-  buildMetrics,
-  fidelityWarnings,
-  runReplay,
-} from '@crypton/backtest';
+import { aggregateCandles, buildMetrics, fidelityWarnings, runReplay } from '@crypton/backtest';
 import { CacheService, DbService } from '../../libs';
 import { MarketsService } from '../markets/markets.service';
 import { BACKTESTABLE_INTERVALS, type CreateBacktestDto } from './dtos';
@@ -68,17 +63,13 @@ export class BacktestsService {
       [BacktestSource.BINANCE]: new BinanceHistory({
         // Las MISMAS variables que ya lee el feed de precio en vivo del worker:
         // un solo sitio al que apuntar si hay que usar un espejo.
-        spotUrl:
-          config.get<string>('BINANCE_REST_URL') ?? 'https://api.binance.com',
-        perpUrl:
-          config.get<string>('BINANCE_FAPI_URL') ?? 'https://fapi.binance.com',
+        spotUrl: config.get<string>('BINANCE_REST_URL') ?? 'https://api.binance.com',
+        perpUrl: config.get<string>('BINANCE_FAPI_URL') ?? 'https://fapi.binance.com',
         timeoutMs,
       }),
       [BacktestSource.BYBIT]: new BybitHistory({
-        spotUrl:
-          config.get<string>('BYBIT_REST_URL') ?? 'https://api.bybit.com',
-        perpUrl:
-          config.get<string>('BYBIT_REST_URL') ?? 'https://api.bybit.com',
+        spotUrl: config.get<string>('BYBIT_REST_URL') ?? 'https://api.bybit.com',
+        perpUrl: config.get<string>('BYBIT_REST_URL') ?? 'https://api.bybit.com',
         timeoutMs,
       }),
     };
@@ -115,27 +106,21 @@ export class BacktestsService {
     // el resultado invitaría a compararlo con su histórico de verdad, y no son
     // lo mismo: aquí no hay libro, ni funding, ni las otras posiciones.
     if (!bot.dry_run) {
-      throw new BadRequestException(
-        'El backtest solo se lanza sobre bots de simulación.',
-      );
+      throw new BadRequestException('El backtest solo se lanza sobre bots de simulación.');
     }
 
     const provider = this.providers[dto.source];
     if (!provider.intervals.includes(dto.interval)) {
       throw new BadRequestException(
         `${dto.source} no sirve velas de ${dto.interval}. Disponibles: ` +
-          provider.intervals
-            .filter((i) => BACKTESTABLE_INTERVALS.includes(i))
-            .join(', ') +
+          provider.intervals.filter((i) => BACKTESTABLE_INTERVALS.includes(i)).join(', ') +
           '.',
       );
     }
 
     const marketType = dto.marketType ?? SourceMarketType.PERP;
     if (!provider.marketTypes.includes(marketType)) {
-      throw new BadRequestException(
-        `${dto.source} no sirve velas de ${marketType}.`,
-      );
+      throw new BadRequestException(`${dto.source} no sirve velas de ${marketType}.`);
     }
 
     const { fromMs, toMs, bars } = this.checkRange(dto);
@@ -144,8 +129,7 @@ export class BacktestsService {
       where: { bot_id: bot.id, version: bot.config_version },
       select: { config: true, version: true },
     });
-    if (!revision)
-      throw new NotFoundException('Ese bot no tiene configuración vigente.');
+    if (!revision) throw new NotFoundException('Ese bot no tiene configuración vigente.');
 
     // Uno a la vez, y por una razón concreta: dos replays simultáneos en el mismo
     // proceso se reparten el bucle de eventos y la API deja de responder a todo
@@ -158,19 +142,13 @@ export class BacktestsService {
     // convertía una caída de Redis en un «ya hay uno en curso» permanente y
     // falso — con nada corriendo.
     if (this.corriendo) {
-      throw new ConflictException(
-        'Ya hay un backtest en curso. Espera a que termine.',
-      );
+      throw new ConflictException('Ya hay un backtest en curso. Espera a que termine.');
     }
     this.corriendo = true;
 
     let cerrojoRemoto = false;
     try {
-      cerrojoRemoto = await this.cache.setnx(
-        'lock:backtest:run',
-        Date.now(),
-        180,
-      );
+      cerrojoRemoto = await this.cache.setnx('lock:backtest:run', Date.now(), 180);
       if (!cerrojoRemoto) {
         this.logger.warn(
           'Sin cerrojo compartido para el backtest: o hay otro en otra réplica, o Redis no ' +
@@ -183,11 +161,7 @@ export class BacktestsService {
 
     const empezado = Date.now();
     try {
-      const sourceSymbol = provider.symbolFor(
-        market.base,
-        marketType,
-        dto.symbolOverride ?? null,
-      );
+      const sourceSymbol = provider.symbolFor(market.base, marketType, dto.symbolOverride ?? null);
       const historia = await paginateHistory({
         provider,
         symbol: sourceSymbol,
@@ -197,8 +171,7 @@ export class BacktestsService {
         toMs,
         barCap: bars,
         gapMs: 150,
-        readCache: async (k) =>
-          (await this.cache.get<Candle[]>(`bt:candles:${k}`)) ?? undefined,
+        readCache: async (k) => (await this.cache.get<Candle[]>(`bt:candles:${k}`)) ?? undefined,
         writeCache: async (k, page) => {
           // Un día: una ventana histórica cerrada no cambia nunca, y es lo que
           // hace instantáneo reejecutar el mismo periodo con otros ajustes —que
@@ -231,16 +204,11 @@ export class BacktestsService {
       });
 
       const span = candleSpanMs(dto.interval);
-      const { metrics, equity } = buildMetrics(
-        out,
-        historia.candles,
-        params.startingBalance,
-        {
-          barsMissing: historia.barsMissing,
-          largestGapMs: historia.largestGapMs,
-          spanMs: span,
-        },
-      );
+      const { metrics, equity } = buildMetrics(out, historia.candles, params.startingBalance, {
+        barsMissing: historia.barsMissing,
+        largestGapMs: historia.largestGapMs,
+        spanMs: span,
+      });
 
       const result: BacktestResult = {
         meta: {
@@ -283,21 +251,14 @@ export class BacktestsService {
         ],
       };
 
-      await this.persist(
-        result,
-        adminId,
-        revision.config,
-        out.fillsTotal,
-        out.ticks,
-      );
+      await this.persist(result, adminId, revision.config, out.fillsTotal, out.ticks);
       this.logger.log(
         `Backtest de ${bot.symbol} (${dto.interval}, ${historia.candles.length} velas) en ${result.meta.durationMs} ms`,
       );
       return result;
     } finally {
       this.corriendo = false;
-      if (cerrojoRemoto)
-        await this.cache.getDel('lock:backtest:run').catch(() => undefined);
+      if (cerrojoRemoto) await this.cache.getDel('lock:backtest:run').catch(() => undefined);
     }
   }
 
@@ -317,16 +278,12 @@ export class BacktestsService {
     const toMs = Math.min(dto.toMs, ahora);
     const fromMs = dto.fromMs;
     if (fromMs >= toMs)
-      throw new BadRequestException(
-        'El rango tiene que empezar antes de acabar.',
-      );
+      throw new BadRequestException('El rango tiene que empezar antes de acabar.');
 
     const span = candleSpanMs(dto.interval);
     const bars = Math.floor((toMs - fromMs) / span);
     if (bars < 10)
-      throw new BadRequestException(
-        'El rango es demasiado corto: menos de diez velas.',
-      );
+      throw new BadRequestException('El rango es demasiado corto: menos de diez velas.');
     if (bars > MAX_BARS) {
       const sugerido = BACKTESTABLE_INTERVALS.find(
         (i) => Math.floor((toMs - fromMs) / candleSpanMs(i)) <= MAX_BARS,
@@ -407,8 +364,7 @@ export class BacktestsService {
         side: f.side,
         // `LIQUIDATION` no es un nivel de estrategia: en la base va como nulo,
         // igual que en `bot_orders`, y la bandera propia es la que lo dice.
-        level_kind:
-          f.levelKind === 'LIQUIDATION' ? null : (f.levelKind as never),
+        level_kind: f.levelKind === 'LIQUIDATION' ? null : (f.levelKind as never),
         level_index: f.levelIndex,
         cycle_seq: f.cycleSeq,
         price: f.price,

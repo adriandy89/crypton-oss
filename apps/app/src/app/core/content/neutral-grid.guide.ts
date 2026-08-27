@@ -123,8 +123,7 @@ export const NEUTRAL_GRID_GUIDE: StrategyGuide<NeutralGridConfig> = {
     },
     reanchorThresholdPct: {
       what: 'A qué porcentaje de distancia del ancla se considera que el precio se ha ido demasiado.',
-      affects:
-        'Solo decide cuando aparece el aviso anterior. No cambia ni una orden por si mismo.',
+      affects: 'Solo decide cuando aparece el aviso anterior. No cambia ni una orden por si mismo.',
       tip: 'Un valor cercano a la mitad de tu rango avisa cuando el precio se acerca a un extremo.',
     },
     maxNotionalCap: {

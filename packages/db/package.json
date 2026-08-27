@@ -15,7 +15,8 @@
     "studio": "prisma studio",
     "build": "prisma generate && tsc -p tsconfig.json",
     "test": "echo \"sin tests\"",
-    "lint": "echo noop",
+    "lint": "eslint \"src/**/*.ts\"",
+    "lint:fix": "eslint \"src/**/*.ts\" --fix",
     "migrate:dev": "prisma migrate dev",
     "migrate:deploy": "prisma migrate deploy"
   },
@@ -25,11 +26,18 @@
     "pg": "^8.18.0"
   },
   "devDependencies": {
+    "@eslint/js": "^9.18.0",
     "@types/node": "^24.0.0",
     "@types/pg": "^8.16.0",
     "dotenv": "^17.2.4",
+    "eslint": "^9.18.0",
+    "eslint-config-prettier": "^10.0.1",
+    "eslint-plugin-prettier": "^5.2.2",
+    "globals": "^17.0.0",
+    "prettier": "^3.4.2",
     "prisma": "^7.3.0",
     "tsx": "^4.20.0",
-    "typescript": "^5.7.3"
+    "typescript": "^5.7.3",
+    "typescript-eslint": "^8.20.0"
   }
 }

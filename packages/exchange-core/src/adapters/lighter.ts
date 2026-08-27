@@ -1,4 +1,4 @@
-import { EMPTY, Observable, Subject, catchError, from, interval, switchMap } from 'rxjs';
+import { Observable, Subject } from 'rxjs';
 import {
   AccountApi,
   Configuration,
@@ -805,7 +805,8 @@ export class LighterAdapter implements ExchangeAdapter {
     const bid = firstNum(data.bids?.[0]?.price, 0);
     const ask = firstNum(data.asks?.[0]?.price, 0);
     const detail = this.detailsBySymbol.get(symbol);
-    const mid = bid.gt(0) && ask.gt(0) ? bid.plus(ask).div(2) : firstNum(detail?.last_trade_price, 0);
+    const mid =
+      bid.gt(0) && ask.gt(0) ? bid.plus(ask).div(2) : firstNum(detail?.last_trade_price, 0);
     return {
       venue: Venue.LIGHTER,
       symbol,
@@ -863,9 +864,7 @@ export class LighterAdapter implements ExchangeAdapter {
           // alimentan la misma columna de la misma pantalla y una diferencia de
           // formato entre ellos se leería como un cambio de precio.
           changePct24h:
-            stat.daily_price_change === undefined
-              ? null
-              : D(stat.daily_price_change).toFixed(4),
+            stat.daily_price_change === undefined ? null : D(stat.daily_price_change).toFixed(4),
           high24h: numOrNull(stat.daily_price_high),
           low24h: numOrNull(stat.daily_price_low),
           volume24h: numOrNull(stat.daily_quote_token_volume),
@@ -1130,7 +1129,6 @@ export class LighterAdapter implements ExchangeAdapter {
       );
     }
 
-
     const timeInForce =
       req.type === 'POST_ONLY'
         ? SignerClient.ORDER_TIME_IN_FORCE_POST_ONLY
@@ -1150,17 +1148,17 @@ export class LighterAdapter implements ExchangeAdapter {
         const result = await this.signedWrite((signer) =>
           this.limiter.run(() =>
             signer.create_order(
-            marketId,
-            clientIndex,
-            baseAmount,
-            price,
-            isAsk,
-            orderType,
-            timeInForce,
-            req.reduceOnly === true,
-            req.triggerPrice
-              ? scaled(req.triggerPrice, spec.priceDecimals)
-              : SignerClient.NIL_TRIGGER_PRICE,
+              marketId,
+              clientIndex,
+              baseAmount,
+              price,
+              isAsk,
+              orderType,
+              timeInForce,
+              req.reduceOnly === true,
+              req.triggerPrice
+                ? scaled(req.triggerPrice, spec.priceDecimals)
+                : SignerClient.NIL_TRIGGER_PRICE,
               SignerClient.DEFAULT_28_DAY_ORDER_EXPIRY,
             ),
           ),
@@ -1234,7 +1232,7 @@ export class LighterAdapter implements ExchangeAdapter {
     }
     this.unwrap(
       (await this.signedWrite((signer) =>
-        this.call(() => signer.cancel_order(marketId, BigInt(orderIndex!))),
+        this.call(() => signer.cancel_order(marketId, BigInt(orderIndex))),
       )) as [unknown, unknown, string | null],
     );
   }
@@ -1275,7 +1273,7 @@ export class LighterAdapter implements ExchangeAdapter {
    */
   async cancelAll(_symbol: string): Promise<void> {
     this.unwrap(
-      (await this.signedWrite((signer) =>
+      await this.signedWrite((signer) =>
         this.call(() =>
           // El segundo argumento va a CERO, no a `Date.now()`.
           //
@@ -1293,24 +1291,22 @@ export class LighterAdapter implements ExchangeAdapter {
           // un valor en milisegundos: aqui no se usa.
           signer.cancel_all_orders(SignerClient.CANCEL_ALL_TIF_IMMEDIATE, 0),
         ),
-      )) as [unknown, unknown, string | null],
+      ),
     );
   }
 
   async setLeverage(symbol: string, leverage: number, mode: MarginMode): Promise<void> {
     const marketId = await this.marketIdOf(symbol);
     this.unwrap(
-      (await this.signedWrite((signer) =>
+      await this.signedWrite((signer) =>
         this.call(() =>
           signer.update_leverage(
             marketId,
-            mode === 'CROSS'
-              ? SignerClient.CROSS_MARGIN_MODE
-              : SignerClient.ISOLATED_MARGIN_MODE,
+            mode === 'CROSS' ? SignerClient.CROSS_MARGIN_MODE : SignerClient.ISOLATED_MARGIN_MODE,
             leverage,
           ),
         ),
-      )) as [unknown, unknown, string | null],
+      ),
     );
   }
 
@@ -1343,11 +1339,15 @@ export class LighterAdapter implements ExchangeAdapter {
     const marketId = await this.marketIdOf(symbol);
     const amount = D(amountUsd).abs();
     if (amount.lte(0)) {
-      throw new ExchangeError('RULES', 'El importe del ajuste de margen debe ser mayor que cero.', this.venue);
+      throw new ExchangeError(
+        'RULES',
+        'El importe del ajuste de margen debe ser mayor que cero.',
+        this.venue,
+      );
     }
     await this.budget.take(this.venue, 1, 'write', this.testnet);
     this.unwrap(
-      (await this.signedWrite((signer) =>
+      await this.signedWrite((signer) =>
         this.limiter.run(() =>
           signer.update_margin(
             marketId,
@@ -1357,7 +1357,7 @@ export class LighterAdapter implements ExchangeAdapter {
               : SignerClient.ISOLATED_MARGIN_ADD_COLLATERAL,
           ),
         ),
-      )) as [unknown, unknown, string | null],
+      ),
     );
   }
 

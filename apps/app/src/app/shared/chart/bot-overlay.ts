@@ -209,7 +209,7 @@ function collapse(lines: OverlayLine[], decimals?: number | null): OverlayLine[]
   }
 
   return [...grupos.values()].map((grupo) => {
-    if (grupo.length === 1) return grupo[0]!;
+    if (grupo.length === 1) return grupo[0];
     const ganadora = grupo.reduce((a, b) => (SEVERITY[b.kind] > SEVERITY[a.kind] ? b : a));
     // Dos rotulos como mucho: a partir de ahi la etiqueta del eje no cabe y se
     // vuelve a perder lo que este colapso venia a arreglar.
@@ -373,15 +373,15 @@ function bucketOf(at: number, span: number, bars: readonly number[] | null): num
   if (!bars) return Math.floor(at / span) * span;
   // Anterior a la primera vela cargada: se queda en ella. El marcador cae en el
   // borde izquierdo del grafico, que es donde de verdad esta su vela.
-  if (at <= bars[0]!) return bars[0]!;
+  if (at <= bars[0]) return bars[0];
   let lo = 0;
   let hi = bars.length - 1;
   while (lo < hi) {
     const mid = (lo + hi + 1) >> 1;
-    if (bars[mid]! <= at) lo = mid;
+    if (bars[mid] <= at) lo = mid;
     else hi = mid - 1;
   }
-  return bars[lo]!;
+  return bars[lo];
 }
 
 /**
@@ -468,7 +468,7 @@ export function buildFillMarkers(
         const titulos = [...g.titulos];
         const text =
           g.count === 1
-            ? titulos[0]!
+            ? titulos[0]
             : titulos.length === 1
               ? `${titulos[0]} ×${g.count}`
               : `${g.side === 'BUY' ? 'COMPRA' : 'VENTA'} ×${g.count}`;

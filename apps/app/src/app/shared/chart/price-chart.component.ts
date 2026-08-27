@@ -664,7 +664,7 @@ export class PriceChartComponent {
     const line = kind === 'line' || kind === 'area';
     this.zone.runOutsideAngular(() => {
       series.update(
-        (line
+        line
           ? { time: toTime(bar.t), value: Number(bar.c) }
           : {
               time: toTime(bar.t),
@@ -672,7 +672,7 @@ export class PriceChartComponent {
               high: Number(bar.h),
               low: Number(bar.l),
               close: Number(bar.c),
-            }) as never,
+            },
       );
       this.volume?.update({
         time: toTime(bar.t),
@@ -712,11 +712,11 @@ export class PriceChartComponent {
     const anterior = this.firstBarAt;
     const prepend =
       anterior !== null &&
-      clean[0]!.t < anterior &&
+      clean[0].t < anterior &&
       // Y la cola intacta: si tambien cambio el final no fue un prepend puro
       // —es un cambio de intervalo o de par— y toca reencuadrar de verdad.
-      clean[clean.length - 1]!.t === this.lastSetAt;
-    this.firstBarAt = clean[0]!.t;
+      clean[clean.length - 1].t === this.lastSetAt;
+    this.firstBarAt = clean[0].t;
     if (prepend) this.historyAsked = false;
 
     this.byTime = new Map(clean.map((c) => [c.t, c]));
@@ -733,7 +733,7 @@ export class PriceChartComponent {
                 low: Number(c.l),
                 close: Number(c.c),
               },
-        ) as never,
+        ),
       );
 
       this.volume?.setData(
@@ -894,6 +894,7 @@ export class PriceChartComponent {
         if (!scale) return;
         // Porcentaje o logaritmica: la formula de abajo es la de la escala
         // normal. Hoy no se usan otras, pero es una linea.
+        // eslint-disable-next-line @typescript-eslint/no-unsafe-enum-comparison -- 0 es PriceScaleMode.Normal; importar el enum solo para esto arrastraria el paquete entero al bundle
         if (scale.options().mode !== 0) return;
         const rango = scale.getVisibleRange();
         if (!rango || !(rango.to > rango.from)) return;
@@ -1189,7 +1190,7 @@ function dedupeAscending(candles: Candle[]): Candle[] {
   // veces por arrastre.
   let limpio = true;
   for (let i = 1; i < candles.length; i++) {
-    if (candles[i]!.t <= candles[i - 1]!.t) {
+    if (candles[i].t <= candles[i - 1].t) {
       limpio = false;
       break;
     }

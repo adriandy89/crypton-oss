@@ -77,13 +77,9 @@ const MAX_RATIO = 0.98;
     @if (available() !== null) {
       <div class="chips">
         @for (p of CHIPS; track p) {
-          <button type="button" [disabled]="disabled()" (click)="applyPct(p)">
-            {{ p }} %
-          </button>
+          <button type="button" [disabled]="disabled()" (click)="applyPct(p)">{{ p }} %</button>
         }
-        <button type="button" class="max" [disabled]="disabled()" (click)="applyMax()">
-          Máx
-        </button>
+        <button type="button" class="max" [disabled]="disabled()" (click)="applyMax()">Máx</button>
       </div>
 
       <ion-range
@@ -101,8 +97,8 @@ const MAX_RATIO = 0.98;
       <p class="err">{{ error() }}</p>
     } @else if (overBalance()) {
       <p class="over">
-        Supera tu saldo disponible en {{ money(excess()) }} {{ field().unit }}. Puedes
-        crearlo igual: manda el exchange al arrancar.
+        Supera tu saldo disponible en {{ money(excess()) }} {{ field().unit }}. Puedes crearlo
+        igual: manda el exchange al arrancar.
       </p>
     } @else if (help()) {
       <p class="help">{{ help() }}</p>

@@ -258,9 +258,10 @@ describe('PriceSourceService', () => {
     it('un sondeo que tarda más que el intervalo no acumula peticiones', async () => {
       let resolver: ((v: unknown) => void) | null = null;
       fetchMock.mockImplementation(
-        () => new Promise((r) => {
-          resolver = r;
-        }),
+        () =>
+          new Promise((r) => {
+            resolver = r;
+          }),
       );
 
       svc.acquire(PERP);

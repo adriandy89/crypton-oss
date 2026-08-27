@@ -31,17 +31,13 @@ export function estimateLiquidationPrice(
   if (!entry.isFinite() || entry.lte(0)) return null;
   const inv = D(1).div(leverage);
   const mmr = D(maintenanceMarginRate);
-  const factor =
-    direction === 'SHORT' ? D(1).plus(inv).minus(mmr) : D(1).minus(inv).plus(mmr);
+  const factor = direction === 'SHORT' ? D(1).plus(inv).minus(mmr) : D(1).minus(inv).plus(mmr);
   const liq = entry.mul(factor);
   return liq.gt(0) ? liq : null;
 }
 
 /** Cuánto puede caer (o subir) el precio antes de liquidar, en %. Siempre ≥ 0. */
-export function liquidationDistancePct(
-  currentPrice: Numeric,
-  liquidationPrice: Numeric,
-): Decimal {
+export function liquidationDistancePct(currentPrice: Numeric, liquidationPrice: Numeric): Decimal {
   const cur = D(currentPrice);
   if (cur.lte(0)) return D(0);
   return D(liquidationPrice).minus(cur).div(cur).mul(100).abs();

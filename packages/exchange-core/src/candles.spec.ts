@@ -65,8 +65,8 @@ describe('finishCandles', () => {
     const salida = finishCandles(entrada, 3);
 
     expect(salida).toHaveLength(3);
-    expect(salida[0]!.t).toBe(AHORA + 7 * SPAN);
-    expect(salida[2]!.t).toBe(AHORA + 9 * SPAN);
+    expect(salida[0].t).toBe(AHORA + 7 * SPAN);
+    expect(salida[2].t).toBe(AHORA + 9 * SPAN);
   });
 
   it('ordena una serie que llega al revés', () => {
@@ -76,9 +76,15 @@ describe('finishCandles', () => {
   });
 
   it('quita duplicados quedándose con el último', () => {
-    const salida = finishCandles([{ ...vela(100), c: '1' }, { ...vela(100), c: '9' }], 10);
+    const salida = finishCandles(
+      [
+        { ...vela(100), c: '1' },
+        { ...vela(100), c: '9' },
+      ],
+      10,
+    );
     expect(salida).toHaveLength(1);
-    expect(salida[0]!.c).toBe('9');
+    expect(salida[0].c).toBe('9');
   });
 
   it('descarta velas con tiempo no finito en vez de propagarlas', () => {

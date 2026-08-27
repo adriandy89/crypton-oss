@@ -174,18 +174,14 @@ export class MarketDataService implements OnModuleDestroy {
    * desplazarse hacia atrás en el gráfico.
    */
   private candleTtl(interval: CandleInterval, endMs?: number): number {
-    if (endMs !== undefined && endMs < Date.now() - candleSpanMs(interval))
-      return 3600;
+    if (endMs !== undefined && endMs < Date.now() - candleSpanMs(interval)) return 3600;
     // Una DÉCIMA del intervalo, entre 3 y 15 segundos.
     //
     // Antes era la mitad, y en 1m eso daba los 15 s del tope: la vela viva se
     // quedaba congelada un cuarto de su propia duración, con la pantalla
     // sondeando cada 5 s y recibiendo tres veces el mismo valor. Con una décima
     // sale 6 s en 1m y el tope sigue mandando en los intervalos largos.
-    return Math.max(
-      3,
-      Math.min(15, Math.floor(candleSpanMs(interval) / 10_000)),
-    );
+    return Math.max(3, Math.min(15, Math.floor(candleSpanMs(interval) / 10_000)));
   }
 
   // ═══════════════════════════════════════════════════════════════
@@ -219,9 +215,7 @@ export class MarketDataService implements OnModuleDestroy {
     if (flat.length === 0) {
       await this.fetchTickers(testnet);
       const retry = await Promise.all(
-        venues.map((v) =>
-          this.cache.get<MarketTicker[]>(tickerKey(v, testnet)),
-        ),
+        venues.map((v) => this.cache.get<MarketTicker[]>(tickerKey(v, testnet))),
       );
       return retry.flatMap((r) => r ?? []);
     }
@@ -250,8 +244,7 @@ export class MarketDataService implements OnModuleDestroy {
   async refreshTickers(): Promise<void> {
     // Una sola réplica sondea. `@Cron` dispara en todas y, sin este cerrojo,
     // tres réplicas multiplicarían por tres las llamadas a los tres venues.
-    if (!(await this.cache.setnx('lock:market-data-tickers', Date.now(), 25)))
-      return;
+    if (!(await this.cache.setnx('lock:market-data-tickers', Date.now(), 25))) return;
     // LAS DOS REDES. Dejar testnet fuera del cron la condenaba a poblarse solo
     // por el camino de arranque en frío, o sea a que la primera pantalla que la
     // mirase se encontrara la lista vacía y tuviera que esperar a que llegara.
@@ -277,31 +270,24 @@ export class MarketDataService implements OnModuleDestroy {
    * comparten una sola llamada a cada venue.
    */
   private fetchTickers(testnet = false): Promise<void> {
-    return this.single(
-      `md:tickers:refresh:${testnet ? 't' : 'm'}`,
-      async () => {
-        await Promise.all(
-          Object.values(Venue).map(async (venue) => {
-            try {
-              const rows = await this.withAdapter(
-                venue,
-                (a) => a.getTickers(),
-                testnet,
-              );
-              await this.cache.set(tickerKey(venue, testnet), rows, 300);
-            } catch (e) {
-              // Se avisa y se sigue: que Aster no responda no puede dejar sin
-              // precios a Hyperliquid y a Lighter.
-              // Recortado: esto corre cada 30 s y por tres venues. El detalle
-              // crudo ya lo ha registrado `withAdapter` en `debug`.
-              this.logger.warn(
-                `No se pudieron leer los precios de ${venue}: ${shortMessage(messageOf(e))}`,
-              );
-            }
-          }),
-        );
-      },
-    );
+    return this.single(`md:tickers:refresh:${testnet ? 't' : 'm'}`, async () => {
+      await Promise.all(
+        Object.values(Venue).map(async (venue) => {
+          try {
+            const rows = await this.withAdapter(venue, (a) => a.getTickers(), testnet);
+            await this.cache.set(tickerKey(venue, testnet), rows, 300);
+          } catch (e) {
+            // Se avisa y se sigue: que Aster no responda no puede dejar sin
+            // precios a Hyperliquid y a Lighter.
+            // Recortado: esto corre cada 30 s y por tres venues. El detalle
+            // crudo ya lo ha registrado `withAdapter` en `debug`.
+            this.logger.warn(
+              `No se pudieron leer los precios de ${venue}: ${shortMessage(messageOf(e))}`,
+            );
+          }
+        }),
+      );
+    });
   }
 
   // ═══════════════════════════════════════════════════════════════
@@ -384,11 +370,7 @@ export class MarketDataService implements OnModuleDestroy {
       // siguiente réplica al caducar su cerrojo de 25 s, y cada usuario que
       // abría el par se quedaba esperando en el mismo single-flight. Los 12 s
       // cubren de sobra una respuesta normal y quedan por debajo del cerrojo.
-      return await withTimeout(
-        fn(this.adapterFor(venue, testnet)),
-        VENUE_TIMEOUT_MS,
-        venue,
-      );
+      return await withTimeout(fn(this.adapterFor(venue, testnet)), VENUE_TIMEOUT_MS, venue);
     } catch (e) {
       // Un intervalo no soportado que se cuele hasta aquí es petición mala, no
       // fallo del servicio: distinguirlos es lo que hace que el 400 lleve el
@@ -407,10 +389,10 @@ export class MarketDataService implements OnModuleDestroy {
       // —la página del cortafuegos, el código de error del exchange— y son
       // kilobytes: en `warn` inundaría el log cada 30 s.
       const crudo = e instanceof ExchangeError ? e.raw : undefined;
-      if (crudo !== undefined)
-        this.logger.debug(
-          `${venue} respondió: ${shortMessage(String(crudo), 600)}`,
-        );
+      if (crudo !== undefined) {
+        const texto = typeof crudo === 'string' ? crudo : JSON.stringify(crudo);
+        this.logger.debug(`${venue} respondió: ${shortMessage(texto, 600)}`);
+      }
 
       // Un corte del venue no es una avería nuestra y se dice distinto: al
       // usuario le sirve saber que hay que esperar, no que «falló algo».
@@ -445,17 +427,10 @@ const tickerKey = (venue: Venue, testnet = false): string =>
 /** Tope por llamada al venue. Por debajo del cerrojo del cron (25 s). */
 const VENUE_TIMEOUT_MS = 12_000;
 
-function withTimeout<T>(
-  promise: Promise<T>,
-  ms: number,
-  venue: Venue,
-): Promise<T> {
+function withTimeout<T>(promise: Promise<T>, ms: number, venue: Venue): Promise<T> {
   let timer: NodeJS.Timeout | undefined;
   const deadline = new Promise<never>((_, reject) => {
-    timer = setTimeout(
-      () => reject(new Error(`${venue} no ha respondido en ${ms / 1000} s.`)),
-      ms,
-    );
+    timer = setTimeout(() => reject(new Error(`${venue} no ha respondido en ${ms / 1000} s.`)), ms);
   });
   return Promise.race([promise, deadline]).finally(() => clearTimeout(timer));
 }
@@ -475,14 +450,10 @@ function quantizeLimit(limit: number | undefined): number {
  * misma ventana; alineado, también comparten la misma entrada de caché. Y un
  * `endMs` en el futuro no significa nada: se trata como «ahora».
  */
-function quantizeEnd(
-  interval: CandleInterval,
-  endMs: number | undefined,
-): number | undefined {
+function quantizeEnd(interval: CandleInterval, endMs: number | undefined): number | undefined {
   if (endMs === undefined || endMs >= Date.now()) return undefined;
   const span = candleSpanMs(interval);
   return Math.floor(endMs / span) * span;
 }
 
-const messageOf = (e: unknown): string =>
-  e instanceof Error ? e.message : String(e);
+const messageOf = (e: unknown): string => (e instanceof Error ? e.message : String(e));

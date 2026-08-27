@@ -11,8 +11,7 @@ import { getStrategy, listStrategies } from './registry';
 import { parseCoid } from './client-order-id';
 import { BASE_CONFIG, makeContext, makeMarket, makePosition, makeVenueOrder } from './testing';
 
-const cfg = (extra: Record<string, unknown>): BotConfig =>
-  ({ ...BASE_CONFIG, ...extra }) as unknown as BotConfig;
+const cfg = (extra: Record<string, unknown>): BotConfig => ({ ...BASE_CONFIG, ...extra });
 
 const byKind = <T extends { levelKind: string }>(orders: T[], kind: string): T[] =>
   orders.filter((o) => o.levelKind === kind);
@@ -655,7 +654,11 @@ describe('marketMaker.plan', () => {
   it('con inventario largo el sesgo baja el centro para soltar antes', () => {
     const ctx = makeContext({
       strategy: StrategyKind.MARKET_MAKER,
-      config: cfg({ ...(config as object), inventoryPriceAdjustment: true, inventorySkewFactor: '1' }),
+      config: cfg({
+        ...(config as object),
+        inventoryPriceAdjustment: true,
+        inventorySkewFactor: '1',
+      }),
       price: '100',
       position: makePosition('5', '100'), // 500 = 50 % del tope
     });
@@ -707,7 +710,10 @@ describe('marketMaker.plan', () => {
       config: cfg({ ...(config as object), buyDistanceBps: '2', minAllowedDistanceBps: '2' }),
       price: '100',
     });
-    const bid = byKind(getStrategy(StrategyKind.MARKET_MAKER).plan(ctx).orders, LevelKind.QUOTE_BID)[0];
+    const bid = byKind(
+      getStrategy(StrategyKind.MARKET_MAKER).plan(ctx).orders,
+      LevelKind.QUOTE_BID,
+    )[0];
     expect(Number(bid.price)).toBeLessThanOrEqual(99.98);
   });
 
@@ -832,7 +838,6 @@ describe('registro de estrategias', () => {
   });
 });
 
-
 // ═══════════════════════════════════════════════════════════════
 // MARKET MAKER — paridad V1
 // ═══════════════════════════════════════════════════════════════
@@ -862,7 +867,7 @@ describe('marketMaker.plan — guardas nuevas', () => {
         config: cfg({ ...(base as object), ...extra }),
         price: '100',
         ...ctxExtra,
-      } as never),
+      }),
     );
 
   it('con post-only desactivado manda limit normales', () => {
@@ -910,7 +915,10 @@ describe('marketMaker.plan — guardas nuevas', () => {
   it('en modo defensivo aleja el lado que añade y acerca el que reduce', () => {
     // Tick fino a propósito: con el de 0,1 del mercado por defecto, 12 y 20 bps
     // sobre un precio de 100 redondean al MISMO precio y el test no probaría nada.
-    const fino = { position: makePosition('7.5', '100'), market: { tickSize: '0.01', priceDecimals: 2 } };
+    const fino = {
+      position: makePosition('7.5', '100'),
+      market: { tickSize: '0.01', priceDecimals: 2 },
+    };
     const normal = plan({}, fino);
     const defensivo = plan(
       { defensiveThresholdPct: '70', highRiskThresholdPct: '95' },
@@ -996,9 +1004,7 @@ describe('marketMaker.plan — guardas nuevas', () => {
     const ctxExtra = {
       position: makePosition('5', '100'), // largo: la venta es la salida
       now: 1_000_000,
-      openOrders: [
-        makeVenueOrder('1a2b3c4d00000000.1.QA0', '100.2', 'SELL', 1_000_000 - 120_000),
-      ],
+      openOrders: [makeVenueOrder('1a2b3c4d00000000.1.QA0', '100.2', 'SELL', 1_000_000 - 120_000)],
     };
     const vivo = plan({ exitOrderTtlSeconds: 0 }, ctxExtra);
     const caducado = plan({ exitOrderTtlSeconds: 60 }, ctxExtra);
@@ -1073,7 +1079,7 @@ describe('marketMakerV2.plan', () => {
         config: cfg({ ...(base as object), ...extra }),
         price: '100',
         ...ctxExtra,
-      } as never),
+      }),
     );
 
   it('cotiza los dos lados a la distancia configurada', () => {
@@ -1193,9 +1199,7 @@ describe('marketMakerV2.plan', () => {
       price: '100.01', // deriva de 1 bps, muy por debajo del umbral de 30
       now: 1_000_000,
       cycle: { scratch: { cycleSeq: 1, quotedMid: '100', quotedAt: 1_000_000 - 5_000 } },
-      openOrders: [
-        makeVenueOrder('1a2b3c4d00000000.1.QB0', '99.6', 'BUY', 1_000_000 - 300_000),
-      ],
+      openOrders: [makeVenueOrder('1a2b3c4d00000000.1.QB0', '99.6', 'BUY', 1_000_000 - 300_000)],
     };
     expect(plan({ orderMaxAgeSeconds: 0 }, ctxExtra).scratchPatch?.quotedMid).toBeUndefined();
     expect(plan({ orderMaxAgeSeconds: 120 }, ctxExtra).scratchPatch?.quotedMid).toBeDefined();
@@ -1380,9 +1384,9 @@ describe('marketMakerV2.validate', () => {
       fairPriceOrigin: FairPriceOrigin.VENUE_MID,
     });
     expect(ok).toBe(true);
-    expect(
-      issues.some((i) => i.field === 'fairPriceOrigin' && i.severity === 'WARNING'),
-    ).toBe(true);
+    expect(issues.some((i) => i.field === 'fairPriceOrigin' && i.severity === 'WARNING')).toBe(
+      true,
+    );
   });
 
   it('rechaza un techo de spread por debajo del suelo por coste', () => {
@@ -1397,9 +1401,9 @@ describe('marketMakerV2.validate', () => {
 
   it('avisa cuando el suelo por coste anula la distancia configurada', () => {
     const { issues } = validate({ feeEstimateBps: '30', minProfitMarginBps: '20' });
-    expect(
-      issues.some((i) => i.field === 'minProfitMarginBps' && i.severity === 'WARNING'),
-    ).toBe(true);
+    expect(issues.some((i) => i.field === 'minProfitMarginBps' && i.severity === 'WARNING')).toBe(
+      true,
+    );
   });
 
   it('exige precio de disparo si hay condición de activación', () => {
@@ -1443,7 +1447,7 @@ describe('preview() con una config que no vale', () => {
       // El caso REAL: el usuario elige estrategia, se cargan los defaults del
       // servidor y pulsa el boton. `defaults()` no trae `totalInvestment`.
       it('no lanza con solo los defaults, sin capital asignado', () => {
-        const defaults = strategy.defaults() as Record<string, unknown>;
+        const defaults = strategy.defaults();
         expect(defaults['totalInvestment']).toBeUndefined();
         expect(() => strategy.preview(defaults as never, market, '100')).not.toThrow();
         expect(strategy.preview(defaults as never, market, '100').valid).toBe(false);

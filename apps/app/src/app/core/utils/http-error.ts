@@ -72,11 +72,11 @@ export function parseHttpError(e: unknown): ParsedHttpError {
   } else if (Array.isArray(inner)) {
     message = inner.join(' ');
   } else if (inner && typeof inner === 'object') {
-    message = typeof inner['message'] === 'string' ? (inner['message'] as string) : message;
+    message = typeof inner['message'] === 'string' ? inner['message'] : message;
     issues = (inner['issues'] as ValidationIssue[]) ?? [];
     coldFields = (inner['coldFields'] as string[]) ?? [];
     requiresConfirmation = inner['requiresConfirmation'] === true;
-    code = typeof inner['code'] === 'string' ? (inner['code'] as string) : null;
+    code = typeof inner['code'] === 'string' ? inner['code'] : null;
   }
 
   return { message, issues, coldFields, requiresConfirmation, status: e.status, code };

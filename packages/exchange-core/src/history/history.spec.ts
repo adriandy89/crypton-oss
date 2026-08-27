@@ -9,7 +9,11 @@ const CONFIG = {
   perpUrl: 'https://fapi.binance.com',
   timeoutMs: 5_000,
 };
-const BYBIT_CONFIG = { spotUrl: 'https://api.bybit.com', perpUrl: 'https://api.bybit.com', timeoutMs: 5_000 };
+const BYBIT_CONFIG = {
+  spotUrl: 'https://api.bybit.com',
+  perpUrl: 'https://api.bybit.com',
+  timeoutMs: 5_000,
+};
 
 const SPAN = 900_000; // 15m
 const T0 = 1_700_000_000_000 - (1_700_000_000_000 % SPAN);
@@ -195,7 +199,7 @@ describe('paginateHistory', () => {
 
     expect(r.pages).toBe(3);
     expect(r.candles).toHaveLength(250);
-    expect(r.candles[0]!.t).toBe(T0);
+    expect(r.candles[0].t).toBe(T0);
     // Contiguas de verdad: un hueco aquí sería un fallo de paginación.
     expect(r.barsMissing).toBe(0);
   });
@@ -239,7 +243,7 @@ describe('paginateHistory', () => {
       }),
     });
 
-    expect(vistos[0]! % SPAN).toBe(0);
+    expect(vistos[0] % SPAN).toBe(0);
   });
 
   it('respeta el tope de barras', async () => {
@@ -251,7 +255,7 @@ describe('paginateHistory', () => {
 
     expect(r.candles).toHaveLength(150);
     // Y conserva las MÁS RECIENTES: `finishCandles` recorta por delante.
-    expect(r.candles[r.candles.length - 1]!.t).toBe(T0 + 199 * SPAN);
+    expect(r.candles[r.candles.length - 1].t).toBe(T0 + 199 * SPAN);
   });
 
   it('rechaza un intervalo que el proveedor no sirve, sin salir a la red', async () => {

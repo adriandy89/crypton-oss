@@ -170,31 +170,14 @@ describe('Aislamiento entre usuarios (e2e)', () => {
       botDeAlicia = bot.id;
     });
 
-    const rutasDeLectura = [
-      '',
-      '/levels',
-      '/orders',
-      '/fills',
-      '/cycles',
-      '/events',
-      '/snapshots',
-    ];
+    const rutasDeLectura = ['', '/levels', '/orders', '/fills', '/cycles', '/events', '/snapshots'];
 
-    it.each(rutasDeLectura)(
-      'bruno no puede leer /bots/:id%s de alicia',
-      async (sufijo) => {
-        await http()
-          .get(`${PREFIX}/bots/${botDeAlicia}${sufijo}`)
-          .set(as(bruno))
-          .expect(404);
-      },
-    );
+    it.each(rutasDeLectura)('bruno no puede leer /bots/:id%s de alicia', async (sufijo) => {
+      await http().get(`${PREFIX}/bots/${botDeAlicia}${sufijo}`).set(as(bruno)).expect(404);
+    });
 
     it('alicia sí puede leer su propio bot', async () => {
-      const res = await http()
-        .get(`${PREFIX}/bots/${botDeAlicia}`)
-        .set(as(alicia))
-        .expect(200);
+      const res = await http().get(`${PREFIX}/bots/${botDeAlicia}`).set(as(alicia)).expect(200);
       expect(res.body.name).toBe('bot-privado-de-alicia');
     });
 
@@ -226,13 +209,8 @@ describe('Aislamiento entre usuarios (e2e)', () => {
     });
 
     it('bruno no puede borrar el bot de alicia', async () => {
-      await http()
-        .delete(`${PREFIX}/bots/${botDeAlicia}`)
-        .set(as(bruno))
-        .expect(404);
-      expect(
-        await db.bot.findUnique({ where: { id: botDeAlicia } }),
-      ).not.toBeNull();
+      await http().delete(`${PREFIX}/bots/${botDeAlicia}`).set(as(bruno)).expect(404);
+      expect(await db.bot.findUnique({ where: { id: botDeAlicia } })).not.toBeNull();
     });
 
     it('el listado de bruno no incluye bots de alicia', async () => {
@@ -303,28 +281,15 @@ describe('Aislamiento entre usuarios (e2e)', () => {
     });
 
     it('el listado de bruno no ve la credencial de alicia', async () => {
-      const res = await http()
-        .get(`${PREFIX}/exchange-accounts`)
-        .set(as(bruno))
-        .expect(200);
+      const res = await http().get(`${PREFIX}/exchange-accounts`).set(as(bruno)).expect(200);
       const ids = (res.body as { id: string }[]).map((c) => c.id);
       expect(ids).not.toContain(cuentaDeAlicia);
     });
 
     it('ninguna respuesta expone el sobre cifrado', async () => {
-      const res = await http()
-        .get(`${PREFIX}/exchange-accounts`)
-        .set(as(alicia))
-        .expect(200);
+      const res = await http().get(`${PREFIX}/exchange-accounts`).set(as(alicia)).expect(200);
       const serializado = JSON.stringify(res.body);
-      for (const campo of [
-        'encPayload',
-        'enc_payload',
-        'encDek',
-        'enc_dek',
-        'encTag',
-        'enc_iv',
-      ]) {
+      for (const campo of ['encPayload', 'enc_payload', 'encDek', 'enc_dek', 'encTag', 'enc_iv']) {
         expect(serializado).not.toContain(campo);
       }
     });
@@ -338,9 +303,7 @@ describe('Aislamiento entre usuarios (e2e)', () => {
         .delete(`${PREFIX}/exchange-accounts/${cuentaDeAlicia}`)
         .set(as(bruno))
         .expect(404);
-      expect(
-        await db.exchangeAccount.findUnique({ where: { id: cuentaDeAlicia } }),
-      ).not.toBeNull();
+      expect(await db.exchangeAccount.findUnique({ where: { id: cuentaDeAlicia } })).not.toBeNull();
     });
 
     /**
@@ -392,10 +355,7 @@ describe('Aislamiento entre usuarios (e2e)', () => {
         .send({ maxLeverage: '7' })
         .expect(200);
 
-      const deBruno = await http()
-        .get(`${PREFIX}/risk/limits`)
-        .set(as(bruno))
-        .expect(200);
+      const deBruno = await http().get(`${PREFIX}/risk/limits`).set(as(bruno)).expect(200);
       expect(String(deBruno.body.maxLeverage ?? '')).not.toBe('7');
     });
 
@@ -404,10 +364,7 @@ describe('Aislamiento entre usuarios (e2e)', () => {
         where: { user_id: alicia.id },
         select: { status: true },
       });
-      await http()
-        .post(`${PREFIX}/risk/kill-switch`)
-        .set(as(bruno))
-        .expect(200);
+      await http().post(`${PREFIX}/risk/kill-switch`).set(as(bruno)).expect(200);
       const despues = await db.bot.findMany({
         where: { user_id: alicia.id },
         select: { status: true },
@@ -418,10 +375,7 @@ describe('Aislamiento entre usuarios (e2e)', () => {
     it('el código de Telegram nace con caducidad', async () => {
       // Lo que se comprueba es que NUNCA se emite un código sin fecha de
       // caducidad: un código eterno es una puerta abierta indefinidamente.
-      const res = await http()
-        .post(`${PREFIX}/telegram/link`)
-        .set(as(alicia))
-        .send({});
+      const res = await http().post(`${PREFIX}/telegram/link`).set(as(alicia)).send({});
 
       expect([200, 201]).toContain(res.status);
 
@@ -436,14 +390,8 @@ describe('Aislamiento entre usuarios (e2e)', () => {
 
   describe('perfil y reautenticación', () => {
     it('cada usuario lee SU perfil, nunca el de otro', async () => {
-      const deAlicia = await http()
-        .get(`${PREFIX}/users/me`)
-        .set(as(alicia))
-        .expect(200);
-      const deBruno = await http()
-        .get(`${PREFIX}/users/me`)
-        .set(as(bruno))
-        .expect(200);
+      const deAlicia = await http().get(`${PREFIX}/users/me`).set(as(alicia)).expect(200);
+      const deBruno = await http().get(`${PREFIX}/users/me`).set(as(bruno)).expect(200);
 
       expect(deAlicia.body.email).toBe(alicia.email);
       expect(deBruno.body.email).toBe(bruno.email);
@@ -451,10 +399,7 @@ describe('Aislamiento entre usuarios (e2e)', () => {
     });
 
     it('el perfil no devuelve la identidad de Google ni restos de credenciales', async () => {
-      const res = await http()
-        .get(`${PREFIX}/users/me`)
-        .set(as(alicia))
-        .expect(200);
+      const res = await http().get(`${PREFIX}/users/me`).set(as(alicia)).expect(200);
       const serializado = JSON.stringify(res.body);
       // `google_sub` identifica la cuenta ante Google: ninguna pantalla lo
       // necesita, así que no debe salir de la base de datos. Los otros tres son
@@ -474,10 +419,7 @@ describe('Aislamiento entre usuarios (e2e)', () => {
         .send({ name: 'Bruno', role: 'ADMIN' })
         .expect(400);
 
-      const res = await http()
-        .get(`${PREFIX}/users/me`)
-        .set(as(bruno))
-        .expect(200);
+      const res = await http().get(`${PREFIX}/users/me`).set(as(bruno)).expect(200);
       expect(res.body.role).toBe('USER');
     });
 
@@ -522,10 +464,7 @@ describe('Aislamiento entre usuarios (e2e)', () => {
 
     it('la reautenticación empieza en blanco y no se puede fingir', async () => {
       // Nadie arranca con permiso vivo para operaciones críticas.
-      const estado = await http()
-        .get(`${PREFIX}/auth/step-up`)
-        .set(as(bruno))
-        .expect(200);
+      const estado = await http().get(`${PREFIX}/auth/step-up`).set(as(bruno)).expect(200);
       expect((estado.body as { fresh: boolean }).fresh).toBe(false);
 
       // Y no hay forma de dárselo a uno mismo: el único camino pasa por volver
@@ -582,10 +521,7 @@ describe('Aislamiento entre usuarios (e2e)', () => {
 
       // Solo `openid` y `email`. Si algún día aparece `profile` aquí, es que
       // alguien ha empezado a pedir el nombre y la foto del usuario.
-      expect(url.searchParams.get('scope')?.split(' ').sort()).toEqual([
-        'email',
-        'openid',
-      ]);
+      expect(url.searchParams.get('scope')?.split(' ').sort()).toEqual(['email', 'openid']);
 
       // PKCE con S256. En `plain` el reto viaja en claro y no protege de nada.
       expect(url.searchParams.get('code_challenge_method')).toBe('S256');
@@ -609,8 +545,7 @@ describe('Aislamiento entre usuarios (e2e)', () => {
         .send({ platform: 'native', challenge: reto })
         .expect(200);
 
-      const state = (res: { body: unknown }) =>
-        urlDe(res).searchParams.get('state');
+      const state = (res: { body: unknown }) => urlDe(res).searchParams.get('state');
       expect(state(uno)).not.toBe(state(dos));
     });
 
@@ -669,22 +604,13 @@ describe('Aislamiento entre usuarios (e2e)', () => {
       // contraseña sin que nadie lo haya decidido.
       const difuntas: Array<[string, Record<string, string>]> = [
         ['/auth/sign-in', { email: 'a@b.c', password: 'Contrasena123' }],
-        [
-          '/auth/sign-up',
-          { email: 'a@b.c', password: 'Contrasena123', name: 'a' },
-        ],
-        [
-          '/auth/password',
-          { currentPassword: 'a', newPassword: 'Contrasena123' },
-        ],
+        ['/auth/sign-up', { email: 'a@b.c', password: 'Contrasena123', name: 'a' }],
+        ['/auth/password', { currentPassword: 'a', newPassword: 'Contrasena123' }],
         ['/auth/totp/setup', {}],
       ];
 
       for (const [ruta, cuerpo] of difuntas) {
-        const res = await http()
-          .post(`${PREFIX}${ruta}`)
-          .set(as(bruno))
-          .send(cuerpo);
+        const res = await http().post(`${PREFIX}${ruta}`).set(as(bruno)).send(cuerpo);
         expect(res.status).toBe(404);
       }
 
@@ -701,13 +627,7 @@ describe('Aislamiento entre usuarios (e2e)', () => {
         .expect(404);
 
       const cuerpo = JSON.stringify(res.body);
-      for (const filtracion of [
-        'prisma',
-        'PrismaClient',
-        'invocation',
-        'SELECT',
-        'user_id',
-      ]) {
+      for (const filtracion of ['prisma', 'PrismaClient', 'invocation', 'SELECT', 'user_id']) {
         expect(cuerpo.toLowerCase()).not.toContain(filtracion.toLowerCase());
       }
     });

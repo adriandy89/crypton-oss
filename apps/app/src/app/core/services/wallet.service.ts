@@ -146,9 +146,7 @@ export class WalletService {
       if (symbol) params['symbol'] = symbol;
       if (botId) params['botId'] = botId;
 
-      const snapshot = await firstValueFrom(
-        this.http.get<CapitalSnapshot>(this.base, { params }),
-      );
+      const snapshot = await firstValueFrom(this.http.get<CapitalSnapshot>(this.base, { params }));
 
       const next = new Map(this.balances());
       next.set(claveSaldo(accountId, botId), snapshot);

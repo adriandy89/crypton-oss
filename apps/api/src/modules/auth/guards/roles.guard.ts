@@ -1,9 +1,4 @@
-import {
-  CanActivate,
-  ExecutionContext,
-  ForbiddenException,
-  Injectable,
-} from '@nestjs/common';
+import { CanActivate, ExecutionContext, ForbiddenException, Injectable } from '@nestjs/common';
 import { Reflector } from '@nestjs/core';
 import type { Role } from '@crypton/db';
 import { ROLES_KEY } from '../decorators/roles.decorator';
@@ -31,21 +26,17 @@ export class RolesGuard implements CanActivate {
   canActivate(context: ExecutionContext): boolean {
     // El método gana sobre la clase: permite abrir una ruta concreta dentro de
     // un controlador restringido, o al revés.
-    const required = this.reflector.getAllAndOverride<Role[] | undefined>(
-      ROLES_KEY,
-      [context.getHandler(), context.getClass()],
-    );
+    const required = this.reflector.getAllAndOverride<Role[] | undefined>(ROLES_KEY, [
+      context.getHandler(),
+      context.getClass(),
+    ]);
     if (!required || required.length === 0) return true;
 
-    const user = context
-      .switchToHttp()
-      .getRequest<{ user?: SessionUser }>().user;
+    const user = context.switchToHttp().getRequest<{ user?: SessionUser }>().user;
     // Sin usuario no se cae con un 500: si `JwtAuthGuard` no corrió, lo honesto
     // es negar, no reventar.
     if (!user || !required.includes(user.role)) {
-      throw new ForbiddenException(
-        'Esta operación es solo para administradores.',
-      );
+      throw new ForbiddenException('Esta operación es solo para administradores.');
     }
     return true;
   }

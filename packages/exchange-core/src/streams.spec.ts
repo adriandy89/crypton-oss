@@ -56,12 +56,12 @@ jest.mock('ws', () => ({
   __esModule: true,
   default: class {
     constructor(url: string) {
-      return new FakeWebSocket(url) as never;
+      return new FakeWebSocket(url);
     }
   },
   WebSocket: class {
     constructor(url: string) {
-      return new FakeWebSocket(url) as never;
+      return new FakeWebSocket(url);
     }
   },
 }));
@@ -109,11 +109,10 @@ jest.mock(
 
 // Las importaciones van DESPUÉS de los mocks a propósito: los adaptadores
 // cargan su SDK de forma perezosa, pero `ws` se resuelve al importar.
-/* eslint-disable @typescript-eslint/no-var-requires */
+
 const { AsterAdapter } = require('./adapters/aster') as typeof import('./adapters/aster');
 const { HyperliquidAdapter } =
   require('./adapters/hyperliquid') as typeof import('./adapters/hyperliquid');
-/* eslint-enable @typescript-eslint/no-var-requires */
 
 const asterAdapter = () =>
   new AsterAdapter({
@@ -378,7 +377,7 @@ describe('Aster — la reconexion del socket, con el flujo compartido', () => {
     // Y el flujo sigue siendo el mismo: quien estaba suscrito no se ha enterado.
     wsLog.ultimo!.emit('message', JSON.stringify({ b: '20', a: '22', E: 2 }));
     expect(recibidos).toHaveLength(2);
-    expect(recibidos[1]!.last).toBe('21');
+    expect(recibidos[1].last).toBe('21');
 
     sub.unsubscribe();
     expect(wsLog.abiertos).toBe(0);

@@ -12,12 +12,7 @@ import {
   MaxLength,
   Min,
 } from 'class-validator';
-import {
-  BacktestSource,
-  BarPath,
-  SourceMarketType,
-  type CandleInterval,
-} from '@crypton/shared';
+import { BacktestSource, BarPath, SourceMarketType, type CandleInterval } from '@crypton/shared';
 
 /**
  * Intervalos con los que un backtest significa algo.
@@ -67,8 +62,7 @@ export class CreateBacktestDto {
   @IsString()
   @MaxLength(32)
   @Matches(/^[A-Z0-9]{2,32}$/, {
-    message:
-      'El símbolo de origen se escribe en mayúsculas y sin separadores: «1000PEPEUSDT».',
+    message: 'El símbolo de origen se escribe en mayúsculas y sin separadores: «1000PEPEUSDT».',
   })
   symbolOverride?: string;
 
