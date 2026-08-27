@@ -59,7 +59,7 @@ type OwnKeys<C> = Exclude<keyof C & string, keyof CommonBotConfig>;
  * límite de rango, es el precio bajo el cual deja de abrir y solo reduce.
  */
 export type GuideOptions<C> = { [K in OwnKeys<C>]-?: OptionDoc } & {
-  [K in keyof CommonBotConfig & string]?: OptionDoc;
+  [K in keyof CommonBotConfig]?: OptionDoc;
 };
 
 export interface StrategyGuide<C = unknown> {

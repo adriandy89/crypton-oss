@@ -1,19 +1,9 @@
 import { StrategyKind } from '@crypton/db';
 import { getStrategy } from '@crypton/strategy-core';
 import type { BotConfig, MarketSpec } from '@crypton/shared';
-import {
-  buildConfig,
-  defaultKnobs,
-  PROFILES,
-  type BuildContext,
-} from './build';
+import { buildConfig, defaultKnobs, PROFILES, type BuildContext } from './build';
 import type { MarketFeatures } from './market-features';
-import {
-  coerceConfig,
-  enforceCouplings,
-  ladderCoveragePct,
-  MAX_SAFE_LEVERAGE,
-} from './sanitize';
+import { coerceConfig, enforceCouplings, ladderCoveragePct, MAX_SAFE_LEVERAGE } from './sanitize';
 
 /**
  * La red de seguridad de toda la funcionalidad.
@@ -154,11 +144,7 @@ function materializar(
   const strategy = getStrategy(kind);
   const knobs = defaultKnobs(profile, ctx.features);
   const generado = buildConfig(kind, knobs, ctx);
-  let config = coerceConfig(
-    strategy.meta.fields,
-    strategy.defaults(),
-    generado,
-  );
+  let config = coerceConfig(strategy.meta.fields, strategy.defaults(), generado);
   config = enforceCouplings(kind, config, ctx.market, ctx.maxLeverageUsuario);
   return { config, ctx };
 }
@@ -256,16 +242,10 @@ describe('recomendaciones de configuracion', () => {
               exchangeAccountId: 'test',
             } as unknown as BotConfig;
             if (!strategy.validate(pv, mercado.spec).ok) return;
-            const preview = strategy.preview(
-              pv,
-              mercado.spec,
-              String(mercado.mark),
-            );
+            const preview = strategy.preview(pv, mercado.spec, String(mercado.mark));
             if (!preview.valid) return;
             // Un 2 % de holgura por los redondeos al paso del venue.
-            expect(Number(preview.worstCaseMargin)).toBeLessThanOrEqual(
-              capital * 1.02,
-            );
+            expect(Number(preview.worstCaseMargin)).toBeLessThanOrEqual(capital * 1.02);
           });
         }
       }
@@ -284,11 +264,7 @@ describe('recomendaciones de configuracion', () => {
         maxLeverageUsuario: null,
         direction: 'SHORT',
       };
-      for (const kind of [
-        StrategyKind.MARTINGALE,
-        StrategyKind.TDCA,
-        StrategyKind.GRIDMART,
-      ]) {
+      for (const kind of [StrategyKind.MARTINGALE, StrategyKind.TDCA, StrategyKind.GRIDMART]) {
         const { config } = materializar(kind, 'EQUILIBRADA', ctx);
         expect(config['direction']).toBe('SHORT');
       }
@@ -302,13 +278,8 @@ describe('recomendaciones de configuracion', () => {
         maxLeverageUsuario: null,
         direction: 'SHORT',
       };
-      for (const kind of [
-        StrategyKind.MARKET_MAKER,
-        StrategyKind.MARKET_MAKER_V2,
-      ]) {
-        expect(materializar(kind, 'EQUILIBRADA', ctx).config['direction']).toBe(
-          'NEUTRAL',
-        );
+      for (const kind of [StrategyKind.MARKET_MAKER, StrategyKind.MARKET_MAKER_V2]) {
+        expect(materializar(kind, 'EQUILIBRADA', ctx).config['direction']).toBe('NEUTRAL');
       }
     });
   });
@@ -367,9 +338,7 @@ describe('recomendaciones de configuracion', () => {
                 } as unknown as BotConfig;
 
                 const validacion = strategy.validate(paraValidar, mercado.spec);
-                const errores = validacion.issues.filter(
-                  (i) => i.severity === 'ERROR',
-                );
+                const errores = validacion.issues.filter((i) => i.severity === 'ERROR');
 
                 // Con capitales pequenos frente al notional minimo del venue hay
                 // configuraciones que legitimamente NO caben: el servicio las
@@ -380,11 +349,7 @@ describe('recomendaciones de configuracion', () => {
                   return;
                 }
 
-                const preview = strategy.preview(
-                  paraValidar,
-                  mercado.spec,
-                  String(mercado.mark),
-                );
+                const preview = strategy.preview(paraValidar, mercado.spec, String(mercado.mark));
                 if (!preview.valid) {
                   // Se descarta en el servicio; aqui solo se comprueba que el
                   // motivo esta dicho y no es un fallo silencioso.

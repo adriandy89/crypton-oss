@@ -23,8 +23,6 @@ export class RiskService {
 
   /** Para TODOS los bots del usuario y cancela sus órdenes. */
   killSwitch(): Promise<{ affected: number }> {
-    return firstValueFrom(
-      this.http.post<{ affected: number }>(`${this.base}/kill-switch`, {}),
-    );
+    return firstValueFrom(this.http.post<{ affected: number }>(`${this.base}/kill-switch`, {}));
   }
 }

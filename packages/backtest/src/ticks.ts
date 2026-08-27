@@ -42,8 +42,8 @@ export function tickPath(
 
   return [
     { ts: candle.t, price: o, role: 'open' as const },
-    { ts: candle.t + Math.floor(span / 4), ...extremos[0]! },
-    { ts: candle.t + Math.floor(span / 2), ...extremos[1]! },
+    { ts: candle.t + Math.floor(span / 4), ...extremos[0] },
+    { ts: candle.t + Math.floor(span / 2), ...extremos[1] },
     { ts: candle.t + Math.floor((span * 3) / 4), price: c, role: 'close' as const },
   ];
 }

@@ -1,14 +1,6 @@
-import {
-  BadRequestException,
-  ForbiddenException,
-  Injectable,
-  Logger,
-} from '@nestjs/common';
+import { BadRequestException, ForbiddenException, Injectable, Logger } from '@nestjs/common';
 import { D, type BotConfig, type MarketSpec } from '@crypton/shared';
-import {
-  estimateLiquidationPrice,
-  liquidationDistancePct,
-} from '@crypton/strategy-core';
+import { estimateLiquidationPrice, liquidationDistancePct } from '@crypton/strategy-core';
 import { DbService } from 'src/libs';
 import { UpdateRiskLimitsDto } from './dtos';
 
@@ -27,9 +19,7 @@ export class RiskService {
   constructor(private readonly db: DbService) {}
 
   async get(userId: string) {
-    const limits = await this.db.riskLimit.findUnique({
-      where: { user_id: userId },
-    });
+    const limits = await this.db.riskLimit.findUnique({ where: { user_id: userId } });
     // Un usuario sin fila no debe quedarse sin guardas: se crean por defecto.
     return limits ?? this.db.riskLimit.create({ data: { user_id: userId } });
   }
@@ -59,11 +49,7 @@ export class RiskService {
    * Un bot que liquida con un 4 % de movimiento adverso es una pérdida casi
    * segura, y merece un rechazo, no un aviso perdido en un tooltip.
    */
-  async assertWithinLimits(
-    userId: string,
-    config: BotConfig,
-    market: MarketSpec,
-  ): Promise<void> {
+  async assertWithinLimits(userId: string, config: BotConfig, market: MarketSpec): Promise<void> {
     const limits = await this.get(userId);
     const leverage = Number(config.leverage ?? 1);
     const investment = D(config.totalInvestment ?? 0);
@@ -80,7 +66,7 @@ export class RiskService {
       notional.gt(limits.max_notional_per_bot.toString())
     ) {
       throw new ForbiddenException(
-        `El notional del bot (${notional.toFixed(2)}) supera tu límite por bot (${limits.max_notional_per_bot}).`,
+        `El notional del bot (${notional.toFixed(2)}) supera tu límite por bot (${limits.max_notional_per_bot.toString()}).`,
       );
     }
 
@@ -89,7 +75,7 @@ export class RiskService {
       const projected = current.plus(notional);
       if (projected.gt(limits.max_total_notional.toString())) {
         throw new ForbiddenException(
-          `Sumando este bot llegarías a ${projected.toFixed(2)} de notional, por encima de tu límite total (${limits.max_total_notional}).`,
+          `Sumando este bot llegarías a ${projected.toFixed(2)} de notional, por encima de tu límite total (${limits.max_total_notional.toString()}).`,
         );
       }
     }
@@ -97,11 +83,7 @@ export class RiskService {
     // La liquidación se estima sobre el precio de referencia del mercado; el
     // número exacto lo da el venue, pero el orden de magnitud basta para
     // detectar una configuración temeraria antes de que exista posición.
-    const liq = estimateLiquidationPrice(
-      1,
-      leverage,
-      config.direction ?? 'LONG',
-    );
+    const liq = estimateLiquidationPrice(1, leverage, config.direction ?? 'LONG');
     if (liq) {
       const distance = liquidationDistancePct(1, liq);
       if (distance.lt(5)) {
@@ -112,9 +94,7 @@ export class RiskService {
     }
 
     if (!market.active) {
-      throw new BadRequestException(
-        `El mercado ${market.symbol} no está operativo.`,
-      );
+      throw new BadRequestException(`El mercado ${market.symbol} no está operativo.`);
     }
   }
 
@@ -141,7 +121,7 @@ export class RiskService {
       const loss = await this.todayRealizedPnl(userId);
       if (loss.lt(limits.max_daily_loss.neg().toString())) {
         throw new ForbiddenException(
-          `Hoy acumulas ${loss.toFixed(2)} de pérdida y tu límite diario es ${limits.max_daily_loss}. No se arrancan bots nuevos hasta mañana.`,
+          `Hoy acumulas ${loss.toFixed(2)} de pérdida y tu límite diario es ${limits.max_daily_loss.toString()}. No se arrancan bots nuevos hasta mañana.`,
         );
       }
     }
@@ -150,10 +130,7 @@ export class RiskService {
       where: { id: botId },
       select: { exchange_account: { select: { status: true, venue: true } } },
     });
-    if (
-      account &&
-      !['VERIFIED', 'ACTIVE'].includes(account.exchange_account.status)
-    ) {
+    if (account && !['VERIFIED', 'ACTIVE'].includes(account.exchange_account.status)) {
       throw new ForbiddenException(
         `La conexión con ${account.exchange_account.venue} no está verificada. Vuelve a verificarla antes de arrancar.`,
       );
@@ -171,10 +148,7 @@ export class RiskService {
    */
   async currentTotalNotional(userId: string) {
     const bots = await this.db.bot.findMany({
-      where: {
-        user_id: userId,
-        status: { in: ['STARTING', 'RUNNING', 'PAUSED'] },
-      },
+      where: { user_id: userId, status: { in: ['STARTING', 'RUNNING', 'PAUSED'] } },
       select: { total_investment: true, leverage: true },
     });
     return bots.reduce(
@@ -204,10 +178,7 @@ export class RiskService {
    */
   async killSwitch(userId: string): Promise<{ affected: number }> {
     const result = await this.db.bot.updateMany({
-      where: {
-        user_id: userId,
-        status: { in: ['STARTING', 'RUNNING', 'PAUSED'] },
-      },
+      where: { user_id: userId, status: { in: ['STARTING', 'RUNNING', 'PAUSED'] } },
       data: { status: 'STOPPING' },
     });
     this.logger.warn(

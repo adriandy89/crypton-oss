@@ -338,11 +338,7 @@ export class DryRunAdapter implements ExchangeAdapter {
     return this.source.getTickers();
   }
 
-  getCandles(
-    symbol: string,
-    interval: CandleInterval,
-    query: CandleQuery,
-  ): Promise<Candle[]> {
+  getCandles(symbol: string, interval: CandleInterval, query: CandleQuery): Promise<Candle[]> {
     return this.source.getCandles(symbol, interval, query);
   }
 
@@ -383,7 +379,14 @@ export class DryRunAdapter implements ExchangeAdapter {
       // saldo libre para meterse en la caja de la posición, igual que en el
       // venue. Sin sumarlo, la simulación dejaría aportar el mismo dinero una
       // y otra vez sin que `available` bajara nunca.
-      return acc.plus(p.qty.abs().mul(mark).div(lev || 1)).plus(p.extraMargin);
+      return acc
+        .plus(
+          p.qty
+            .abs()
+            .mul(mark)
+            .div(lev || 1),
+        )
+        .plus(p.extraMargin);
     }, D(0));
 
     return Promise.resolve([
@@ -468,8 +471,7 @@ export class DryRunAdapter implements ExchangeAdapter {
     // también. Si no, el simulador sería más permisivo que la realidad y las
     // estrategias parecerían funcionar mejor de lo que funcionan.
     if (req.type === 'POST_ONLY') {
-      const crosses =
-        req.side === 'BUY' ? price.gte(D(ticker.ask)) : price.lte(D(ticker.bid));
+      const crosses = req.side === 'BUY' ? price.gte(D(ticker.ask)) : price.lte(D(ticker.bid));
       if (crosses) {
         throw new ExchangeError('RULES', 'Post-only rechazada: cruzaría el libro', this.venue);
       }
@@ -567,7 +569,11 @@ export class DryRunAdapter implements ExchangeAdapter {
     const pos = this.positions.get(symbol);
     if (!pos || pos.qty.isZero()) {
       return Promise.reject(
-        new ExchangeError('RULES', `No hay posición abierta en ${symbol} que financiar.`, this.venue),
+        new ExchangeError(
+          'RULES',
+          `No hay posición abierta en ${symbol} que financiar.`,
+          this.venue,
+        ),
       );
     }
     if (pos.marginMode !== 'ISOLATED') {
@@ -698,7 +704,14 @@ export class DryRunAdapter implements ExchangeAdapter {
    */
   private liquidationOf(symbol: string, p: SimPosition): Decimal | null {
     return liquidationOfPosition(
-      { symbol, qty: p.qty, entryPrice: p.entryPrice, leverage: p.leverage, marginMode: p.marginMode, extraMargin: p.extraMargin },
+      {
+        symbol,
+        qty: p.qty,
+        entryPrice: p.entryPrice,
+        leverage: p.leverage,
+        marginMode: p.marginMode,
+        extraMargin: p.extraMargin,
+      },
       this.collateralView(),
       this.equity(),
       this.mmr,

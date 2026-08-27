@@ -67,9 +67,7 @@ function build(opts: {
     exchangeAccount: {
       findFirst: jest
         .fn()
-        .mockResolvedValue(
-          opts.accountExists === false ? null : { id: ACCOUNT_ID },
-        ),
+        .mockResolvedValue(opts.accountExists === false ? null : { id: ACCOUNT_ID }),
     },
     bot: { findMany: jest.fn().mockResolvedValue([]) },
     paperState: { findFirst: jest.fn().mockResolvedValue(null) },

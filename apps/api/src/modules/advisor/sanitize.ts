@@ -42,8 +42,7 @@ const num = (v: unknown): number | null => {
   return Number.isFinite(n) ? n : null;
 };
 
-const clamp = (v: number, min: number, max: number): number =>
-  Math.min(Math.max(v, min), max);
+const clamp = (v: number, min: number, max: number): number => Math.min(Math.max(v, min), max);
 
 /**
  * Cuantiza al paso del campo.
@@ -53,11 +52,7 @@ const clamp = (v: number, min: number, max: number): number =>
  * redondea el resultado a diez decimales porque `Math.round(x/0.05)*0.05`
  * produce cosas como 1,3000000000000003, que luego se enseñan tal cual.
  */
-function quantize(
-  value: number,
-  step: number | undefined,
-  min: number,
-): number {
+function quantize(value: number, step: number | undefined, min: number): number {
   if (!step || step <= 0) return value;
   const pasos = Math.round((value - min) / step);
   return Number((min + pasos * step).toFixed(10));
@@ -78,9 +73,7 @@ export function coerceField(field: FieldMeta, raw: unknown): unknown {
 
     case 'enum': {
       const s = String(raw);
-      return field.options?.includes(s)
-        ? s
-        : (field.default ?? field.options?.[0]);
+      return field.options?.includes(s) ? s : (field.default ?? field.options?.[0]);
     }
 
     case 'text':
@@ -96,8 +89,7 @@ export function coerceField(field: FieldMeta, raw: unknown): unknown {
       const max = field.max ?? Number.POSITIVE_INFINITY;
       let v = clamp(n, min, max);
       if (field.kind === 'integer') v = Math.round(v);
-      else if (Number.isFinite(min))
-        v = clamp(quantize(v, field.step, min), min, max);
+      else if (Number.isFinite(min)) v = clamp(quantize(v, field.step, min), min, max);
       return v;
     }
   }
@@ -191,10 +183,7 @@ export function enforceCouplings(
         // del descriptor cabe, se recorta el numero de niveles, que es la otra
         // palanca; bajar el apalancamiento seria cambiar la estrategia.
         const MIN_SEP = 0.05;
-        const truncada = Math.max(
-          MIN_SEP,
-          Math.floor(separacion / MIN_SEP) * MIN_SEP,
-        );
+        const truncada = Math.max(MIN_SEP, Math.floor(separacion / MIN_SEP) * MIN_SEP);
         c['initialSeparationPct'] = Number(truncada.toFixed(10));
 
         let nivelesFinales = niveles;
@@ -217,10 +206,7 @@ export function enforceCouplings(
     if (capital > 0 && compras > 0 && porCompra * compras > capital) {
       // Se baja el importe por compra, no el numero de compras: el numero es lo
       // que define hasta donde promedia el bot, que es la estrategia.
-      c['amountPerBuy'] = Math.max(
-        1,
-        Math.floor((capital / compras) * 100) / 100,
-      );
+      c['amountPerBuy'] = Math.max(1, Math.floor((capital / compras) * 100) / 100);
     }
   }
 
@@ -251,8 +237,7 @@ export function enforceCouplings(
     const venta = num(c['sellDistanceBps']);
     if (minDist != null && compra != null && venta != null) {
       const menor = Math.min(compra, venta);
-      if (minDist > menor)
-        c['minAllowedDistanceBps'] = Math.max(1, Math.floor(menor));
+      if (minDist > menor) c['minAllowedDistanceBps'] = Math.max(1, Math.floor(menor));
     }
   }
 

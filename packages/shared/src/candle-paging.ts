@@ -82,7 +82,7 @@ export function nextHistoryRequest(
   if (state.noMore || state.capped) return null;
   // Sin serie no hay desde dónde retroceder: la carga inicial es de otro camino.
   if (state.bars.length === 0) return null;
-  return { endMs: state.bars[0]!.t, limit: limits.pageBars };
+  return { endMs: state.bars[0].t, limit: limits.pageBars };
 }
 
 /**
@@ -108,8 +108,8 @@ export function applyHistoryPage(
   if (state.bars.length === 0) return { ...historyStateOf(page), pages: state.pages + 1 };
 
   const span = candleSpanMs(limits.interval);
-  const primera = state.bars[0]!.t;
-  const masNuevaDeLaPagina = page.reduce((max, c) => (c.t > max ? c.t : max), page[0]!.t);
+  const primera = state.bars[0].t;
+  const masNuevaDeLaPagina = page.reduce((max, c) => (c.t > max ? c.t : max), page[0].t);
 
   // Contigua o solapada. El caso normal es el solape de UNA vela, porque el
   // `endTime` del venue es inclusivo.

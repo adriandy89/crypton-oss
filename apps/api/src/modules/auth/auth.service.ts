@@ -73,11 +73,7 @@ interface TicketRecord {
 
 /** Motivos por los que el redirect de vuelta puede traer un error. */
 type AuthErrorCode =
-  | 'access_denied'
-  | 'email_unverified'
-  | 'account_disabled'
-  | 'email_taken'
-  | 'failed';
+  'access_denied' | 'email_unverified' | 'account_disabled' | 'email_taken' | 'failed';
 
 /**
  * De código estable de la excepción a código de la URL de vuelta.
@@ -93,8 +89,7 @@ const CODIGOS_DE_ERROR: Record<string, AuthErrorCode> = {
 };
 
 const randomToken = () => randomBytes(32).toString('base64url');
-const sha256 = (value: string) =>
-  createHash('sha256').update(value).digest('base64url');
+const sha256 = (value: string) => createHash('sha256').update(value).digest('base64url');
 
 /**
  * Acceso a la plataforma. Una sola forma de entrar: Google.
@@ -205,11 +200,7 @@ export class AuthService {
    * mirando una página en blanco. Los fallos se transmiten como un `error=` en
    * la URL de vuelta, y es la app la que los explica.
    */
-  async handleCallback(query: {
-    code?: string;
-    state?: string;
-    error?: string;
-  }): Promise<string> {
+  async handleCallback(query: { code?: string; state?: string; error?: string }): Promise<string> {
     if (!query.state) {
       // Sin `state` no se sabe ni a qué app devolver: el intento no salió de
       // aquí, o expiró hace tanto que ya no queda rastro.
@@ -226,8 +217,7 @@ export class AuthService {
       );
     }
 
-    const back = (params: Record<string, string>) =>
-      this.appUrl(flow.platform, params);
+    const back = (params: Record<string, string>) => this.appUrl(flow.platform, params);
 
     // El usuario cerró la pantalla de Google o denegó el permiso.
     if (query.error || !query.code) {
@@ -280,20 +270,13 @@ export class AuthService {
     | { stepUp: true; expiresIn: number }
   > {
     const record = await this.cache.getDel<TicketRecord>(ticketKey(ticket));
-    if (!record)
-      throw new UnauthorizedException(
-        'El acceso ha caducado. Inténtalo otra vez.',
-      );
+    if (!record) throw new UnauthorizedException('El acceso ha caducado. Inténtalo otra vez.');
 
     if (!this.matches(sha256(verifier), record.ticketChallenge)) {
       // Alguien tiene el vale pero no el verificador: o es otra aplicación que
       // ha capturado el enlace, o el flujo se ha cruzado con otro.
-      this.logger.warn(
-        'Vale de acceso presentado con un verificador que no corresponde.',
-      );
-      throw new UnauthorizedException(
-        'El acceso ha caducado. Inténtalo otra vez.',
-      );
+      this.logger.warn('Vale de acceso presentado con un verificador que no corresponde.');
+      throw new UnauthorizedException('El acceso ha caducado. Inténtalo otra vez.');
     }
 
     const user = await this.db.user.findUnique({
@@ -323,8 +306,7 @@ export class AuthService {
   async refresh(refreshToken: string) {
     const { sub, fam } = await this.tokens.consumeRefresh(refreshToken);
     const user = await this.db.user.findUnique({ where: { id: sub } });
-    if (!user || user.disabled)
-      throw new UnauthorizedException('Sesión no válida.');
+    if (!user || user.disabled) throw new UnauthorizedException('Sesión no válida.');
     return this.tokens.reissue(this.toSessionUser(user), fam);
   }
 
@@ -513,10 +495,7 @@ export class AuthService {
    * que el navegador volviera con un vale válido: la reautenticación
    * comprobaría que alguien está vivo al otro lado, no que sea quien dice.
    */
-  private async resolveStepUp(
-    userId: string | undefined,
-    googleSub: string,
-  ): Promise<string> {
+  private async resolveStepUp(userId: string | undefined, googleSub: string): Promise<string> {
     if (!userId) throw new UnauthorizedException('Reautenticación no válida.');
 
     const user = await this.db.user.findUnique({
@@ -530,12 +509,8 @@ export class AuthService {
       });
 
     if (!this.matches(user.google_sub, googleSub)) {
-      this.logger.warn(
-        `Reautenticación de ${userId} completada con otra cuenta de Google.`,
-      );
-      throw new UnauthorizedException(
-        'Has entrado con una cuenta de Google distinta.',
-      );
+      this.logger.warn(`Reautenticación de ${userId} completada con otra cuenta de Google.`);
+      throw new UnauthorizedException('Has entrado con una cuenta de Google distinta.');
     }
     return user.id;
   }
@@ -547,13 +522,9 @@ export class AuthService {
   }
 
   /** URL de vuelta a la app, con el vale o con el motivo del fallo. */
-  private appUrl(
-    platform: AppPlatform,
-    params: Record<string, string>,
-  ): string {
+  private appUrl(platform: AppPlatform, params: Record<string, string>): string {
     const url = new URL(this.appRedirects[platform]);
-    for (const [key, value] of Object.entries(params))
-      url.searchParams.set(key, value);
+    for (const [key, value] of Object.entries(params)) url.searchParams.set(key, value);
     return url.toString();
   }
 

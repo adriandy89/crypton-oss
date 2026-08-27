@@ -41,6 +41,7 @@ export class CandlesQueryDto {
   @IsString()
   @IsNotEmpty()
   @MaxLength(32)
+  // eslint-disable-next-line no-control-regex -- el rango de control esta a proposito: es el saneado que rechaza caracteres de control en un simbolo
   @Matches(/^[^\s,:|\u0000-\u001f]+$/)
   symbol: string;
 
@@ -143,6 +144,7 @@ export class WatchDto {
   @IsArray()
   @ArrayMaxSize(60)
   @IsString({ each: true })
+  // eslint-disable-next-line no-control-regex -- el rango de control esta a proposito: es el saneado que rechaza caracteres de control en un simbolo
   @Matches(/^[A-Z]+:[^\s,:|\u0000-\u001f]{1,32}$/, { each: true })
   symbols: string[];
 
@@ -160,6 +162,7 @@ export class WatchDto {
   @IsArray()
   @ArrayMaxSize(4)
   @IsString({ each: true })
+  // eslint-disable-next-line no-control-regex -- el rango de control esta a proposito: es el saneado que rechaza caracteres de control en un simbolo
   @Matches(/^[A-Z]+:[^\s,:|\u0000-\u001f]{1,32}:[A-Za-z0-9]{1,3}$/, {
     each: true,
   })

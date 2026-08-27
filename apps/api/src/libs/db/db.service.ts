@@ -10,10 +10,7 @@ import { PrismaClient, createPrismaAdapter } from '@crypton/db';
  * servicio sin ninguna pista de por que.
  */
 @Injectable()
-export class DbService
-  extends PrismaClient
-  implements OnModuleInit, OnModuleDestroy
-{
+export class DbService extends PrismaClient implements OnModuleInit, OnModuleDestroy {
   constructor() {
     super({ adapter: createPrismaAdapter() });
   }

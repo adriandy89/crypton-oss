@@ -13,6 +13,9 @@ import { tdca } from './strategies/tdca';
  * por aquí: añadir una estrategia es añadir una entrada a este mapa, sin tocar
  * ni el motor ni los formularios (que se generan desde `meta.fields`).
  */
+// El registro es heterogeneo por definicion: cada estrategia tiene su propio
+// tipo de config y el parametro solo se concreta al pedir una por su kind.
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
 const REGISTRY: Record<StrategyKind, Strategy<any>> = {
   [StrategyKind.GRID_CLASSIC]: gridClassic,
   [StrategyKind.NEUTRAL_GRID]: neutralGrid,

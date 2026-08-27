@@ -356,7 +356,9 @@ export class UiFieldComponent {
   readonly isSegment = computed(() => {
     const f = this.field();
     const options = f.options ?? [];
-    return f.control === 'segment' && f.kind === 'enum' && options.length >= 2 && options.length <= 3;
+    return (
+      f.control === 'segment' && f.kind === 'enum' && options.length >= 2 && options.length <= 3
+    );
   });
 
   readonly range = computed(() => {

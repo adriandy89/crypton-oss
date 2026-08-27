@@ -21,7 +21,10 @@ import { ExchangeError, type ExchangeErrorKind, type Venue } from '@crypton/shar
  */
 
 const PATTERNS: { kind: ExchangeErrorKind; re: RegExp }[] = [
-  { kind: 'AUTH', re: /unauthor|invalid.?(api|key|signature)|forbidden|permission|expired.?token/i },
+  {
+    kind: 'AUTH',
+    re: /unauthor|invalid.?(api|key|signature)|forbidden|permission|expired.?token/i,
+  },
   {
     kind: 'INSUFFICIENT_FUNDS',
     re: /insufficient|not enough|margin is insufficient|exceeds free collateral|balance/i,
@@ -114,6 +117,10 @@ export function messageOf(raw: unknown): string {
   try {
     return JSON.stringify(raw);
   } catch {
+    // Ultimo recurso: aqui solo se llega si JSON.stringify se rindio, que en la
+    // practica significa referencias circulares. Un "[object Object]" es peor
+    // que el JSON pero mejor que quedarse sin registrar el fallo.
+    // eslint-disable-next-line @typescript-eslint/no-base-to-string
     return String(raw);
   }
 }
@@ -192,7 +199,6 @@ export function shortMessage(message: string, max = 200): string {
   const flat = message.replace(/\s+/g, ' ').trim();
   return flat.length <= max ? flat : flat.slice(0, max - 1) + '…';
 }
-
 
 /**
  * Envuelve cualquier fallo en un ExchangeError ya clasificado.

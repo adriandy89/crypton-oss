@@ -164,9 +164,7 @@ const VIVOS = ['STARTING', 'RUNNING', 'PAUSED'];
         } @else if (faltaConexion()) {
           <ui-empty-state
             icon="flask-outline"
-            [title]="
-              testnet() ? 'Sin conexiones en testnet' : 'Prueba primero, sin conectar nada'
-            "
+            [title]="testnet() ? 'Sin conexiones en testnet' : 'Prueba primero, sin conectar nada'"
           >
             <p>
               @if (testnet()) {
@@ -362,9 +360,7 @@ export class BotsListPage implements OnInit {
         .accounts()
         .some(
           (a) =>
-            !a.paper &&
-            ['VERIFIED', 'ACTIVE'].includes(a.status) &&
-            a.testnet === this.testnet(),
+            !a.paper && ['VERIFIED', 'ACTIVE'].includes(a.status) && a.testnet === this.testnet(),
         ),
   );
 
@@ -433,7 +429,7 @@ export class BotsListPage implements OnInit {
 
   async reload(event: CustomEvent): Promise<void> {
     await Promise.all([this.bots.refresh(), this.cargarConexiones()]);
-    (event.target as HTMLIonRefresherElement).complete();
+    void (event.target as HTMLIonRefresherElement).complete();
   }
 
   total(bot: BotSummary): string {

@@ -121,13 +121,13 @@ export class BusService implements OnModuleInit, OnModuleDestroy {
     const url = this.config.get<string>('REDIS_URL', 'redis://localhost:6379');
     const password = this.config.get<string>('REDIS_PASSWORD');
 
-    this.publisher = createClient({ url, password }) as RedisClientType;
+    this.publisher = createClient({ url, password });
     // Una conexión en modo suscripción no admite otros comandos, de ahí que
     // publicar y escuchar necesiten clientes distintos.
-    this.subscriber = this.publisher.duplicate() as RedisClientType;
+    this.subscriber = this.publisher.duplicate();
 
-    this.publisher.on('error', (e) => this.logger.error('Publisher Redis: ' + e.message));
-    this.subscriber.on('error', (e) => this.logger.error('Subscriber Redis: ' + e.message));
+    this.publisher.on('error', (e: Error) => this.logger.error('Publisher Redis: ' + e.message));
+    this.subscriber.on('error', (e: Error) => this.logger.error('Subscriber Redis: ' + e.message));
 
     await Promise.all([this.publisher.connect(), this.subscriber.connect()]);
     this.logger.log('Bus de eventos conectado');

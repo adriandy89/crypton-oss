@@ -1,9 +1,4 @@
-import {
-  Injectable,
-  Logger,
-  NotFoundException,
-  type OnModuleInit,
-} from '@nestjs/common';
+import { Injectable, Logger, NotFoundException, type OnModuleInit } from '@nestjs/common';
 import { Cron, CronExpression } from '@nestjs/schedule';
 import type { MarketSpec } from '@crypton/shared';
 import { createPublicAdapter } from '@crypton/exchange-core';
@@ -100,18 +95,13 @@ export class MarketsService implements OnModuleInit {
    * y el step de testnet no son los de mainnet, y devolver los que no son deja
    * al bot construyendo ordenes que el venue rechaza una por una.
    */
-  async getSpec(
-    venue: Venue,
-    symbol: string,
-    testnet = false,
-  ): Promise<MarketSpec> {
+  async getSpec(venue: Venue, symbol: string, testnet = false): Promise<MarketSpec> {
     const market = await this.db.market.findUnique({
       where: { venue_testnet_symbol: { venue, testnet, symbol } },
     });
     if (!market) {
       throw new NotFoundException(
-        `El mercado ${symbol} no está disponible en ${venue}` +
-          (testnet ? ' (testnet).' : '.'),
+        `El mercado ${symbol} no está disponible en ${venue}` + (testnet ? ' (testnet).' : '.'),
       );
     }
     return {
@@ -150,19 +140,14 @@ export class MarketsService implements OnModuleInit {
       const specs = await adapter.getMarkets();
       await this.upsertAll(specs, testnet);
       const red = testnet ? ' (testnet)' : '';
-      this.logger.log(
-        `${specs.length} mercados sincronizados en ${venue}${red}`,
-      );
+      this.logger.log(`${specs.length} mercados sincronizados en ${venue}${red}`);
       return specs.length;
     } finally {
       await adapter.close().catch(() => undefined);
     }
   }
 
-  private async upsertAll(
-    specs: MarketSpec[],
-    testnet: boolean,
-  ): Promise<void> {
+  private async upsertAll(specs: MarketSpec[], testnet: boolean): Promise<void> {
     // En serie y no en paralelo: son unos cientos de filas y hacerlo a la vez
     // agotaría el pool de conexiones sin ganar nada apreciable.
     for (const spec of specs) {
@@ -223,9 +208,7 @@ export class MarketsService implements OnModuleInit {
           await this.syncVenue(venue, testnet);
         } catch (e) {
           const red = testnet ? ' (testnet)' : '';
-          this.logger.warn(
-            `No se pudo sincronizar ${venue}${red}: ${(e as Error).message}`,
-          );
+          this.logger.warn(`No se pudo sincronizar ${venue}${red}: ${(e as Error).message}`);
         }
       }
     }
@@ -246,9 +229,7 @@ export class MarketsService implements OnModuleInit {
    */
   onModuleInit(): void {
     void this.syncAll().catch((e) => {
-      this.logger.warn(
-        `Sincronizacion inicial incompleta: ${(e as Error).message}`,
-      );
+      this.logger.warn(`Sincronizacion inicial incompleta: ${(e as Error).message}`);
     });
   }
 }

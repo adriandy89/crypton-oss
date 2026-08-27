@@ -73,11 +73,7 @@ function atrPct(velas: Candle[], periodo: number): number {
     const alto = n(trozo[i].h);
     const bajo = n(trozo[i].l);
     const cierrePrevio = n(trozo[i - 1].c);
-    const tr = Math.max(
-      alto - bajo,
-      Math.abs(alto - cierrePrevio),
-      Math.abs(bajo - cierrePrevio),
-    );
+    const tr = Math.max(alto - bajo, Math.abs(alto - cierrePrevio), Math.abs(bajo - cierrePrevio));
     suma += tr;
     cuenta++;
   }
@@ -116,9 +112,7 @@ export function buildFeatures(
     retornos.push(Math.log(ventana[i] / ventana[i - 1]));
   }
   const varianza =
-    retornos.length > 1
-      ? retornos.reduce((a, r) => a + r * r, 0) / (retornos.length - 1)
-      : 0;
+    retornos.length > 1 ? retornos.reduce((a, r) => a + r * r, 0) / (retornos.length - 1) : 0;
   const volAnnualPct = Math.sqrt(varianza) * Math.sqrt(24 * 365) * 100;
 
   // ── Rango de los ultimos 30 dias y posicion dentro de el ──
@@ -139,10 +133,8 @@ export function buildFeatures(
   // ── Eficiencia: recorrido neto sobre recorrido total ──
   const tramo = cierres1h.slice(-168);
   let recorrido = 0;
-  for (let i = 1; i < tramo.length; i++)
-    recorrido += Math.abs(tramo[i] - tramo[i - 1]);
-  const neto =
-    tramo.length > 1 ? Math.abs(tramo[tramo.length - 1] - tramo[0]) : 0;
+  for (let i = 1; i < tramo.length; i++) recorrido += Math.abs(tramo[i] - tramo[i - 1]);
+  const neto = tramo.length > 1 ? Math.abs(tramo[tramo.length - 1] - tramo[0]) : 0;
   const efficiency = recorrido > 0 ? neto / recorrido : 0;
 
   // ── La peor sesion del periodo ──
@@ -163,9 +155,7 @@ export function buildFeatures(
     mark,
     volAnnualPct: round2(volAnnualPct),
     atrPct1h: round2(atrPct(velas1h, 14)),
-    atrPct1d: round2(
-      velas1d.length >= 2 ? atrPct(velas1d, 14) : atrPct(velas1h, 14) * 4,
-    ),
+    atrPct1d: round2(velas1d.length >= 2 ? atrPct(velas1d, 14) : atrPct(velas1h, 14) * 4),
     rangePct30: round2(rangePct30),
     posInRange: round2(Math.min(Math.max(posInRange, 0), 1)),
     trendPct: round2(trendPct),

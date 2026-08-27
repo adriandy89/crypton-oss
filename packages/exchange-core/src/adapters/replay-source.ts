@@ -59,7 +59,9 @@ export class ReplaySourceAdapter implements ExchangeAdapter {
 
   getTicker(): Promise<Ticker> {
     if (!this.current) {
-      return Promise.reject(new ExchangeError('RULES', 'El replay aún no ha fijado ningún precio.'));
+      return Promise.reject(
+        new ExchangeError('RULES', 'El replay aún no ha fijado ningún precio.'),
+      );
     }
     return Promise.resolve(this.current);
   }

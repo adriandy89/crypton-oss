@@ -1,5 +1,12 @@
 import type { Candle, CandleInterval } from './candle';
-import type { BacktestSource, LevelKind, OrderSide, SourceMarketType, StrategyKind, Venue } from './enums';
+import type {
+  BacktestSource,
+  LevelKind,
+  OrderSide,
+  SourceMarketType,
+  StrategyKind,
+  Venue,
+} from './enums';
 
 /**
  * El contrato de un backtest: lo que se pide y lo que sale.

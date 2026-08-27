@@ -57,7 +57,10 @@ import type * as HL from '@nktkas/hyperliquid';
 
 let sdk: typeof HL | null = null;
 const hl = (): typeof HL => {
-  // eslint-disable-next-line @typescript-eslint/no-var-requires
+  // Carga perezosa a proposito: el SDK es ESM y el runtime de Jest no
+  // implementa `require(esm)`, asi que importarlo arriba romperia todo test que
+  // solo quisiera los helpers puros de este fichero. Ver la nota de cabecera.
+  // eslint-disable-next-line @typescript-eslint/no-require-imports
   sdk ??= require('@nktkas/hyperliquid') as typeof HL;
   return sdk;
 };
@@ -413,9 +416,7 @@ export class HyperliquidAdapter implements ExchangeAdapter {
         qty: D(o.origSz).toFixed(),
         filledQty: D(o.origSz).minus(o.sz).toFixed(),
         avgPrice: null,
-        status: D(o.sz).eq(o.origSz)
-          ? OrderStatus.OPEN
-          : OrderStatus.PARTIALLY_FILLED,
+        status: D(o.sz).eq(o.origSz) ? OrderStatus.OPEN : OrderStatus.PARTIALLY_FILLED,
         reduceOnly: o.reduceOnly === true,
         createdAt: o.timestamp,
       }));
@@ -703,7 +704,7 @@ export class HyperliquidAdapter implements ExchangeAdapter {
           s: req.qty ?? existing.qty,
           r: existing.reduceOnly,
           t: { limit: { tif: 'Gtc' } },
-          c: hyperliquidCodec.encode(req.clientOrderId) as `0x${string}`,
+          c: hyperliquidCodec.encode(req.clientOrderId),
         },
       }),
     );
@@ -1091,9 +1092,7 @@ export class HyperliquidAdapter implements ExchangeAdapter {
     clientOrderId: string,
     cloid: string,
   ): Promise<OrderAck | null> {
-    const result = await this.call(() =>
-      this.info.orderStatus({ user: this.addr(), oid: cloid as `0x${string}` }),
-    );
+    const result = await this.call(() => this.info.orderStatus({ user: this.addr(), oid: cloid }));
     if (result.status !== 'order') return null;
     // Un RECHAZO no cuenta como «entró»: se devuelve null para que el reenvío
     // reproduzca el error real del venue y el motor lo clasifique como toca.

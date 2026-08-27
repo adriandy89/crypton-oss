@@ -1,10 +1,5 @@
 import { randomUUID } from 'node:crypto';
-import {
-  Injectable,
-  Logger,
-  OnModuleDestroy,
-  OnModuleInit,
-} from '@nestjs/common';
+import { Injectable, Logger, OnModuleDestroy, OnModuleInit } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { createClient, type RedisClientType } from 'redis';
 import { Subject, filter, map, type Observable } from 'rxjs';
@@ -131,12 +126,8 @@ export class BusService implements OnModuleInit, OnModuleDestroy {
     // publicar y escuchar necesiten clientes distintos.
     this.subscriber = this.publisher.duplicate();
 
-    this.publisher.on('error', (e) =>
-      this.logger.error('Publisher Redis: ' + e.message),
-    );
-    this.subscriber.on('error', (e) =>
-      this.logger.error('Subscriber Redis: ' + e.message),
-    );
+    this.publisher.on('error', (e: Error) => this.logger.error('Publisher Redis: ' + e.message));
+    this.subscriber.on('error', (e: Error) => this.logger.error('Subscriber Redis: ' + e.message));
 
     await Promise.all([this.publisher.connect(), this.subscriber.connect()]);
     this.logger.log('Bus de eventos conectado');
@@ -148,10 +139,7 @@ export class BusService implements OnModuleInit, OnModuleDestroy {
     await Promise.allSettled([this.publisher?.quit(), this.subscriber?.quit()]);
   }
 
-  async publish<T>(
-    channel: string,
-    message: Omit<BusMessage<T>, 'channel' | 'ts'>,
-  ): Promise<void> {
+  async publish<T>(channel: string, message: Omit<BusMessage<T>, 'channel' | 'ts'>): Promise<void> {
     const payload: BusMessage<T> = {
       ...message,
       channel,
@@ -213,17 +201,12 @@ export class BusService implements OnModuleInit, OnModuleDestroy {
    * la API gastaba cupo sin apuntarlo en ninguna parte — que es como el cron de
    * precios y el gráfico acabaron agotando el de Lighter entre los dos.
    */
-  evalScript(
-    script: string,
-    options: { keys: string[]; arguments: string[] },
-  ): Promise<unknown> {
+  evalScript(script: string, options: { keys: string[]; arguments: string[] }): Promise<unknown> {
     return this.publisher.eval(script, options);
   }
 
   /** Se suscribe a un canal (idempotente) y devuelve sus mensajes. */
-  async listen<T = Record<string, unknown>>(
-    channel: string,
-  ): Promise<Observable<BusMessage<T>>> {
+  async listen<T = Record<string, unknown>>(channel: string): Promise<Observable<BusMessage<T>>> {
     if (!this.subscribed.has(channel)) {
       this.subscribed.add(channel);
       await this.subscriber.subscribe(channel, (raw) => {

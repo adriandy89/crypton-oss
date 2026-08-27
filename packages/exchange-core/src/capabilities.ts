@@ -26,7 +26,20 @@ import { capabilitiesOf } from './candles';
  * del SDK. Falta 6h, y no es un olvido: no está en la lista del venue.
  */
 export const HL_INTERVALS = [
-  '1m', '3m', '5m', '15m', '30m', '1h', '2h', '4h', '8h', '12h', '1d', '3d', '1w', '1M',
+  '1m',
+  '3m',
+  '5m',
+  '15m',
+  '30m',
+  '1h',
+  '2h',
+  '4h',
+  '8h',
+  '12h',
+  '1d',
+  '3d',
+  '1w',
+  '1M',
 ] as const satisfies readonly CandleInterval[];
 
 /**
@@ -41,7 +54,14 @@ export const HL_INTERVALS = [
  * https://apidocs.lighter.xyz/reference/candles.md
  */
 export const LIGHTER_INTERVALS = [
-  '1m', '5m', '15m', '30m', '1h', '4h', '12h', '1d',
+  '1m',
+  '5m',
+  '15m',
+  '30m',
+  '1h',
+  '4h',
+  '12h',
+  '1d',
 ] as const satisfies readonly CandleInterval[];
 
 /**
@@ -49,7 +69,21 @@ export const LIGHTER_INTERVALS = [
  * Es el más generoso: el único con 6h.
  */
 export const ASTER_INTERVALS = [
-  '1m', '3m', '5m', '15m', '30m', '1h', '2h', '4h', '6h', '8h', '12h', '1d', '3d', '1w', '1M',
+  '1m',
+  '3m',
+  '5m',
+  '15m',
+  '30m',
+  '1h',
+  '2h',
+  '4h',
+  '6h',
+  '8h',
+  '12h',
+  '1d',
+  '3d',
+  '1w',
+  '1M',
 ] as const satisfies readonly CandleInterval[];
 
 /**

@@ -1,9 +1,4 @@
-import {
-  actorOf,
-  pickFields,
-  safeRoute,
-  type AuditableRequest,
-} from './audit.request';
+import { actorOf, pickFields, safeRoute, type AuditableRequest } from './audit.request';
 import { AuditService } from './audit.service';
 
 /**
@@ -38,9 +33,7 @@ describe('Redactor — lo que NUNCA puede acabar en la tabla', () => {
   });
 
   it('ninguna clave privada aparece en el resultado serializado', () => {
-    const out = JSON.stringify(
-      pickFields(cuerpoConSecretos, ['venue', 'label']),
-    );
+    const out = JSON.stringify(pickFields(cuerpoConSecretos, ['venue', 'label']));
     expect(out).not.toContain('a'.repeat(64));
     expect(out).not.toContain('b'.repeat(64));
     expect(out).not.toContain('c'.repeat(64));
@@ -50,11 +43,7 @@ describe('Redactor — lo que NUNCA puede acabar en la tabla', () => {
   it('aunque alguien listara el venue entero por error, el objeto no se serializa', () => {
     // Segundo cerrojo: las claves privadas viven SIEMPRE dentro de un objeto
     // anidado, y un objeto nunca se copia — se sustituye por su forma.
-    const out = pickFields(cuerpoConSecretos, [
-      'venue',
-      'hyperliquid',
-      'aster',
-    ]);
+    const out = pickFields(cuerpoConSecretos, ['venue', 'hyperliquid', 'aster']);
     expect(out).toEqual({
       venue: 'HYPERLIQUID',
       hyperliquid: '[objeto]',
@@ -69,10 +58,7 @@ describe('Redactor — lo que NUNCA puede acabar en la tabla', () => {
   });
 
   it('recorta las cadenas largas en vez de guardarlas enteras', () => {
-    const out = pickFields({ label: 'x'.repeat(500) }, ['label']) as Record<
-      string,
-      string
-    >;
+    const out = pickFields({ label: 'x'.repeat(500) }, ['label']) as Record<string, string>;
     expect(out['label'].length).toBeLessThanOrEqual(201);
   });
 
@@ -91,8 +77,7 @@ describe('safeRoute — la fuga de OAuth', () => {
     const req: AuditableRequest = {
       method: 'GET',
       path: '/api/v1/auth/google/callback',
-      originalUrl:
-        '/api/v1/auth/google/callback?code=4%2F0AXsecreto&state=abc123',
+      originalUrl: '/api/v1/auth/google/callback?code=4%2F0AXsecreto&state=abc123',
       url: '/auth/google/callback?code=4%2F0AXsecreto&state=abc123',
     };
     const route = safeRoute(req)!;

@@ -49,9 +49,7 @@ export class ProfileService {
   }
 
   async update(patch: ProfilePatch): Promise<void> {
-    const perfil = await firstValueFrom(
-      this.http.patch<Profile>(`${this.base}/users/me`, patch),
-    );
+    const perfil = await firstValueFrom(this.http.patch<Profile>(`${this.base}/users/me`, patch));
     this.profile.set(perfil);
     this.sincronizarSesion(perfil);
   }

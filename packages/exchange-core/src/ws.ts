@@ -126,8 +126,8 @@ export class ReconnectingSocket {
         this.startKeepalive(socket);
       });
 
-      socket.on('message', (raw) =>
-        this.guard(() => this.opts.onMessage(String(raw)), 'onMessage'),
+      socket.on('message', (raw: Buffer | string) =>
+        this.guard(() => this.opts.onMessage(raw.toString()), 'onMessage'),
       );
 
       socket.on('error', (e) => {

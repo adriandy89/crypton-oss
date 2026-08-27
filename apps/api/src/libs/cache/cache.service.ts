@@ -1,9 +1,4 @@
-import {
-  Injectable,
-  Logger,
-  OnModuleDestroy,
-  OnModuleInit,
-} from '@nestjs/common';
+import { Injectable, Logger, OnModuleDestroy, OnModuleInit } from '@nestjs/common';
 import { createClient, RedisClientType } from 'redis';
 import type { CacheOptions } from './cache.constants';
 
@@ -32,9 +27,7 @@ export class CacheService implements OnModuleInit, OnModuleDestroy {
 
     try {
       await this.client.connect();
-      this.logger.verbose(
-        `Connected to Redis [${this.serviceName}] at ${this.options.redisUrl}`,
-      );
+      this.logger.verbose(`Connected to Redis [${this.serviceName}] at ${this.options.redisUrl}`);
     } catch (err) {
       // El arranque SIGUE aunque Redis no responda, y es deliberado: con
       // `/health` atado al healthcheck de Docker, tumbar el proceso aqui
@@ -66,9 +59,7 @@ export class CacheService implements OnModuleInit, OnModuleDestroy {
 
   async flushAll(): Promise<void> {
     if (!this.client?.isReady) {
-      this.logger.error(
-        `Redis client [${this.serviceName}] is not ready for FLUSHALL.`,
-      );
+      this.logger.error(`Redis client [${this.serviceName}] is not ready for FLUSHALL.`);
       return;
     }
     try {
@@ -81,37 +72,27 @@ export class CacheService implements OnModuleInit, OnModuleDestroy {
 
   async ttl(key: string): Promise<number> {
     if (!this.client?.isReady) {
-      this.logger.error(
-        `Redis client [${this.serviceName}] is not ready for TTL.`,
-      );
+      this.logger.error(`Redis client [${this.serviceName}] is not ready for TTL.`);
       return await Promise.resolve(-1);
     }
     try {
       return await this.client.ttl(key);
     } catch (error) {
-      console.error(
-        `Error in TTL from Redis [${this.serviceName}], key: ${key}:`,
-        error,
-      );
+      console.error(`Error in TTL from Redis [${this.serviceName}], key: ${key}:`, error);
       return await Promise.resolve(-1);
     }
   }
 
   async get<T>(key: string): Promise<T | null> {
     if (!this.client?.isReady) {
-      this.logger.error(
-        `Redis client [${this.serviceName}] is not ready for GET.`,
-      );
+      this.logger.error(`Redis client [${this.serviceName}] is not ready for GET.`);
       return null;
     }
     try {
       const value = await this.client.get(key);
       return value ? (JSON.parse(value) as T) : null;
     } catch (error) {
-      console.error(
-        `Error in GET from Redis [${this.serviceName}], key: ${key}:`,
-        error,
-      );
+      console.error(`Error in GET from Redis [${this.serviceName}], key: ${key}:`, error);
       return null;
     }
   }
@@ -119,28 +100,21 @@ export class CacheService implements OnModuleInit, OnModuleDestroy {
   /** Atomic GET + DEL (single-use tokens: refresh rotation, SSE tickets). */
   async getDel<T>(key: string): Promise<T | null> {
     if (!this.client?.isReady) {
-      this.logger.error(
-        `Redis client [${this.serviceName}] is not ready for GETDEL.`,
-      );
+      this.logger.error(`Redis client [${this.serviceName}] is not ready for GETDEL.`);
       return null;
     }
     try {
       const value = await this.client.getDel(key);
       return value ? (JSON.parse(value) as T) : null;
     } catch (error) {
-      console.error(
-        `Error in GETDEL from Redis [${this.serviceName}], key: ${key}:`,
-        error,
-      );
+      console.error(`Error in GETDEL from Redis [${this.serviceName}], key: ${key}:`, error);
       return null;
     }
   }
 
   async set<T>(key: string, value: T, ttlSeconds?: number): Promise<void> {
     if (!this.client?.isReady) {
-      this.logger.error(
-        `Redis client [${this.serviceName}] is not ready for SET.`,
-      );
+      this.logger.error(`Redis client [${this.serviceName}] is not ready for SET.`);
       return;
     }
     try {
@@ -151,18 +125,13 @@ export class CacheService implements OnModuleInit, OnModuleDestroy {
         await this.client.set(key, stringValue);
       }
     } catch (error) {
-      console.error(
-        `Error in SET to Redis [${this.serviceName}], key: ${key}:`,
-        error,
-      );
+      console.error(`Error in SET to Redis [${this.serviceName}], key: ${key}:`, error);
     }
   }
 
   async setnx<T>(key: string, value: T, ttlSeconds?: number): Promise<boolean> {
     if (!this.client?.isReady) {
-      this.logger.error(
-        `Redis client [${this.serviceName}] is not ready for SETNX.`,
-      );
+      this.logger.error(`Redis client [${this.serviceName}] is not ready for SETNX.`);
       return false;
     }
     try {
@@ -173,163 +142,119 @@ export class CacheService implements OnModuleInit, OnModuleDestroy {
       });
       return result === 'OK'; // Redis returns 'OK' on success
     } catch (error) {
-      console.error(
-        `Error in SETNX to Redis [${this.serviceName}], key: ${key}:`,
-        error,
-      );
+      console.error(`Error in SETNX to Redis [${this.serviceName}], key: ${key}:`, error);
       return false;
     }
   }
 
   async del(key: string | string[]): Promise<void> {
     if (!this.client?.isReady) {
-      this.logger.error(
-        `Redis client [${this.serviceName}] is not ready for DEL.`,
-      );
+      this.logger.error(`Redis client [${this.serviceName}] is not ready for DEL.`);
       return;
     }
     try {
       await this.client.del(key);
     } catch (error) {
-      console.error(
-        `Error in DEL from Redis [${this.serviceName}], key: ${key}:`,
-        error,
-      );
+      const claves = Array.isArray(key) ? key.join(', ') : key;
+      console.error(`Error in DEL from Redis [${this.serviceName}], key: ${claves}:`, error);
     }
   }
 
   async exists(key: string): Promise<boolean> {
     if (!this.client?.isReady) {
-      this.logger.error(
-        `Redis client [${this.serviceName}] is not ready for EXISTS.`,
-      );
+      this.logger.error(`Redis client [${this.serviceName}] is not ready for EXISTS.`);
       return false;
     }
     try {
       const exists = await this.client.exists(key);
       return exists === 1;
     } catch (error) {
-      console.error(
-        `Error in EXISTS from Redis [${this.serviceName}], key: ${key}:`,
-        error,
-      );
+      console.error(`Error in EXISTS from Redis [${this.serviceName}], key: ${key}:`, error);
       return false;
     }
   }
 
   async keys(pattern: string): Promise<string[]> {
     if (!this.client?.isReady) {
-      this.logger.error(
-        `Redis client [${this.serviceName}] is not ready for KEYS.`,
-      );
+      this.logger.error(`Redis client [${this.serviceName}] is not ready for KEYS.`);
       return [];
     }
     try {
       const keys = await this.client.keys(pattern);
       return keys;
     } catch (error) {
-      console.error(
-        `Error in KEYS from Redis [${this.serviceName}], pattern: ${pattern}:`,
-        error,
-      );
+      console.error(`Error in KEYS from Redis [${this.serviceName}], pattern: ${pattern}:`, error);
       return [];
     }
   }
 
   async expire(key: string, seconds: number): Promise<void> {
     if (!this.client?.isReady) {
-      this.logger.error(
-        `Redis client [${this.serviceName}] is not ready for EXPIRE.`,
-      );
+      this.logger.error(`Redis client [${this.serviceName}] is not ready for EXPIRE.`);
       return;
     }
     try {
       await this.client.expire(key, seconds);
     } catch (error) {
-      console.error(
-        `Error in EXPIRE from Redis [${this.serviceName}], key: ${key}:`,
-        error,
-      );
+      console.error(`Error in EXPIRE from Redis [${this.serviceName}], key: ${key}:`, error);
     }
   }
 
   async sAdd(key: string, value: string | string[]): Promise<void> {
     if (!this.client?.isReady) {
-      this.logger.error(
-        `Redis client [${this.serviceName}] is not ready for SADD.`,
-      );
+      this.logger.error(`Redis client [${this.serviceName}] is not ready for SADD.`);
       return;
     }
     try {
       await this.client.sAdd(key, value);
     } catch (error) {
-      console.error(
-        `Error in SADD to Redis [${this.serviceName}], key: ${key}:`,
-        error,
-      );
+      console.error(`Error in SADD to Redis [${this.serviceName}], key: ${key}:`, error);
     }
   }
 
   async sMembers(key: string): Promise<string[]> {
     if (!this.client?.isReady) {
-      this.logger.error(
-        `Redis client [${this.serviceName}] is not ready for SMEMBERS.`,
-      );
+      this.logger.error(`Redis client [${this.serviceName}] is not ready for SMEMBERS.`);
       return [];
     }
     try {
       const members = await this.client.sMembers(key);
       return members;
     } catch (error) {
-      this.logger.error(
-        `Error in SMEMBERS from Redis [${this.serviceName}], key: ${key}:`,
-        error,
-      );
+      this.logger.error(`Error in SMEMBERS from Redis [${this.serviceName}], key: ${key}:`, error);
       return [];
     }
   }
 
   async sRem(key: string, value: string | string[]): Promise<void> {
     if (!this.client?.isReady) {
-      this.logger.error(
-        `Redis client [${this.serviceName}] is not ready for SREM.`,
-      );
+      this.logger.error(`Redis client [${this.serviceName}] is not ready for SREM.`);
       return;
     }
     try {
       await this.client.sRem(key, value);
     } catch (error) {
-      console.error(
-        `Error in SREM from Redis [${this.serviceName}], key: ${key}:`,
-        error,
-      );
+      console.error(`Error in SREM from Redis [${this.serviceName}], key: ${key}:`, error);
     }
   }
 
   async lRange(key: string, start: number, stop: number): Promise<string[]> {
     if (!this.client?.isReady) {
-      this.logger.error(
-        `Redis client [${this.serviceName}] is not ready for LRANGE.`,
-      );
+      this.logger.error(`Redis client [${this.serviceName}] is not ready for LRANGE.`);
       return [];
     }
     try {
       const members = await this.client.lRange(key, start, stop);
       return members;
     } catch (error) {
-      this.logger.error(
-        `Error in LRANGE from Redis [${this.serviceName}], key: ${key}:`,
-        error,
-      );
+      this.logger.error(`Error in LRANGE from Redis [${this.serviceName}], key: ${key}:`, error);
       return [];
     }
   }
 
   async sIsMember(key: string, value: string): Promise<boolean> {
     if (!this.client?.isReady) {
-      this.logger.error(
-        `Redis client [${this.serviceName}] is not ready for SISMEMBER.`,
-      );
+      this.logger.error(`Redis client [${this.serviceName}] is not ready for SISMEMBER.`);
       return false;
     }
     try {
@@ -349,9 +274,7 @@ export class CacheService implements OnModuleInit, OnModuleDestroy {
    */
   async incrWithExpire(key: string, expireSeconds: number): Promise<number> {
     if (!this.client?.isReady) {
-      this.logger.error(
-        `Redis client [${this.serviceName}] is not ready for INCR.`,
-      );
+      this.logger.error(`Redis client [${this.serviceName}] is not ready for INCR.`);
       return -1;
     }
     try {
@@ -362,10 +285,7 @@ export class CacheService implements OnModuleInit, OnModuleDestroy {
       }
       return value;
     } catch (error) {
-      console.error(
-        `Error in INCR/EXPIRE from Redis [${this.serviceName}], key: ${key}:`,
-        error,
-      );
+      console.error(`Error in INCR/EXPIRE from Redis [${this.serviceName}], key: ${key}:`, error);
       return -1;
     }
   }
@@ -396,10 +316,7 @@ export class CacheService implements OnModuleInit, OnModuleDestroy {
         );
       }
     } catch (error) {
-      console.error(
-        `Error clearing all devices cache in Redis [${this.serviceName}]:`,
-        error,
-      );
+      console.error(`Error clearing all devices cache in Redis [${this.serviceName}]:`, error);
     }
   }
 
@@ -413,9 +330,7 @@ export class CacheService implements OnModuleInit, OnModuleDestroy {
     }
     try {
       if (!userIds || userIds.length === 0) {
-        this.logger.warn(
-          `No user IDs provided for clearing users cache [${this.serviceName}].`,
-        );
+        this.logger.warn(`No user IDs provided for clearing users cache [${this.serviceName}].`);
         return;
       }
       const pattern = '*:*:users';
@@ -424,10 +339,7 @@ export class CacheService implements OnModuleInit, OnModuleDestroy {
         await this.client.sRem(key, userIds);
       }
     } catch (error) {
-      console.error(
-        `Error clearing all users cache in Redis [${this.serviceName}]:`,
-        error,
-      );
+      console.error(`Error clearing all users cache in Redis [${this.serviceName}]:`, error);
     }
   }
 
@@ -451,10 +363,7 @@ export class CacheService implements OnModuleInit, OnModuleDestroy {
         await this.client.del(keysToDelete);
       }
     } catch (error) {
-      console.error(
-        `Error clearing phone cache in Redis [${this.serviceName}]:`,
-        error,
-      );
+      console.error(`Error clearing phone cache in Redis [${this.serviceName}]:`, error);
     }
   }
 }

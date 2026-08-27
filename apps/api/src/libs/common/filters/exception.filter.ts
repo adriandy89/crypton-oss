@@ -9,12 +9,7 @@ import {
 } from '@nestjs/common';
 import { Request, Response } from 'express';
 import { AuditOutcome, EventSeverity } from '@crypton/shared';
-import {
-  AuditService,
-  actorOf,
-  safeRoute,
-  type AuditableRequest,
-} from '../../audit';
+import { AuditService, actorOf, safeRoute, type AuditableRequest } from '../../audit';
 
 /**
  * Filtro global de excepciones.
@@ -57,9 +52,7 @@ export class AllExceptionFilter implements ExceptionFilter {
     const request = ctx.getRequest<Request>();
 
     const isHttp = exception instanceof HttpException;
-    const status = isHttp
-      ? exception.getStatus()
-      : HttpStatus.INTERNAL_SERVER_ERROR;
+    const status = isHttp ? exception.getStatus() : HttpStatus.INTERNAL_SERVER_ERROR;
 
     let error: unknown;
     if (isHttp) {
@@ -106,11 +99,7 @@ export class AllExceptionFilter implements ExceptionFilter {
    * detallado: el mensaje de una validación puede repetir el valor rechazado, y
    * el valor rechazado de `POST /exchange-accounts` es una clave privada.
    */
-  private audite(
-    request: AuditableRequest,
-    status: number,
-    exception: unknown,
-  ): void {
+  private audite(request: AuditableRequest, status: number, exception: unknown): void {
     if (!this.audit.enabled) return;
     try {
       const { actor, actorId } = actorOf(request);
@@ -158,7 +147,6 @@ export class AllExceptionFilter implements ExceptionFilter {
  */
 function kindOf(e: unknown): string {
   const code = (e as { code?: unknown })?.code;
-  if (typeof code === 'string' && /^[A-Z][A-Z0-9_]{0,46}$/.test(code))
-    return code;
+  if (typeof code === 'string' && /^[A-Z][A-Z0-9_]{0,46}$/.test(code)) return code;
   return e instanceof Error ? e.constructor.name : 'UnknownError';
 }

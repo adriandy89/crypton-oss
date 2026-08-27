@@ -89,10 +89,7 @@ export class BotsController {
   @ApiOperation({
     summary: 'Flujo SSE con los eventos de los bots del usuario',
   })
-  stream(
-    @GetUserInfo() user: SessionUser,
-    @Req() req: Request,
-  ): Observable<MessageEvent> {
+  stream(@GetUserInfo() user: SessionUser, @Req() req: Request): Observable<MessageEvent> {
     const { obs, subject, streamId } = this.sse.stream(user.id);
     // Se retira EXACTAMENTE este subject al cerrarse la conexión; ver el
     // comentario de BotsSseService.remove sobre la carrera al reconectar. El
@@ -133,11 +130,7 @@ export class BotsController {
   @Audit('bot.rename', { fields: ['name'], params: ['id'] })
   @Patch(':id')
   @ApiOperation({ summary: 'Renombra el bot' })
-  rename(
-    @GetUserInfo() user: SessionUser,
-    @Param() { id }: IdParamDto,
-    @Body() dto: RenameBotDto,
-  ) {
+  rename(@GetUserInfo() user: SessionUser, @Param() { id }: IdParamDto, @Body() dto: RenameBotDto) {
     return this.bots.rename(user.id, id, dto.name);
   }
 
@@ -182,10 +175,7 @@ export class BotsController {
   @Delete(':id')
   @HttpCode(204)
   @ApiOperation({ summary: 'Elimina el bot (debe estar parado)' })
-  async remove(
-    @GetUserInfo() user: SessionUser,
-    @Param() { id }: IdParamDto,
-  ): Promise<void> {
+  async remove(@GetUserInfo() user: SessionUser, @Param() { id }: IdParamDto): Promise<void> {
     await this.bots.remove(user.id, id);
   }
 

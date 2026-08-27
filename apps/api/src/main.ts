@@ -1,4 +1,4 @@
-import { Logger, ValidationPipe } from '@nestjs/common';
+import { Logger, ValidationPipe, type INestApplication } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { NestFactory } from '@nestjs/core';
 import { DocumentBuilder, SwaggerModule } from '@nestjs/swagger';
@@ -17,21 +17,25 @@ import { AppModule } from './app.module';
  * number pierde precision en silencio, y un id truncado es un id que apunta a
  * otra fila.
  */
-(BigInt.prototype as unknown as { toJSON(): string }).toJSON = function toJSON(
-  this: bigint,
-) {
+(BigInt.prototype as unknown as { toJSON(): string }).toJSON = function toJSON(this: bigint) {
   return this.toString();
 };
 
 async function bootstrap() {
-  const app = await NestFactory.create(AppModule);
+  const app = await NestFactory.create<INestApplication>(AppModule);
 
   const logger = new Logger('bootstrap');
   const configService = app.get(ConfigService);
   const environment = configService.get<string>('NODE_ENV', 'development');
 
   if (environment === 'production') {
-    app.getHttpAdapter().getInstance().set('trust proxy', 1);
+    // `getInstance()` devuelve `any`: sin el parametro de tipo, una errata en
+    // el nombre del ajuste —o llamar a un metodo que no existe— pasaba el
+    // compilador y solo se veia arrancando en produccion.
+    const servidor = app.getHttpAdapter().getInstance() as {
+      set(ajuste: string, valor: unknown): void;
+    };
+    servidor.set('trust proxy', 1);
   }
 
   /**
@@ -74,11 +78,11 @@ async function bootstrap() {
     ...extraOrigins,
   ]);
   app.enableCors({
-    origin: (origin, callback) => {
-      callback(
-        null,
-        !origin || environment !== 'production' || allowedOrigins.has(origin),
-      );
+    origin: (
+      origin: string | undefined,
+      callback: (err: Error | null, permitido: boolean) => void,
+    ) => {
+      callback(null, !origin || environment !== 'production' || allowedOrigins.has(origin));
     },
     methods: 'GET,HEAD,PUT,PATCH,POST,DELETE',
     allowedHeaders: 'Content-Type, Accept, Authorization',

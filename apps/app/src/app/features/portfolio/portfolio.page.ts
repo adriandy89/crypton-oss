@@ -103,7 +103,9 @@ import {
                 </div>
 
                 <div class="row">
-                  <span class="qty num">{{ qty(b.positionQty) }} &#64; {{ price(b.averageEntry) }}</span>
+                  <span class="qty num"
+                    >{{ qty(b.positionQty) }} &#64; {{ price(b.averageEntry) }}</span
+                  >
                   <span class="num" [class]="'c-' + pnlColor(b.unrealizedPnl)">
                     {{ signed(b.unrealizedPnl) }}
                   </span>
@@ -164,7 +166,9 @@ import {
                 </div>
 
                 <div class="row">
-                  <span class="qty num">{{ qty(b.positionQty) }} &#64; {{ price(b.averageEntry) }}</span>
+                  <span class="qty num"
+                    >{{ qty(b.positionQty) }} &#64; {{ price(b.averageEntry) }}</span
+                  >
                   <span class="num" [class]="'c-' + pnlColor(b.unrealizedPnl)">
                     {{ signed(b.unrealizedPnl) }}
                   </span>
@@ -223,7 +227,8 @@ export class PortfolioPage implements OnInit {
 
   /** El mismo total, para los simulados. Vive en su propia tarjeta. */
   readonly simPnl = computed(
-    () => this.sumPnl(this.simulados(), 'realizedPnl') + this.sumPnl(this.simulados(), 'unrealizedPnl'),
+    () =>
+      this.sumPnl(this.simulados(), 'realizedPnl') + this.sumPnl(this.simulados(), 'unrealizedPnl'),
   );
   readonly simLive = computed(() => this.simulados().filter((b) => this.isLive(b.status)).length);
 
@@ -274,6 +279,6 @@ export class PortfolioPage implements OnInit {
 
   async reload(event: CustomEvent): Promise<void> {
     await this.bots.refresh();
-    (event.target as HTMLIonRefresherElement).complete();
+    void (event.target as HTMLIonRefresherElement).complete();
   }
 }

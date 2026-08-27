@@ -5,7 +5,7 @@ import { AuditOutcome, EventSeverity } from '@crypton/shared';
 import { AuditService, BUS_CHANNELS, BusService, DbService } from '../libs';
 import { BotRunner, type RunnerCommand } from './bot-runner';
 import { AccountHub } from './account-hub.service';
-import { BotStore, type BotRecord, type RiskGuards } from './bot-store';
+import { BotStore, type RiskGuards } from './bot-store';
 import { CommandInbox } from './command-inbox.service';
 import { LeaseService } from './lease.service';
 import { PriceSourceService } from '../marketdata';
@@ -485,7 +485,7 @@ export class EngineService implements OnModuleInit, OnModuleDestroy {
     };
 
     const runner = new BotRunner({
-      bot: bot as unknown as BotRecord,
+      bot: bot,
       adapter,
       testnet,
       market: spec,
@@ -543,7 +543,7 @@ export class EngineService implements OnModuleInit, OnModuleDestroy {
       if (!message.botId) return;
       const runner = this.runners.get(message.botId);
       if (!runner) return;
-      void this.reloadConfig(message.botId, runner, message.data as { level?: string });
+      void this.reloadConfig(message.botId, runner, message.data);
     });
   }
 

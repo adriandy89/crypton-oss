@@ -64,9 +64,7 @@ interface RespuestaOpenRouter {
  */
 function referenteValido(bruto: string): string {
   const primero = (bruto || '').split(',')[0]?.trim() ?? '';
-  return primero && /^[ -~]+$/.test(primero)
-    ? primero
-    : 'https://example.invalid';
+  return primero && /^[ -~]+$/.test(primero) ? primero : 'https://example.invalid';
 }
 
 @Injectable()
@@ -81,17 +79,11 @@ export class OpenRouterClient {
     // arrancar igual. Tumbar el servidor entero por una ayuda del asistente
     // seria un intercambio pesimo.
     const apiKey = this.config.get<string>('OPENROUTER_API_KEY', '');
-    const enabled =
-      this.config.get<string>('AI_ADVISOR_ENABLE', 'false') === 'true';
+    const enabled = this.config.get<string>('AI_ADVISOR_ENABLE', 'false') === 'true';
 
     this.apiKey = enabled ? apiKey : '';
-    this.model = this.config.get<string>(
-      'OPENROUTER_MODEL',
-      'anthropic/claude-sonnet-5',
-    );
-    this.referer = referenteValido(
-      this.config.get<string>('PUBLIC_APP_URL', ''),
-    );
+    this.model = this.config.get<string>('OPENROUTER_MODEL', 'anthropic/claude-sonnet-5');
+    this.referer = referenteValido(this.config.get<string>('PUBLIC_APP_URL', ''));
 
     if (enabled && !apiKey) {
       this.logger.warn(
@@ -209,18 +201,14 @@ export class OpenRouterClient {
       // un fallo de red: el modelo estaba pensando de mas.
       const nombre = (e as Error)?.name;
       if (nombre === 'TimeoutError' || nombre === 'AbortError') {
-        this.logger.debug(
-          `El modelo tardó más de ${TIMEOUT_MS} ms: se usan reglas.`,
-        );
+        this.logger.debug(`El modelo tardó más de ${TIMEOUT_MS} ms: se usan reglas.`);
       } else if (e instanceof TypeError) {
         // Un TypeError aqui NO es un problema de red: es una peticion mal
         // construida por nosotros —una cabecera con un carácter ilegal, un
         // cuerpo que no se puede serializar— y `fetch` la rechaza antes de
         // abrir el socket. Va como error y no como depuracion porque si no,
         // un fallo permanente nuestro se disfraza de caida ajena pasajera.
-        this.logger.error(
-          `Petición a OpenRouter mal formada, no llegó a salir: ${e.message}`,
-        );
+        this.logger.error(`Petición a OpenRouter mal formada, no llegó a salir: ${e.message}`);
       } else {
         this.logger.debug(`Fallo al pedir recomendaciones: ${String(e)}`);
       }
@@ -321,9 +309,7 @@ export class OpenRouterClient {
     } else if (res.status === 429) {
       this.logger.warn('OpenRouter está limitando el ritmo: se usan reglas.');
     } else {
-      this.logger.debug(
-        `El modelo no respondió (${res.status}): ${cuerpo.slice(0, 300)}`,
-      );
+      this.logger.debug(`El modelo no respondió (${res.status}): ${cuerpo.slice(0, 300)}`);
     }
     return null;
   }
@@ -356,8 +342,7 @@ export class OpenRouterClient {
     for (const p of propuestas) {
       const o = p as Record<string, unknown>;
       const profile = o['profile'] as Profile;
-      if (!PROFILES.includes(profile) || perfilesVistos.has(profile))
-        return null;
+      if (!PROFILES.includes(profile) || perfilesVistos.has(profile)) return null;
       perfilesVistos.add(profile);
 
       if (
@@ -386,10 +371,7 @@ export class OpenRouterClient {
         // objeto da «[object Object]», y eso acabaria de explicacion en una
         // tarjeta. Y se recorta aqui sin fiarse del modelo: el limite de
         // longitud es una descripcion del esquema, no algo que la API imponga.
-        rationale:
-          typeof o['rationale'] === 'string'
-            ? o['rationale'].slice(0, 240)
-            : '',
+        rationale: typeof o['rationale'] === 'string' ? o['rationale'].slice(0, 240) : '',
       });
     }
 

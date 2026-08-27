@@ -24,8 +24,7 @@ export type Venue = (typeof Venue)[keyof typeof Venue];
  * llevar `:` (lo prohibe el filtro de simbolos del stream), asi que
  * `LIGHTER:t` nunca colisiona con un venue ni con un par.
  */
-export const venueKey = (venue: Venue, testnet = false): string =>
-  testnet ? `${venue}:t` : venue;
+export const venueKey = (venue: Venue, testnet = false): string => (testnet ? `${venue}:t` : venue);
 
 export const StrategyKind = {
   GRID_CLASSIC: 'GRID_CLASSIC',
@@ -109,8 +108,7 @@ export const PositionModeSetting = {
   ONE_WAY: 'ONE_WAY',
   HEDGE: 'HEDGE',
 } as const;
-export type PositionModeSetting =
-  (typeof PositionModeSetting)[keyof typeof PositionModeSetting];
+export type PositionModeSetting = (typeof PositionModeSetting)[keyof typeof PositionModeSetting];
 
 export const Direction = { LONG: 'LONG', SHORT: 'SHORT', NEUTRAL: 'NEUTRAL' } as const;
 export type Direction = (typeof Direction)[keyof typeof Direction];

@@ -2,11 +2,7 @@ import { randomBytes } from 'node:crypto';
 import { Injectable, Logger, NotFoundException } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { DbService } from 'src/libs';
-import {
-  DEFAULT_TELEGRAM_PREFS,
-  UpdateTelegramPrefsDto,
-  type TelegramPrefs,
-} from './dtos';
+import { DEFAULT_TELEGRAM_PREFS, UpdateTelegramPrefsDto, type TelegramPrefs } from './dtos';
 
 /**
  * Alfabeto Crockford base32: sin I, L, O ni U. Se eligen 32 símbolos exactos
@@ -52,9 +48,7 @@ export class TelegramService {
    */
   private randomCode(length: number): string {
     if (256 % ALPHABET.length !== 0) {
-      throw new Error(
-        'El alfabeto debe dividir a 256 para no sesgar el código.',
-      );
+      throw new Error('El alfabeto debe dividir a 256 para no sesgar el código.');
     }
     const bytes = randomBytes(length);
     let out = '';
@@ -131,24 +125,18 @@ export class TelegramService {
     return {
       code,
       botUsername,
-      deepLink: botUsername
-        ? `https://t.me/${botUsername}?start=${code}`
-        : null,
+      deepLink: botUsername ? `https://t.me/${botUsername}?start=${code}` : null,
       // El código se envía al bot, no se teclea en la app: se muestra por si el
       // enlace profundo no abre Telegram (navegador de escritorio, por ejemplo).
       instructions: `Abre el chat con @${botUsername || 'el bot'} y envía: /start ${code}`,
     };
   }
 
-  async updatePrefs(
-    userId: string,
-    dto: UpdateTelegramPrefsDto,
-  ): Promise<TelegramPrefs> {
+  async updatePrefs(userId: string, dto: UpdateTelegramPrefsDto): Promise<TelegramPrefs> {
     const link = await this.db.telegramLink.findUnique({
       where: { user_id: userId },
     });
-    if (!link)
-      throw new NotFoundException('Todavía no has vinculado Telegram.');
+    if (!link) throw new NotFoundException('Todavía no has vinculado Telegram.');
 
     const prefs: TelegramPrefs = {
       ...DEFAULT_TELEGRAM_PREFS,

@@ -85,7 +85,7 @@ const run = (candles: Candle[], over: Record<string, unknown> = {}, params = PAR
   runReplay({
     botId: '1a2b3c4d-0000-4000-8000-000000000000',
     strategy: StrategyKind.GRID_CLASSIC,
-    config: { ...GRID, ...over } as never,
+    config: { ...GRID, ...over },
     venue: Venue.HYPERLIQUID,
     market: TEST_MARKET,
     interval: '15m',
@@ -127,7 +127,7 @@ describe('runReplay', () => {
   it('la curva de equity tiene un punto por vela', async () => {
     const r = await run(plano(30, '100'));
     expect(r.equity).toHaveLength(30);
-    expect(r.equity[0]!.ts).toBe(T0);
+    expect(r.equity[0].ts).toBe(T0);
   });
 
   describe('las tres trampas', () => {
@@ -177,7 +177,13 @@ describe('runReplay', () => {
       // liquidación nunca — la martingala infalible.
       const r = await run(
         [...plano(3, '100'), ...rampa(40, 100, 78, T0 + 3 * SPAN)],
-        { totalInvestment: '50000', leverage: 10, lowerPrice: '95', upperPrice: '105', gridLevels: 4 },
+        {
+          totalInvestment: '50000',
+          leverage: 10,
+          lowerPrice: '95',
+          upperPrice: '105',
+          gridLevels: 4,
+        },
         { ...PARAMS, leverage: 10, startingBalance: '6000' },
       );
 

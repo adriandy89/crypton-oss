@@ -1,12 +1,4 @@
-import {
-  Body,
-  Controller,
-  Get,
-  HttpCode,
-  Patch,
-  Post,
-  UseGuards,
-} from '@nestjs/common';
+import { Body, Controller, Get, HttpCode, Patch, Post, UseGuards } from '@nestjs/common';
 import { ApiBearerAuth, ApiOperation, ApiTags } from '@nestjs/swagger';
 import { Audit } from 'src/libs';
 import { GetUserInfo, JwtAuthGuard, type SessionUser } from '../auth';
@@ -27,13 +19,7 @@ export class RiskController {
   }
 
   @Audit('risk.update_limits', {
-    fields: [
-      'maxNotionalPerBot',
-      'maxTotalNotional',
-      'maxLeverage',
-      'maxOpenBots',
-      'maxDailyLoss',
-    ],
+    fields: ['maxNotionalPerBot', 'maxTotalNotional', 'maxLeverage', 'maxOpenBots', 'maxDailyLoss'],
     critical: true,
   })
   @Patch('limits')

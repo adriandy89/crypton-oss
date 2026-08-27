@@ -412,7 +412,7 @@ describe('BotRunner', () => {
       (
         runner as unknown as { deps: { guards: Record<string, string> } }
       ).deps.guards.maxNotionalPerBot = '1';
-      const adapterAny = adapter as FakeAdapter;
+      const adapterAny = adapter;
       adapterAny.position = {
         venue: Venue.HYPERLIQUID,
         symbol: 'BTC',
@@ -1430,7 +1430,7 @@ describe('liquidación del venue', () => {
       marginMode: 'ISOLATED',
       liquidationPrice: null,
       marginUsed: '6',
-    } as never;
+    };
 
     adapter.fills$.next(fillLiq({ qty: '0.4' }));
     await new Promise((r) => setTimeout(r, 60));
@@ -1531,10 +1531,13 @@ describe('liquidación del venue', () => {
     // Llega por el WebSocket y otra vez por el barrido REST. `recordLiquidation`
     // devuelve null la segunda —choca contra la clave del coid sintético— y ahí
     // tiene que pararse.
-    const { runner, adapter, store } = build({ orders: [], immediate: [] }, {
-      recordFill: jest.fn().mockResolvedValue(null),
-      recordLiquidation: jest.fn().mockResolvedValue(null),
-    } as never);
+    const { runner, adapter, store } = build(
+      { orders: [], immediate: [] },
+      {
+        recordFill: jest.fn().mockResolvedValue(null),
+        recordLiquidation: jest.fn().mockResolvedValue(null),
+      },
+    );
     await runner.start();
     conPosicion(runner);
 

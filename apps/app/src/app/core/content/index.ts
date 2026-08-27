@@ -29,7 +29,7 @@ export const STRATEGY_GUIDES: Record<StrategyKind, StrategyGuide> = {
   MARKET_MAKER_V2: MARKET_MAKER_V2_GUIDE,
 };
 
-export const strategyGuide = (kind: StrategyKind | string): StrategyGuide | null =>
+export const strategyGuide = (kind: string): StrategyGuide | null =>
   STRATEGY_GUIDES[kind as StrategyKind] ?? null;
 
 /**
@@ -39,7 +39,7 @@ export const strategyGuide = (kind: StrategyKind | string): StrategyGuide | null
  * allí significa otra cosa; si no, la común. `null` si nadie la ha escrito: el
  * panel cae entonces a la ayuda corta del formulario, que es mejor que un hueco.
  */
-export function optionDoc(kind: StrategyKind | string, key: string): OptionDoc | null {
+export function optionDoc(kind: string, key: string): OptionDoc | null {
   const guide = STRATEGY_GUIDES[kind as StrategyKind];
   const own = (guide?.options as Record<string, OptionDoc> | undefined)?.[key];
   return own ?? COMMON_OPTION_DOCS[key as keyof typeof COMMON_OPTION_DOCS] ?? null;

@@ -1,11 +1,5 @@
 import { Component, inject } from '@angular/core';
-import {
-  IonIcon,
-  IonLabel,
-  IonTabBar,
-  IonTabButton,
-  IonTabs,
-} from '@ionic/angular/standalone';
+import { IonIcon, IonLabel, IonTabBar, IonTabButton, IonTabs } from '@ionic/angular/standalone';
 import { addIcons } from 'ionicons';
 import { gridOutline, personOutline, pieChartOutline, statsChartOutline } from 'ionicons/icons';
 import { StreamService } from '../core/services';

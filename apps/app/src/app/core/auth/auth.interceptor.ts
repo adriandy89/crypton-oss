@@ -33,9 +33,7 @@ export const authInterceptor: HttpInterceptorFn = (req, next) => {
   const token = auth.accessToken;
 
   const authorized =
-    token && !isPublic
-      ? req.clone({ setHeaders: { Authorization: `Bearer ${token}` } })
-      : req;
+    token && !isPublic ? req.clone({ setHeaders: { Authorization: `Bearer ${token}` } }) : req;
 
   return next(authorized).pipe(
     catchError((error: unknown) => {
@@ -51,9 +49,7 @@ export const authInterceptor: HttpInterceptorFn = (req, next) => {
           // Se repite la petición con el token nuevo. Solo se reintenta UNA
           // vez: si vuelve a dar 401 con un token recién emitido, el problema
           // no es la caducidad y reintentar en bucle no ayudaría.
-          return next(
-            req.clone({ setHeaders: { Authorization: `Bearer ${auth.accessToken}` } }),
-          );
+          return next(req.clone({ setHeaders: { Authorization: `Bearer ${auth.accessToken}` } }));
         }),
       );
     }),

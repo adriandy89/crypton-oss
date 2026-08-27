@@ -1,5 +1,4 @@
 import {
-  BarPath,
   D,
   Decimal,
   candleSpanMs,
@@ -16,7 +15,6 @@ import {
   type Position,
   type StrategyKind,
   type Venue,
-  type VenueOrder,
 } from '@crypton/shared';
 import { DryRunAdapter, ReplaySourceAdapter, codecFor } from '@crypton/exchange-core';
 import {
@@ -88,7 +86,16 @@ export interface ReplayOutput {
   /** Repartos sobre el TOTAL, no sobre la lista acotada. */
   fillCounts: { buy: number; sell: number; maker: number; taker: number };
   equity: ReplayState[];
-  cycles: { seq: number; openedAt: number; closedAt: number | null; entries: number; averageEntry: string | null; exitAvg: string | null; realizedPnl: string; fees: string }[];
+  cycles: {
+    seq: number;
+    openedAt: number;
+    closedAt: number | null;
+    entries: number;
+    averageEntry: string | null;
+    exitAvg: string | null;
+    realizedPnl: string;
+    fees: string;
+  }[];
   liquidations: number;
   ticks: number;
   finalBalance: Decimal;
@@ -170,7 +177,16 @@ export async function runReplay(opts: ReplayOptions): Promise<ReplayOutput> {
   const fills: BacktestFillView[] = [];
   const equity: ReplayState[] = [];
   const cycles: ReplayOutput['cycles'] = [
-    { seq: 1, openedAt: clock, closedAt: null, entries: 0, averageEntry: null, exitAvg: null, realizedPnl: '0', fees: '0' },
+    {
+      seq: 1,
+      openedAt: clock,
+      closedAt: null,
+      entries: 0,
+      averageEntry: null,
+      exitAvg: null,
+      realizedPnl: '0',
+      fees: '0',
+    },
   ];
   const warnings: string[] = [];
   let liquidations = 0;
@@ -197,10 +213,16 @@ export async function runReplay(opts: ReplayOptions): Promise<ReplayOutput> {
       if (esLiquidacion) liquidations += 1;
 
       const antes = cycleSeq();
-      const r = cycleAfterFill(cycle, totals, fill, {
-        recycleLevelOnExit: strategy.recycleLevelOnExit,
-        cooldownMinutes: Number(opts.config.cooldownMinutes ?? 0),
-      }, clock);
+      const r = cycleAfterFill(
+        cycle,
+        totals,
+        fill,
+        {
+          recycleLevelOnExit: strategy.recycleLevelOnExit,
+          cooldownMinutes: Number(opts.config.cooldownMinutes ?? 0),
+        },
+        clock,
+      );
 
       cycle = r.cycle;
       totals = r.totals;
@@ -230,7 +252,7 @@ export async function runReplay(opts: ReplayOptions): Promise<ReplayOutput> {
         });
       }
 
-      const abierto = cycles[cycles.length - 1]!;
+      const abierto = cycles[cycles.length - 1];
       abierto.entries = r.totals.entriesFilled;
       abierto.averageEntry = r.totals.averageEntry?.toFixed() ?? null;
       abierto.realizedPnl = r.totals.realizedPnl.toFixed();
@@ -266,7 +288,12 @@ export async function runReplay(opts: ReplayOptions): Promise<ReplayOutput> {
       // GridMart se comporte aquí como en producción.
       if (strategy.onFill) {
         cycle = strategy.onFill(
-          { ...(await contexto(D(raw.price))), position: null, openOrders: [], availableBalance: '0' },
+          {
+            ...(await contexto(D(raw.price))),
+            position: null,
+            openOrders: [],
+            availableBalance: '0',
+          },
           fill,
           cycle,
         );
@@ -305,7 +332,7 @@ export async function runReplay(opts: ReplayOptions): Promise<ReplayOutput> {
   const yieldEvery = opts.yieldEvery ?? 250;
 
   for (let i = 0; i < opts.candles.length && !detenido; i++) {
-    const bar = opts.candles[i]!;
+    const bar = opts.candles[i];
 
     for (const step of tickPath(bar, opts.interval, params.barPath)) {
       clock = step.ts;
@@ -327,7 +354,7 @@ export async function runReplay(opts: ReplayOptions): Promise<ReplayOutput> {
     await planificar(D(bar.c));
     await drenar();
 
-    equity.push({ ts: bar.t, ...(await snapshot(D(bar.c))) });
+    equity.push({ ts: bar.t, ...(await snapshot()) });
 
     if (i % yieldEvery === 0 && opts.onProgress) await opts.onProgress(i, opts.candles.length);
   }
@@ -406,7 +433,7 @@ export async function runReplay(opts: ReplayOptions): Promise<ReplayOutput> {
       .catch(() => undefined);
   }
 
-  async function snapshot(precio: Decimal): Promise<{ equity: Decimal; position: Decimal }> {
+  async function snapshot(): Promise<{ equity: Decimal; position: Decimal }> {
     const [positions, balances] = await Promise.all([
       sim.getPositions(market.symbol),
       sim.getBalances(),

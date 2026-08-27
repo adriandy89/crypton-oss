@@ -524,11 +524,7 @@ const V2_FIELDS: readonly FieldMeta[] = [
     mutability: Mutability.COLD,
     labelKey: 'strategy.mmv2.positionMode',
     helpKey: 'strategy.mmv2.positionModeHelp',
-    options: [
-      PositionModeSetting.AUTO,
-      PositionModeSetting.HEDGE,
-      PositionModeSetting.ONE_WAY,
-    ],
+    options: [PositionModeSetting.AUTO, PositionModeSetting.HEDGE, PositionModeSetting.ONE_WAY],
     required: false,
     default: PositionModeSetting.AUTO,
     group: 'venue',
@@ -556,11 +552,7 @@ const V2_FIELDS: readonly FieldMeta[] = [
     mutability: Mutability.HOT,
     labelKey: 'strategy.mmv2.fairPriceOrigin',
     helpKey: 'strategy.mmv2.fairPriceOriginHelp',
-    options: [
-      FairPriceOrigin.SOURCE_GLOBAL,
-      FairPriceOrigin.VENUE_MID,
-      FairPriceOrigin.VENUE_MARK,
-    ],
+    options: [FairPriceOrigin.SOURCE_GLOBAL, FairPriceOrigin.VENUE_MID, FairPriceOrigin.VENUE_MARK],
     required: false,
     default: FairPriceOrigin.SOURCE_GLOBAL,
     group: 'priceSource',
@@ -1039,7 +1031,7 @@ export const marketMakerV2: Strategy<MarketMakerV2Config> = {
     const shouldRequote =
       quotedMid == null || (!cooling && (staleByTime || staleByDrift || expired.size > 0));
 
-    const mid = shouldRequote ? anchorNow : quotedMid!;
+    const mid = shouldRequote ? anchorNow : quotedMid;
     if (shouldRequote) {
       scratchPatch['quotedMid'] = mid.toFixed(pd);
       scratchPatch['quotedAt'] = ctx.now;
@@ -1245,4 +1237,3 @@ function fitToRoom(
   if (notional.lte(room)) return notional;
   return cfg.useFullSizeUntilMax ? D(0) : room;
 }
-

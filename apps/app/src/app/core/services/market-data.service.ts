@@ -1,13 +1,5 @@
 import { HttpClient } from '@angular/common/http';
-import {
-  DestroyRef,
-  Injectable,
-  computed,
-  effect,
-  inject,
-  signal,
-  untracked,
-} from '@angular/core';
+import { DestroyRef, Injectable, computed, effect, inject, signal, untracked } from '@angular/core';
 import { App as CapApp } from '@capacitor/app';
 import { filter, firstValueFrom, map, type Observable } from 'rxjs';
 import { environment } from '../../../environments/environment';
@@ -770,7 +762,7 @@ export class MarketDataService {
     // Camino rapido: lo normal es pegar una o dos velas AL FINAL. Reconstruir un
     // Map y reordenar tres mil elementos cada treinta segundos para eso era
     // gratis con 600 barras y deja de serlo con historico cargado.
-    const ultima = previous.length ? previous[previous.length - 1]!.t : -Infinity;
+    const ultima = previous.length ? previous[previous.length - 1].t : -Infinity;
     if (previous.length && incoming.every((c) => c.t > ultima)) {
       const merged = [...previous, ...incoming];
       return merged.length > keep ? merged.slice(merged.length - keep) : merged;

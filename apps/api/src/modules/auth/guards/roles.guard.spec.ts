@@ -45,9 +45,7 @@ describe('RolesGuard', () => {
 
   it('rechaza a quien no lo tiene', () => {
     const guard = new RolesGuard(reflector(['ADMIN']));
-    expect(() => guard.canActivate(ctx({ id: 'u1', role: 'USER' }))).toThrow(
-      ForbiddenException,
-    );
+    expect(() => guard.canActivate(ctx({ id: 'u1', role: 'USER' }))).toThrow(ForbiddenException);
   });
 
   it('sin usuario NIEGA, no revienta', () => {

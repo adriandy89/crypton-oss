@@ -1,4 +1,10 @@
-import { D, Decimal, type BacktestEquityPoint, type BacktestMetrics, type Candle } from '@crypton/shared';
+import {
+  D,
+  Decimal,
+  type BacktestEquityPoint,
+  type BacktestMetrics,
+  type Candle,
+} from '@crypton/shared';
 import type { ReplayOutput, ReplayState } from './engine';
 
 /**
@@ -22,21 +28,22 @@ export function buildMetrics(
   const dd = drawdownOf(out.equity);
   const curva = downsampleExtrema(out.equity, CURVE_POINTS, dd.peakByTs);
 
-  const finalEquity = out.equity.length ? out.equity[out.equity.length - 1]!.equity : inicial;
+  const finalEquity = out.equity.length ? out.equity[out.equity.length - 1].equity : inicial;
   const netPnl = finalEquity.minus(inicial);
 
   const cerrados = out.cycles.filter((c) => c.closedAt !== null);
   const ganadores = cerrados.filter((c) => D(c.realizedPnl).gt(0)).length;
-  const duraciones = cerrados
-    .map((c) => (c.closedAt ?? 0) - c.openedAt)
-    .filter((d) => d > 0);
+  const duraciones = cerrados.map((c) => (c.closedAt ?? 0) - c.openedAt).filter((d) => d > 0);
 
   const enMercado = out.equity.filter((p) => !p.position.isZero()).length;
   const picoQty = out.equity.reduce((m, p) => Decimal.max(m, p.position.abs()), D(0));
 
   const buyHold =
     candles.length >= 2
-      ? D(candles[candles.length - 1]!.c).minus(candles[0]!.c).div(candles[0]!.c).mul(100)
+      ? D(candles[candles.length - 1].c)
+          .minus(candles[0].c)
+          .div(candles[0].c)
+          .mul(100)
       : D(0);
 
   const noRealizado = finalEquity.minus(inicial).minus(out.realizedPnl);
@@ -60,9 +67,7 @@ export function buildMetrics(
 
       cyclesClosed: cerrados.length,
       cyclesOpenAtEnd: out.cycles.length - cerrados.length,
-      winRatePct: cerrados.length
-        ? D(ganadores).div(cerrados.length).mul(100).toFixed(2)
-        : null,
+      winRatePct: cerrados.length ? D(ganadores).div(cerrados.length).mul(100).toFixed(2) : null,
       avgCycleMs: duraciones.length
         ? Math.round(duraciones.reduce((a, b) => a + b, 0) / duraciones.length)
         : null,
@@ -79,7 +84,7 @@ export function buildMetrics(
       liquidations: out.liquidations,
 
       peakPositionQty: picoQty.toFixed(),
-      peakNotional: picoQty.mul(candles.length ? D(candles[candles.length - 1]!.c) : D(0)).toFixed(),
+      peakNotional: picoQty.mul(candles.length ? D(candles[candles.length - 1].c) : D(0)).toFixed(),
       timeInMarketPct: out.equity.length
         ? D(enMercado).div(out.equity.length).mul(100).toFixed(2)
         : '0',
@@ -103,8 +108,8 @@ function drawdownOf(serie: ReplayState[]): {
   peakTs: number | null;
   peakByTs: Map<number, Decimal>;
 } {
-  let peak = serie.length ? serie[0]!.equity : D(0);
-  let peakTs: number | null = serie.length ? serie[0]!.ts : null;
+  let peak = serie.length ? serie[0].equity : D(0);
+  let peakTs: number | null = serie.length ? serie[0].ts : null;
   let maxAbs = D(0);
   let maxPct = D(0);
   let atTs: number | null = null;
@@ -155,13 +160,13 @@ function downsampleExtrema(
   const out: BacktestEquityPoint[] = [];
   for (let i = 0; i < serie.length; i += cubo) {
     const tramo = serie.slice(i, i + cubo);
-    let min = tramo[0]!;
-    let maxP = tramo[0]!;
+    let min = tramo[0];
+    let maxP = tramo[0];
     for (const p of tramo) {
       if (p.equity.lt(min.equity)) min = p;
       if (p.equity.gt(maxP.equity)) maxP = p;
     }
-    const elegidos = [tramo[0]!, min, maxP, tramo[tramo.length - 1]!]
+    const elegidos = [tramo[0], min, maxP, tramo[tramo.length - 1]]
       .filter((p, idx, arr) => arr.findIndex((q) => q.ts === p.ts) === idx)
       .sort((a, b) => a.ts - b.ts);
     out.push(...elegidos.map(punto));
@@ -182,11 +187,11 @@ export function aggregateCandles(candles: Candle[], max: number): Candle[] {
   for (let i = 0; i < candles.length; i += cubo) {
     const tramo = candles.slice(i, i + cubo);
     out.push({
-      t: tramo[0]!.t,
-      o: tramo[0]!.o,
-      h: tramo.reduce((m, c) => (D(c.h).gt(m) ? D(c.h) : m), D(tramo[0]!.h)).toFixed(),
-      l: tramo.reduce((m, c) => (D(c.l).lt(m) ? D(c.l) : m), D(tramo[0]!.l)).toFixed(),
-      c: tramo[tramo.length - 1]!.c,
+      t: tramo[0].t,
+      o: tramo[0].o,
+      h: tramo.reduce((m, c) => (D(c.h).gt(m) ? D(c.h) : m), D(tramo[0].h)).toFixed(),
+      l: tramo.reduce((m, c) => (D(c.l).lt(m) ? D(c.l) : m), D(tramo[0].l)).toFixed(),
+      c: tramo[tramo.length - 1].c,
       v: tramo.every((c) => c.v === null)
         ? null
         : tramo.reduce((s, c) => s.plus(c.v ?? 0), D(0)).toFixed(),

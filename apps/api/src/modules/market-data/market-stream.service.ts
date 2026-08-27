@@ -1,14 +1,5 @@
-import {
-  Injectable,
-  Logger,
-  OnModuleDestroy,
-  OnModuleInit,
-} from '@nestjs/common';
-import {
-  CANDLE_INTERVALS,
-  type Candle,
-  type CandleInterval,
-} from '@crypton/shared';
+import { Injectable, Logger, OnModuleDestroy, OnModuleInit } from '@nestjs/common';
+import { CANDLE_INTERVALS, type Candle, type CandleInterval } from '@crypton/shared';
 import { Venue } from '@crypton/db';
 import { BUS_CHANNELS, BusService } from 'src/libs';
 import { BotsSseService } from '../bots';
@@ -57,9 +48,7 @@ export class MarketStreamService implements OnModuleInit, OnModuleDestroy {
   ) {}
 
   async onModuleInit(): Promise<void> {
-    const ticks$ = await this.bus.listenPublic<TickPayload>(
-      BUS_CHANNELS.MARKET_TICKS,
-    );
+    const ticks$ = await this.bus.listenPublic<TickPayload>(BUS_CHANNELS.MARKET_TICKS);
     ticks$.subscribe((message) => {
       // Dentro de un `try`, como el de las velas: lo que se lanza en el `next`
       // de un Observable no lo recoge nadie y acaba tumbando el proceso.
@@ -78,26 +67,21 @@ export class MarketStreamService implements OnModuleInit, OnModuleDestroy {
       }
     });
 
-    const candles$ = await this.bus.listenPublic<CandlePayload>(
-      BUS_CHANNELS.MARKET_CANDLES,
-    );
+    const candles$ = await this.bus.listenPublic<CandlePayload>(BUS_CHANNELS.MARKET_CANDLES);
     candles$.subscribe((message) => {
       try {
         const { venue, symbol, interval, candle, testnet } = message.data;
         if (!venue || !symbol || !interval || !candle) return;
-        this.sse.emitTopic(
-          candleTopicOf(venue, symbol, interval, testnet === true),
-          {
-            type: 'CANDLE',
-            data: {
-              venue,
-              symbol,
-              interval,
-              candle,
-              testnet: testnet === true,
-            },
+        this.sse.emitTopic(candleTopicOf(venue, symbol, interval, testnet === true), {
+          type: 'CANDLE',
+          data: {
+            venue,
+            symbol,
+            interval,
+            candle,
+            testnet: testnet === true,
           },
-        );
+        });
       } catch (e) {
         this.logger.warn(`Vela ilegible: ${(e as Error).message}`);
       }
@@ -169,20 +153,13 @@ export class MarketStreamService implements OnModuleInit, OnModuleDestroy {
       .filter(isTopic)
       .slice(0, hueco);
 
-    const accepted = this.sse.setTopics(userId, streamId, [
-      ...velas,
-      ...precios,
-    ]);
+    const accepted = this.sse.setTopics(userId, streamId, [...velas, ...precios]);
     await this.announce();
     // Se devuelve el par pelado, sin prefijo: el cliente ya sabe en que red
     // pidio —la mando el— y anadirsela solo le daria algo que volver a quitar.
     return {
-      symbols: accepted
-        .filter((t) => t.startsWith(testnet ? PT : PX))
-        .map(fromTopic),
-      candles: accepted
-        .filter((t) => t.startsWith(testnet ? KT : KL))
-        .map(fromTopic),
+      symbols: accepted.filter((t) => t.startsWith(testnet ? PT : PX)).map(fromTopic),
+      candles: accepted.filter((t) => t.startsWith(testnet ? KT : KL)).map(fromTopic),
     };
   }
 
@@ -293,12 +270,8 @@ const KT = 'kt:';
 
 const topicOf = (venue: string, symbol: string, testnet = false): string =>
   `${testnet ? PT : PX}${venue}:${symbol}`;
-const candleTopicOf = (
-  venue: string,
-  symbol: string,
-  interval: string,
-  testnet = false,
-): string => `${testnet ? KT : KL}${venue}:${symbol}:${interval}`;
+const candleTopicOf = (venue: string, symbol: string, interval: string, testnet = false): string =>
+  `${testnet ? KT : KL}${venue}:${symbol}:${interval}`;
 const fromTopic = (topic: string): string => topic.slice(3);
 const isTopic = (t: string | null): t is string => t !== null;
 
@@ -324,6 +297,7 @@ const isTopic = (t: string | null): t is string => t !== null;
  *
  * El tope de 32 es el ancho de la columna `markets.symbol`.
  */
+// eslint-disable-next-line no-control-regex -- el rango de control esta a proposito: es el saneado que rechaza caracteres de control en un simbolo
 const SYMBOL_RE = /^[^\s,:|\u0000-\u001f]{1,32}$/;
 
 /**

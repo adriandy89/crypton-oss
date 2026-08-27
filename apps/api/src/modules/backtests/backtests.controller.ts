@@ -12,13 +12,7 @@ import {
 import { Throttle } from '@nestjs/throttler';
 import { ApiBearerAuth, ApiOperation, ApiTags } from '@nestjs/swagger';
 import { Audit } from 'src/libs';
-import {
-  GetUserInfo,
-  JwtAuthGuard,
-  Roles,
-  RolesGuard,
-  type SessionUser,
-} from '../auth';
+import { GetUserInfo, JwtAuthGuard, Roles, RolesGuard, type SessionUser } from '../auth';
 import { BacktestsService } from './backtests.service';
 import { CreateBacktestDto, ListBacktestsQueryDto } from './dtos';
 
@@ -74,8 +68,7 @@ export class BacktestsController {
   @Get()
   @ApiOperation({
     summary: 'Ejecuciones anteriores (solo ADMIN)',
-    description:
-      'Es lo que permite comparar dos ajustes sobre el mismo periodo.',
+    description: 'Es lo que permite comparar dos ajustes sobre el mismo periodo.',
   })
   list(@Query() q: ListBacktestsQueryDto) {
     return this.backtests.list({ botId: q.botId, limit: q.limit });
@@ -90,13 +83,9 @@ export class BacktestsController {
   @Get(':id/fills')
   @ApiOperation({
     summary: 'Ejecuciones simuladas (solo ADMIN)',
-    description:
-      'En tabla aparte: un market maker sobre treinta días produce decenas de miles.',
+    description: 'En tabla aparte: un market maker sobre treinta días produce decenas de miles.',
   })
-  fills(
-    @Param('id', ParseUUIDPipe) id: string,
-    @Query('limit') limit?: string,
-  ) {
+  fills(@Param('id', ParseUUIDPipe) id: string, @Query('limit') limit?: string) {
     return this.backtests.fills(id, Number(limit) || 500);
   }
 

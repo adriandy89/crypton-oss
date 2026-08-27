@@ -69,6 +69,7 @@ import {
   strategyLabel,
   uptime,
   venueLabel,
+  textoDeConfig,
 } from '../../core/utils';
 import {
   UiBadgeComponent,
@@ -277,7 +278,9 @@ export class BotDetailPage implements OnInit {
   readonly dirty = computed(() => {
     const original = this.bot()?.config ?? {};
     const current = this.draft();
-    return Object.keys(current).some((k) => String(current[k] ?? '') !== String(original[k] ?? ''));
+    return Object.keys(current).some(
+      (k) => textoDeConfig(current[k]) !== textoDeConfig(original[k]),
+    );
   });
 
   constructor() {
@@ -316,7 +319,7 @@ export class BotDetailPage implements OnInit {
       // El borrador solo se reinicia si el usuario no tiene cambios sin
       // guardar: refrescar por un evento no debe borrarle lo que estaba
       // escribiendo.
-      if (!this.dirty()) this.draft.set({ ...(detail.config as Record<string, unknown>) });
+      if (!this.dirty()) this.draft.set({ ...detail.config });
       const [orders, events] = await Promise.all([
         this.bots.orders(this.id, 60),
         this.bots.events(this.id, 60),
@@ -349,8 +352,8 @@ export class BotDetailPage implements OnInit {
   coldValue(field: FieldMeta): string {
     const raw = this.value(field.key);
     if (raw === null || raw === undefined || raw === '') return '—';
-    if (field.kind === 'enum') return optionLabel(String(raw), field.labelKey);
-    return String(raw);
+    if (field.kind === 'enum') return optionLabel(textoDeConfig(raw), field.labelKey);
+    return textoDeConfig(raw);
   }
 
   private fieldsOf(mutability: 'HOT' | 'WARM' | 'COLD'): FieldMeta[] {
@@ -449,7 +452,10 @@ export class BotDetailPage implements OnInit {
   // Ajuste de margen
   // ═══════════════════════════════════════════════════════════════
 
-  async openMarginSheet(): Promise<void> {
+  // Sincrono a proposito: abre la hoja y dispara la lectura del saldo sin
+  // esperarla —eso lo explica el comentario de abajo—. Solo lo llama la
+  // plantilla, que no encadena nada con el resultado.
+  openMarginSheet(): void {
     this.marginAction.set('ADD');
     this.marginAmount.set('');
     this.marginCountAsCapital.set(false);

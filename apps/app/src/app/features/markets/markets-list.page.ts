@@ -43,7 +43,7 @@ import {
   NetworkService,
   ToastService,
 } from '../../core/services';
-import type { Market, MarketTicker, Venue } from '../../core/models';
+import type { Market, Venue } from '../../core/models';
 import { compact, errorText, pct, price, venueLabel } from '../../core/utils';
 import { UiBadgeComponent, UiEmptyStateComponent } from '../../shared/ui';
 import { FavouriteMarketsService } from './favourites.service';
@@ -593,7 +593,7 @@ export class MarketsListPage implements OnInit {
     } catch (e) {
       await this.toast.error(errorText(e));
     } finally {
-      (event?.target as HTMLIonRefresherElement | undefined)?.complete();
+      void (event?.target as HTMLIonRefresherElement | undefined)?.complete();
     }
   }
 

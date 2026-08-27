@@ -142,9 +142,7 @@ describe('Aislamiento — lo que no puede hacer un cliente', () => {
 
   it('un identificador inventado no crea conexion ni interes', () => {
     const sse = build();
-    expect(sse.setTopics('u1', 'no-existe', ['px:HYPERLIQUID:BTC'])).toEqual(
-      [],
-    );
+    expect(sse.setTopics('u1', 'no-existe', ['px:HYPERLIQUID:BTC'])).toEqual([]);
     expect(sse.activeTopics()).toEqual([]);
   });
 

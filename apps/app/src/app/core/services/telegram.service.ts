@@ -44,9 +44,7 @@ export class TelegramService {
   }
 
   async updatePrefs(patch: Partial<TelegramPrefs>): Promise<void> {
-    const prefs = await firstValueFrom(
-      this.http.patch<TelegramPrefs>(`${this.base}/prefs`, patch),
-    );
+    const prefs = await firstValueFrom(this.http.patch<TelegramPrefs>(`${this.base}/prefs`, patch));
     const current = this.status();
     if (current) this.status.set({ ...current, prefs });
   }

@@ -257,15 +257,22 @@ export interface ExchangeAdapter {
 
 /** Estado de un stream del venue. */
 export interface StreamHealth {
-  stream: "orders" | "fills" | "ticker" | "candles";
-  status: "UP" | "DOWN";
+  stream: 'orders' | 'fills' | 'ticker' | 'candles';
+  status: 'UP' | 'DOWN';
   symbol?: string;
   detail?: string;
 }
 
-/** Traduce el id canónico del motor al formato que acepta cada venue. */
+/**
+ * Traduce el id canónico del motor al formato que acepta cada venue.
+ *
+ * `this: void` no es adorno: los codecs son objetos planos de funciones puras y
+ * se usan sueltos (`codecFor(venue).encode`), separados de su objeto. Declararlo
+ * dice que ninguna implementación puede depender de `this`, y de paso deja de
+ * ser un aviso donde no hay nada que arreglar.
+ */
 export interface ClientOrderIdCodec {
-  encode(canonical: string): string;
+  encode(this: void, canonical: string): string;
   /** Algunos venues necesitan el id como número (Lighter). */
-  encodeNumeric?(canonical: string): number;
+  encodeNumeric?(this: void, canonical: string): number;
 }

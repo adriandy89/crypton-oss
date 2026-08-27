@@ -1,12 +1,7 @@
 import { StrategyKind } from '@crypton/db';
 import { getStrategy, VENUE_MARKETS } from '@crypton/strategy-core';
 import { D, type BotConfig, type MarketSpec } from '@crypton/shared';
-import {
-  buildConfig,
-  defaultKnobs,
-  PROFILES,
-  type BuildContext,
-} from './build';
+import { buildConfig, defaultKnobs, PROFILES, type BuildContext } from './build';
 import type { MarketFeatures } from './market-features';
 import { coerceConfig, enforceCouplings } from './sanitize';
 
@@ -124,11 +119,7 @@ function configurar(
  * A propósito NO se usa `normalizeOrder`: es lo que usa el preview por dentro, y
  * comprobar una cosa con ella misma no comprueba nada.
  */
-function romperReglas(
-  market: MarketSpec,
-  price: string,
-  qty: string,
-): string[] {
+function romperReglas(market: MarketSpec, price: string, qty: string): string[] {
   const fallos: string[] = [];
   const p = D(price);
   const q = D(qty);
@@ -152,9 +143,7 @@ function romperReglas(
     fallos.push(`cantidad ${qty} por encima del máximo ${market.maxQty}`);
   }
   if (market.minNotional && p.mul(q).lt(market.minNotional)) {
-    fallos.push(
-      `notional ${p.mul(q).toFixed(4)} por debajo del mínimo ${market.minNotional}`,
-    );
+    fallos.push(`notional ${p.mul(q).toFixed(4)} por debajo del mínimo ${market.minNotional}`);
   }
   return fallos;
 }
@@ -167,14 +156,7 @@ describe('matriz de venues: todas las estrategias en todos los mercados reales',
           for (const capital of CAPITALES) {
             for (const reg of REGIMENES) {
               it(`${nombre} · ${kind} · ${perfil} · ${capital} · ${reg.nombre}`, () => {
-                const { config } = configurar(
-                  kind,
-                  perfil,
-                  spec,
-                  mark,
-                  capital,
-                  reg.f,
-                );
+                const { config } = configurar(kind, perfil, spec, mark, capital, reg.f);
                 const strategy = getStrategy(kind);
                 const paraValidar = {
                   ...config,
@@ -217,22 +199,13 @@ describe('matriz de venues: todas las estrategias en todos los mercados reales',
     // Si con 5.000 de capital en un par líquido una estrategia no consigue
     // producir NI UNA configuración válida, no es que el capital sea corto: es
     // que esa estrategia está rota en ese venue.
-    const LIQUIDOS = VENUE_MARKETS.filter((m) =>
-      ['BTC', 'ETH'].includes(m.spec.base),
-    );
+    const LIQUIDOS = VENUE_MARKETS.filter((m) => ['BTC', 'ETH'].includes(m.spec.base));
 
     for (const { nombre, spec, mark } of LIQUIDOS) {
       for (const kind of ESTRATEGIAS) {
         it(`${nombre} · ${kind}`, () => {
           const salen = PROFILES.filter((perfil) => {
-            const { config } = configurar(
-              kind,
-              perfil,
-              spec,
-              mark,
-              '5000',
-              REGIMENES[1].f,
-            );
+            const { config } = configurar(kind, perfil, spec, mark, '5000', REGIMENES[1].f);
             const strategy = getStrategy(kind);
             const cfg = {
               ...config,
@@ -258,14 +231,7 @@ describe('matriz de venues: todas las estrategias en todos los mercados reales',
         for (const kind of ESTRATEGIAS) {
           for (const perfil of PROFILES) {
             for (const reg of REGIMENES) {
-              const { config } = configurar(
-                kind,
-                perfil,
-                spec,
-                mark,
-                '1000',
-                reg.f,
-              );
+              const { config } = configurar(kind, perfil, spec, mark, '1000', reg.f);
               const lev = Number(config['leverage'] ?? 1);
               expect(lev).toBeGreaterThanOrEqual(1);
               expect(lev).toBeLessThanOrEqual(spec.maxLeverage);

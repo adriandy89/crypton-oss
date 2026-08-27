@@ -8,8 +8,7 @@ export const routes: Routes = [
   // mandaría a los bots antes de canjear el vale.
   {
     path: 'auth/callback',
-    loadComponent: () =>
-      import('./features/auth/callback.page').then((m) => m.AuthCallbackPage),
+    loadComponent: () => import('./features/auth/callback.page').then((m) => m.AuthCallbackPage),
   },
 
   // ── Acceso (pantalla completa, solo sin sesión) ──
@@ -92,8 +91,7 @@ export const routes: Routes = [
   {
     path: 'telegram',
     canActivate: [authGuard],
-    loadComponent: () =>
-      import('./features/account/telegram.page').then((m) => m.TelegramPage),
+    loadComponent: () => import('./features/account/telegram.page').then((m) => m.TelegramPage),
   },
   {
     path: 'risk',
@@ -119,8 +117,7 @@ export const routes: Routes = [
   {
     path: 'admin/backtest',
     canActivate: [authGuard, adminGuard],
-    loadComponent: () =>
-      import('./features/admin/backtest.page').then((m) => m.AdminBacktestPage),
+    loadComponent: () => import('./features/admin/backtest.page').then((m) => m.AdminBacktestPage),
   },
 
   { path: '', redirectTo: 'tabs/bots', pathMatch: 'full' },

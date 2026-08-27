@@ -64,7 +64,7 @@ function build() {
   // Se inyecta el adaptador falso: construir el real cargaría el SDK de
   // Hyperliquid, que es solo ESM y no se puede `require` desde Jest.
   (service as unknown as { adapters: Map<Venue, unknown> }).adapters.set(
-    'HYPERLIQUID' as Venue,
+    'HYPERLIQUID',
     fake.adapter,
   );
   return { service, fake, bus, published };
@@ -88,7 +88,7 @@ describe('subscribe() — reemitir el ultimo precio', () => {
     const segundo: Ticker[] = [];
     service.subscribe(HL, 'BTC').subscribe((t) => segundo.push(t));
     expect(segundo).toHaveLength(1);
-    expect(segundo[0]!.last).toBe('50000');
+    expect(segundo[0].last).toBe('50000');
 
     await service.onModuleDestroy();
   });
@@ -205,7 +205,13 @@ describe('MarketWatchService — reconciliacion del interes', () => {
       }),
     };
     const watch = new MarketWatchService(bus as never, marketData);
-    return { watch, marketData, fake, start: () => watch.onModuleInit(), emit: (m: Parameters<typeof emit>[0]) => emit(m) };
+    return {
+      watch,
+      marketData,
+      fake,
+      start: () => watch.onModuleInit(),
+      emit: (m: Parameters<typeof emit>[0]) => emit(m),
+    };
   }
 
   const watched = (symbols: string[], origin = 'api-1') => ({ data: { symbols }, origin });
@@ -393,11 +399,11 @@ describe('Velas en vivo — el feed que sustituye al sondeo del grafico', () => 
     // permite a la pantalla componer la vela desde el precio en vez de esperar
     // algo que no va a llegar. Se prueba con un adaptador de mentira.
     const { service, fake } = build();
-    (service as unknown as { adapters: Map<Venue, unknown> }).adapters.set('LIGHTER' as Venue, {
+    (service as unknown as { adapters: Map<Venue, unknown> }).adapters.set('LIGHTER', {
       ...(fake.adapter as Record<string, unknown>),
       streamCandles: undefined,
     });
-    expect(service.subscribeCandles('LIGHTER' as Venue, 'BTC', '1h')).toBe(false);
+    expect(service.subscribeCandles('LIGHTER', 'BTC', '1h')).toBe(false);
     await service.onModuleDestroy();
   });
 
@@ -525,7 +531,7 @@ describe('publishCandle — la barra que se cierra', () => {
     (base.service as unknown as { adapters: Map<Venue, unknown> }).adapters.set(HL, adapter);
     return {
       ...base,
-      push: (candle: unknown) => streams.get('BTC|1h')?.next(candle as never),
+      push: (candle: unknown) => streams.get('BTC|1h')?.next(candle),
       publicadas: () =>
         base.bus.publishPublic.mock.calls.map(
           (c) => (c as [string, { data: { candle: { t: number; c: string } } }])[1].data.candle,
@@ -551,7 +557,7 @@ describe('publishCandle — la barra que se cierra', () => {
     const cierres = h.publicadas().filter((c) => c.t === 1_000);
     // Sin esto, el cliente se queda con c=10 para siempre en una barra que de
     // verdad cerro en 60, sin ningun error y sin forma de notarlo.
-    expect(cierres[cierres.length - 1]!.c).toBe('60');
+    expect(cierres[cierres.length - 1].c).toBe('60');
     await h.service.onModuleDestroy();
   });
 
@@ -573,9 +579,10 @@ describe('MarketWatchService — las dos redes son interes independiente', () =>
   function harness() {
     const { service: marketData, fake } = build();
     const fakeTest = fakeAdapter();
-    (
-      marketData as unknown as { adapters: Map<string, unknown> }
-    ).adapters.set('HYPERLIQUID:t', fakeTest.adapter);
+    (marketData as unknown as { adapters: Map<string, unknown> }).adapters.set(
+      'HYPERLIQUID:t',
+      fakeTest.adapter,
+    );
 
     let emit: (m: { data?: Record<string, unknown>; origin?: string }) => void = () => undefined;
     const bus = {

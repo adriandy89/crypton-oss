@@ -68,7 +68,9 @@ export class BacktestsService {
 
   async loadSources(): Promise<void> {
     if (this.sources()) return;
-    this.sources.set(await firstValueFrom(this.http.get<BacktestSourceInfo[]>(`${this.base}/sources`)));
+    this.sources.set(
+      await firstValueFrom(this.http.get<BacktestSourceInfo[]>(`${this.base}/sources`)),
+    );
   }
 
   run(input: RunBacktestInput): Promise<BacktestResult> {

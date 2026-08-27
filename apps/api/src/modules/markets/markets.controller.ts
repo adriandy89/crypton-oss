@@ -1,10 +1,5 @@
 import { Controller, Get, Post, Query, UseGuards } from '@nestjs/common';
-import {
-  ApiBearerAuth,
-  ApiOperation,
-  ApiQuery,
-  ApiTags,
-} from '@nestjs/swagger';
+import { ApiBearerAuth, ApiOperation, ApiQuery, ApiTags } from '@nestjs/swagger';
 import { Audit } from 'src/libs';
 import { JwtAuthGuard, Roles, RolesGuard } from '../auth';
 import { Venue } from '@crypton/db';

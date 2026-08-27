@@ -89,7 +89,10 @@ export function botStatusTone(status: BotStatus): StatusTone {
   return BOT_STATUS_TONES[status] ?? 'flat';
 }
 
-export function strategyLabel(kind: StrategyKind | string): string {
+/** Acepta `string` y no `StrategyKind` a proposito: la estrategia puede llegar
+ * de la API con un valor que esta version de la app aun no conoce, y el caso
+ * se resuelve con el `??` de abajo en vez de romper la pantalla. */
+export function strategyLabel(kind: string): string {
   return STRATEGY_LABELS[kind as StrategyKind] ?? kind;
 }
 
@@ -101,11 +104,11 @@ export function strategyLabel(kind: StrategyKind | string): string {
  * si se creo hace tres semanas. Devuelve cadena vacia para una estrategia
  * desconocida en vez de la constante cruda, porque ahi se lee como un parrafo.
  */
-export function strategyBlurb(kind: StrategyKind | string): string {
+export function strategyBlurb(kind: string): string {
   return STRATEGY_BLURBS[kind as StrategyKind] ?? '';
 }
 
-export function venueLabel(venue: Venue | string): string {
+export function venueLabel(venue: string): string {
   return VENUE_LABELS[venue as Venue] ?? venue;
 }
 

@@ -213,7 +213,7 @@ export class NotifierService implements OnModuleInit, OnModuleDestroy {
       return null;
     }
 
-    const prefs = { ...DEFAULT_PREFS, ...((link.prefs as object) ?? {}) } as TelegramPrefs;
+    const prefs = { ...DEFAULT_PREFS, ...((link.prefs as object) ?? {}) };
     this.linkCache.set(userId, { chatId: link.chat_id, prefs, at: Date.now() });
     return { chatId: link.chat_id, prefs };
   }
@@ -267,7 +267,7 @@ export class NotifierService implements OnModuleInit, OnModuleDestroy {
     midnight.setHours(0, 0, 0, 0);
 
     for (const link of links) {
-      const prefs = { ...DEFAULT_PREFS, ...((link.prefs as object) ?? {}) } as TelegramPrefs;
+      const prefs = { ...DEFAULT_PREFS, ...((link.prefs as object) ?? {}) };
       if (!prefs.daily || !link.chat_id) continue;
 
       try {

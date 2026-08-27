@@ -10,12 +10,7 @@ import {
   UseGuards,
 } from '@nestjs/common';
 import { ApiBearerAuth, ApiOperation, ApiTags } from '@nestjs/swagger';
-import {
-  AuthService,
-  GetUserInfo,
-  JwtAuthGuard,
-  type SessionUser,
-} from '../auth';
+import { AuthService, GetUserInfo, JwtAuthGuard, type SessionUser } from '../auth';
 import { Audit, IdParamDto } from 'src/libs';
 import { CreateExchangeAccountDto, UpdateExchangeAccountDto } from './dtos';
 import { ExchangeAccountsService } from './exchange-accounts.service';
@@ -48,10 +43,7 @@ export class ExchangeAccountsController {
     description:
       'Exige haberse reautenticado con Google: dar de alta una clave de firma es la operación más sensible de la plataforma.',
   })
-  async create(
-    @GetUserInfo() user: SessionUser,
-    @Body() dto: CreateExchangeAccountDto,
-  ) {
+  async create(@GetUserInfo() user: SessionUser, @Body() dto: CreateExchangeAccountDto) {
     // Sin esto, un token de acceso robado —15 minutos de vida, sin revalidar
     // contra la base de datos— bastaba para conectar una wallet ajena a la
     // cuenta y ponerse a operar con ella.
@@ -87,8 +79,7 @@ export class ExchangeAccountsController {
   @Post(':id/paper-reset')
   @HttpCode(200)
   @ApiOperation({
-    summary:
-      'Devuelve la simulación a su capital de partida, sin posiciones ni órdenes',
+    summary: 'Devuelve la simulación a su capital de partida, sin posiciones ni órdenes',
   })
   resetPaper(@GetUserInfo() user: SessionUser, @Param() { id }: IdParamDto) {
     return this.accounts.resetPaper(user.id, id);
@@ -100,10 +91,7 @@ export class ExchangeAccountsController {
   @ApiOperation({
     summary: 'Elimina la conexión (exige que no queden bots activos)',
   })
-  async remove(
-    @GetUserInfo() user: SessionUser,
-    @Param() { id }: IdParamDto,
-  ): Promise<void> {
+  async remove(@GetUserInfo() user: SessionUser, @Param() { id }: IdParamDto): Promise<void> {
     await this.accounts.remove(user.id, id);
   }
 }

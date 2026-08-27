@@ -229,7 +229,7 @@ export class MarketDataService implements OnModuleDestroy {
           // Igual que con los precios: no se cierra el feed. El respaldo por
           // REST del cliente sigue sirviendo y una reconexión debe poder
           // volver a entregar por el mismo canal.
-          feed!.venueSub = null;
+          feed.venueSub = null;
           this.logger.warn(
             `Stream de velas ${venueKey(venue, testnet)}:${symbol}:${interval} caído: ` +
               (e as Error).message,
@@ -241,12 +241,7 @@ export class MarketDataService implements OnModuleDestroy {
   }
 
   /** Suelta el interés. Al llegar a cero se cierra la suscripción del venue. */
-  releaseCandles(
-    venue: Venue,
-    symbol: string,
-    interval: CandleInterval,
-    testnet = false,
-  ): void {
+  releaseCandles(venue: Venue, symbol: string, interval: CandleInterval, testnet = false): void {
     const k = candleKey(venue, symbol, interval, testnet);
     const feed = this.candleFeeds.get(k);
     if (!feed) return;

@@ -53,8 +53,8 @@ export class TelegramPollerService implements OnModuleInit, OnApplicationShutdow
     this.redis = createClient({
       url: this.config.get<string>('REDIS_URL', 'redis://localhost:6379'),
       password: this.config.get<string>('REDIS_PASSWORD'),
-    }) as RedisClientType;
-    this.redis.on('error', (e) => this.logger.error('Redis (telegram): ' + e.message));
+    });
+    this.redis.on('error', (e: Error) => this.logger.error('Redis (telegram): ' + e.message));
     await this.redis.connect();
 
     const me = await this.client.getMe();

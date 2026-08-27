@@ -1,11 +1,4 @@
-import {
-  IsEnum,
-  IsIn,
-  IsISO8601,
-  IsOptional,
-  IsString,
-  MaxLength,
-} from 'class-validator';
+import { IsEnum, IsIn, IsISO8601, IsOptional, IsString, MaxLength } from 'class-validator';
 import { ActorKind, EventSeverity } from '@crypton/db';
 import { PageOptionsDto } from 'src/libs';
 

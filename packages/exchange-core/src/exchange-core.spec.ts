@@ -18,7 +18,15 @@ import { esLiquidacionHl } from './adapters/hyperliquid';
 import { asterCodec, codecFor, hyperliquidCodec, lighterCodec } from './coid';
 import { classify, isRetryable, messageOf, toExchangeError } from './errors';
 import { MarketSpecCache, decimalsOf } from './market-cache';
-import { capabilitiesOf, changePct, checkInterval, finishCandles, num, numOrNull, resolveRange } from './candles';
+import {
+  capabilitiesOf,
+  changePct,
+  checkInterval,
+  finishCandles,
+  num,
+  numOrNull,
+  resolveRange,
+} from './candles';
 import { RateLimiter, withRetry, withWriteRetry } from './rate-limit';
 import { MemoryVenueBudget } from './venue-budget';
 import type { ExchangeAdapter, StreamHealth } from './types';
@@ -389,7 +397,7 @@ describe('DryRunAdapter', () => {
 
       const ack = await sim.placeOrder(order());
       expect(ack.ts).toBe(AYER);
-      expect((await sim.getOpenOrders())[0]!.createdAt).toBe(AYER);
+      expect((await sim.getOpenOrders())[0].createdAt).toBe(AYER);
     });
 
     it('el reloj llega también a las ejecuciones', async () => {
@@ -404,7 +412,7 @@ describe('DryRunAdapter', () => {
 
       const fills = await sim.getRecentFills('BTC', 0);
       expect(fills).toHaveLength(1);
-      expect(fills[0]!.ts).toBe(AYER);
+      expect(fills[0].ts).toBe(AYER);
     });
 
     it('con la misma semilla, dos ejecuciones producen los mismos ids', async () => {
@@ -1191,7 +1199,7 @@ describe('finishCandles', () => {
     // Es lo que pasa al fusionar la vela en formacion con la que ya se tenia.
     const out = finishCandles([c(1, '10'), c(1, '20')], 10);
     expect(out).toHaveLength(1);
-    expect(out[0]!.c).toBe('20');
+    expect(out[0].c).toBe('20');
   });
 
   it('recorta por el extremo ANTIGUO: un grafico recortado por el nuevo esta roto', () => {
@@ -1302,7 +1310,12 @@ describe('LighterAdapter.getTickers — el cambio de 24 h sale de la serie de pr
 
   const adapterWith = (details: Record<string, unknown>[]) => {
     const { LighterAdapter } = require('./adapters/lighter');
-    const a = new LighterAdapter({ venue: 'LIGHTER', accountIndex: 0, apiKeyIndex: 0, apiPrivateKey: '' });
+    const a = new LighterAdapter({
+      venue: 'LIGHTER',
+      accountIndex: 0,
+      apiKeyIndex: 0,
+      apiPrivateKey: '',
+    });
     a.call = async (fn: () => Promise<unknown>) => fn();
     a.orderApi = { orderBookDetails: async () => ({ data: { order_book_details: details } }) };
     return a as { getTickers(): Promise<MarketTicker[]> };
@@ -1312,31 +1325,36 @@ describe('LighterAdapter.getTickers — el cambio de 24 h sale de la serie de pr
     const [t] = await adapterWith([detail({})]).getTickers();
     // 2955 - 2900 = 55; 55 / 2900 = 1,8966 %. Las dos cifras salen del MISMO
     // precio de referencia, asi que no pueden contradecirse en pantalla.
-    expect(t!.change24h).toBe('55');
-    expect(t!.changePct24h).toBe('1.8966');
+    expect(t.change24h).toBe('55');
+    expect(t.changePct24h).toBe('1.8966');
   });
 
   it('NO lee daily_price_change cuando hay serie: su unidad no esta documentada', async () => {
     // 1.9 en porcentaje daria 1.9; en importe daria 1.9 USDC. Ninguna de las
     // dos es lo que se devuelve cuando hay serie.
     const [t] = await adapterWith([detail({ daily_price_change: 1.9 })]).getTickers();
-    expect(t!.changePct24h).not.toBe('1.9');
+    expect(t.changePct24h).not.toBe('1.9');
   });
 
   it('sin serie —mercado recien listado— cae a daily_price_change y deja el importe en null', async () => {
-    const [t] = await adapterWith([detail({ daily_chart: {}, daily_price_change: 0.5 })]).getTickers();
-    expect(t!.change24h).toBeNull();
-    expect(t!.changePct24h).toBe('0.5');
+    const [t] = await adapterWith([
+      detail({ daily_chart: {}, daily_price_change: 0.5 }),
+    ]).getTickers();
+    expect(t.change24h).toBeNull();
+    expect(t.changePct24h).toBe('0.5');
   });
 
   it('maximo y minimo van a su campo, no intercambiados', async () => {
     const [t] = await adapterWith([detail({})]).getTickers();
-    expect(Number(t!.high24h)).toBeGreaterThanOrEqual(Number(t!.low24h));
-    expect(t!.high24h).toBe('2960');
+    expect(Number(t.high24h)).toBeGreaterThanOrEqual(Number(t.low24h));
+    expect(t.high24h).toBe('2960');
   });
 
   it('excluye los mercados spot, igual que getMarkets', async () => {
-    const rows = await adapterWith([detail({}), detail({ symbol: 'X', market_type: 'spot' })]).getTickers();
+    const rows = await adapterWith([
+      detail({}),
+      detail({ symbol: 'X', market_type: 'spot' }),
+    ]).getTickers();
     expect(rows).toHaveLength(1);
   });
 });

@@ -10,8 +10,8 @@
     "build": "ng build",
     "watch": "ng build --watch --configuration development",
     "test": "echo \"sin tests de UI por ahora\"",
-    "//lint": "La app aun no esta lintada: el script existe pero nunca hubo eslint.config. Ver CONTRIBUTING.",
-    "lint": "echo \"sin lint todavia\"",
+    "lint": "ng lint",
+    "lint:fix": "ng lint --fix",
     "cap:sync": "ng build && cap sync android",
     "android": "ionic cap run android -l --external"
   },
@@ -57,14 +57,20 @@
     "@angular/compiler-cli": "21.2.18",
     "@capacitor/assets": "^3.0.5",
     "@capacitor/cli": "8.4.2",
+    "@eslint/js": "^9.18.0",
     "@ionic/angular-toolkit": "^12.0.0",
     "@tailwindcss/postcss": "^4.3.3",
     "@types/jasmine": "~5.1.0",
     "@typescript-eslint/eslint-plugin": "^8.18.0",
     "@typescript-eslint/parser": "^8.18.0",
+    "angular-eslint": "^20.7.0",
     "eslint": "^9.16.0",
+    "eslint-config-prettier": "^10.0.1",
+    "eslint-plugin-prettier": "^5.2.2",
     "postcss": "^8.5.20",
+    "prettier": "^3.4.2",
     "tailwindcss": "^4.3.3",
-    "typescript": "~5.9.0"
+    "typescript": "~5.9.0",
+    "typescript-eslint": "^8.20.0"
   }
 }

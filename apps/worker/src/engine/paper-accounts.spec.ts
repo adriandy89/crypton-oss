@@ -1,4 +1,4 @@
-import { DryRunAdapter, type DryRunState } from '@crypton/exchange-core';
+import { type DryRunState } from '@crypton/exchange-core';
 import { AccountHub } from './account-hub.service';
 import { BotStore } from './bot-store';
 import { CredentialsService } from './credentials.service';
@@ -238,10 +238,10 @@ describe('BotStore.recordLiquidation', () => {
     await a.store.recordLiquidation('11111111-1111-1111-1111-111111111111', fill, 1);
     await b.store.recordLiquidation('22222222-2222-2222-2222-222222222222', fill, 1);
 
-    const coidA = (a.botOrder.create.mock.calls[0][0] as { data: { client_order_id: string } })
-      .data.client_order_id;
-    const coidB = (b.botOrder.create.mock.calls[0][0] as { data: { client_order_id: string } })
-      .data.client_order_id;
+    const coidA = (a.botOrder.create.mock.calls[0][0] as { data: { client_order_id: string } }).data
+      .client_order_id;
+    const coidB = (b.botOrder.create.mock.calls[0][0] as { data: { client_order_id: string } }).data
+      .client_order_id;
     expect(coidA).not.toBe(coidB);
     expect(coidA.length).toBeLessThanOrEqual(64);
   });
@@ -435,7 +435,7 @@ describe('AccountHub — un sandbox por bot, una fuente por venue', () => {
     await b.close();
     await new Promise((r) => setTimeout(r, 20));
 
-    const guardados = (store.save as jest.Mock).mock.calls.map((c) => c[0]);
+    const guardados = store.save.mock.calls.map((c) => c[0]);
     expect(guardados).toEqual(['bot-b']);
     await hub.onModuleDestroy();
   });

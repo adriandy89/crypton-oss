@@ -37,9 +37,7 @@ class FakeCache {
 const markets = {
   async getSpec(venue: string, symbol: string) {
     if (symbol === 'NOPE')
-      throw new NotFoundException(
-        `El mercado ${symbol} no está disponible en ${venue}.`,
-      );
+      throw new NotFoundException(`El mercado ${symbol} no está disponible en ${venue}.`);
     return { venue, symbol };
   },
 };
@@ -113,12 +111,10 @@ describe('MarketDataService — capacidades', () => {
 describe('MarketDataService — validacion de intervalo', () => {
   it('rechaza con 400 y nombra las alternativas, sin tocar el venue', async () => {
     const { service } = svc();
-    await expect(
-      service.candles(Venue.LIGHTER, 'BTC', '3m'),
-    ).rejects.toBeInstanceOf(BadRequestException);
-    await expect(service.candles(Venue.LIGHTER, 'BTC', '3m')).rejects.toThrow(
-      /1m, 5m, 15m/,
+    await expect(service.candles(Venue.LIGHTER, 'BTC', '3m')).rejects.toBeInstanceOf(
+      BadRequestException,
     );
+    await expect(service.candles(Venue.LIGHTER, 'BTC', '3m')).rejects.toThrow(/1m, 5m, 15m/);
   });
 
   it('el mensaje se puede enseñar tal cual al usuario', async () => {
@@ -134,9 +130,9 @@ describe('MarketDataService — símbolo desconocido', () => {
     // Cada símbolo inventado era antes una llamada al DEX con el presupuesto
     // de caudal que comparten los bots.
     const { service } = svc();
-    await expect(
-      service.candles(Venue.ASTER, 'NOPE', '1h'),
-    ).rejects.toBeInstanceOf(NotFoundException);
+    await expect(service.candles(Venue.ASTER, 'NOPE', '1h')).rejects.toBeInstanceOf(
+      NotFoundException,
+    );
   });
 });
 
@@ -155,9 +151,7 @@ describe('MarketDataService — caché de velas', () => {
     const key = 'md:candles:HYPERLIQUID:BTC:1h:300:now';
     await cache.set(key, [candle(1)], 10);
 
-    await expect(
-      service.candles(Venue.HYPERLIQUID, 'BTC', '1h'),
-    ).resolves.toEqual([candle(1)]);
+    await expect(service.candles(Venue.HYPERLIQUID, 'BTC', '1h')).resolves.toEqual([candle(1)]);
   });
 
   it('dos endMs dentro de la misma vela comparten entrada de caché', async () => {
@@ -167,11 +161,7 @@ describe('MarketDataService — caché de velas', () => {
     const { service, cache } = svc();
     const span = 3_600_000;
     const alineado = Math.floor((Date.now() - 10 * span) / span) * span;
-    await cache.set(
-      `md:candles:HYPERLIQUID:BTC:1h:300:${alineado}`,
-      [candle(3)],
-      60,
-    );
+    await cache.set(`md:candles:HYPERLIQUID:BTC:1h:300:${alineado}`, [candle(3)], 60);
 
     await expect(
       service.candles(Venue.HYPERLIQUID, 'BTC', '1h', { endMs: alineado }),
@@ -206,9 +196,9 @@ describe('MarketDataService — caché de velas', () => {
     const { service, cache } = svc();
     await cache.set('md:candles:LIGHTER:BTC:1h:500:now', [candle(7)], 10);
 
-    await expect(
-      service.candles(Venue.LIGHTER, 'BTC', '1h', { limit: 1500 }),
-    ).resolves.toEqual([candle(7)]);
+    await expect(service.candles(Venue.LIGHTER, 'BTC', '1h', { limit: 1500 })).resolves.toEqual([
+      candle(7),
+    ]);
   });
 
   it('una ventana CERRADA se cachea una hora; la viva, segundos', async () => {
@@ -240,9 +230,7 @@ describe('MarketDataService — caché de velas', () => {
   it('el TTL de la vela viva es una decima del intervalo, entre 3 y 15 s', () => {
     const { service } = svc();
     const ttl = (i: string) =>
-      (
-        service as never as { candleTtl(i: string, e?: number): number }
-      ).candleTtl(i);
+      (service as never as { candleTtl(i: string, e?: number): number }).candleTtl(i);
 
     // 1m -> 6 s. Con la mitad del intervalo salian los 15 s del tope y la vela
     // viva se congelaba un cuarto de su propia duracion.
@@ -259,9 +247,7 @@ describe('MarketDataService — caché de velas', () => {
     await cache.set('md:candles:ASTER:BTCUSDT:1h:300:now', [candle(9)]);
     await cache.set('md:candles:ASTER:BTCUSDT:1h:300:3600000', [candle(1)]);
 
-    await expect(
-      service.candles(Venue.ASTER, 'BTCUSDT', '1h'),
-    ).resolves.toEqual([candle(9)]);
+    await expect(service.candles(Venue.ASTER, 'BTCUSDT', '1h')).resolves.toEqual([candle(9)]);
     await expect(
       service.candles(Venue.ASTER, 'BTCUSDT', '1h', { endMs: 3_600_001 }),
     ).resolves.toEqual([candle(1)]);
@@ -274,9 +260,9 @@ describe('MarketDataService — caché de velas', () => {
     const { service, cache } = svc();
     await cache.set('md:candles:ASTER:BTCUSDT:1h:300:now', [candle(7)]);
     for (const limit of [151, 200, 299, 300]) {
-      await expect(
-        service.candles(Venue.ASTER, 'BTCUSDT', '1h', { limit }),
-      ).resolves.toEqual([candle(7)]);
+      await expect(service.candles(Venue.ASTER, 'BTCUSDT', '1h', { limit })).resolves.toEqual([
+        candle(7),
+      ]);
     }
   });
 
@@ -306,9 +292,7 @@ describe('MarketDataService — precios de 24 h', () => {
 
   it('une los tres venues cuando no se filtra', async () => {
     const { service, cache } = svc();
-    await cache.set('md:tickers:HYPERLIQUID', [
-      ticker(Venue.HYPERLIQUID, 'BTC'),
-    ]);
+    await cache.set('md:tickers:HYPERLIQUID', [ticker(Venue.HYPERLIQUID, 'BTC')]);
     await cache.set('md:tickers:LIGHTER', [ticker(Venue.LIGHTER, 'BTC')]);
     await cache.set('md:tickers:ASTER', [ticker(Venue.ASTER, 'BTCUSDT')]);
 
@@ -317,9 +301,7 @@ describe('MarketDataService — precios de 24 h', () => {
 
   it('filtrado devuelve solo ese venue', async () => {
     const { service, cache } = svc();
-    await cache.set('md:tickers:HYPERLIQUID', [
-      ticker(Venue.HYPERLIQUID, 'BTC'),
-    ]);
+    await cache.set('md:tickers:HYPERLIQUID', [ticker(Venue.HYPERLIQUID, 'BTC')]);
     await cache.set('md:tickers:ASTER', [ticker(Venue.ASTER, 'BTCUSDT')]);
 
     const rows = await service.tickers(Venue.ASTER);
@@ -330,9 +312,7 @@ describe('MarketDataService — precios de 24 h', () => {
   it('un venue sin datos no vacia a los demas', async () => {
     // Que Aster no responda no puede dejar la lista sin Hyperliquid.
     const { service, cache } = svc();
-    await cache.set('md:tickers:HYPERLIQUID', [
-      ticker(Venue.HYPERLIQUID, 'BTC'),
-    ]);
+    await cache.set('md:tickers:HYPERLIQUID', [ticker(Venue.HYPERLIQUID, 'BTC')]);
 
     const rows = await service.tickers();
     expect(rows).toHaveLength(1);

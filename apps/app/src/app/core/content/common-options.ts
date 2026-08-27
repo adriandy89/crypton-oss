@@ -9,7 +9,7 @@ import type { OptionDoc } from './types';
  * verdad es que varios comunes cambian de sentido según donde caen: el ejemplo
  * claro es `maxNotionalCap`, que solo lo honran tres de las siete.
  */
-export const COMMON_OPTION_DOCS: Record<keyof CommonBotConfig & string, OptionDoc> = {
+export const COMMON_OPTION_DOCS: Record<keyof CommonBotConfig, OptionDoc> = {
   exchangeAccountId: {
     what: 'La cuenta de exchange con la que va a operar este bot. Es una de las conexiones que hayas dado de alta, con su red (real o de pruebas) ya decidida.',
     affects:

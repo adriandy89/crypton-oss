@@ -170,9 +170,7 @@ export class MarketWatchService implements OnModuleInit, OnModuleDestroy {
       // apuntar su interés dejaría una reserva que nunca entrega nada y que
       // luego habría que soltar; la pantalla ya compone la vela desde el
       // precio en ese caso.
-      if (
-        this.marketData.subscribeCandles(parsed.venue, parsed.symbol, parsed.interval, testnet)
-      ) {
+      if (this.marketData.subscribeCandles(parsed.venue, parsed.symbol, parsed.interval, testnet)) {
         keptCandles.add(serie);
       }
     }

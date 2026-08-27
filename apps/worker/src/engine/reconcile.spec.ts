@@ -2,7 +2,6 @@ import { Venue, type DesiredOrder, type MarketSpec, type VenueOrder } from '@cry
 import { codecFor, hyperliquidCodec } from '@crypton/exchange-core';
 import { buildOwnIdSet, makeCoid, reconcile } from '@crypton/strategy-core';
 const BOT_ID = '1a2b3c4d-0000-0000-0000-000000000000';
-const SHORT = '1a2b3c4d';
 const MARKET: MarketSpec = {
   venue: Venue.HYPERLIQUID,
   symbol: 'BTC',

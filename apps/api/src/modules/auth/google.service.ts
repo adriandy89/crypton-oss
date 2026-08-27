@@ -133,20 +133,14 @@ export class GoogleService {
       // API suya. Se revoca en cuanto se tiene la identidad, para no dejar
       // vivo un permiso que nadie va a ejercer.
       if (tokens.access_token) {
-        await this.client
-          .revokeToken(tokens.access_token)
-          .catch(() => undefined);
+        await this.client.revokeToken(tokens.access_token).catch(() => undefined);
       }
     } catch (error) {
       // El detalle se queda en el log del servidor: al usuario, que el intento
       // no ha valido. Un mensaje que distinga «código caducado» de «código
       // inválido» solo ayuda a quien está probando códigos.
-      this.logger.warn(
-        `Fallo al canjear el código con Google: ${String(error)}`,
-      );
-      throw new UnauthorizedException(
-        'No se pudo completar el acceso con Google.',
-      );
+      this.logger.warn(`Fallo al canjear el código con Google: ${String(error)}`);
+      throw new UnauthorizedException('No se pudo completar el acceso con Google.');
     }
 
     if (!idToken) {
@@ -157,9 +151,7 @@ export class GoogleService {
 
     if (payload.nonce !== params.nonce) {
       this.logger.warn('ID token con nonce que no corresponde a la petición.');
-      throw new UnauthorizedException(
-        'No se pudo completar el acceso con Google.',
-      );
+      throw new UnauthorizedException('No se pudo completar el acceso con Google.');
     }
     if (!payload.email || payload.email_verified !== true) {
       throw new UnauthorizedException({
@@ -183,9 +175,7 @@ export class GoogleService {
       return payload;
     } catch (error) {
       this.logger.warn(`ID token de Google no válido: ${String(error)}`);
-      throw new UnauthorizedException(
-        'No se pudo completar el acceso con Google.',
-      );
+      throw new UnauthorizedException('No se pudo completar el acceso con Google.');
     }
   }
 

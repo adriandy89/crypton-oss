@@ -194,7 +194,8 @@ export const MARKET_MAKER_V2_GUIDE: StrategyGuide<MarketMakerV2Config> = {
     },
     orderBookMarginBps: {
       what: 'Margen fijo que se suma siempre a la parte dinámica, haya volatilidad o no.',
-      affects: 'Es un suelo de la parte dinámica: garantiza un mínimo de holgura sobre la anchura del libro.',
+      affects:
+        'Es un suelo de la parte dinámica: garantiza un mínimo de holgura sobre la anchura del libro.',
       tip: 'Valores pequeños, de 1 a 3 bps, son lo habitual.',
     },
     volatilityMultiplier: {
@@ -217,7 +218,8 @@ export const MARKET_MAKER_V2_GUIDE: StrategyGuide<MarketMakerV2Config> = {
     },
     layerDistanceMultiplier: {
       what: 'Cuánto se aleja cada capa respecto de la anterior. Con 1 todas van a la misma distancia.',
-      affects: 'Subirlo abre la cotización en abanico: la cercana se ejecuta a menudo, las lejanas esperan movimientos grandes.',
+      affects:
+        'Subirlo abre la cotización en abanico: la cercana se ejecuta a menudo, las lejanas esperan movimientos grandes.',
     },
     layerSizeMultiplier: {
       what: 'Cuánto crece cada capa respecto de la anterior.',
@@ -262,7 +264,8 @@ export const MARKET_MAKER_V2_GUIDE: StrategyGuide<MarketMakerV2Config> = {
     },
     activationPrice: {
       what: 'El precio que tiene que cruzarse para que el bot se arme y empiece.',
-      affects: 'Sin condición de activación no hace nada. Con condición puesta, es obligatorio y mayor que cero.',
+      affects:
+        'Sin condición de activación no hace nada. Con condición puesta, es obligatorio y mayor que cero.',
       tip: 'Ponlo donde de verdad quieras empezar a cotizar, no donde está el precio hoy.',
     },
     positionMode: {
@@ -284,16 +287,19 @@ export const MARKET_MAKER_V2_GUIDE: StrategyGuide<MarketMakerV2Config> = {
     },
     direction: {
       what: 'Hacia qué lado se inclina la cotización. Aquí no describe una posición, sino una intención.',
-      affects: 'En neutral cotiza igual a los dos lados; con intención long o short trata la posición contraria como algo a deshacer.',
+      affects:
+        'En neutral cotiza igual a los dos lados; con intención long o short trata la posición contraria como algo a deshacer.',
       tip: 'Neutral es lo natural en un market maker. No se puede cambiar después.',
     },
     priceFloor: {
       what: 'Por debajo de este precio el bot solo reduce, no abre.',
-      affects: 'Desactiva el lado comprador cuando el precio cae por debajo de donde ya no quieres seguir acumulando.',
+      affects:
+        'Desactiva el lado comprador cuando el precio cae por debajo de donde ya no quieres seguir acumulando.',
     },
     priceCeiling: {
       what: 'Por encima de este precio el bot solo reduce, no abre.',
-      affects: 'Desactiva el lado vendedor cuando el precio sube por encima de donde ya no quieres seguir vendiendo.',
+      affects:
+        'Desactiva el lado vendedor cuando el precio sube por encima de donde ya no quieres seguir vendiendo.',
     },
   },
 };

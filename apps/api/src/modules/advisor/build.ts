@@ -21,22 +21,12 @@ import { MAX_SAFE_LEVERAGE, ladderCoveragePct } from './sanitize';
 
 export type Profile = 'PRUDENTE' | 'EQUILIBRADA' | 'AGRESIVA';
 
-export const PROFILES: readonly Profile[] = [
-  'PRUDENTE',
-  'EQUILIBRADA',
-  'AGRESIVA',
-];
+export const PROFILES: readonly Profile[] = ['PRUDENTE', 'EQUILIBRADA', 'AGRESIVA'];
 
 /** Bandas discretas. Son las unicas que el modelo puede elegir. */
 export type Band = 'MUY_BAJA' | 'BAJA' | 'MEDIA' | 'ALTA' | 'MUY_ALTA';
 
-export const BANDS: readonly Band[] = [
-  'MUY_BAJA',
-  'BAJA',
-  'MEDIA',
-  'ALTA',
-  'MUY_ALTA',
-];
+export const BANDS: readonly Band[] = ['MUY_BAJA', 'BAJA', 'MEDIA', 'ALTA', 'MUY_ALTA'];
 
 /**
  * Lo que el modelo decide. Todo son enums: es lo unico que las salidas
@@ -67,8 +57,7 @@ export interface BuildContext {
   direction: 'LONG' | 'SHORT' | 'NEUTRAL';
 }
 
-const clamp = (v: number, min: number, max: number): number =>
-  Math.min(Math.max(v, min), max);
+const clamp = (v: number, min: number, max: number): number => Math.min(Math.max(v, min), max);
 
 /** Factor de cada banda: el centro es 1 y los extremos se alejan simetricamente. */
 const FACTOR: Record<Band, number> = {
@@ -83,13 +72,7 @@ const FACTOR: Record<Band, number> = {
 const dec = (v: number, decimales: number): string => v.toFixed(decimales);
 
 /** Cuantiza al paso, anclando al minimo, y devuelve cadena. */
-function stepped(
-  v: number,
-  min: number,
-  max: number,
-  step: number,
-  decimales: number,
-): string {
+function stepped(v: number, min: number, max: number, step: number, decimales: number): string {
   const pasos = Math.round((clamp(v, min, max) - min) / step);
   return dec(clamp(min + pasos * step, min, max), decimales);
 }
@@ -116,11 +99,7 @@ const ceilToTick = (precio: number, tick: number): number =>
  * mas de un tercio de la distancia a liquidacion. Un par que un dia cayo un 20 %
  * no admite 10x por mucho que la media diga lo contrario.
  */
-export function leverageFor(
-  k: Knobs,
-  ctx: BuildContext,
-  techoEstrategia: number,
-): number {
+export function leverageFor(k: Knobs, ctx: BuildContext, techoEstrategia: number): number {
   // La distancia a liquidacion tiene que valer N sesiones tipicas.
   //
   // La formula anterior era `60 / volatilidadAnual` redondeado, y estaba mal de
@@ -134,9 +113,7 @@ export function leverageFor(
   // siguen atados a cuanto respira el par.
   const volDiaria = Math.max(ctx.features.volAnnualPct, 10) / Math.sqrt(365);
   const sesiones = 8 / FACTOR[k.leverage];
-  let lev = Math.round(
-    clamp(100 / (sesiones * volDiaria), 1, MAX_SAFE_LEVERAGE),
-  );
+  let lev = Math.round(clamp(100 / (sesiones * volDiaria), 1, MAX_SAFE_LEVERAGE));
 
   const peorDia = Math.abs(ctx.features.worstDayPct);
   if (peorDia > 0.5) lev = Math.min(lev, Math.floor(100 / (3 * peorDia)));
@@ -178,8 +155,7 @@ export function defaultKnobs(profile: Profile, f: MarketFeatures): Knobs {
     // un mercado salvaje los tres salian con la misma anchura y, como ahi el
     // apalancamiento tambien cae a 1 para todos, dos de las tres tarjetas eran
     // literalmente la misma configuracion.
-    spread:
-      f.efficiency > 0.5 ? shiftBand(inverso[profile], 1) : inverso[profile],
+    spread: f.efficiency > 0.5 ? shiftBand(inverso[profile], 1) : inverso[profile],
     sizeGrowth: porPerfil[profile],
     cadence: porPerfil[profile],
   };
@@ -219,15 +195,9 @@ function buildLadder(k: Knobs, ctx: BuildContext): Record<string, unknown> {
   // que una de ocho que el exchange no acepta.
   const minNotional = Math.max(Number(ctx.market.minNotional ?? 0), 1);
   const levProvisional = leverageFor(k, ctx, 10);
-  const cabenPorCapital = Math.floor(
-    (ctx.totalInvestment * levProvisional) / (minNotional * 1.6),
-  );
+  const cabenPorCapital = Math.floor((ctx.totalInvestment * levProvisional) / (minNotional * 1.6));
   const niveles = Math.round(
-    clamp(
-      Math.min(6 * FACTOR[k.coverage], Math.max(cabenPorCapital, 1)),
-      1,
-      12,
-    ),
+    clamp(Math.min(6 * FACTOR[k.coverage], Math.max(cabenPorCapital, 1)), 1, 12),
   );
   const stepScale = clamp(1.1 * FACTOR[k.spread], 1, 3);
   const volumeScale = clamp(1.2 * FACTOR[k.sizeGrowth], 1, 2.5);
@@ -236,8 +206,7 @@ function buildLadder(k: Knobs, ctx: BuildContext): Record<string, unknown> {
   // Cuanto recorrido adverso se quiere cubrir, atado a lo que este par se mueve
   // de verdad y acotado por lo que cabe antes de la liquidacion.
   const distanciaLiq = 100 / lev;
-  const deseada =
-    Math.max(2 * f.atrPct1d, 0.6 * f.rangePct30) * FACTOR[k.coverage];
+  const deseada = Math.max(2 * f.atrPct1d, 0.6 * f.rangePct30) * FACTOR[k.coverage];
   const objetivo = clamp(deseada, distanciaLiq * 0.35, distanciaLiq * 0.85);
 
   // Se despeja la separacion que da exactamente esa cobertura.
@@ -272,21 +241,13 @@ function buildGridMart(k: Knobs, ctx: BuildContext): Record<string, unknown> {
     satelliteTpPct: stepped(tp * 0.6, 0.05, 20, 0.05, 2),
     gridSellCount: Math.round(clamp(4 * FACTOR[k.coverage], 1, 20)),
     gridSellInitialSeparationPct: stepped(tp, 0.05, 20, 0.05, 2),
-    gridSellDistanceMultiplier: stepped(
-      clamp(1.1 * FACTOR[k.spread], 1, 3),
-      1,
-      3,
-      0.05,
-      2,
-    ),
+    gridSellDistanceMultiplier: stepped(clamp(1.1 * FACTOR[k.spread], 1, 3), 1, 3, 0.05, 2),
     // Cuanto del nucleo se suelta en el primer escalon. El prudente suelta mas
     // pronto: recupera capital antes aunque renuncie a parte del recorrido.
     corePctSoldAtLevel1: Math.round(clamp(25 / FACTOR[k.sizeGrowth], 1, 100)),
     gridSellQtyMultiplier: stepped(1, 0.1, 3, 0.05, 2),
     gridRebuyDiscountPct: stepped(tp / 2, 0.05, 20, 0.05, 2),
-    fullCycleCooldownMinutes: Math.round(
-      clamp(5 / FACTOR[k.cadence], 0, 10080),
-    ),
+    fullCycleCooldownMinutes: Math.round(clamp(5 / FACTOR[k.cadence], 0, 10080)),
   };
 }
 
@@ -301,11 +262,7 @@ function buildGridMart(k: Knobs, ctx: BuildContext): Record<string, unknown> {
  * El apalancamiento se topa a 3 aunque el usuario admita mas: una rejilla con
  * todas sus lineas llenas es una posicion apalancada SIN escalera de rescate.
  */
-function buildGrid(
-  k: Knobs,
-  ctx: BuildContext,
-  neutral: boolean,
-): Record<string, unknown> {
+function buildGrid(k: Knobs, ctx: BuildContext, neutral: boolean): Record<string, unknown> {
   const f = ctx.features;
   const market = ctx.market;
   const tick = Number(market.tickSize) || 0;
@@ -327,11 +284,7 @@ function buildGrid(
   const upper = ceilToTick(centro * (1 + medio / 100), tick);
 
   // Numero de lineas por PASO objetivo, no al reves.
-  const pasoPct = clamp(
-    f.atrPct1h * FACTOR[k.spread],
-    (4 * f.tickBps) / 100,
-    medio / 2,
-  );
+  const pasoPct = clamp(f.atrPct1h * FACTOR[k.spread], (4 * f.tickBps) / 100, medio / 2);
   let lineas = Math.round((2 * medio) / Math.max(pasoPct, 0.01)) + 1;
 
   // Techo por el tick: el paso no puede bajar de dos ticks.
@@ -343,10 +296,7 @@ function buildGrid(
   // puede llenar deja ordenes que el exchange rechaza una a una.
   const minNotional = Number(market.minNotional ?? 0);
   if (minNotional > 0) {
-    lineas = Math.min(
-      lineas,
-      Math.floor((ctx.totalInvestment * lev) / (minNotional * 1.2)),
-    );
+    lineas = Math.min(lineas, Math.floor((ctx.totalInvestment * lev) / (minNotional * 1.2)));
   }
   lineas = Math.round(clamp(lineas, neutral ? 4 : 3, 200));
 
@@ -374,13 +324,7 @@ function buildGrid(
     ...comun,
     // Pegado al borde dejaria una de las dos patas sin lineas.
     anchorPrice: dec(clamp(f.mark, lower + tick, upper - tick), decimales),
-    sizeMultiplier: stepped(
-      clamp(1 * FACTOR[k.sizeGrowth], 1, 3),
-      1,
-      3,
-      0.05,
-      2,
-    ),
+    sizeMultiplier: stepped(clamp(1 * FACTOR[k.sizeGrowth], 1, 3), 1, 3, 0.05, 2),
     // Sin tope de exposicion la posicion neta crece hasta agotar el margen; el
     // propio validador avisa de ello.
     maxExposure: dec(ctx.totalInvestment * lev * 0.8, 2),
@@ -402,34 +346,20 @@ function buildGrid(
  */
 function buildDca(k: Knobs, ctx: BuildContext): Record<string, unknown> {
   const f = ctx.features;
-  const lev = Math.min(
-    leverageFor(k, ctx, 2),
-    k.profile === 'AGRESIVA' ? 2 : 1,
-  );
+  const lev = Math.min(leverageFor(k, ctx, 2), k.profile === 'AGRESIVA' ? 2 : 1);
   const minNotional = Math.max(Number(ctx.market.minNotional ?? 0), 1);
 
   // Cuantas compras caben con el capital, sin bajar del minimo del venue.
-  const techoPorCapital = Math.floor(
-    ctx.totalInvestment / Math.max(minNotional * 1.2, 1),
-  );
+  const techoPorCapital = Math.floor(ctx.totalInvestment / Math.max(minNotional * 1.2, 1));
   const deseadas = Math.round(20 * FACTOR[k.coverage]);
-  const compras = Math.round(
-    clamp(Math.min(deseadas, techoPorCapital), 1, 500),
-  );
+  const compras = Math.round(clamp(Math.min(deseadas, techoPorCapital), 1, 500));
 
-  const porCompra = Math.max(
-    1,
-    Math.floor((ctx.totalInvestment / compras) * 100) / 100,
-  );
+  const porCompra = Math.max(1, Math.floor((ctx.totalInvestment / compras) * 100) / 100);
 
   // En un par que se mueve mucho se espacian las compras: comprar cada hora en
   // algo que respira un 5 % diario es promediar contra el ruido.
   const minutos = Math.round(
-    clamp(
-      (240 / FACTOR[k.cadence]) * clamp(20 / Math.max(f.atrPct1d, 0.5), 0.5, 2),
-      1,
-      10080,
-    ),
+    clamp((240 / FACTOR[k.cadence]) * clamp(20 / Math.max(f.atrPct1d, 0.5), 0.5, 2), 1, 10080),
   );
 
   return {
@@ -438,13 +368,7 @@ function buildDca(k: Knobs, ctx: BuildContext): Record<string, unknown> {
     maxBuysPerCycle: compras,
     intervalMinutes: minutos,
     buyOnlyIfImprovesAverage: true,
-    marginBelowAveragePct: stepped(
-      clamp(0.5 / FACTOR[k.cadence], 0, 100),
-      0,
-      100,
-      0.1,
-      1,
-    ),
+    marginBelowAveragePct: stepped(clamp(0.5 / FACTOR[k.cadence], 0, 100), 0, 100, 0.1, 1),
     takeProfitPct: stepped(
       clamp(f.atrPct1d * 2 * (2 - FACTOR[k.cadence]), 0.05, 100),
       0.05,
@@ -468,11 +392,7 @@ function buildDca(k: Knobs, ctx: BuildContext): Record<string, unknown> {
  * cumpla `min <= min(compra, venta)` POR CONSTRUCCION. V1 valida esa relacion;
  * V2 no, asi que si se eligiera libre, V2 aceptaria una configuracion incoherente.
  */
-function buildMarketMaker(
-  k: Knobs,
-  ctx: BuildContext,
-  v2: boolean,
-): Record<string, unknown> {
+function buildMarketMaker(k: Knobs, ctx: BuildContext, v2: boolean): Record<string, unknown> {
   const f = ctx.features;
   const lev = leverageFor(k, ctx, 3);
 
@@ -487,9 +407,7 @@ function buildMarketMaker(
     maxBps,
   );
   const distancia = Math.round(spread);
-  const minDistancia = Math.round(
-    clamp(Math.min(spread * 0.4, spread - 1), 1, 500),
-  );
+  const minDistancia = Math.round(clamp(Math.min(spread * 0.4, spread - 1), 1, 500));
 
   const minNotional = Math.max(Number(ctx.market.minNotional ?? 0), 1);
   // Cada capa cotiza a los DOS lados, asi que N capas son 2N ordenes vivas. Con
@@ -500,15 +418,10 @@ function buildMarketMaker(
   // sirve de nada: se calculaba con `minNotional * 1.5 * 2` mientras el reparto
   // dividia entre `capas * 2 * 3`, asi que autorizaba capas cuyo tamano por lado
   // acababa por debajo del minimo del venue.
-  const capasPorCapital = Math.floor(
-    (ctx.totalInvestment * lev) / (2 * 3 * minNotional * 1.2),
-  );
+  const capasPorCapital = Math.floor((ctx.totalInvestment * lev) / (2 * 3 * minNotional * 1.2));
   const capas = Math.round(
     clamp(
-      Math.min(
-        (v2 ? 2 : 3) * FACTOR[k.sizeGrowth],
-        Math.max(capasPorCapital, 1),
-      ),
+      Math.min((v2 ? 2 : 3) * FACTOR[k.sizeGrowth], Math.max(capasPorCapital, 1)),
       1,
       v2 ? 3 : 10,
     ),
@@ -525,21 +438,16 @@ function buildMarketMaker(
   //
   // Ahora, si no cabe, se devuelve un tamano por debajo del minimo a proposito:
   // el `preview()` lo marcara como violacion y el perfil se descarta con motivo.
-  const porLado =
-    Math.floor(((ctx.totalInvestment * lev) / (capas * 2 * 3)) * 100) / 100;
+  const porLado = Math.floor(((ctx.totalInvestment * lev) / (capas * 2 * 3)) * 100) / 100;
   const defensivo = Math.round(clamp(70 * FACTOR[k.coverage], 1, 94));
   const alto = Math.round(clamp(defensivo + 10, defensivo + 1, 100));
-  const refresco =
-    Math.round(clamp(30 / FACTOR[k.cadence], 15, 3600 / 5) / 5) * 5;
+  const refresco = Math.round(clamp(30 / FACTOR[k.cadence], 15, 3600 / 5) / 5) * 5;
 
   const comun: Record<string, unknown> = {
     leverage: lev,
     direction: 'NEUTRAL',
     orderSizePerSide: dec(porLado, 2),
-    maxBotPositionValue: dec(
-      ctx.totalInvestment * lev * clamp(FACTOR[k.coverage], 0.4, 1),
-      2,
-    ),
+    maxBotPositionValue: dec(ctx.totalInvestment * lev * clamp(FACTOR[k.coverage], 0.4, 1), 2),
     sizingMode: 'QUOTE',
     buyDistanceBps: distancia,
     sellDistanceBps: distancia,
@@ -549,20 +457,8 @@ function buildMarketMaker(
     highRiskThresholdPct: alto,
     refreshSeconds: Math.max(15, refresco),
     layers: capas,
-    layerDistanceMultiplier: stepped(
-      clamp(1.4 * FACTOR[k.spread], 1, 3),
-      1,
-      3,
-      0.05,
-      2,
-    ),
-    layerSizeMultiplier: stepped(
-      clamp(1 * FACTOR[k.sizeGrowth], 0.1, 3),
-      0.1,
-      3,
-      0.05,
-      2,
-    ),
+    layerDistanceMultiplier: stepped(clamp(1.4 * FACTOR[k.spread], 1, 3), 1, 3, 0.05, 2),
+    layerSizeMultiplier: stepped(clamp(1 * FACTOR[k.sizeGrowth], 0.1, 3), 0.1, 3, 0.05, 2),
     // Al tocar el tope, el prudente cierra; los demas dejan de abrir pero
     // conservan lo que tengan.
     limitAction: k.profile === 'PRUDENTE' ? 'CLOSE_ALL' : 'PAUSE_ENTRIES',
@@ -580,13 +476,7 @@ function buildMarketMaker(
             : 'BALANCED',
       autoAdjustDistance: k.profile === 'AGRESIVA',
       inventoryPriceAdjustment: true,
-      inventorySkewFactor: stepped(
-        clamp(1 * FACTOR[k.sizeGrowth], 0, 3),
-        0,
-        3,
-        0.05,
-        2,
-      ),
+      inventorySkewFactor: stepped(clamp(1 * FACTOR[k.sizeGrowth], 0, 3), 0, 3, 0.05, 2),
     };
   }
 
@@ -603,18 +493,10 @@ function buildMarketMaker(
     minProfitMarginBps: dec(margenMinimo, 1),
     orderBookMarginBps: dec(1.5, 1),
     repriceThresholdBps: Math.round(clamp(spread * 0.5, 1, 1000)),
-    orderMaxAgeSeconds:
-      Math.round(clamp(120 / FACTOR[k.cadence], 0, 86400) / 5) * 5,
-    fillCooldownSeconds:
-      Math.round(clamp(35 / FACTOR[k.cadence], 0, 3600) / 5) * 5,
+    orderMaxAgeSeconds: Math.round(clamp(120 / FACTOR[k.cadence], 0, 86400) / 5) * 5,
+    fillCooldownSeconds: Math.round(clamp(35 / FACTOR[k.cadence], 0, 3600) / 5) * 5,
     volatilitySampleSeconds: 300,
-    volatilityMultiplier: stepped(
-      clamp(0.35 * FACTOR[k.spread], 0, 5),
-      0,
-      5,
-      0.05,
-      2,
-    ),
+    volatilityMultiplier: stepped(clamp(0.35 * FACTOR[k.spread], 0, 5), 0, 5, 0.05, 2),
     // El techo dinamico nunca puede quedar por debajo del suelo por coste, o el
     // bot no podria cotizar con beneficio en ningun momento.
     maxDynamicSpreadBps: Math.round(clamp(spread * 4, suelo, 5000)),
@@ -629,10 +511,7 @@ function buildMarketMaker(
  * siempre NEUTRAL por mucho que se pida otra cosa. La rejilla neutral admite las
  * tres. El resto solo tiene sentido en un sentido, y NEUTRAL no es uno de ellos.
  */
-function directionFor(
-  kind: string,
-  pedida: 'LONG' | 'SHORT' | 'NEUTRAL',
-): string {
+function directionFor(kind: string, pedida: 'LONG' | 'SHORT' | 'NEUTRAL'): string {
   if (kind === 'MARKET_MAKER' || kind === 'MARKET_MAKER_V2') return 'NEUTRAL';
   if (kind === 'NEUTRAL_GRID') return pedida;
   return pedida === 'SHORT' ? 'SHORT' : 'LONG';

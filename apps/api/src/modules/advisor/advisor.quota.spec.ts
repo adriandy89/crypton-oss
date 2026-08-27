@@ -122,14 +122,7 @@ function montar(opts: {
   } as unknown as ConfigService;
 
   return {
-    service: new AdvisorService(
-      markets,
-      marketData,
-      risk,
-      cache,
-      modelo,
-      config,
-    ),
+    service: new AdvisorService(markets, marketData, risk, cache, modelo, config),
     cache,
     modelo,
     llamadas: () => llamadas,
@@ -149,11 +142,7 @@ const perilla = (profile: string) => ({
   rationale: 'Porque encaja con este mercado.',
 });
 
-const PERILLAS = [
-  perilla('PRUDENTE'),
-  perilla('EQUILIBRADA'),
-  perilla('AGRESIVA'),
-] as never;
+const PERILLAS = [perilla('PRUDENTE'), perilla('EQUILIBRADA'), perilla('AGRESIVA')] as never;
 
 const pedir = (s: AdvisorService, userId = 'u1') =>
   s.suggest(userId, {
@@ -253,8 +242,7 @@ describe('cupo diario del asistente', () => {
     const { service, cache } = montar({});
     await pedir(service, 'usuario-7');
 
-    const clave = (cache.incrWithExpire as jest.Mock).mock
-      .calls[0][0] as string;
+    const clave = (cache.incrWithExpire as jest.Mock).mock.calls[0][0] as string;
     expect(clave).toContain('usuario-7');
     expect(clave).toMatch(/\d{4}-\d{2}-\d{2}$/);
     // Un dia de caducidad: sin ella la clave viviria para siempre y el cupo no

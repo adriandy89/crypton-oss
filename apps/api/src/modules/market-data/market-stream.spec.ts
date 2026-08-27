@@ -13,15 +13,11 @@ import { MarketStreamService } from './market-stream.service';
 function build() {
   const publicados: { canal: string; data: Record<string, unknown> }[] = [];
   const bus = {
-    listenPublic: jest
-      .fn()
-      .mockResolvedValue({ subscribe: () => ({ unsubscribe() {} }) }),
-    publishPublic: jest.fn(
-      (canal: string, m: { data: Record<string, unknown> }) => {
-        publicados.push({ canal, data: m.data });
-        return Promise.resolve();
-      },
-    ),
+    listenPublic: jest.fn().mockResolvedValue({ subscribe: () => ({ unsubscribe() {} }) }),
+    publishPublic: jest.fn((canal: string, m: { data: Record<string, unknown> }) => {
+      publicados.push({ canal, data: m.data });
+      return Promise.resolve();
+    }),
   };
   const sse = new BotsSseService(bus as never);
   const stream = new MarketStreamService(bus as never, sse);
@@ -38,18 +34,14 @@ describe('watch — precios y velas comparten cupo', () => {
     // Es el caso NORMAL, no un borde: la lista de mercados vive dentro de las
     // pestañas y sigue abierta debajo del gráfico, asi que sus sesenta pares
     // estan declarados a la vez que el par que se esta mirando.
-    const r = await h.stream.watch('u1', h.streamId, sesentaPares, [
-      'HYPERLIQUID:BTC:1h',
-    ]);
+    const r = await h.stream.watch('u1', h.streamId, sesentaPares, ['HYPERLIQUID:BTC:1h']);
     expect(r.candles).toEqual(['HYPERLIQUID:BTC:1h']);
     expect(h.sse.activeTopics()).toContain('kl:HYPERLIQUID:BTC:1h');
   });
 
   it('lo que se recorta son los PRECIOS, que es lo barato de recuperar', async () => {
     const h = build();
-    const r = await h.stream.watch('u1', h.streamId, sesentaPares, [
-      'HYPERLIQUID:BTC:1h',
-    ]);
+    const r = await h.stream.watch('u1', h.streamId, sesentaPares, ['HYPERLIQUID:BTC:1h']);
     // Un precio que se cae fuera se sigue viendo con la instantanea; una serie
     // de velas que se cae fuera deja el grafico congelado.
     expect(r.symbols.length + r.candles.length).toBeLessThanOrEqual(60);
@@ -64,12 +56,7 @@ describe('watch — precios y velas comparten cupo', () => {
 
   it('se le dice al worker cada clase por su lado', async () => {
     const h = build();
-    await h.stream.watch(
-      'u1',
-      h.streamId,
-      ['HYPERLIQUID:BTC'],
-      ['HYPERLIQUID:BTC:1h'],
-    );
+    await h.stream.watch('u1', h.streamId, ['HYPERLIQUID:BTC'], ['HYPERLIQUID:BTC:1h']);
     const ultimo = h.publicados[h.publicados.length - 1];
     expect(ultimo.data['symbols']).toEqual(['HYPERLIQUID:BTC']);
     expect(ultimo.data['candles']).toEqual(['HYPERLIQUID:BTC:1h']);
@@ -92,13 +79,7 @@ describe('watch — las dos redes no se mezclan', () => {
     // `fromTopic` corta por posicion: un prefijo de otro largo devolveria el par
     // con el prefijo pegado, o sea una suscripcion a un simbolo inventado.
     const h = build();
-    await h.stream.watch(
-      'u1',
-      h.streamId,
-      ['LIGHTER:ETH'],
-      ['LIGHTER:ETH:1h'],
-      true,
-    );
+    await h.stream.watch('u1', h.streamId, ['LIGHTER:ETH'], ['LIGHTER:ETH:1h'], true);
     const ultimo = h.publicados[h.publicados.length - 1];
     expect(ultimo.data['symbolsTest']).toEqual(['LIGHTER:ETH']);
     expect(ultimo.data['candlesTest']).toEqual(['LIGHTER:ETH:1h']);
@@ -131,12 +112,7 @@ describe('watch — lo que no puede pasar del borde', () => {
       'u1',
       h.streamId,
       [],
-      [
-        'HYPERLIQUID:BTC:99x',
-        'HYPERLIQUID:BTC',
-        'INVENTADO:BTC:1h',
-        'sin-nada',
-      ],
+      ['HYPERLIQUID:BTC:99x', 'HYPERLIQUID:BTC', 'INVENTADO:BTC:1h', 'sin-nada'],
     );
     expect(r.candles).toEqual([]);
     expect(h.sse.activeTopics()).toEqual([]);
@@ -150,10 +126,7 @@ describe('watch — lo que no puede pasar del borde', () => {
 
   it('mas velas de las permitidas se recortan, no se aceptan todas', async () => {
     const h = build();
-    const muchas = Array.from(
-      { length: 20 },
-      (_, i) => `HYPERLIQUID:BTC:${i + 1}m`,
-    );
+    const muchas = Array.from({ length: 20 }, (_, i) => `HYPERLIQUID:BTC:${i + 1}m`);
     const r = await h.stream.watch('u1', h.streamId, [], muchas);
     // Cada serie es una conexion al venue: el borde tiene que acotarlo antes de
     // que llegue a nadie.
@@ -166,12 +139,7 @@ describe('watch — lo que no puede pasar del borde', () => {
       { publishPublic: jest.fn().mockResolvedValue(undefined) } as never,
       h.sse,
     );
-    const r = await otra.watch(
-      'atacante',
-      h.streamId,
-      ['HYPERLIQUID:BTC'],
-      ['HYPERLIQUID:BTC:1h'],
-    );
+    const r = await otra.watch('atacante', h.streamId, ['HYPERLIQUID:BTC'], ['HYPERLIQUID:BTC:1h']);
     expect(r.symbols).toEqual([]);
     expect(r.candles).toEqual([]);
   });
@@ -198,12 +166,7 @@ describe('Simbolos que existen de verdad', () => {
   it('UNO malo entre sesenta buenos no se lleva por delante a los demas', async () => {
     const h = build();
     const buenos = Array.from({ length: 59 }, (_, i) => `ASTER:PAR${i}USDT`);
-    const r = await h.stream.watch(
-      'u1',
-      h.streamId,
-      [...buenos, 'ASTER:con:dos:puntos'],
-      [],
-    );
+    const r = await h.stream.watch('u1', h.streamId, [...buenos, 'ASTER:con:dos:puntos'], []);
     // El borde descarta el que no encaja y deja pasar el resto. Lo que NO puede
     // hacer es tirar la declaracion entera y dejar la pantalla sin precios.
     expect(r.symbols).toHaveLength(59);

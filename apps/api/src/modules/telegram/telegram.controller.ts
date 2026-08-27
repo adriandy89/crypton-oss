@@ -1,13 +1,4 @@
-import {
-  Body,
-  Controller,
-  Delete,
-  Get,
-  HttpCode,
-  Patch,
-  Post,
-  UseGuards,
-} from '@nestjs/common';
+import { Body, Controller, Delete, Get, HttpCode, Patch, Post, UseGuards } from '@nestjs/common';
 import { ApiBearerAuth, ApiOperation, ApiTags } from '@nestjs/swagger';
 import { Audit } from 'src/libs';
 import { GetUserInfo, JwtAuthGuard } from '../auth';
@@ -34,8 +25,7 @@ export class TelegramController {
   @Post('link')
   @ApiOperation({
     summary: 'Genera un codigo de vinculacion de un solo uso',
-    description:
-      'Devuelve el codigo y un enlace profundo. Regenerarlo invalida el anterior.',
+    description: 'Devuelve el codigo y un enlace profundo. Regenerarlo invalida el anterior.',
   })
   link(@GetUserInfo() user: SessionUser) {
     return this.telegram.createLinkCode(user.id);

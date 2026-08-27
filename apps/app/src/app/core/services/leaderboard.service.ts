@@ -42,11 +42,13 @@ export class LeaderboardService {
   readonly rows = signal<LeaderboardRow[]>([]);
   readonly loading = signal(false);
 
-  async load(filters: {
-    period?: LeaderboardPeriod;
-    venue?: Venue;
-    strategy?: StrategyKind;
-  } = {}): Promise<void> {
+  async load(
+    filters: {
+      period?: LeaderboardPeriod;
+      venue?: Venue;
+      strategy?: StrategyKind;
+    } = {},
+  ): Promise<void> {
     this.loading.set(true);
     try {
       const params: Record<string, string> = {};

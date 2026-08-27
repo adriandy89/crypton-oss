@@ -1,6 +1,16 @@
-import { inject, isDevMode, provideAppInitializer, provideZoneChangeDetection } from '@angular/core';
+import {
+  inject,
+  isDevMode,
+  provideAppInitializer,
+  provideZoneChangeDetection,
+} from '@angular/core';
 import { bootstrapApplication } from '@angular/platform-browser';
-import { PreloadAllModules, RouteReuseStrategy, provideRouter, withPreloading } from '@angular/router';
+import {
+  PreloadAllModules,
+  RouteReuseStrategy,
+  provideRouter,
+  withPreloading,
+} from '@angular/router';
 import { IonicRouteStrategy, provideIonicAngular } from '@ionic/angular/standalone';
 import { provideHttpClient, withInterceptors } from '@angular/common/http';
 import { provideTransloco } from '@jsverse/transloco';
@@ -10,7 +20,7 @@ import { routes } from './app/app.routes';
 import { AuthService, authInterceptor } from './app/core/auth';
 import { TranslocoHttpLoader } from './transloco-loader';
 
-bootstrapApplication(AppComponent, {
+void bootstrapApplication(AppComponent, {
   providers: [
     provideZoneChangeDetection(),
     { provide: RouteReuseStrategy, useClass: IonicRouteStrategy },

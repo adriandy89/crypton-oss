@@ -121,11 +121,7 @@ export function systemPrompt(): string {
 }
 
 /** Los rasgos del mercado, ya calculados. El modelo no calcula nada. */
-export function marketPrompt(
-  strategy: string,
-  symbol: string,
-  f: MarketFeatures,
-): string {
+export function marketPrompt(strategy: string, symbol: string, f: MarketFeatures): string {
   return [
     `Estrategia: ${strategy}`,
     `Par: ${symbol}`,

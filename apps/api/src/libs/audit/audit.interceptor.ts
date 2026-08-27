@@ -1,21 +1,10 @@
-import {
-  CallHandler,
-  ExecutionContext,
-  Injectable,
-  NestInterceptor,
-} from '@nestjs/common';
+import { CallHandler, ExecutionContext, Injectable, NestInterceptor } from '@nestjs/common';
 import { Reflector } from '@nestjs/core';
 import { Observable, tap } from 'rxjs';
 import { AuditOutcome, EventSeverity } from '@crypton/shared';
 import { AuditService } from './audit.service';
 import { AUDIT_METADATA, type AuditOptions } from './audit.types';
-import {
-  MUTATING,
-  actorOf,
-  pickFields,
-  safeRoute,
-  type AuditableRequest,
-} from './audit.request';
+import { MUTATING, actorOf, pickFields, safeRoute, type AuditableRequest } from './audit.request';
 
 /**
  * Registra las MUTACIONES QUE SALEN BIEN.
@@ -34,8 +23,7 @@ export class AuditInterceptor implements NestInterceptor {
   ) {}
 
   intercept(context: ExecutionContext, next: CallHandler): Observable<unknown> {
-    if (!this.audit.enabled || context.getType() !== 'http')
-      return next.handle();
+    if (!this.audit.enabled || context.getType() !== 'http') return next.handle();
 
     const http = context.switchToHttp();
     const req = http.getRequest<AuditableRequest>();
@@ -49,9 +37,10 @@ export class AuditInterceptor implements NestInterceptor {
     // el endpoint esto lo sigue impidiendo. Mismo criterio que
     // `TimeoutInterceptor`, que también se exime por esta cabecera.
     if (req.headers?.accept === 'text/event-stream') return next.handle();
-    const options = this.reflector.get<
-      (AuditOptions & { action: string }) | undefined
-    >(AUDIT_METADATA, context.getHandler());
+    const options = this.reflector.get<(AuditOptions & { action: string }) | undefined>(
+      AUDIT_METADATA,
+      context.getHandler(),
+    );
 
     // Sin decorador, solo se registran las mutaciones; una lectura correcta no
     // dice nada que merezca una fila. Con decorador, se registra siempre: es
@@ -67,8 +56,7 @@ export class AuditInterceptor implements NestInterceptor {
         // manejador declare `@HttpCode(204)` —el caso de `DELETE /bots/:id`—.
         // Diferido un tick, Nest ya ha fijado el código real. No añade latencia:
         // la respuesta ya va de camino.
-        next: () =>
-          setImmediate(() => this.write(req, res, options, method, startedAt)),
+        next: () => setImmediate(() => this.write(req, res, options, method, startedAt)),
         // Los errores se dejan pasar: los recoge el filtro, que además conoce
         // el código HTTP definitivo.
         error: () => undefined,
@@ -96,8 +84,7 @@ export class AuditInterceptor implements NestInterceptor {
       // `/exchange-accounts/:id` acababa en la columna `bot_id` y la
       // correlación con `bot_events` devolvía basura.
       botId:
-        options?.action?.startsWith('bot.') &&
-        typeof req.params?.['id'] === 'string'
+        options?.action?.startsWith('bot.') && typeof req.params?.['id'] === 'string'
           ? req.params['id']
           : null,
       action: options?.action ?? `http.${method.toLowerCase()}`,

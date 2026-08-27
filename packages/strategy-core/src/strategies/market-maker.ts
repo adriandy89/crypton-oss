@@ -388,11 +388,7 @@ const MM_FIELDS: readonly FieldMeta[] = [
     mutability: Mutability.COLD,
     labelKey: 'strategy.mm.positionMode',
     helpKey: 'strategy.mm.positionModeHelp',
-    options: [
-      PositionModeSetting.AUTO,
-      PositionModeSetting.HEDGE,
-      PositionModeSetting.ONE_WAY,
-    ],
+    options: [PositionModeSetting.AUTO, PositionModeSetting.HEDGE, PositionModeSetting.ONE_WAY],
     required: false,
     default: PositionModeSetting.AUTO,
     group: 'venue',
@@ -502,7 +498,9 @@ export const marketMaker: Strategy<MarketMakerConfig> = {
 
     const maxPos = D(cfg.maxBotPositionValue ?? 0);
     if (!maxPos.isFinite() || maxPos.lte(0)) {
-      issues.push(err('maxBotPositionValue', 'El valor máximo de posición debe ser mayor que cero.'));
+      issues.push(
+        err('maxBotPositionValue', 'El valor máximo de posición debe ser mayor que cero.'),
+      );
     }
 
     const buyBps = D(cfg.buyDistanceBps ?? 0);
@@ -525,7 +523,8 @@ export const marketMaker: Strategy<MarketMakerConfig> = {
     }
 
     const layers = Math.floor(cfg.layers ?? 0);
-    if (layers < 1 || layers > 10) issues.push(err('layers', 'Las capas deben estar entre 1 y 10.'));
+    if (layers < 1 || layers > 10)
+      issues.push(err('layers', 'Las capas deben estar entre 1 y 10.'));
 
     if (Math.floor(cfg.refreshSeconds ?? 0) < 15) {
       issues.push(
@@ -691,7 +690,7 @@ export const marketMaker: Strategy<MarketMakerConfig> = {
     const shouldRequote =
       quotedMid == null || (!cooling && (staleByTime || staleByDrift || expired.size > 0));
 
-    const mid = anchor ?? (shouldRequote ? liveMid : quotedMid!);
+    const mid = anchor ?? (shouldRequote ? liveMid : quotedMid);
     const scratchPatch: Record<string, unknown> = {};
     if (!anchor && shouldRequote) {
       scratchPatch['quotedMid'] = mid.toFixed(pd);

@@ -141,9 +141,7 @@ describe('páginas de error en vez de respuestas de la API', () => {
     // fatal.
     expect(classify(HTML_503)).toBe('RETRYABLE');
     expect(
-      classify(
-        Object.assign(new Error('x'), { response: { status: 503, data: HTML_503 } }),
-      ),
+      classify(Object.assign(new Error('x'), { response: { status: 503, data: HTML_503 } })),
     ).toBe('RETRYABLE');
   });
 

@@ -124,9 +124,7 @@ export class AuditService implements OnModuleDestroy {
     try {
       await this.db.activityLog.createMany({ data: batch.map(toRow) });
     } catch (e) {
-      this.logger.warn(
-        `No se pudieron registrar ${batch.length} entradas: ${messageOf(e)}`,
-      );
+      this.logger.warn(`No se pudieron registrar ${batch.length} entradas: ${messageOf(e)}`);
     }
   }
 
@@ -156,5 +154,4 @@ function toRow(entry: AuditEntry) {
   };
 }
 
-const messageOf = (e: unknown): string =>
-  e instanceof Error ? e.message : String(e);
+const messageOf = (e: unknown): string => (e instanceof Error ? e.message : String(e));

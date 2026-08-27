@@ -52,17 +52,13 @@ describe('UpdateRiskLimitsDto', () => {
 
     it('el mensaje dice qué hacer en su lugar', () => {
       // Rechazar sin explicar la alternativa deja al usuario probando cifras.
-      const fallos = validateSync(
-        plainToInstance(UpdateRiskLimitsDto, { maxNotionalPerBot: '0' }),
-      );
+      const fallos = validateSync(plainToInstance(UpdateRiskLimitsDto, { maxNotionalPerBot: '0' }));
       const texto = JSON.stringify(fallos[0]?.constraints ?? {});
       expect(texto).toContain('vacío');
     });
 
     it('rechaza un negativo', () => {
-      expect(errores({ maxNotionalPerBot: '-500' })).toContain(
-        'maxNotionalPerBot',
-      );
+      expect(errores({ maxNotionalPerBot: '-500' })).toContain('maxNotionalPerBot');
     });
   });
 

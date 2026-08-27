@@ -10,11 +10,7 @@ export * from './market-cache';
 export * from './candles';
 export * from './capabilities';
 export * from './factory';
-export {
-  HyperliquidAdapter,
-  esLiquidacionHl,
-  hyperliquidTickSize,
-} from './adapters/hyperliquid';
+export { HyperliquidAdapter, esLiquidacionHl, hyperliquidTickSize } from './adapters/hyperliquid';
 export { AsterAdapter } from './adapters/aster';
 export { LighterAdapter, oldestPrice, scaled } from './adapters/lighter';
 export { DryRunAdapter, type DryRunOptions, type DryRunState } from './adapters/dry-run';

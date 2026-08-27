@@ -191,9 +191,7 @@ export class ListBotsQueryDto {
    * cliente sin actualizar sigue viendo todos sus bots.
    */
   @IsOptional()
-  @Transform(({ value }) =>
-    value === undefined ? undefined : value === true || value === 'true',
-  )
+  @Transform(({ value }) => (value === undefined ? undefined : value === true || value === 'true'))
   @IsBoolean()
   testnet?: boolean;
 
