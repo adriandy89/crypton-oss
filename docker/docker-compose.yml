@@ -1,0 +1,295 @@
+# CRYPTON — APLICACIÓN (migraciones + API + worker + cliente web)
+#
+#   docker compose -f docker-compose.infra.yml up -d   # 1. infraestructura
+#   docker compose up -d --build                       # 2. aplicación
+#
+# O con los atajos:  pnpm infra:up  &&  pnpm stack:up
+#
+# ┌──────────────────────────────────────────────────────────────────────────┐
+# │  AQUÍ NO HAY VOLÚMENES NI BASE DE DATOS, Y ES DELIBERADO.                │
+# │                                                                          │
+# │  Este stack es DESECHABLE: `docker compose down` lo tira entero y los    │
+# │  datos ni se enteran, porque viven en otro proyecto de compose           │
+# │  (docker-compose.infra.yml). Desplegar no puede destruir datos.          │
+# └──────────────────────────────────────────────────────────────────────────┘
+#
+# Ojo: `depends_on` NO cruza proyectos de compose, así que aquí no se puede
+# esperar al healthcheck de Postgres. El job de migraciones espera por su cuenta
+# (ver su `command`).
+
+name: crypton
+
+services:
+  # Contenedor efímero: espera a que Postgres acepte conexiones, aplica las
+  # migraciones, siembra el catálogo de planes y termina. La API y el worker no
+  # arrancan hasta que sale con código 0, así que nunca corren contra un esquema
+  # desactualizado.
+  #
+  # La semilla va aquí y no aparte porque antes no la ejecutaba nadie en un
+  # despliegue con contenedores: solo el flujo de la máquina anfitriona
+  # (`make bootstrap`). El stack levantaba con la tabla `plans` vacía, así que
+  # `GET /plans` devolvía [] y la pantalla de planes salía sin catálogo. Es
+  # idempotente —todo upserts por `code`— y no toca usuarios ni bots.
+  migrate:
+    container_name: crypton-migrate
+    build:
+      # El contexto es la raíz del monorepo: la imagen necesita packages/*.
+      context: ..
+      dockerfile: apps/api/Dockerfile
+      target: prisma-migrate
+    restart: 'no'
+    environment:
+      # Se usan los NOMBRES DE CONTENEDOR y no los de servicio: los servicios
+      # viven en otro proyecto de compose, y el nombre de contenedor es el alias
+      # inequívoco en la red compartida.
+      DATABASE_URL: postgresql://${POSTGRES_USER:-postgres}:${POSTGRES_PASSWORD:-postgres}@crypton-db:5432/${POSTGRES_DB:-crypton}?schema=public
+    command: >
+      sh -c "
+        echo 'Esperando a Postgres en crypton-db:5432...';
+        until node -e \"const s=require('node:net').connect(5432,'crypton-db');s.on('connect',()=>{s.end();process.exit(0)});s.on('error',()=>process.exit(1))\" 2>/dev/null; do
+          sleep 2;
+        done;
+        echo 'Postgres listo, aplicando migraciones';
+        pnpm exec prisma migrate deploy
+      "
+
+  api:
+    container_name: crypton-api
+    build:
+      context: ..
+      dockerfile: apps/api/Dockerfile
+      target: production
+    restart: unless-stopped
+    ports:
+      - '${API_PORT:-3200}:3200'
+    environment:
+      NODE_ENV: production
+      API_PORT: 3200
+      SWAGGER_ENABLE: ${SWAGGER_ENABLE:-false}
+      # Bitácora de actividad. Apagada por defecto.
+      AUDIT_LOG_ENABLE: ${AUDIT_LOG_ENABLE:-false}
+
+      DATABASE_URL: postgresql://${POSTGRES_USER:-postgres}:${POSTGRES_PASSWORD:-postgres}@crypton-db:5432/${POSTGRES_DB:-crypton}?schema=public&connection_limit=10
+      REDIS_URL: redis://crypton-redis:6379
+      REDIS_PASSWORD: ${REDIS_PASSWORD:-changeme}
+
+      # El MISMO valor que el worker, y esa es toda la gracia: es lo que hace
+      # que los dos compartan el depósito de fichas en Redis. Los límites de los
+      # DEX se cuentan por IP y estos dos servicios salen por la misma, así que
+      # un presupuesto por proceso no sería un presupuesto — cada uno se creería
+      # dueño del total. Sin esto, la API gastaba cupo sin apuntarlo en ninguna
+      # parte, y entre ella y el worker agotaron el de Lighter.
+      WORKER_EGRESS_ID: ${WORKER_EGRESS_ID:-shared}
+
+      # Cuenta de servicio de Lighter. Ver docker/.env.example.
+      LIGHTER_SERVICE_ACCOUNT_INDEX: ${LIGHTER_SERVICE_ACCOUNT_INDEX:-}
+      LIGHTER_SERVICE_API_KEY_INDEX: ${LIGHTER_SERVICE_API_KEY_INDEX:-4}
+      LIGHTER_SERVICE_PRIVATE_KEY: ${LIGHTER_SERVICE_PRIVATE_KEY:-}
+
+      # La clave maestra se define UNA vez en el .env del stack y se inyecta a
+      # los dos servicios. Es lo que garantiza estructuralmente que coincidan:
+      # si cada uno la leyera de su propio fichero, un despiste dejaría al worker
+      # sin poder descifrar lo que la API cifró, y ningún bot arrancaría.
+      CREDENTIALS_MASTER_KEY: ${CREDENTIALS_MASTER_KEY:?falta CREDENTIALS_MASTER_KEY, genérala con openssl rand -hex 32}
+      CREDENTIALS_ACTIVE_KEY_ID: ${CREDENTIALS_ACTIVE_KEY_ID:-v1}
+
+      JWT_ACCESS_SECRET: ${JWT_ACCESS_SECRET:?falta JWT_ACCESS_SECRET}
+      JWT_ACCESS_TTL: ${JWT_ACCESS_TTL:-15m}
+      JWT_REFRESH_SECRET: ${JWT_REFRESH_SECRET:?falta JWT_REFRESH_SECRET}
+      JWT_REFRESH_TTL: ${JWT_REFRESH_TTL:-30d}
+
+      # Acceso con Google: sin esto no entra nadie, asi que la API no arranca.
+      # Mejor un fallo ruidoso al desplegar que descubrirlo por el primer
+      # usuario que se queda fuera.
+      GOOGLE_CLIENT_ID: ${GOOGLE_CLIENT_ID:?falta GOOGLE_CLIENT_ID}
+      GOOGLE_CLIENT_SECRET: ${GOOGLE_CLIENT_SECRET:?falta GOOGLE_CLIENT_SECRET}
+      GOOGLE_REDIRECT_URI: ${GOOGLE_REDIRECT_URI:?falta GOOGLE_REDIRECT_URI}
+      APP_REDIRECT_WEB: ${APP_REDIRECT_WEB:?falta APP_REDIRECT_WEB}
+      APP_REDIRECT_NATIVE: ${APP_REDIRECT_NATIVE:?falta APP_REDIRECT_NATIVE}
+
+      THROTTLE_TTL: ${THROTTLE_TTL:-30000}
+      THROTTLE_LIMIT: ${THROTTLE_LIMIT:-100}
+      PUBLIC_APP_URL: ${PUBLIC_APP_URL:-}
+
+      BUILDER_ADDRESS: ${BUILDER_ADDRESS:-}
+      BUILDER_FEE_TENTH_BPS: ${BUILDER_FEE_TENTH_BPS:-0}
+      TELEGRAM_BOT_USERNAME: ${TELEGRAM_BOT_USERNAME:-}
+
+      # Velas historicas para el backtesting (solo ADMIN). Las de Binance son las
+      # MISMAS que usa el worker para el precio de referencia en vivo; Bybit es el
+      # respaldo por si Binance bloquea la IP de este servidor con un 451.
+      BINANCE_REST_URL: ${BINANCE_REST_URL:-https://api.binance.com}
+      BINANCE_FAPI_URL: ${BINANCE_FAPI_URL:-https://fapi.binance.com}
+      BYBIT_REST_URL: ${BYBIT_REST_URL:-https://api.bybit.com}
+
+      # Configuraciones sugeridas al crear un bot. Todas con `:-` y no con `:?`:
+      # sin ellas la funcion cae a las reglas deterministas y la API tiene que
+      # arrancar igual. Ver apps/api/.env.example.
+      AI_ADVISOR_ENABLE: ${AI_ADVISOR_ENABLE:-false}
+      OPENROUTER_API_KEY: ${OPENROUTER_API_KEY:-}
+      OPENROUTER_MODEL: ${OPENROUTER_MODEL:-anthropic/claude-sonnet-5}
+      AI_ADVISOR_DAILY_LIMIT: ${AI_ADVISOR_DAILY_LIMIT:-20}
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+    healthcheck:
+      test:
+        - CMD
+        - node
+        - -e
+        - "require('node:http').get('http://127.0.0.1:3200/api/v1/health',r=>process.exit(r.statusCode===200?0:1)).on('error',()=>process.exit(1))"
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 20s
+
+  # Cliente web: la MISMA aplicación que la de Android, compilada para navegador
+  # y servida por nginx, que además hace de proxy de `/api` hacia la API.
+  #
+  # Ese proxy es lo que permite que el navegador vea aplicación y API en el mismo
+  # origen: sin CORS que configurar y sin recompilar la imagen al cambiar de
+  # dominio. Ver apps/app/nginx.conf.
+  #
+  # OJO: la entrada con Google usa crypto.subtle (PKCE), que el navegador solo
+  # expone en contexto seguro. Detrás de este contenedor tiene que haber HTTPS
+  # o nadie podrá iniciar sesión.
+  app:
+    container_name: crypton-app
+    build:
+      # Contexto en la raíz del monorepo: la app depende de packages/*.
+      context: ..
+      dockerfile: apps/app/Dockerfile
+      target: production
+    restart: unless-stopped
+    ports:
+      - '${APP_PORT:-8100}:8080'
+    # `service_started` y no `service_healthy` a propósito: si la API está caída,
+    # el cliente web debe seguir sirviéndose y enseñar el error dentro de la
+    # aplicación. nginx resuelve el nombre de la API en cada petición, así que se
+    # reengancha solo cuando vuelve.
+    depends_on:
+      api:
+        condition: service_started
+    healthcheck:
+      test: ['CMD', 'wget', '-q', '-O', '-', 'http://127.0.0.1:8080/']
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+
+  # El motor. Se puede escalar: `docker compose up -d --scale worker=3`.
+  #
+  # SIN `container_name`, y es lo que lo hace posible: un nombre fijo obliga a
+  # que haya exactamente una instancia, así que el motor estaba diseñado para
+  # escalar en horizontal —lease por bot, adopción sin coordinación— y el
+  # compose lo impedía. Cada réplica se queda con los bots cuyo lease consiga,
+  # hasta su tope de `WORKER_MAX_BOTS`.
+  #
+  # Solo publica el puerto de salud, y no hacia fuera: el resto de la
+  # comunicación va por Postgres y por el bus de Redis.
+  worker:
+    build:
+      context: ..
+      dockerfile: apps/worker/Dockerfile
+      target: production
+    restart: unless-stopped
+    # Margen para que al recibir SIGTERM cierre los runners de forma ordenada y
+    # libere sus leases: eso acorta el relevo cuando otro worker los adopta.
+    # Matarlo de golpe también funciona, pero obliga a esperar al TTL del lease.
+    stop_grace_period: 45s
+    environment:
+      NODE_ENV: production
+
+      DATABASE_URL: postgresql://${POSTGRES_USER:-postgres}:${POSTGRES_PASSWORD:-postgres}@crypton-db:5432/${POSTGRES_DB:-crypton}?schema=public&connection_limit=10
+      REDIS_URL: redis://crypton-redis:6379
+      REDIS_PASSWORD: ${REDIS_PASSWORD:-changeme}
+
+      # La MISMA clave que la API, desde la misma variable. Ver el comentario del
+      # servicio `api`.
+      CREDENTIALS_MASTER_KEY: ${CREDENTIALS_MASTER_KEY:?falta CREDENTIALS_MASTER_KEY}
+      CREDENTIALS_ACTIVE_KEY_ID: ${CREDENTIALS_ACTIVE_KEY_ID:-v1}
+
+      ENGINE_SCAN_INTERVAL_MS: ${ENGINE_SCAN_INTERVAL_MS:-5000}
+      RECONCILE_INTERVAL_MS: ${RECONCILE_INTERVAL_MS:-15000}
+      WORKER_LEASE_TTL_MS: ${WORKER_LEASE_TTL_MS:-30000}
+      DRY_RUN_BALANCE: ${DRY_RUN_BALANCE:-10000}
+
+      # Cuántos bots acepta CADA réplica. Al llegar al tope deja de adquirir
+      # leases, y los bots que sobren esperan a que haya otra réplica. Sin tope,
+      # la primera que arrancaba se los llevaba todos.
+      WORKER_MAX_BOTS: ${WORKER_MAX_BOTS:-250}
+
+      # Puerto de salud. No se publica al host: lo consulta el healthcheck desde
+      # dentro del contenedor, y con --scale no podría haber dos publicando el
+      # mismo puerto.
+      WORKER_HEALTH_PORT: 3300
+
+      # ── Caudal hacia los venues ──────────────────────────────────
+      # Dos ámbitos, porque los DEX limitan en dos:
+      #
+      #   VENUE_RATE_LIMIT_PER_SECOND  por CUENTA de exchange.
+      #   WORKER_EGRESS_ID             agrupa los procesos que comparten IP de
+      #                                salida para que compartan presupuesto.
+      #
+      # Con todas las réplicas detrás de la misma IP —lo normal en un compose—
+      # el valor debe ser el MISMO en todas. Pon `memory` solo si cada réplica
+      # sale por su propia IP.
+      VENUE_RATE_LIMIT_PER_SECOND: ${VENUE_RATE_LIMIT_PER_SECOND:-8}
+      WORKER_EGRESS_ID: ${WORKER_EGRESS_ID:-shared}
+
+      # Cuánto vale una lectura de estado de cuenta antes de repetirla. Es lo
+      # que hace que diez bots de la misma cuenta latiendo a la vez cuesten UNA
+      # llamada y no diez.
+      ACCOUNT_STATE_TTL_MS: ${ACCOUNT_STATE_TTL_MS:-1000}
+      MARKETDATA_RATE_LIMIT_PER_SECOND: ${MARKETDATA_RATE_LIMIT_PER_SECOND:-6}
+
+      # Cuenta de SERVICIO de Lighter. Sin ella, sus lecturas van sin firmar y
+      # el cupo son 60 peticiones por minuto para TODA la IP de salida — la
+      # misma que usa la API. Ver docker/.env.example para el porqué y para cómo
+      # conseguirla.
+      LIGHTER_SERVICE_ACCOUNT_INDEX: ${LIGHTER_SERVICE_ACCOUNT_INDEX:-}
+      LIGHTER_SERVICE_API_KEY_INDEX: ${LIGHTER_SERVICE_API_KEY_INDEX:-4}
+      LIGHTER_SERVICE_PRIVATE_KEY: ${LIGHTER_SERVICE_PRIVATE_KEY:-}
+
+      # Retención de las series temporales. El histórico real —ciclos, órdenes y
+      # ejecuciones— no se purga nunca; esto solo afecta a gráficas y timeline.
+      RETENTION_SNAPSHOT_DAYS: ${RETENTION_SNAPSHOT_DAYS:-30}
+      RETENTION_EVENT_DAYS: ${RETENTION_EVENT_DAYS:-90}
+      RETENTION_CRITICAL_EVENT_DAYS: ${RETENTION_CRITICAL_EVENT_DAYS:-365}
+      AUDIT_LOG_ENABLE: ${AUDIT_LOG_ENABLE:-false}
+      RETENTION_AUDIT_DAYS: ${RETENTION_AUDIT_DAYS:-180}
+
+      BUILDER_ADDRESS: ${BUILDER_ADDRESS:-}
+      BUILDER_FEE_TENTH_BPS: ${BUILDER_FEE_TENTH_BPS:-0}
+      TELEGRAM_BOT_TOKEN: ${TELEGRAM_BOT_TOKEN:-}
+
+      # Oráculo de precio del Market Maker V2 cuando no se ancla al propio venue.
+      # Estaban declaradas en docker/.env.example y las lee el worker, pero NADIE
+      # se las pasaba: rellenarlas allí no hacía absolutamente nada y siempre se
+      # usaban los valores por defecto del código. Es el fallo silencioso que
+      # scripts/check-env.mjs existe para cazar.
+      BINANCE_REST_URL: ${BINANCE_REST_URL:-https://api.binance.com}
+      BINANCE_FAPI_URL: ${BINANCE_FAPI_URL:-https://fapi.binance.com}
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+    deploy:
+      replicas: ${WORKER_REPLICAS:-1}
+    healthcheck:
+      test:
+        - CMD
+        - node
+        - -e
+        - "require('node:http').get('http://127.0.0.1:3300/health',r=>process.exit(r.statusCode===200?0:1)).on('error',()=>process.exit(1))"
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 20s
+
+# La red la crea docker-compose.infra.yml; aquí solo se consume. Si no existe,
+# el arranque falla con un mensaje claro en vez de crear una red nueva y aislada
+# en la que los contenedores no verían la base de datos.
+networks:
+  default:
+    external: true
+    name: crypton-network

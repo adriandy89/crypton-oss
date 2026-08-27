@@ -1,0 +1,35 @@
+{
+  "name": "@crypton/db",
+  "version": "0.1.0",
+  "license": "AGPL-3.0-only",
+  "private": true,
+  "description": "Esquema Prisma y cliente generado. Fuente unica del modelo de datos para la API y el worker.",
+  "main": "dist/src/index.js",
+  "types": "dist/src/index.d.ts",
+  "comments": {
+    "porQuePaquete": "El cliente de Prisma lo necesitan api y worker por igual. Prisma 7 genera TypeScript, no JavaScript, asi que hay que compilarlo: se hace aqui una sola vez y ambas apps consumen el dist. Generarlo dentro de una de las dos obligaria a la otra a importar por ruta relativa, que se rompe al empaquetar en Docker."
+  },
+  "scripts": {
+    "postinstall": "prisma generate && tsc -p tsconfig.json",
+    "generate": "prisma generate",
+    "studio": "prisma studio",
+    "build": "prisma generate && tsc -p tsconfig.json",
+    "test": "echo \"sin tests\"",
+    "lint": "echo noop",
+    "migrate:dev": "prisma migrate dev",
+    "migrate:deploy": "prisma migrate deploy"
+  },
+  "dependencies": {
+    "@prisma/adapter-pg": "^7.3.0",
+    "@prisma/client": "^7.3.0",
+    "pg": "^8.18.0"
+  },
+  "devDependencies": {
+    "@types/node": "^24.0.0",
+    "@types/pg": "^8.16.0",
+    "dotenv": "^17.2.4",
+    "prisma": "^7.3.0",
+    "tsx": "^4.20.0",
+    "typescript": "^5.7.3"
+  }
+}

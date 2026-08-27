@@ -1,0 +1,472 @@
+// El paso activo va en el cian de marca, no en verde: el verde de esta app
+// significa que estas ganando dinero, no que has avanzado un paso.
+.steps {
+  display: flex;
+  gap: var(--space-1);
+  padding: var(--space-3) var(--space-4) var(--space-1);
+
+  // `button` y no `span`: los pasos ya recorridos se pueden volver a abrir
+  // tocandolos. Antes el indicador solo informaba, y para corregir el capital
+  // desde la revision habia que pulsar «Atras» y adivinar cuantas veces.
+  button {
+    flex: 1;
+    text-align: center;
+    font-family: inherit;
+    font-size: 11px;
+    font-weight: 600;
+    letter-spacing: 0.04em;
+    color: var(--text-3);
+    padding: 0 0 8px;
+    background: none;
+    border: 0;
+    border-bottom: 2px solid var(--border-subtle);
+    transition: all 0.2s ease;
+    cursor: pointer;
+
+    // Hacia adelante no se salta: el paso siguiente puede depender de lo que
+    // todavia no se ha rellenado en este.
+    &:disabled {
+      cursor: default;
+    }
+
+    &.on {
+      color: var(--brand-2);
+      border-bottom-color: var(--brand-2);
+    }
+
+    // Ya recorrido: se ve que se puede volver.
+    &.done {
+      color: var(--text-2);
+      border-bottom-color: var(--border-strong);
+    }
+  }
+}
+
+.center {
+  display: grid;
+  place-items: center;
+  min-height: 55vh;
+}
+
+.pad {
+  padding: var(--space-2) var(--space-4) 40px;
+}
+
+.title {
+  font-family: var(--font-display);
+  font-size: 19px;
+  font-weight: 700;
+  letter-spacing: -0.025em;
+  margin: var(--space-2) 0 var(--space-2);
+}
+
+/* El nombre de la estrategia y su manual, en la misma linea. */
+.titlerow {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-2);
+
+  .title {
+    flex: 1;
+    min-width: 0;
+  }
+}
+
+.hint {
+  font-size: 12.5px;
+  color: var(--text-2);
+  line-height: 1.6;
+  margin: 0 0 var(--space-3);
+}
+
+.next {
+  margin-top: var(--space-5);
+}
+
+// El estado vacio del paso 1 usa `ui-empty-state`, que trae sus propios
+// estilos: el bloque `.empty` que habia aqui era una tercera copia de lo mismo.
+
+// ── Tarjetas de estrategia ──
+.cards {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+/* La tarjeta elige la estrategia; el icono de al lado solo la explica. */
+.srow {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+
+  .scard {
+    flex: 1;
+    min-width: 0;
+  }
+}
+
+.scard {
+  width: 100%;
+  text-align: left;
+  background: var(--surface-1);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-md);
+  padding: var(--space-4);
+  color: inherit;
+  font: inherit;
+  cursor: pointer;
+
+  &.risky {
+    border-color: rgba(var(--pnl-down-rgb), 0.35);
+  }
+
+  .line {
+    display: flex;
+    align-items: center;
+    flex-wrap: wrap;
+    gap: 6px 9px;
+    margin-bottom: var(--space-1);
+  }
+
+  h3 {
+    margin: 0;
+    font-family: var(--font-display);
+    font-size: 16px;
+    font-weight: 700;
+    letter-spacing: -0.02em;
+  }
+
+  p {
+    margin: 0;
+    font-size: 12.5px;
+    color: var(--text-2);
+    line-height: 1.5;
+  }
+}
+
+// El boton solo aparece antes de la primera propuesta; despues, el propio bloque
+// de tarjetas ofrece reintentar.
+.reco-cta {
+  margin: 0 0 var(--space-3);
+}
+
+// ── Escalera del preview ──
+.ladder {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+  margin-bottom: var(--space-5);
+}
+
+.lvl {
+  display: grid;
+  grid-template-columns: 1fr auto auto 62px;
+  gap: 9px;
+  align-items: center;
+  padding: 9px 12px;
+  border-radius: var(--radius-sm);
+  background: var(--surface-1);
+  border: 1px solid var(--border-subtle);
+  border-left: 3px solid var(--pnl-up);
+  font-family: var(--font-num);
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+
+  &.sell {
+    border-left-color: var(--pnl-down);
+  }
+
+  // Un nivel que el venue rechazaria se marca aqui, no despues de veinte
+  // rechazos seguidos en produccion.
+  &.bad {
+    border-left-color: var(--pnl-down);
+    background: rgba(var(--pnl-down-rgb), 0.09);
+  }
+
+  .kind {
+    font-size: 11px;
+    color: var(--text-3);
+  }
+  .price {
+    font-weight: 600;
+  }
+  .qty {
+    color: var(--text-2);
+  }
+  .dist {
+    text-align: right;
+    font-size: 11px;
+    color: var(--text-3);
+  }
+  .viol {
+    grid-column: 1 / -1;
+    margin: 5px 0 0;
+    font-size: 11px;
+    color: var(--pnl-down);
+  }
+}
+
+// ── Peor caso ──
+.worst {
+  padding: var(--space-4);
+  border-radius: var(--radius-md);
+  background: var(--surface-1);
+  border: 1px solid var(--border-strong);
+  margin-bottom: var(--space-4);
+
+  h3 {
+    margin: 0 0 var(--space-3);
+    font-family: var(--font-display);
+    font-size: 14px;
+    font-weight: 700;
+    letter-spacing: -0.015em;
+  }
+}
+
+.wgrid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: var(--space-3);
+
+  div {
+    display: flex;
+    flex-direction: column;
+    gap: 3px;
+    min-width: 0;
+  }
+
+  .k {
+    font-size: 10.5px;
+    color: var(--text-3);
+  }
+
+  .v {
+    font-family: var(--font-num);
+    font-size: 15px;
+    font-weight: 600;
+    letter-spacing: -0.015em;
+    font-variant-numeric: tabular-nums;
+
+    &.danger {
+      color: var(--pnl-down);
+    }
+  }
+}
+
+.issues {
+  display: flex;
+  flex-direction: column;
+  gap: 7px;
+  margin-bottom: var(--space-4);
+}
+
+.issue {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--space-2);
+  padding: 10px 12px;
+  border-radius: var(--radius-sm);
+  font-size: 12px;
+  line-height: 1.5;
+  background: rgba(var(--signal-warn-rgb), 0.1);
+  color: var(--signal-warn);
+
+  &.err {
+    background: rgba(var(--pnl-down-rgb), 0.11);
+    color: var(--pnl-down);
+  }
+
+  ion-icon {
+    flex-shrink: 0;
+    font-size: 15px;
+    margin-top: 2px;
+  }
+}
+
+.realwarn {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  padding: var(--space-3) var(--space-3);
+  border-radius: var(--radius-sm);
+  margin-top: var(--space-3);
+  font-size: 12.5px;
+  line-height: 1.5;
+  background: rgba(var(--pnl-down-rgb), 0.12);
+  border: 1px solid rgba(var(--pnl-down-rgb), 0.3);
+  color: var(--pnl-down);
+
+  ion-icon {
+    flex-shrink: 0;
+    font-size: 19px;
+  }
+}
+
+// El motivo por el que el boton de arriba esta apagado.
+//
+// Sustituye a `.blocked`, que solo aparecia cuando la escalera era invalida:
+// faltaba el nombre del bot y el boton se quedaba muerto sin una sola palabra
+// en pantalla. La regla ahora es que un control deshabilitado SIEMPRE explica
+// la causa, y aqui es donde se escribe.
+.why {
+  margin: var(--space-2) 0 0;
+  text-align: center;
+  font-size: 12.5px;
+  line-height: 1.5;
+  color: var(--text-2);
+}
+
+// Avisos que NO bloquean: los WARNING del validador. Ambar y no rojo, porque
+// una configuracion con avisos es perfectamente creable.
+.warn {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  padding: var(--space-3);
+  border-radius: var(--radius-sm);
+  margin-top: var(--space-3);
+  font-size: 12.5px;
+  line-height: 1.5;
+  background: rgba(var(--signal-warn-rgb), 0.1);
+  border: 1px solid rgba(var(--signal-warn-rgb), 0.28);
+  color: var(--signal-warn);
+
+  ion-icon {
+    flex-shrink: 0;
+    font-size: 18px;
+  }
+
+  // Un tope de riesgo SI bloquea: es el mismo que va a producir un 403.
+  &.err {
+    background: rgba(var(--pnl-down-rgb), 0.1);
+    border-color: rgba(var(--pnl-down-rgb), 0.3);
+    color: var(--pnl-down);
+  }
+}
+
+// Nombre del bot e interruptores del ultimo paso. Replican el ritmo de
+// `ui-field` para que el bloque no parezca de otra pantalla.
+.fld {
+  padding: 12px 0;
+}
+
+.fhead {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  margin-bottom: 7px;
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text-1);
+
+  .req {
+    color: var(--brand-2);
+  }
+}
+
+// Separador entre dos campos de la misma tarjeta, igual que hace `ui-field`
+// entre hermanos.
+.fld.sep {
+  border-top: 1px solid var(--border-subtle);
+}
+.fhelp {
+  margin: 6px 0 0;
+  font-size: 11.5px;
+  line-height: 1.45;
+  color: var(--text-3);
+}
+
+.srow {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-3);
+  padding: 12px 0;
+  border-top: 1px solid var(--border-subtle);
+}
+
+.slbl {
+  min-width: 0;
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text-1);
+
+  p {
+    margin: 4px 0 0;
+    font-size: 11.5px;
+    font-weight: 400;
+    line-height: 1.45;
+    color: var(--text-3);
+  }
+}
+
+// Aviso al copiar del ranking. El texto importa mas que el estilo: el sesgo de
+// autoridad hace que una configuracion que "le funciona a otro" se revise menos,
+// justo cuando mas habria que mirarla.
+.copied {
+  display: flex;
+  gap: 10px;
+  padding: 13px;
+  border-radius: var(--radius-sm);
+  margin-bottom: var(--space-3);
+  background: rgba(var(--signal-warn-rgb), 0.1);
+  color: var(--signal-warn);
+  font-size: 12.5px;
+  line-height: 1.55;
+
+  ion-icon {
+    flex-shrink: 0;
+    font-size: 18px;
+    margin-top: 2px;
+  }
+}
+
+.fields {
+  padding: 2px var(--space-4);
+}
+
+/* Un formulario de treinta parametros necesita cabeceras: sin ellas es una
+   columna de casillas indistinguibles. */
+.section {
+  margin: var(--space-5) 0 var(--space-2);
+  font-family: var(--font-display);
+  font-size: 13.5px;
+  font-weight: 700;
+  letter-spacing: -0.015em;
+  color: var(--text-1);
+}
+
+.subsection {
+  margin: var(--space-3) 0 0;
+  padding-top: var(--space-3);
+  border-top: 1px solid var(--border-subtle);
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--text-3);
+}
+
+.adv {
+  margin-top: var(--space-3);
+}
+
+.qprev {
+  margin-bottom: var(--space-4);
+}
+
+/* ── Pantallas grandes ───────────────────────────────────────────────────
+   El asistente se queda estrecho a proposito: es un formulario, y un campo
+   de 1000 px de ancho no se rellena mejor. Solo la escalera se ensancha. */
+@media (min-width: 900px) {
+  .cards {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    align-items: start;
+  }
+
+  .wgrid {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+  }
+}

@@ -1,0 +1,512 @@
+<ion-header>
+  <ion-toolbar>
+    <ion-buttons slot="start">
+      <ion-back-button [defaultHref]="bot() ? '/bots/' + bot()!.id : '/tabs/markets'" />
+    </ion-buttons>
+    <ion-title>
+      {{ market()?.base ?? symbol() }}<span class="quote">/{{ market()?.quote ?? '' }}</span>
+    </ion-title>
+    <ion-buttons slot="end">
+      <ion-button
+        (click)="toggleFavourite()"
+        [attr.aria-label]="isFavourite() ? 'Quitar de favoritos' : 'Añadir a favoritos'"
+      >
+        <ion-icon
+          slot="icon-only"
+          [name]="isFavourite() ? 'star' : 'star-outline'"
+          [class.fav-on]="isFavourite()"
+        />
+      </ion-button>
+      <ion-button (click)="openOptions()" aria-label="Opciones del gráfico">
+        <ion-icon slot="icon-only" name="ellipsis-vertical" />
+      </ion-button>
+    </ion-buttons>
+  </ion-toolbar>
+</ion-header>
+
+<ion-content>
+  <!-- ═══ De dónde vengo ═══
+       Se entra desde un bot y la pantalla no deja de decirlo: sin esta banda,
+       las líneas del gráfico serían rayas sin dueño. -->
+  @if (bot(); as b) {
+    <div class="botbar" (click)="goToBot(b)">
+      <div class="who">
+        <span class="name">{{ b.name }}</span>
+        <span class="meta">
+          <span class="txt">
+            {{ strategyLabel(b.strategy) }}
+            @if (b.cycle) {
+              · Ciclo #{{ b.cycle.seq }}
+            }
+          </span>
+          <!-- Ambar, igual que en la lista y en el detalle. Antes esta era la
+               unica pantalla donde «simulación» salia en cian: el aviso mas
+               caro de la app pintado del color de los enlaces. -->
+          @if (b.dryRun) {
+            <ui-badge size="sm" tone="warn" caps>simulación</ui-badge>
+          }
+        </span>
+      </div>
+      <ui-status-pill [status]="b.status" />
+    </div>
+  }
+
+  <!-- ═══ Precio ═══ -->
+  <div class="head">
+    <div class="last">
+      @if (ticker(); as t) {
+        <div
+          class="big num"
+          [class]="
+            'c-' +
+            (t.changePct24h === null ? 'medium' : +t.changePct24h >= 0 ? 'success' : 'danger')
+          "
+        >
+          {{ price(t.last, decimals()) }}
+        </div>
+        <div
+          class="chg num"
+          [class]="
+            'c-' +
+            (t.changePct24h === null ? 'medium' : +t.changePct24h >= 0 ? 'success' : 'danger')
+          "
+        >
+          {{ signed(t.change24h, decimals()) }}&nbsp;&nbsp;{{ pct(t.changePct24h) }}
+        </div>
+      } @else if (candles().length) {
+        <div class="big num">{{ price(candles()[candles().length - 1].c, decimals()) }}</div>
+        <div class="chg num c-medium">sin datos de 24 h</div>
+      } @else {
+        <div class="big num c-medium">—</div>
+      }
+    </div>
+
+    @if (bot(); as b) {
+      <!-- Con bot, lo que importa no son los máximos del día sino dónde está la
+           posición y a qué distancia queda la liquidación. -->
+      <div class="stats">
+        <ui-stat label="Precio medio" [value]="price(b.averageEntry, decimals())" />
+        <ui-stat
+          label="PnL del bot"
+          [value]="signed(+b.realizedPnl + +b.unrealizedPnl)"
+          [tone]="+b.realizedPnl + +b.unrealizedPnl >= 0 ? 'success' : 'danger'"
+        />
+        <ui-stat label="Posición" [value]="qty(b.positionQty)" />
+      </div>
+    } @else if (ticker(); as t) {
+      <div class="stats">
+        <ui-stat label="Alto 24 h" [value]="price(t.high24h, decimals())" />
+        <ui-stat label="Bajo 24 h" [value]="price(t.low24h, decimals())" />
+        <ui-stat label="Vol 24 h" [value]="compact(t.volume24h)" />
+      </div>
+    }
+  </div>
+
+  <!-- ═══ Intervalos ═══
+       Salen de GET /market-data/capabilities: esta plantilla no lleva ninguna
+       lista escrita a mano. -->
+  <div class="ivbar">
+    <!-- Solo visible en apaisado, donde la cabecera —y con ella el boton de
+         volver y el nombre del par— se esconde para dar la pantalla al
+         grafico. En iOS no hay gesto de volver: sin esto no habria salida. -->
+    <button type="button" class="iv land-only back" (click)="goBack()" aria-label="Volver">
+      <ion-icon name="chevron-back-outline" />
+      <span class="pair">{{ market()?.base ?? symbol() }}</span>
+    </button>
+    @for (iv of quickIntervals(); track iv) {
+      <button type="button" class="iv" [class.on]="iv === interval()" (click)="changeInterval(iv)">
+        {{ intervalLabel(iv) }}
+      </button>
+    }
+    <span class="grow"></span>
+    <button type="button" class="iv icon" (click)="openOptions()" aria-label="Más opciones">
+      <ion-icon name="options-outline" />
+    </button>
+  </div>
+
+  <!-- ═══ Gráfico ═══ -->
+  <div class="chartbox">
+    @if (readout(); as r) {
+      <!-- Leyenda FIJA, no un globo flotante: en un móvil el dedo tapa el globo
+           justo donde están los valores que se quieren leer. -->
+      <div class="ohlc num">
+        <span
+          >A <b>{{ price(r.open, decimals()) }}</b></span
+        >
+        <span
+          >M <b>{{ price(r.high, decimals()) }}</b></span
+        >
+        <span
+          >m <b>{{ price(r.low, decimals()) }}</b></span
+        >
+        <span
+          >C <b [class]="r.up ? 'c-success' : 'c-danger'">{{ price(r.close, decimals()) }}</b></span
+        >
+        @if (r.volume) {
+          <span class="hide-sm"
+            >Vol <b>{{ compact(r.volume) }}</b></span
+          >
+        }
+      </div>
+    } @else {
+      <div class="ohlc num muted">
+        {{ symbol() }} · {{ intervalLabel(interval()) }} · {{ venueLabel(venue()) }}
+      </div>
+    }
+
+    @if (chartError()) {
+      <div class="chart-fallback">
+        <ion-icon name="warning-outline" />
+        <h3>No se han podido cargar las velas</h3>
+        <p>{{ chartError() }}</p>
+        <ion-button size="small" fill="outline" (click)="loadCandles()">Reintentar</ion-button>
+      </div>
+    } @else {
+      <app-price-chart
+        [candles]="candles()"
+        [liveBar]="liveBar()"
+        [kind]="kind()"
+        [priceDecimals]="decimals()"
+        [showVolume]="showVolume()"
+        [lines]="visibleLines()"
+        [markers]="visibleMarkers()"
+        [fitSpan]="bot() ? overlaySpan() : null"
+        [scaleKey]="scaleKey()"
+        (needHistory)="loadMoreHistory()"
+      />
+
+      <!--
+        Aviso del borde izquierdo. Tres estados y NINGUNO es un error, por eso no
+        pasa por `chartError`: ese sustituye el gráfico entero por un mensaje con
+        «Reintentar», y las velas que hay en pantalla están bien.
+      -->
+      @if (loadingHistory()) {
+        <div class="histnota" aria-live="polite">
+          <ion-spinner name="dots" />
+        </div>
+      } @else if (noMoreHistory()) {
+        <div class="histnota">{{ venueLabel(venue()) }} no sirve más histórico de {{ intervalLabel(interval()) }}</div>
+      } @else if (historyCapped()) {
+        <div class="histnota">Máximo en pantalla. Usa un intervalo mayor para ver más atrás</div>
+      }
+    }
+  </div>
+
+  <!-- ═══ La escalera no se ha podido cargar ═══
+       Va aquí y no en un toast: sin este aviso la pantalla se ve EXACTAMENTE
+       igual que la de un mercado sin bot, y se lee como «este bot no tiene
+       órdenes» cuando lo que pasa es que no hemos podido preguntarlo.
+
+       El texto distingue los dos casos, y no es un matiz: si ya hay escalera
+       pintada, lo que falló fue un refresco y las líneas que se ven son buenas
+       aunque viejas. Decir ahí «no las está pintando» sería mentir al revés, y
+       en la dirección peligrosa: invitaría a ignorar unas líneas correctas. -->
+  @if (botError(); as fallo) {
+    <div class="botfail">
+      <ui-notice tone="warn" icon="warning-outline">
+        @if (bot()) {
+          Las órdenes que ves son las de la última lectura correcta: no se han podido actualizar.
+        } @else {
+          No se han podido cargar las órdenes de este bot, así que el gráfico no las está pintando.
+        }
+        {{ fallo }}
+      </ui-notice>
+      <ion-button size="small" fill="outline" (click)="retryBot()">Reintentar</ion-button>
+    </div>
+  }
+
+  <!-- ═══ Capas ═══
+       Leyenda e interruptor a la vez: explica qué significa cada color y
+       permite apagarlo, en la misma fila. -->
+  @if (bot()) {
+    <div class="legend">
+      <button type="button" [class.off]="!layers().ladder" (click)="toggleLayer('ladder')">
+        <i class="sw buy"></i>Escalera
+      </button>
+      <!-- Los niveles que el bot TIENE PREVISTO colocar y todavía no ha puesto.
+           Son los que dicen hasta dónde aguanta si el precio sigue en contra, y
+           hasta ahora no se veían en ninguna pantalla. Se apagan con la
+           escalera: sin las órdenes reales delante no significan nada. -->
+      <button
+        type="button"
+        class="sub"
+        [class.off]="!layers().ladder || !layers().planned"
+        [disabled]="!layers().ladder"
+        (click)="toggleLayer('planned')"
+      >
+        <i class="sw plan"></i>Previstas
+      </button>
+      <button type="button" [class.off]="!layers().fills" (click)="toggleLayer('fills')">
+        <i class="tri"></i>Ejecuciones
+      </button>
+      <button
+        type="button"
+        [class.off]="!layers().liquidation"
+        (click)="toggleLayer('liquidation')"
+      >
+        <i class="sw liq"></i>Liquidación
+      </button>
+
+      <!-- Órdenes vivas que no se han podido situar: una orden a mercado sin
+           ejecutar todavía no tiene precio al que dibujarla. Se dice en vez de
+           desaparecer, que es lo que hacía antes. -->
+      @if (overlaySkipped(); as n) {
+        <span
+          class="warnpill"
+          [title]="
+            n === 1
+              ? 'Hay una orden a mercado sin precio todavía: no se puede situar en el gráfico.'
+              : 'Hay órdenes a mercado sin precio todavía: no se pueden situar en el gráfico.'
+          "
+        >
+          {{ n }} sin precio
+        </span>
+      }
+
+      <!-- El ledger topa en FILL_LIMIT. Sin decirlo, un gráfico que empieza a
+           tener flechas a mitad se lee como «aquí antes no operó», y en un
+           market maker esas doscientas ejecuciones pueden ser cuatro minutos. -->
+      @if (fillsTruncated()) {
+        <span class="warnpill" title="Solo se pintan las últimas ejecuciones del bot.">
+          últimas {{ overlayFills().length }}
+        </span>
+      }
+
+      @if (liqDistance(); as d) {
+        <span class="liqdist num" [class.warn]="d < 25" [class.danger]="d < 10">
+          a {{ money(d, 1) }} %
+        </span>
+      }
+    </div>
+  }
+
+  <!-- ═══ Pestañas ═══ -->
+  <ion-toolbar class="tabs">
+    <ion-segment class="seg-tabs" [value]="tab()" (ionChange)="tab.set($any($event.detail.value))">
+      <ion-segment-button value="info">Información</ion-segment-button>
+      <ion-segment-button value="bots">Mis bots</ion-segment-button>
+      <ion-segment-button value="venues">Plataformas</ion-segment-button>
+    </ion-segment>
+  </ion-toolbar>
+
+  <div class="pad">
+    @if (loading()) {
+      <div class="center"><ion-spinner name="crescent" /></div>
+    } @else if (tab() === 'info') {
+      @if (market(); as m) {
+        <div class="spec">
+          <span>Tick de precio</span><b class="num">{{ m.tick_size }}</b>
+        </div>
+        <div class="spec">
+          <span>Paso de cantidad</span><b class="num">{{ m.step_size }}</b>
+        </div>
+        <div class="spec">
+          <span>Mínimo nocional</span><b class="num">{{ m.min_notional ?? '—' }}</b>
+        </div>
+        <div class="spec">
+          <span>Apalancamiento máximo</span><b class="num">{{ m.max_leverage }}×</b>
+        </div>
+        <div class="spec last">
+          <span>Intervalos disponibles</span><b class="num">{{ intervals().length }}</b>
+        </div>
+      } @else {
+        <ui-notice tone="info">
+          No se ha podido leer la ficha de este mercado. El gráfico funciona igual; solo se pintan
+          menos decimales.
+        </ui-notice>
+      }
+    } @else if (tab() === 'bots') {
+      @if (bots().length) {
+        @for (b of bots(); track b.id) {
+          <div class="botrow" (click)="goToBot(b)">
+            <div class="who">
+              <span class="name">{{ b.name }}</span>
+              <span class="meta">{{ strategyLabel(b.strategy) }} · {{ b.leverage }}×</span>
+            </div>
+            <ui-stat
+              label="PnL"
+              [value]="signed(+b.realizedPnl + +b.unrealizedPnl)"
+              [tone]="+b.realizedPnl + +b.unrealizedPnl >= 0 ? 'success' : 'danger'"
+            />
+            <ui-status-pill [status]="b.status" />
+          </div>
+        }
+      } @else {
+        <ui-notice tone="info">
+          Todavía no tienes ningún bot en este par. Puedes empezar en simulación: precios reales y
+          cero órdenes enviadas.
+        </ui-notice>
+      }
+    } @else {
+      @if (elsewhere().length) {
+        <p class="hint">
+          El mismo activo en las demás plataformas. El precio no es idéntico: cada DEX tiene su
+          propio libro.
+        </p>
+        @for (t of elsewhere(); track t.venue + t.symbol) {
+          <div class="vrow" (click)="openMarket(t.venue, t.symbol)">
+            <span class="venue" [attr.data-v]="t.venue">{{ venueLabel(t.venue) }}</span>
+            <span class="sym">{{ t.symbol }}</span>
+            <div class="px">
+              <b class="num">{{ price(t.last, decimals()) }}</b>
+              <em
+                class="num"
+                [class]="
+                  'c-' +
+                  (t.changePct24h === null ? 'medium' : +t.changePct24h >= 0 ? 'success' : 'danger')
+                "
+              >
+                {{ pct(t.changePct24h) }}
+              </em>
+            </div>
+          </div>
+        }
+      } @else {
+        <ui-notice tone="info">
+          Este activo solo cotiza en {{ venueLabel(venue()) }} de las plataformas que soportamos.
+        </ui-notice>
+      }
+    }
+  </div>
+</ion-content>
+
+<!-- ═══ Ajustes del gráfico ═══
+     Hoja propia, no una `ion-action-sheet`: con quince intervalos aquella
+     crecía hasta tapar la pantalla entera y se quedaba sin salida visible.
+     Esta se cierra tocando fuera, arrastrando hacia abajo, con el aspa o con
+     el botón de abajo — cuatro salidas, ninguna escondida. -->
+<ion-modal
+  class="opts"
+  [isOpen]="optionsOpen()"
+  [initialBreakpoint]="0.72"
+  [breakpoints]="optionBreakpoints"
+  handleBehavior="cycle"
+  (ionModalDidDismiss)="optionsOpen.set(false)"
+>
+  <ng-template>
+    <ion-content class="optbody">
+      <header class="opthead">
+        <h2>Ajustes del gráfico</h2>
+        <button type="button" class="x" (click)="closeOptions()" aria-label="Cerrar">
+          <ion-icon name="close-outline" />
+        </button>
+      </header>
+
+      <!-- ── Intervalo ──
+           Salen los quince, no solo los que sirve la plataforma: esconder los
+           demás deja al usuario creyendo que la app no sabe hacerlo, cuando el
+           que no puede es el venue. Los que no hay van apagados y dicen dónde
+           sí los hay. -->
+      <section>
+        <div class="lbl">Intervalo</div>
+        <div class="ivgrid">
+          @for (iv of intervalOptions(); track iv.value) {
+            <button
+              type="button"
+              class="chip"
+              [class.on]="iv.value === interval()"
+              [disabled]="!iv.ok"
+              [attr.title]="iv.hint"
+              [attr.aria-label]="iv.hint"
+              (click)="pickInterval(iv.value)"
+            >
+              {{ iv.label }}
+            </button>
+          }
+        </div>
+        @if (missingCount(); as missing) {
+          <p class="note">
+            {{ venueLabel(venue()) }} no sirve {{ missing }} de los {{ totalIntervals }} intervalos;
+            salen apagados.
+          </p>
+        }
+      </section>
+
+      <!-- ── Tipo de serie ── -->
+      <section>
+        <div class="lbl">Tipo de gráfico</div>
+        <div class="duo">
+          <button
+            type="button"
+            class="chip wide"
+            [class.on]="kind() === 'candles'"
+            (click)="setKind('candles')"
+          >
+            Velas
+          </button>
+          <button
+            type="button"
+            class="chip wide"
+            [class.on]="kind() === 'bars'"
+            (click)="setKind('bars')"
+          >
+            Barras
+          </button>
+        </div>
+      </section>
+
+      <!-- ── Escala de precios ──
+           Además del gesto sobre el eje y del botón AUTO del propio gráfico:
+           esta fila es la que explica que el comportamiento existe a quien
+           nunca llegue a arrastrar el eje. -->
+      <section>
+        <button
+          type="button"
+          class="switch"
+          (click)="resetChartScale()"
+          [disabled]="!chartScaled()"
+          [attr.aria-pressed]="!chartScaled()"
+        >
+          <span class="who">
+            <b>Escala automática</b>
+            <em>
+              @if (chartScaled()) {
+                Has ajustado la escala a mano. Toca para volver al encuadre automático.
+              } @else {
+                El gráfico encuadra solo. Arrastra el eje de precios para ajustarlo tú.
+              }
+            </em>
+          </span>
+          <i class="track" [class.on]="!chartScaled()"><i class="knob"></i></i>
+        </button>
+      </section>
+
+      <!-- ── Volumen ── -->
+      <section>
+        <button
+          type="button"
+          class="switch"
+          (click)="toggleVolume()"
+          [attr.aria-pressed]="showVolume()"
+        >
+          <span class="who">
+            <b>Volumen</b>
+            <em>La banda de barras bajo el precio.</em>
+          </span>
+          <i class="track" [class.on]="showVolume()"><i class="knob"></i></i>
+        </button>
+      </section>
+
+      <ion-button expand="block" fill="outline" (click)="closeOptions()">Cerrar</ion-button>
+    </ion-content>
+  </ng-template>
+</ion-modal>
+
+<!-- ═══ Acciones ═══ -->
+<ion-toolbar class="cta">
+  @if (bot(); as b) {
+    <div class="cta-row">
+      <ion-button expand="block" fill="outline" (click)="goToBot(b)">Ver el bot</ion-button>
+      <ion-button expand="block" [routerLink]="['/bots', b.id]">Acciones</ion-button>
+    </div>
+  } @else {
+    <div class="cta-row">
+      @if (bots().length) {
+        <ion-button expand="block" fill="outline" (click)="tab.set('bots')">
+          Ver mis {{ bots().length }} {{ bots().length === 1 ? 'bot' : 'bots' }}
+        </ion-button>
+      }
+      <ion-button expand="block" (click)="createBot()">Crear bot aquí</ion-button>
+    </div>
+  }
+</ion-toolbar>

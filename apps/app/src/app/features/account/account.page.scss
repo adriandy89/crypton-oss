@@ -1,0 +1,215 @@
+.pad {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+}
+
+.who {
+  display: flex;
+  align-items: center;
+  gap: 13px;
+  padding: var(--space-4);
+  cursor: pointer;
+  /* El unico sitio de esta pantalla con color de marca: la identidad. */
+  background:
+    radial-gradient(130% 130% at 0% 0%, rgba(var(--brand-rgb), 0.24), transparent 62%),
+    radial-gradient(100% 100% at 100% 20%, rgba(var(--brand-2-rgb), 0.13), transparent 60%),
+    var(--surface-1);
+
+  .av {
+    flex-shrink: 0;
+    width: 48px;
+    height: 48px;
+    border-radius: var(--radius-md);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 16px;
+    font-weight: 700;
+    color: #fff;
+    background: var(--brand-gradient);
+  }
+
+  .id {
+    flex-grow: 1;
+    display: flex;
+    flex-direction: column;
+    gap: 3px;
+    min-width: 0;
+  }
+
+  h2 {
+    margin: 0;
+    font-size: 16px;
+    font-weight: 700;
+    letter-spacing: -0.02em;
+  }
+
+  p {
+    margin: 0;
+    font-size: 12px;
+    color: var(--text-2);
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+}
+
+.chev {
+  flex-shrink: 0;
+  font-size: 17px;
+  color: var(--text-3);
+}
+
+/* Encabezado de seccion, entre tarjetas. Separa la SIMULACION de las
+   conexiones de verdad, que es una frontera que la pantalla tiene que hacer
+   evidente: arriba hay credenciales que mueven dinero y abajo no hay ninguna. */
+.sec {
+  margin: var(--space-5) 0 var(--space-2);
+  font-size: 13px;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  text-transform: uppercase;
+  color: var(--text-3);
+}
+
+/* El aviso de «sin conexiones» vive dentro de una tarjeta `flush`: se pone su
+   propio relleno, y va en la misma escala que el de las filas de debajo para
+   que el texto no baile al aparecer la primera conexion. */
+.intro {
+  padding: var(--space-4) var(--space-4) var(--space-3);
+}
+
+.conn {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: var(--space-4) var(--space-4) 10px;
+
+  .ico {
+    flex-shrink: 0;
+    font-size: 20px;
+    color: var(--pnl-up);
+
+    &.bad {
+      color: var(--pnl-down);
+    }
+  }
+
+  .id {
+    flex-grow: 1;
+    display: flex;
+    flex-direction: column;
+    gap: 3px;
+    min-width: 0;
+  }
+
+  h4 {
+    margin: 0;
+    font-size: 14px;
+    font-weight: 700;
+    line-height: 1.35;
+    letter-spacing: -0.01em;
+  }
+
+  /* La referencia publica de la cuenta es un hash sin espacios: sin punto de
+     corte se salia por el lado derecho de la tarjeta. */
+  p {
+    margin: 0;
+    font-size: 11px;
+    line-height: 1.4;
+    color: var(--text-3);
+    overflow-wrap: anywhere;
+  }
+
+  .err {
+    color: var(--pnl-down);
+  }
+
+  // El saldo se resalta sobre el resto de la ficha: es la unica cifra de esta
+  // fila que cambia sola, y la razon por la que se entra a mirarla.
+  .bal {
+    font-weight: 700;
+    color: var(--text-1);
+  }
+}
+
+/* Los dos botones de la ficha. `fill="clear"` de Ionic ya trae 8 px de relleno
+   propio, asi que el contenedor le descuenta esos 8 px al lado: con 16 px a
+   pelo el rotulo «Reverificar» quedaba 8 px mas adentro que el nombre del
+   exchange que hay justo encima, y las dos fichas se leian desalineadas. */
+.acts {
+  display: flex;
+  gap: var(--space-1);
+  padding: 0 var(--space-2) var(--space-2);
+  border-bottom: 1px solid var(--border-subtle);
+}
+
+.add {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: var(--space-4);
+  min-height: 52px;
+  color: var(--brand-2);
+  font-size: 14px;
+  font-weight: 700;
+  cursor: pointer;
+
+  ion-icon {
+    font-size: 18px;
+  }
+}
+
+/* Cerrar sesion no destruye nada, pero saca al usuario de la app: se lee como
+   accion de riesgo bajo, no como el boton primario de la pantalla. */
+.out {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 9px;
+  width: 100%;
+  min-height: 48px;
+  padding: 14px;
+  border: 1px solid rgba(var(--pnl-down-rgb), 0.22);
+  border-radius: var(--radius-md);
+  background: rgba(var(--pnl-down-rgb), 0.09);
+  color: var(--pnl-down);
+  font-family: var(--font-ui);
+  font-size: 14px;
+  font-weight: 700;
+  cursor: pointer;
+
+  ion-icon {
+    font-size: 18px;
+  }
+}
+
+.legal {
+  margin: 2px 0 0;
+  padding: 0 10px;
+  font-size: 11px;
+  line-height: 1.55;
+  color: var(--text-3);
+  text-align: center;
+}
+
+/* La fila de la lente de red. El titulo y el subtitulo van dentro del propio
+   `ion-toggle` para que tocar cualquier parte del texto lo conmute: con el
+   texto fuera, solo el interruptor respondia y en un movil eso es un objetivo
+   de doce pixeles. */
+.net-t {
+  margin: 0;
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--text-1);
+}
+
+.net-s {
+  margin: 3px 0 0;
+  font-size: 12px;
+  line-height: 1.4;
+  color: var(--text-2);
+  /* `ion-toggle` no ajusta el texto por defecto y el subtitulo es largo. */
+  white-space: normal;
+}

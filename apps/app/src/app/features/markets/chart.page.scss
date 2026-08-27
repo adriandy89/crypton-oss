@@ -1,0 +1,521 @@
+/* Pantalla de datos: en un monitor aprovecha el ancho. Ver global.scss. */
+:host {
+  --page-max: var(--content-wide);
+  /* La altura del gráfico vive en una variable para poder cambiarla desde una
+     media query sin tocar el componente. */
+  --chart-h: 46vh;
+}
+
+ion-title .quote {
+  color: var(--text-3);
+  font-weight: 600;
+}
+
+ion-icon.fav-on {
+  color: var(--signal-warn);
+}
+
+/* ── De dónde vengo ── */
+.botbar {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  padding: 9px var(--space-4);
+  background: var(--surface-2);
+  cursor: pointer;
+
+  .who {
+    flex-grow: 1;
+    min-width: 0;
+  }
+
+  .name {
+    display: block;
+    font-size: 13.5px;
+    font-weight: 700;
+    letter-spacing: -0.015em;
+  }
+
+  .meta {
+    display: flex;
+    align-items: center;
+    flex-wrap: wrap;
+    gap: 4px 6px;
+    margin-top: 3px;
+    font-size: 10.5px;
+    line-height: 1.4;
+    color: var(--text-3);
+  }
+
+  .meta .txt {
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+}
+
+/* ── Precio ── */
+.head {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--space-4);
+  padding: 10px var(--space-4) 6px;
+}
+
+.last {
+  flex-grow: 1;
+  min-width: 0;
+}
+
+.big {
+  font-size: 28px;
+  font-weight: 700;
+  letter-spacing: -0.03em;
+  line-height: 1.1;
+}
+
+.chg {
+  margin-top: 4px;
+  font-size: 12.5px;
+  font-weight: 700;
+}
+
+.stats {
+  flex-shrink: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding-top: 3px;
+
+  ui-stat {
+    flex-direction: row;
+    align-items: baseline;
+    gap: var(--space-2);
+    justify-content: space-between;
+  }
+}
+
+/* ── Intervalos ──
+   44 px de alto: es el mínimo táctil que la propia app ya impone a
+   `ion-segment-button`, y una barra de intervalos es justo donde se toca mal. */
+.ivbar {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  padding: 0 var(--space-4);
+  overflow-x: auto;
+  scrollbar-width: none;
+
+  &::-webkit-scrollbar {
+    display: none;
+  }
+
+  .grow {
+    flex-grow: 1;
+  }
+}
+
+.iv {
+  flex-shrink: 0;
+  min-height: 44px;
+  min-width: 42px;
+  padding: 0 11px;
+  display: grid;
+  place-items: center;
+  border: 0;
+  border-radius: var(--radius-xs);
+  background: transparent;
+  color: var(--text-2);
+  font-family: var(--font-ui);
+  font-size: 12.5px;
+  font-weight: 600;
+
+  &.on {
+    color: var(--text-1);
+    background: var(--surface-3);
+  }
+
+  &.icon ion-icon {
+    font-size: 18px;
+  }
+
+  /* El boton de volver de apaisado: oculto en vertical, donde ya hay cabecera. */
+  &.land-only {
+    display: none;
+  }
+
+  &.back {
+    gap: 2px;
+    grid-auto-flow: column;
+    padding-inline: 6px 12px;
+    color: var(--text-1);
+
+    ion-icon {
+      font-size: 20px;
+    }
+
+    .pair {
+      font-family: var(--font-display);
+      font-size: 13px;
+      font-weight: 700;
+      letter-spacing: -0.015em;
+    }
+  }
+}
+
+/* ── Gráfico ── */
+.chartbox {
+  position: relative;
+  padding: 0 var(--space-4);
+}
+
+/* Aviso del borde IZQUIERDO del gráfico: cargando más pasado, se acabó el
+   histórico del venue, o se llegó a nuestro techo.
+
+   Va abajo a la izquierda, en la esquina opuesta al botón AUTO del componente,
+   para que los dos puedan convivir. Y es deliberadamente discreto: ninguno de
+   los tres es un fallo, así que nada de tratarlos como `chartError`, que tapa
+   el gráfico entero. */
+.histnota {
+  position: absolute;
+  left: calc(var(--space-4) + 6px);
+  bottom: 26px;
+  z-index: 3;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  max-width: 60%;
+  padding: 3px 7px;
+  border-radius: var(--radius-xs);
+  background: color-mix(in srgb, var(--ion-background-color) 82%, transparent);
+  color: var(--ion-color-medium);
+  font-size: 10px;
+  line-height: 1.25;
+  pointer-events: none;
+
+  ion-spinner {
+    width: 14px;
+    height: 14px;
+  }
+}
+
+/* Leyenda FIJA arriba del gráfico. En un móvil no hay hover: la cruceta se
+   activa con pulsación larga, y un globo flotante lo tapa el propio dedo. */
+.ohlc {
+  display: flex;
+  gap: 9px;
+  padding: 2px 0 4px;
+  font-size: 9.5px;
+  color: var(--text-3);
+  white-space: nowrap;
+  overflow: hidden;
+
+  b {
+    font-weight: 600;
+    color: var(--text-2);
+  }
+
+  &.muted {
+    color: var(--text-3);
+  }
+}
+
+.chart-fallback {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: var(--space-2);
+  height: var(--chart-h);
+  text-align: center;
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-sm);
+
+  ion-icon {
+    font-size: 30px;
+    color: var(--pnl-down);
+  }
+
+  h3 {
+    margin: 0;
+    font-family: var(--font-display);
+    font-size: 14px;
+    font-weight: 700;
+    letter-spacing: -0.02em;
+  }
+
+  p {
+    margin: 0;
+    max-width: 34ch;
+    font-size: 11.5px;
+    line-height: 1.5;
+    color: var(--text-2);
+  }
+}
+
+/* ── Capas ──
+   El aviso de que la escalera no se ha podido pedir. Ocupa el sitio de la
+   leyenda, que es justo donde el usuario mira para saber qué hay pintado. */
+.botfail {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  padding: 6px var(--space-4);
+
+  ui-notice {
+    flex-grow: 1;
+    min-width: 0;
+  }
+
+  ion-button {
+    flex-shrink: 0;
+    margin: 0;
+  }
+}
+
+/* La leyenda de capas (`.legend`) vive en global.scss: esta hoja topa con el
+   presupuesto de 6 kB por componente. */
+
+ion-toolbar.tabs {
+  --padding-start: 0;
+  --padding-end: 0;
+  --min-height: 44px;
+  margin-top: var(--space-1);
+}
+
+/* ── Contenido de las pestañas ── */
+.pad {
+  padding: var(--space-2) var(--space-4) 24px;
+}
+
+.hint {
+  margin: 0 0 var(--space-2);
+  font-size: 12px;
+  line-height: 1.55;
+  color: var(--text-3);
+}
+
+.spec {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  min-height: 40px;
+  border-bottom: 1px solid rgba(46, 43, 82, 0.5);
+  font-size: 13px;
+
+  span {
+    color: var(--text-2);
+  }
+
+  &.last {
+    border-bottom: 0;
+  }
+}
+
+.botrow,
+.vrow {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  min-height: 58px;
+  border-bottom: 1px solid rgba(46, 43, 82, 0.5);
+  cursor: pointer;
+
+  &:last-child {
+    border-bottom: 0;
+  }
+}
+
+.botrow .who,
+.vrow .sym {
+  flex-grow: 1;
+  min-width: 0;
+}
+
+.botrow {
+  .name {
+    display: block;
+    font-size: 13.5px;
+    font-weight: 700;
+    letter-spacing: -0.015em;
+  }
+
+  .meta {
+    display: block;
+    margin-top: 2px;
+    font-size: 10.5px;
+    color: var(--text-3);
+  }
+}
+
+.vrow {
+  .sym {
+    font-size: 12.5px;
+    color: var(--text-2);
+  }
+
+  .px {
+    text-align: end;
+
+    b {
+      display: block;
+      font-size: 13px;
+      font-weight: 700;
+    }
+
+    em {
+      display: block;
+      margin-top: 2px;
+      font-size: 10.5px;
+      font-weight: 700;
+      font-style: normal;
+    }
+  }
+}
+
+/* ── Acciones ── */
+ion-toolbar.cta {
+  --background: var(--surface-bar);
+  --border-width: 1px 0 0 0;
+  --border-color: var(--border-subtle);
+  --padding-top: var(--space-3);
+  --padding-bottom: var(--space-3);
+  /* La barra flota sobre el borde inferior de la pantalla; sin esto se mete
+     bajo la barra de gestos de Android. */
+  padding-bottom: env(safe-area-inset-bottom);
+}
+
+.cta-row {
+  display: flex;
+  gap: 10px;
+  padding: 0 var(--space-4);
+
+  ion-button {
+    flex: 1;
+    margin: 0;
+  }
+}
+
+/* ═══════════════════════════════════════════════════════════════
+   Móviles pequeños: 360×640 es donde esto se rompe primero.
+   Nada se recorta — lo que cede es la altura del gráfico, nunca los
+   controles ni la cifra del precio.
+   ═══════════════════════════════════════════════════════════════ */
+@media (max-height: 700px) {
+  :host {
+    --chart-h: 38vh;
+  }
+
+  .big {
+    font-size: 24px;
+  }
+
+  .head {
+    padding-top: 6px;
+  }
+}
+
+@media (max-width: 370px) {
+  .ohlc .hide-sm {
+    display: none;
+  }
+
+  .stats ui-stat {
+    font-size: 11px;
+  }
+}
+
+/* ═══════════════════════════════════════════════════════════════
+   APAISADO — es donde de verdad se mira un gráfico en un móvil.
+   El chrome se aparta y la pantalla se la queda el gráfico.
+   ═══════════════════════════════════════════════════════════════ */
+@media (orientation: landscape) and (max-height: 500px) {
+  /* Lo que queda tras el chrome que SI se ve en apaisado: banda del bot (40),
+     precio (40), intervalos (44), leyenda OHLC (18) y capas (34) = 176 px, mas
+     el margen seguro inferior. Con 132 el grafico desbordaba 44 px y la pagina
+     hacia scroll justo en la vista que existe para no hacerlo. */
+  :host {
+    --chart-h: calc(100vh - 180px - env(safe-area-inset-bottom));
+  }
+
+  /* La cabecera desaparece: en 390 px de alto, 52 px de barra son un 13 % de
+     la pantalla gastados en repetir un nombre que ya está en el gráfico. El
+     boton de volver se muda a la barra de intervalos. */
+  ion-header {
+    display: none;
+  }
+
+  .iv.land-only {
+    display: grid;
+  }
+
+  .botbar {
+    padding-top: 4px;
+    padding-bottom: 4px;
+    min-height: 40px;
+  }
+
+  /* El precio y las estadísticas se ponen en una sola línea. */
+  .head {
+    align-items: center;
+    padding: 4px var(--space-4) 2px;
+  }
+
+  .big {
+    font-size: 20px;
+  }
+
+  .chg {
+    display: inline-block;
+    margin-top: 0;
+    margin-inline-start: var(--space-3);
+    font-size: 11.5px;
+  }
+
+  .stats {
+    flex-direction: row;
+    gap: var(--space-5);
+    padding-top: 0;
+  }
+
+  /* Las pestañas, su contenido y la barra de acciones no caben ni tienen
+     sentido aquí: en apaisado se viene a mirar el gráfico, no a leer el tick
+     del mercado ni a crear un bot. Al girar de vuelta reaparecen. */
+  ion-toolbar.tabs,
+  ion-toolbar.cta,
+  .pad {
+    display: none;
+  }
+
+  /* Márgenes seguros laterales: en horizontal la muesca se come el borde y un
+     gráfico a sangre se metería debajo. */
+  .chartbox,
+  .ivbar,
+  .legend,
+  .head {
+    padding-inline: max(var(--space-4), env(safe-area-inset-left));
+  }
+}
+
+/* En un monitor hay altura de sobra: el gráfico crece y deja de ser el
+   recorte apretado que necesita un móvil. */
+@media (min-width: 768px) {
+  :host {
+    --chart-h: 52vh;
+  }
+
+  .big {
+    font-size: 34px;
+  }
+
+  .stats {
+    flex-direction: row;
+    gap: var(--space-6);
+
+    ui-stat {
+      flex-direction: column;
+      justify-content: flex-start;
+    }
+  }
+}

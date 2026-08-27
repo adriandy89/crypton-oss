@@ -1,0 +1,141 @@
+.filters {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px;
+  padding: var(--space-3) var(--space-4) 0;
+
+  ion-select {
+    --background: var(--surface-1);
+    border: 1px solid var(--border-subtle);
+    border-radius: var(--radius-sm);
+  }
+}
+
+.list {
+  padding: var(--space-3) var(--space-4) 0;
+  display: flex;
+  flex-direction: column;
+  gap: 11px;
+}
+
+.row {
+  display: flex;
+  flex-direction: column;
+  gap: 13px;
+
+  .head {
+    display: flex;
+    align-items: center;
+    gap: 11px;
+  }
+
+  .id {
+    flex-grow: 1;
+    display: flex;
+    flex-direction: column;
+    gap: 3px;
+    min-width: 0;
+  }
+
+  h3 {
+    margin: 0;
+    font-size: 15px;
+    font-weight: 700;
+    letter-spacing: -0.02em;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .meta {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    margin: 0;
+    min-width: 0;
+    font-size: 11px;
+    color: var(--text-3);
+  }
+
+  /* Lo que se recorta es el texto, nunca la etiqueta de plataforma. */
+  .meta .txt {
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+}
+
+/* El podio se marca con el color de marca, no con el verde: estar el tercero
+   del ranking no es lo mismo que ir ganando dinero, y mezclarlos confunde. */
+/* `min-width` y no `width`: a partir del puesto 100 el numero no cabia en 30 px
+   y se salia del recuadro. Con relleno lateral el cuadrado crece a pastilla en
+   vez de romperse. */
+.rank {
+  flex-shrink: 0;
+  box-sizing: border-box;
+  min-width: 30px;
+  height: 30px;
+  padding: 0 6px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: var(--radius-xs);
+  font-size: 13px;
+  font-weight: 700;
+  line-height: 1;
+  color: var(--text-2);
+  background: var(--surface-2);
+
+  &.top {
+    color: #fff;
+    background: var(--brand-gradient);
+  }
+}
+
+.roi {
+  flex-shrink: 0;
+  font-size: 16px;
+  font-weight: 700;
+  line-height: 1.2;
+  letter-spacing: -0.02em;
+}
+
+.stats {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 8px;
+}
+
+.copy {
+  margin: 0;
+  --border-radius: var(--radius-sm);
+  --border-color: var(--border-strong);
+  --color: var(--brand-2);
+}
+
+.foot {
+  margin: var(--space-5) 0 0;
+  padding: 0 var(--space-5) 40px;
+  font-size: 11px;
+  line-height: 1.6;
+  color: var(--text-3);
+  text-align: center;
+}
+
+/* ── Pantallas grandes ────────────────────────────────────────────────── */
+:host {
+  --page-max: var(--content-wide);
+}
+
+@media (min-width: 900px) {
+  .list {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    align-items: start;
+  }
+
+  .filters {
+    max-width: 520px;
+  }
+}

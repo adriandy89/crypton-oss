@@ -1,0 +1,118 @@
+<ion-header>
+  <ion-toolbar>
+    <!-- Ranking dejo de ser una pestana y pasa a pantalla completa: sin este
+         boton la unica salida seria el gesto de volver de Android, que en iOS
+         no existe. -->
+    <ion-buttons slot="start">
+      <ion-back-button defaultHref="/tabs/account" />
+    </ion-buttons>
+    <ion-title>Ranking</ion-title>
+  </ion-toolbar>
+  <ion-toolbar>
+    <ion-segment [value]="period()" (ionChange)="setPeriod($any($event.detail.value))">
+      <ion-segment-button value="DAY">Hoy</ion-segment-button>
+      <ion-segment-button value="WEEK">7 días</ion-segment-button>
+      <ion-segment-button value="MONTH">30 días</ion-segment-button>
+      <ion-segment-button value="ALL">Total</ion-segment-button>
+    </ion-segment>
+  </ion-toolbar>
+</ion-header>
+
+<ion-content>
+  <ion-refresher slot="fixed" (ionRefresh)="reload($event)">
+    <ion-refresher-content />
+  </ion-refresher>
+
+  <div class="filters">
+    <ion-select
+      label="Exchange"
+      labelPlacement="stacked"
+      interface="popover"
+      [value]="venue()"
+      (ionChange)="setVenue($event.detail.value)"
+    >
+      <ion-select-option value="">Todos</ion-select-option>
+      <ion-select-option value="HYPERLIQUID">Hyperliquid</ion-select-option>
+      <ion-select-option value="LIGHTER">Lighter</ion-select-option>
+      <ion-select-option value="ASTER">Aster</ion-select-option>
+    </ion-select>
+
+    <ion-select
+      label="Estrategia"
+      labelPlacement="stacked"
+      interface="popover"
+      [value]="strategy()"
+      (ionChange)="setStrategy($event.detail.value)"
+    >
+      <ion-select-option value="">Todas</ion-select-option>
+      <ion-select-option value="GRID_CLASSIC">Rejilla</ion-select-option>
+      <ion-select-option value="NEUTRAL_GRID">Rejilla neutral</ion-select-option>
+      <ion-select-option value="TDCA">DCA temporizado</ion-select-option>
+      <ion-select-option value="MARTINGALE">Martingala</ion-select-option>
+      <ion-select-option value="GRIDMART">GridMart</ion-select-option>
+      <ion-select-option value="MARKET_MAKER">Market maker</ion-select-option>
+    </ion-select>
+  </div>
+
+  @if (leaderboard.loading() && leaderboard.rows().length === 0) {
+    <div class="center"><ion-spinner name="crescent" /></div>
+  } @else if (leaderboard.rows().length === 0) {
+    <ui-empty-state icon="trophy-outline" title="Todavía no hay bots en el ranking">
+      <p>
+        Solo entran bots reales —nunca simulados—, publicados por su autor y con al menos 6 horas de
+        recorrido. Un bot de una hora con un golpe de suerte no debería encabezar nada.
+      </p>
+    </ui-empty-state>
+  } @else {
+    <div class="list">
+      @for (row of leaderboard.rows(); track row.botId) {
+        <ui-card class="row">
+          <div class="head">
+            <span class="rank num" [class.top]="row.rank <= 3">{{ row.rank }}</span>
+            <div class="id">
+              <h3>{{ row.name }}</h3>
+              <!-- El par y la estrategia en texto, la plataforma en su etiqueta
+                   de color: en una lista que mezcla los tres exchanges, el
+                   tinte se lee antes que la palabra. Es la misma etiqueta que
+                   en Mercados. -->
+              <p class="meta">
+                <span class="venue" [attr.data-v]="row.venue">{{ venueLabel(row.venue) }}</span>
+                <span class="txt">
+                  {{ row.symbol }} · {{ strategyLabel(row.strategy) }}
+                  @if (row.leverage) {
+                    · {{ row.leverage }}×
+                  }
+                </span>
+              </p>
+            </div>
+            <span class="roi num" [class]="'c-' + pnlColor(row.roiPct)">{{ pct(row.roiPct) }}</span>
+          </div>
+
+          <!-- Ni capital ni resultado absoluto: eran el dinero que mueve el
+               autor. El ROI, que sí se muestra arriba, permite comparar sin
+               revelar el tamaño de la cartera de nadie. -->
+          <!-- El apalancamiento ya va en la línea de arriba ("· 3×"): repetirlo
+               aquí obligaba a partir "Apalancamiento" en tres líneas. -->
+          <div class="stats">
+            <ui-stat label="Dirección" [value]="row.direction ?? '—'" />
+            <ui-stat label="Activo" [value]="uptime(row.uptimeSeconds)" />
+            <ui-stat label="Copias" [value]="row.copies" />
+          </div>
+
+          @if (row.shareCode) {
+            <ion-button expand="block" fill="outline" size="small" class="copy" (click)="copy(row)">
+              <ion-icon slot="start" name="copy-outline" />
+              Copiar configuración
+            </ion-button>
+          }
+        </ui-card>
+      }
+    </div>
+
+    <p class="foot">
+      El ROI incluye el resultado no realizado. Un bot con mucho beneficio cerrado y una posición
+      muy perdida abierta no es un buen bot, y ocultarlo sería engañoso. Resultados pasados no
+      predicen los futuros.
+    </p>
+  }
+</ion-content>

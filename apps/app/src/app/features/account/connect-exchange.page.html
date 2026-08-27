@@ -1,0 +1,193 @@
+<ion-header>
+  <ion-toolbar>
+    <ion-buttons slot="start"><ion-back-button [defaultHref]="volverA" /></ion-buttons>
+    <ion-title>Conectar exchange</ion-title>
+  </ion-toolbar>
+  <ion-toolbar>
+    <ion-segment [value]="venue()" (ionChange)="venue.set($any($event.detail.value))">
+      <ion-segment-button value="HYPERLIQUID">Hyperliquid</ion-segment-button>
+      <ion-segment-button value="LIGHTER">Lighter</ion-segment-button>
+      <ion-segment-button value="ASTER">Aster</ion-segment-button>
+    </ion-segment>
+  </ion-toolbar>
+</ion-header>
+
+<ion-content>
+  @if (necesitaReauth()) {
+    <!-- Antes de nada, quien está al otro lado. Conectar una clave de firma es
+         la operación más sensible de la plataforma, y un token de sesión robado
+         no puede bastar para hacerla. Se pide AQUÍ y no al guardar: en web, ir a
+         Google recarga la aplicación, y pedirlo después borraría la clave que el
+         usuario acaba de pegar. -->
+    <div class="pad gate">
+      <div class="safe">
+        <ion-icon name="lock-closed-outline" />
+        <div>
+          <strong>Confirma que eres tú.</strong>
+          Vas a conectar una clave capaz de operar con tu dinero. Te llevamos a Google para
+          comprobarlo y vuelves aquí enseguida.
+        </div>
+      </div>
+
+      <ion-button expand="block" [disabled]="busy()" (click)="confirmarIdentidad()">
+        @if (busy()) {
+          <ion-spinner name="crescent" />
+        } @else {
+          Continuar con Google
+        }
+      </ion-button>
+    </div>
+  } @else {
+    <div class="pad">
+      <!-- Lo primero que se lee, antes que ningún campo. -->
+      <div class="safe">
+        <ion-icon name="lock-closed-outline" />
+        <div>
+          <strong>Nunca introduzcas tu frase semilla.</strong>
+          Lo que se pide es la clave de una API wallet: puede colocar y cancelar órdenes, pero
+          <strong>no puede retirar fondos</strong>. Se guarda cifrada y puedes revocarla desde el
+          propio exchange cuando quieras.
+        </div>
+      </div>
+
+      <h2 class="title">{{ help().title }}</h2>
+      <ol class="steps">
+        @for (s of help().steps; track s) {
+          <li>{{ s }}</li>
+        }
+      </ol>
+
+      <ion-list inset="true">
+        <ion-item>
+          <ion-input
+            label="Etiqueta"
+            labelPlacement="stacked"
+            [(ngModel)]="label"
+            name="label"
+            placeholder="Principal"
+          />
+        </ion-item>
+
+        <!--
+          Va aqui arriba, fuera de los bloques por venue, porque los tres tienen
+          testnet y porque es lo PRIMERO que hay que decidir: cambia contra que
+          exchange se verifica la clave y donde operaran sus bots.
+        -->
+        <ion-item>
+          <ion-toggle [(ngModel)]="testnet" name="testnet"> Cuenta de testnet </ion-toggle>
+        </ion-item>
+
+        @if (venue() === 'HYPERLIQUID') {
+          <ion-item>
+            <ion-input
+              label="Dirección de tu cuenta"
+              labelPlacement="stacked"
+              placeholder="0x…"
+              [(ngModel)]="hlAccount"
+              name="hlAccount"
+            />
+          </ion-item>
+          <ion-item>
+            <ion-input
+              label="Clave privada de la API wallet"
+              labelPlacement="stacked"
+              type="password"
+              placeholder="0x…"
+              [(ngModel)]="hlKey"
+              name="hlKey"
+              (ionInput)="onKeyInput($any($event.target).value)"
+            />
+          </ion-item>
+        }
+
+        @if (venue() === 'LIGHTER') {
+          <ion-item>
+            <ion-input
+              label="Indice de cuenta"
+              labelPlacement="stacked"
+              type="number"
+              [(ngModel)]="ltAccountIndex"
+              name="ltAccountIndex"
+            />
+          </ion-item>
+          <ion-item>
+            <ion-input
+              label="Indice de la clave de API"
+              labelPlacement="stacked"
+              type="number"
+              [(ngModel)]="ltKeyIndex"
+              name="ltKeyIndex"
+            />
+          </ion-item>
+          <ion-item>
+            <ion-input
+              label="Clave privada de la API"
+              labelPlacement="stacked"
+              type="password"
+              [(ngModel)]="ltKey"
+              name="ltKey"
+              (ionInput)="onKeyInput($any($event.target).value)"
+            />
+          </ion-item>
+        }
+
+        @if (venue() === 'ASTER') {
+          <ion-item>
+            <ion-input
+              label="Dirección de tu wallet"
+              labelPlacement="stacked"
+              placeholder="0x…"
+              [(ngModel)]="asUser"
+              name="asUser"
+            />
+          </ion-item>
+          <ion-item>
+            <ion-input
+              label="Dirección de la API wallet"
+              labelPlacement="stacked"
+              placeholder="0x…"
+              [(ngModel)]="asSigner"
+              name="asSigner"
+            />
+          </ion-item>
+          <ion-item>
+            <ion-input
+              label="Clave privada de la API wallet"
+              labelPlacement="stacked"
+              type="password"
+              placeholder="0x…"
+              [(ngModel)]="asKey"
+              name="asKey"
+              (ionInput)="onKeyInput($any($event.target).value)"
+            />
+          </ion-item>
+        }
+      </ion-list>
+
+      @if (seedWarning()) {
+        <div class="danger">
+          <ion-icon name="warning-outline" />
+          <div>
+            Eso parece una <strong>frase semilla</strong>. No la introduzcas aquí ni en ningún otro
+            sitio: da control total sobre tus fondos. Usa la clave privada de una API wallet.
+          </div>
+        </div>
+      }
+
+      <ion-note class="foot">
+        La credencial se verifica contra
+        <strong>{{ testnet ? 'la testnet' : 'la red real' }}</strong>
+        de {{ venue() }} antes de guardarse. Si no funciona, no se almacena. La red se fija al
+        conectar y no se puede cambiar despues: para operar en la otra, conecta una cuenta aparte.
+      </ion-note>
+
+      <ion-button expand="block" [disabled]="!canSubmit() || busy()" (click)="submit()">
+        @if (busy()) {
+          <ion-spinner name="crescent" />
+        } @else {
+          Verificar y conectar
+        }
+      </ion-button>
+    </div>
+  }
+</ion-content>

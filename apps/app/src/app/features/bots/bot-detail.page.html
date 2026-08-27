@@ -1,0 +1,637 @@
+<ion-header>
+  <ion-toolbar>
+    <ion-buttons slot="start">
+      <ion-back-button defaultHref="/tabs/bots" />
+    </ion-buttons>
+    <!-- Nombre y tipo, en la barra y en las cinco pestanas.
+         La ficha de abajo solo se ve en «Resumen»: desde «Órdenes» o «Ajustes»
+         la unica referencia era el nombre que le puso el usuario, y «BTC noche»
+         no dice si lo que estas tocando es una rejilla o una martingala. -->
+    <ion-title>
+      <span class="tname">{{ bot()?.name ?? 'Bot' }}</span>
+      @if (bot(); as b) {
+        <span class="tkind">{{ strategyLabel(b.strategy) }} · {{ b.symbol }}</span>
+      }
+    </ion-title>
+    <ion-buttons slot="end">
+      <!-- Al grafico CON el contexto del bot: `?bot=` es lo que hace que se
+           pinten encima la escalera, el precio medio y la liquidacion. -->
+      <ion-button
+        [routerLink]="['/markets', bot()?.venue, bot()?.symbol]"
+        [queryParams]="{ bot: bot()?.id }"
+        [disabled]="!bot()"
+        aria-label="Ver el grafico"
+      >
+        <ion-icon slot="icon-only" name="stats-chart-outline" />
+      </ion-button>
+      <ion-button (click)="openCommands()" [disabled]="!bot()">
+        <ion-icon slot="icon-only" name="ellipsis-vertical" />
+      </ion-button>
+    </ion-buttons>
+  </ion-toolbar>
+
+  <ion-toolbar>
+    <ion-segment [value]="tab()" (ionChange)="tab.set($any($event.detail.value))" scrollable="true">
+      <ion-segment-button value="resumen">Resumen</ion-segment-button>
+      <ion-segment-button value="escalera">Escalera</ion-segment-button>
+      <ion-segment-button value="ordenes">Órdenes</ion-segment-button>
+      <ion-segment-button value="ajustes">Ajustes</ion-segment-button>
+      <ion-segment-button value="eventos">Eventos</ion-segment-button>
+    </ion-segment>
+  </ion-toolbar>
+</ion-header>
+
+<ion-content>
+  @if (loading()) {
+    <div class="center"><ion-spinner name="crescent" /></div>
+  } @else if (bot(); as b) {
+    <!-- ═══ RESUMEN ═══ -->
+    @if (tab() === 'resumen') {
+      <div class="pad">
+        <!-- QUE es este bot, no solo como se llama.
+             El rotulo de arriba es el nombre que le puso el usuario, y un mes
+             despues «BTC noche» no dice si es una rejilla o una martingala —que
+             es justo lo que hay que saber antes de tocar un ajuste—. La
+             estrategia va en pastilla junto al par, y debajo la linea que
+             explica que hace, la misma que se leyo al crearlo. -->
+        <div class="head">
+          <div class="who">
+            <div class="line">
+              <h2>{{ b.symbol }}</h2>
+              <ui-badge tone="brand" size="sm">{{ strategyLabel(b.strategy) }}</ui-badge>
+            </div>
+            <p class="sub">{{ venueLabel(b.venue) }} · {{ b.direction }} · {{ b.leverage }}×</p>
+            @if (b.dryRun || b.testnet) {
+              <div class="flags">
+                @if (b.dryRun) {
+                  <ui-badge size="sm" tone="warn" caps>simulación</ui-badge>
+                }
+                <!-- Contorno y no relleno: comparte el ambar con «simulación» y
+                     un bot SIMULADO en testnet no es lo mismo que uno real en
+                     testnet. -->
+                @if (b.testnet) {
+                  <ui-badge size="sm" tone="warn" variant="outline" caps>testnet</ui-badge>
+                }
+              </div>
+            }
+          </div>
+          <!-- La misma pastilla que en la lista y en el grafico. Antes esto era
+               un `ion-badge` con el enum crudo: el bot salia «RUNNING» aqui y
+               «operando» en la lista de la que se venia. -->
+          <ui-status-pill [status]="b.status" />
+        </div>
+
+        @if (strategyBlurb(b.strategy); as queHace) {
+          <p class="kind-note">{{ queHace }}</p>
+        }
+
+        @if (b.lastError) {
+          <div class="alert danger">
+            <ion-icon name="warning-outline" />
+            <span>{{ b.lastError }}</span>
+          </div>
+        } @else if (b.note) {
+          <p class="note">{{ b.note }}</p>
+        }
+
+        <div class="metrics">
+          <div>
+            <span class="k">PnL realizado</span>
+            <span class="v" [class]="'c-' + pnlColor(b.realizedPnl)">{{
+              signed(b.realizedPnl)
+            }}</span>
+          </div>
+          <div>
+            <span class="k">PnL no realizado</span>
+            <span class="v" [class]="'c-' + pnlColor(b.unrealizedPnl)">{{
+              signed(b.unrealizedPnl)
+            }}</span>
+          </div>
+          <div>
+            <span class="k">ROI</span>
+            <span class="v" [class]="'c-' + pnlColor(b.roiPct)">{{ pct(b.roiPct) }}</span>
+          </div>
+          <div>
+            <span class="k">Posición</span>
+            <span class="v">{{ qty(b.positionQty) }}</span>
+          </div>
+          <div>
+            <span class="k">Precio medio</span>
+            <span class="v">{{ price(b.averageEntry) }}</span>
+          </div>
+          <div>
+            <span class="k">Liquidación</span>
+            <span class="v c-danger">{{ price(b.liquidationPrice) }}</span>
+          </div>
+          <div>
+            <span class="k">Órdenes vivas</span>
+            <span class="v">{{ b.openOrders }}</span>
+          </div>
+          <div>
+            <span class="k">Activo</span>
+            <span class="v">{{ uptime(b.uptimeSeconds) }}</span>
+          </div>
+        </div>
+
+        <!-- ── Margen de la posición aislada ──
+             Solo aparece con margen AISLADO y posición abierta, que es cuando
+             la operación existe: en cruzado el colateral es el de toda la
+             cuenta y no hay una caja por posición que engordar, y sin posición
+             no hay nada que financiar.
+
+             Es el único camino de la app que mueve el precio de liquidación
+             sin comprar ni vender, y por eso se ofrece aquí —al lado de la
+             cifra de liquidación— y no enterrado en el menú de acciones. -->
+        @if (canAdjustMargin()) {
+          <button class="margin-cta" type="button" (click)="openMarginSheet()">
+            <ion-icon name="shield-outline" />
+            <span>
+              <strong>Ajustar margen</strong>
+              <em>Aporta colateral para alejar la liquidación</em>
+            </span>
+            <ion-icon name="chevron-forward-outline" class="chev" />
+          </button>
+        }
+
+        <!-- ── Ficha de market making ──
+             Los tiles de arriba valen para cualquier bot; estos son los que
+             deciden si un market maker está funcionando. `Grid profit` y
+             `Realizado` se enseñan por separado a propósito: la diferencia
+             entre ambos es exactamente lo que se lleva el exchange, y con una
+             sola cifra no hay forma de saber si el bot gana poco porque cotiza
+             estrecho o porque las comisiones se lo comen. -->
+        @if (mmStats(); as mm) {
+          <h3 class="section">Market maker</h3>
+
+          <div class="mm-tiles">
+            <ui-stat
+              label="Grid profit"
+              [value]="signed(mm.grossMatchedProfit)"
+              [tone]="pnlColor(mm.grossMatchedProfit)"
+              size="lg"
+            />
+            <ui-stat
+              label="Beneficio total"
+              [value]="signed(mm.totalProfit)"
+              [tone]="pnlColor(mm.totalProfit)"
+              size="lg"
+            />
+            <ui-stat label="Pares casados" [value]="mm.closedCycles" size="lg" />
+            <ui-stat label="Peak margin" [value]="money(mm.peakMargin)" size="lg" />
+          </div>
+
+          <div class="metrics">
+            <div>
+              <span class="k">Realizado (tras comisiones)</span>
+              <span class="v" [class]="'c-' + pnlColor(mm.realizedPnl)">{{
+                signed(mm.realizedPnl)
+              }}</span>
+            </div>
+            <div>
+              <span class="k">Comisiones pagadas</span>
+              <span class="v">{{ money(mm.feesPaid) }}</span>
+            </div>
+            <div>
+              <span class="k">PnL de inventario</span>
+              <span class="v" [class]="'c-' + pnlColor(mm.inventoryPnl)">{{
+                signed(mm.inventoryPnl)
+              }}</span>
+            </div>
+            <div>
+              <span class="k">Efficiency</span>
+              <span class="v">{{ mm.efficiencyPct ? mm.efficiencyPct + ' %' : '—' }}</span>
+            </div>
+            <div>
+              <span class="k">APR</span>
+              <span class="v">{{ mm.aprPct ? mm.aprPct + ' %' : '—' }}</span>
+            </div>
+            <div>
+              <span class="k">Peak inventory</span>
+              <span class="v">{{ money(mm.peakInventory) }}</span>
+            </div>
+            <div>
+              <span class="k">Fills</span>
+              <span class="v">{{ mm.fills }}</span>
+            </div>
+            <div>
+              <span class="k">Compras / ventas</span>
+              <span class="v">{{ mm.buyFills }} / {{ mm.sellFills }}</span>
+            </div>
+            <div>
+              <span class="k">Ejecutado como maker</span>
+              <span class="v">{{ makerPct() ?? '—' }}</span>
+            </div>
+            <div>
+              <span class="k">Último fill</span>
+              <span class="v">{{ mm.lastFillAt ? shortDate(mm.lastFillAt) : '—' }}</span>
+            </div>
+          </div>
+
+          <p class="mm-foot">
+            «Grid profit» es el diferencial capturado antes de comisiones; «realizado» es esa misma
+            cifra ya con las comisiones restadas. «Efficiency» es el diferencial capturado sobre el
+            mayor margen que el bot llegó a inmovilizar, y la APR anualiza el beneficio total sobre
+            ese mismo margen. Son definiciones nuestras: no las compares con las de otra plataforma.
+          </p>
+        }
+
+        @if (b.cycle; as c) {
+          <h3 class="section">Ciclo #{{ c.seq }}</h3>
+          <ion-list inset="true">
+            <ion-item
+              ><ion-label>Entradas ejecutadas</ion-label
+              ><ion-note slot="end">{{ c.entries_filled }}</ion-note></ion-item
+            >
+            <ion-item
+              ><ion-label>Ancla de la escalera</ion-label
+              ><ion-note slot="end">{{ price(c.anchor_price) }}</ion-note></ion-item
+            >
+            <ion-item
+              ><ion-label>Precio medio del ciclo</ion-label
+              ><ion-note slot="end">{{ price(c.average_entry) }}</ion-note></ion-item
+            >
+            <ion-item
+              ><ion-label>Resultado del ciclo</ion-label
+              ><ion-note slot="end">{{ signed(c.realized_pnl) }}</ion-note></ion-item
+            >
+            <ion-item
+              ><ion-label>Comisiones</ion-label
+              ><ion-note slot="end">{{ money(c.fees) }}</ion-note></ion-item
+            >
+            @if (c.cooldown_until) {
+              <ion-item
+                ><ion-label>En espera hasta</ion-label
+                ><ion-note slot="end">{{ shortDate(c.cooldown_until) }}</ion-note></ion-item
+              >
+            }
+          </ion-list>
+        }
+
+        <!-- ── Ranking ──
+             Va ENCIMA de las acciones y no dentro: ahí abajo viven «Arrancar» y
+             «Eliminar bot», y mezclar publicar con lo destructivo invita a
+             pulsar lo que no es. -->
+        <h3 class="section">Ranking</h3>
+        @if (b.dryRun) {
+          <ui-notice tone="info">
+            Los bots en simulación no se pueden publicar: su histórico no viene de operaciones
+            reales y engañaría a quien lo copiase.
+          </ui-notice>
+
+          <!-- Atajo al backtest, solo para administradores. Se llega con el bot
+               ya elegido: es el camino natural, porque quien lo pide está
+               mirando este bot justo ahora. -->
+          @if (esAdmin()) {
+            <ion-button
+              expand="block"
+              fill="outline"
+              [routerLink]="['/admin/backtest']"
+              [queryParams]="{ botId: b.id }"
+            >
+              <ion-icon name="flask-outline" slot="start" />
+              Probar sobre histórico
+            </ion-button>
+          }
+        } @else if (publicado()) {
+          <ui-notice tone="ok" icon="trophy-outline">
+            Publicado en el ranking · {{ b.share?.copies ?? 0 }} copia(s).
+          </ui-notice>
+          <div class="rank-act">
+            <ion-button
+              expand="block"
+              fill="outline"
+              [disabled]="publicando()"
+              (click)="alternarPublicacion()"
+            >
+              @if (publicando()) {
+                <ion-spinner name="crescent" />
+              } @else {
+                Dejar de publicar
+              }
+            </ion-button>
+          </div>
+        } @else {
+          <ui-notice tone="info">
+            Se comparte la <strong>forma</strong> de la estrategia, no tu tamaño: los importes
+            viajan como proporción del capital, así que nadie ve cuánto dinero mueves. Ni tu cuenta
+            ni tus claves salen de aquí.
+            @if (demasiadoJoven()) {
+              El ranking solo lista bots con más de 6 horas de recorrido: se publicará ahora y
+              aparecerá al cumplirlas.
+            }
+          </ui-notice>
+          <div class="rank-act">
+            <ion-button expand="block" [disabled]="publicando()" (click)="alternarPublicacion()">
+              @if (publicando()) {
+                <ion-spinner name="crescent" />
+              } @else {
+                Publicar en el ranking
+              }
+            </ion-button>
+          </div>
+        }
+
+        <div class="actions">
+          @if (!isLive()) {
+            <ion-button expand="block" (click)="start()">Arrancar</ion-button>
+          }
+          <ion-button expand="block" fill="outline" (click)="openCommands()">Acciones</ion-button>
+          @if (!isLive()) {
+            <ion-button expand="block" fill="clear" color="danger" (click)="remove()">
+              Eliminar bot
+            </ion-button>
+          }
+        </div>
+      </div>
+    }
+
+    <!-- ═══ ESCALERA ═══ -->
+    @if (tab() === 'escalera') {
+      <div class="pad">
+        <p class="hint">
+          Órdenes que el bot mantiene vivas ahora mismo en el exchange. Se recalculan en cada ciclo:
+          lo que ves aquí es el estado real, no una proyección.
+        </p>
+        @if (bot()!.openOrdersList.length) {
+          <div class="ladder">
+            @for (o of bot()!.openOrdersList; track o.client_order_id) {
+              <div class="lvl" [class.buy]="o.side === 'BUY'" [class.sell]="o.side === 'SELL'">
+                <span class="kind">{{ o.level_kind }}#{{ o.level_index }}</span>
+                <span class="price">{{ price(o.price) }}</span>
+                <span class="qty">{{ qty(o.qty) }}</span>
+                <span class="side">{{ o.side }}</span>
+              </div>
+            }
+          </div>
+        } @else {
+          <p class="empty-note">Sin órdenes vivas.</p>
+        }
+      </div>
+    }
+
+    <!-- ═══ ORDENES ═══ -->
+    @if (tab() === 'ordenes') {
+      <div class="pad">
+        @if (orders().length) {
+          <div class="orders">
+            @for (o of orders(); track o.client_order_id) {
+              <div class="ord">
+                <div class="line">
+                  <ui-badge size="sm" square [tone]="o.side === 'BUY' ? 'up' : 'down'">
+                    {{ o.side }}
+                  </ui-badge>
+                  <span class="mono">{{ qty(o.qty) }} &#64; {{ price(o.price) }}</span>
+                  <span
+                    class="status"
+                    [class.filled]="o.status === 'FILLED'"
+                    [class.rejected]="o.status === 'REJECTED'"
+                  >
+                    {{ o.status }}
+                  </span>
+                </div>
+                <div class="line small">
+                  <span>{{ o.level_kind }}#{{ o.level_index }} · ciclo {{ o.cycle_seq }}</span>
+                  <span>{{ shortDate(o.placed_at) }}</span>
+                </div>
+                @if (o.raw_error) {
+                  <p class="ord-err">{{ o.raw_error }}</p>
+                }
+              </div>
+            }
+          </div>
+        } @else {
+          <p class="empty-note">Todavía no hay órdenes.</p>
+        }
+      </div>
+    }
+
+    <!-- ═══ AJUSTES ═══ -->
+    @if (tab() === 'ajustes') {
+      <div class="pad">
+        @if (bot(); as b) {
+          <div class="ajustes-head">
+            <span>{{ strategyLabel(b.strategy) }}</span>
+            <ui-strategy-help [kind]="b.strategy" [fields]="b.fields" variant="inline" />
+          </div>
+        }
+        <p class="hint">
+          Cada campo indica qué ocurre si lo cambias ahora mismo. Los
+          <ui-mutability-badge level="HOT" /> se aplican en el próximo ciclo sin tocar la posición;
+          los <ui-mutability-badge level="WARM" /> recolocan las órdenes —tampoco cierran nada— y
+          los <ui-mutability-badge level="COLD" /> no se pueden cambiar en un bot ya creado.
+        </p>
+
+        <h3 class="section"><ui-mutability-badge level="HOT" /> Se aplica en el próximo ciclo</h3>
+        <ui-card flush class="fields">
+          @for (f of hotBasic(); track f.key) {
+            <ui-field [field]="f" [value]="value(f.key)" (valueChange)="setValue(f.key, $event)" />
+          }
+          @if (hotAdvanced().length) {
+            <ui-collapsible title="Más parámetros" [count]="hotAdvanced().length">
+              @for (f of hotAdvanced(); track f.key) {
+                <ui-field
+                  [field]="f"
+                  [value]="value(f.key)"
+                  (valueChange)="setValue(f.key, $event)"
+                />
+              }
+            </ui-collapsible>
+          }
+        </ui-card>
+
+        <h3 class="section"><ui-mutability-badge level="WARM" /> Recoloca las órdenes</h3>
+        <p class="warn-note">
+          Cambiar cualquiera de estos cancela las órdenes y las vuelve a tender con la forma nueva.
+          <strong>La posición sigue abierta.</strong>
+        </p>
+        <ui-card flush class="fields">
+          @for (f of warmBasic(); track f.key) {
+            <ui-field [field]="f" [value]="value(f.key)" (valueChange)="setValue(f.key, $event)" />
+          }
+          @if (warmAdvanced().length) {
+            <ui-collapsible title="Más parámetros" [count]="warmAdvanced().length">
+              @for (f of warmAdvanced(); track f.key) {
+                <ui-field
+                  [field]="f"
+                  [value]="value(f.key)"
+                  (valueChange)="setValue(f.key, $event)"
+                />
+              }
+            </ui-collapsible>
+          }
+        </ui-card>
+
+        <h3 class="section"><ui-mutability-badge level="COLD" /> No se puede cambiar</h3>
+        <ui-card flush class="cold-list">
+          @for (f of coldFields(); track f.key) {
+            <div class="cold-row">
+              <span class="cold-key">{{ fieldLabel(f) }}</span>
+              <span class="cold-val num">{{ coldValue(f) }}</span>
+            </div>
+          }
+        </ui-card>
+
+        @if (dirty()) {
+          <div class="save-bar">
+            <ion-button fill="clear" (click)="discard()">Descartar</ion-button>
+            <ion-button [disabled]="saving()" (click)="save()">
+              @if (saving()) {
+                <ion-spinner name="crescent" />
+              } @else {
+                Guardar cambios
+              }
+            </ion-button>
+          </div>
+        }
+      </div>
+    }
+
+    <!-- ═══ EVENTOS ═══ -->
+    @if (tab() === 'eventos') {
+      <div class="pad">
+        <p class="hint">
+          Bitacora completa de lo que ha hecho el bot y por qué. Es lo que hay que mirar cuando algo
+          no cuadra.
+        </p>
+        @if (events().length) {
+          <div class="events">
+            @for (e of events(); track e.id) {
+              <div class="ev" [class]="'sev-' + e.severity.toLowerCase()">
+                <div class="line">
+                  <span class="type">{{ e.type }}</span>
+                  <span class="when">{{ shortDate(e.created_at) }}</span>
+                </div>
+                <p>{{ e.message }}</p>
+              </div>
+            }
+          </div>
+        } @else {
+          <p class="empty-note">Sin eventos todavía.</p>
+        }
+      </div>
+    }
+  }
+</ion-content>
+
+<!-- ═══ Ajustar el margen de la posición aislada ═══
+     Dos efectos, y la hoja tiene que dejar claro que son independientes:
+
+       · La transferencia al venue —que ocurre SIEMPRE— es lo que mueve el
+         precio de liquidación. Es a lo que viene el usuario.
+       · El interruptor solo cambia la contabilidad del bot (ROI, APR, margen
+         punta) y de propina retiende la escalera. NO toca la liquidación.
+
+     Mezclarlos en una sola frase es exactamente el malentendido caro: alguien
+     sube el capital asignado creyendo que así defiende la posición, la escalera
+     se recoloca, y la liquidación sigue donde estaba. -->
+<ion-modal
+  class="opts margin-sheet"
+  [isOpen]="marginOpen()"
+  [initialBreakpoint]="0.9"
+  [breakpoints]="[0, 0.9]"
+  handleBehavior="cycle"
+  (ionModalDidDismiss)="marginOpen.set(false)"
+>
+  <ng-template>
+    <ion-content class="optbody margin-body">
+      <header class="opthead">
+        <h2>Ajustar margen</h2>
+        <button type="button" class="x" (click)="closeMarginSheet()" aria-label="Cerrar">
+          <ion-icon name="close-outline" />
+        </button>
+      </header>
+
+      @if (bot(); as b) {
+        <ion-segment
+          class="margin-seg"
+          [value]="marginAction()"
+          (ionChange)="marginAction.set($any($event.detail.value))"
+        >
+          <ion-segment-button value="ADD">Aportar</ion-segment-button>
+          <ion-segment-button value="REMOVE">Retirar</ion-segment-button>
+        </ion-segment>
+
+        @if (marginAction() === 'ADD') {
+          <p class="margin-lead">
+            El importe sale de tu margen libre y entra en la caja de esta posición.
+            <strong>Aleja el precio de liquidación</strong>, ahora en
+            {{ price(b.liquidationPrice) }}, sin comprar ni vender nada.
+          </p>
+        } @else {
+          <p class="margin-lead danger">
+            Sacas colateral de esta posición y vuelve a tu margen libre.
+            <strong>Acerca el precio de liquidación</strong>, ahora en
+            {{ price(b.liquidationPrice) }}. Si el mercado se mueve en contra, se liquidará antes.
+          </p>
+        }
+
+        <label class="margin-amount">
+          <span class="lbl">Importe</span>
+          <input
+            type="number"
+            inputmode="decimal"
+            min="0"
+            step="0.01"
+            placeholder="0.00"
+            [ngModel]="marginAmount()"
+            (ngModelChange)="marginAmount.set($event)"
+          />
+        </label>
+
+        @if (freeMargin(); as free) {
+          <div class="margin-free">
+            <span>Margen libre: {{ money(free) }}</span>
+            @if (marginAction() === 'ADD') {
+              <!-- Sin atajo al 100 %: dejar la cuenta sin un céntimo libre es
+                   lo que impide pagar la siguiente comisión, y es el mismo
+                   criterio que ya aplica `ui-amount-field` al capital. -->
+              <div class="chips">
+                <button type="button" (click)="fillMargin(0.25)">25%</button>
+                <button type="button" (click)="fillMargin(0.5)">50%</button>
+                <button type="button" (click)="fillMargin(0.75)">75%</button>
+              </div>
+            }
+          </div>
+        }
+
+        @if (marginAction() === 'ADD') {
+          <div class="margin-toggle">
+            <ion-toggle
+              [checked]="marginCountAsCapital()"
+              (ionChange)="marginCountAsCapital.set($any($event.detail.checked))"
+            >
+              Contar como capital del bot
+            </ion-toggle>
+            @if (marginCountAsCapital()) {
+              <p class="hint warn">
+                Además sube el capital asignado del bot, así que el ROI y la APR reflejarán el
+                dinero real que tienes puesto.
+                <strong>Cancela y vuelve a colocar las órdenes abiertas.</strong>
+                No cambia la liquidación más de lo que ya lo hace el aporte.
+              </p>
+            } @else {
+              <p class="hint">
+                Solo mueve la liquidación. El ROI y la APR se seguirán calculando sobre el capital
+                asignado actual, así que saldrán más altos de lo que corresponde al dinero puesto.
+              </p>
+            }
+          </div>
+        }
+
+        <ion-button
+          expand="block"
+          class="margin-go"
+          [color]="marginAction() === 'REMOVE' ? 'danger' : 'primary'"
+          [disabled]="marginBusy()"
+          (click)="submitMargin()"
+        >
+          @if (marginBusy()) {
+            <ion-spinner name="crescent" />
+          } @else {
+            {{ marginAction() === 'ADD' ? 'Aportar margen' : 'Retirar margen' }}
+          }
+        </ion-button>
+      }
+    </ion-content>
+  </ng-template>
+</ion-modal>

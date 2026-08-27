@@ -1,0 +1,21 @@
+{
+  "compilerOptions": {
+    "module": "commonjs",
+    "moduleResolution": "node",
+    "target": "ES2023",
+    "lib": ["ES2023"],
+    "declaration": true,
+    "outDir": "./dist",
+    // La raiz incluye `generated/`: Prisma 7 emite TypeScript, no JavaScript, asi
+    // que el cliente hay que compilarlo aqui. Consumirlo como fuente obligaria a
+    // la API y al worker a llevar un cargador de TS en produccion.
+    "rootDir": ".",
+    "strict": false,
+    "esModuleInterop": true,
+    "skipLibCheck": true,
+    "forceConsistentCasingInFileNames": true,
+    "incremental": true
+  },
+  "include": ["src/**/*.ts", "generated/**/*.ts"],
+  "exclude": ["node_modules", "dist", "prisma/seed.ts"]
+}

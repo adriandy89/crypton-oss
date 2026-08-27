@@ -1,0 +1,143 @@
+/* Pantalla de administración: densidad alta y cero adorno. Quien entra aquí
+   viene a leer números, no a que se los presenten. */
+
+ion-content {
+  --padding-start: var(--space-4);
+  --padding-end: var(--space-4);
+  --padding-bottom: var(--space-6);
+}
+
+.form,
+.resultado,
+.historial {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+  margin-top: var(--space-4);
+}
+
+.campo {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+
+  > span {
+    font-size: 11px;
+    font-weight: 600;
+    letter-spacing: 0.04em;
+    text-transform: uppercase;
+    color: var(--ion-color-medium);
+  }
+
+  small {
+    font-size: 11px;
+    line-height: 1.35;
+    color: var(--ion-color-medium);
+  }
+
+  ion-input,
+  ion-select {
+    --padding-start: var(--space-3);
+    --padding-end: var(--space-3);
+    border: 1px solid var(--ion-color-step-150, #2a2a2a);
+    border-radius: var(--radius-sm);
+    font-size: 14px;
+  }
+}
+
+.dos {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: var(--space-3);
+}
+
+/* El contador de velas. En rojo antes de mandar nada: descubrir el tope después
+   de esperar es la peor forma de enterarse. */
+.barras {
+  margin: 0;
+  font-size: 12px;
+  color: var(--ion-color-medium);
+
+  &.mal {
+    color: var(--ion-color-danger);
+    font-weight: 600;
+  }
+}
+
+.stats {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(140px, 1fr));
+  gap: var(--space-2);
+}
+
+h3 {
+  margin: var(--space-4) 0 0;
+  font-size: 13px;
+  font-weight: 700;
+  letter-spacing: 0.03em;
+  text-transform: uppercase;
+  color: var(--ion-color-medium);
+}
+
+.grafico {
+  height: 240px;
+  position: relative;
+}
+
+.meta {
+  margin: 0;
+  font-size: 11px;
+  color: var(--ion-color-medium);
+}
+
+/* Los límites van como lista y no plegados: un resultado sin ellos al lado
+   invita a tomarlo por una promesa. */
+.limites {
+  margin: 0;
+  padding-left: var(--space-4);
+  font-size: 12px;
+  line-height: 1.5;
+  color: var(--ion-color-medium);
+
+  li + li {
+    margin-top: 6px;
+  }
+}
+
+.fila {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-3);
+  padding: var(--space-2) 0;
+  border-bottom: 1px solid var(--ion-color-step-100, #1e1e1e);
+
+  .izq {
+    display: flex;
+    align-items: center;
+    gap: var(--space-2);
+    min-width: 0;
+    font-size: 13px;
+  }
+
+  .fecha {
+    font-size: 11px;
+    color: var(--ion-color-medium);
+    white-space: nowrap;
+  }
+
+  .der {
+    display: flex;
+    align-items: center;
+    gap: var(--space-1);
+    font-size: 13px;
+    font-weight: 600;
+
+    .ok {
+      color: var(--ion-color-success);
+    }
+    .mal {
+      color: var(--ion-color-danger);
+    }
+  }
+}

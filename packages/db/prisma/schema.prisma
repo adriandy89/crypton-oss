@@ -1,0 +1,1046 @@
+generator client {
+  provider     = "prisma-client"
+  output       = "../generated/prisma"
+  moduleFormat = "cjs"
+}
+
+datasource db {
+  provider = "postgresql"
+}
+
+// ═══════════════════════════════════════════════════════════════
+// IDENTIDAD
+// ═══════════════════════════════════════════════════════════════
+
+enum Role {
+  USER
+  ADMIN
+}
+
+model User {
+  id    String @id(map: "pk_user_id") @default(uuid())
+  email String @unique(map: "uq_user_email") @db.VarChar
+
+  /// Identificador de Google (`sub` del ID token). Es la CLAVE de identidad:
+  /// nunca cambia, ni siquiera si el usuario cambia de correo. Enlazar por
+  /// correo en su lugar convertiría un cambio de dirección ajeno en una toma de
+  /// cuenta, que es el fallo clásico de los inicios de sesión federados.
+  google_sub String @unique(map: "uq_user_google_sub") @db.VarChar(64)
+
+  /// Nombre visible. NO viene de Google: solo se piden los permisos `openid` y
+  /// `email`, así que el perfil de Google —nombre real, foto, idioma— no llega
+  /// nunca aquí. Nace de la parte local del correo y lo cambia el usuario.
+  name String @db.VarChar(128)
+
+  disabled          Boolean @default(false)
+  /// Lo afirma Google en el ID token (`email_verified`). Sin él no se entra.
+  is_email_verified Boolean @default(false)
+  language          String  @default("es") @db.VarChar(5)
+  role              Role    @default(USER)
+
+  // ── Perfil ────────────────────────────────────────────────────
+  // Todo opcional: nada de esto hace falta para operar, y pedir datos que no
+  // se necesitan es recoger datos que luego hay que proteger.
+  //
+  // El perfil es PRIVADO: solo lo ve su dueño. No hay endpoint que devuelva el
+  // perfil de otro usuario, y el ranking ya no publica ni el capital ni el
+  // resultado absoluto de nadie.
+  bio        String? @db.VarChar(280)
+  country    String? @db.VarChar(2)
+  /// Zona IANA (`Europe/Madrid`). Decide cómo se fechan los avisos y el resumen.
+  timezone   String? @db.VarChar(64)
+  /// Moneda en la que se muestran los importes. No cambia con qué se opera.
+  display_currency String? @db.VarChar(8)
+
+  created_at    DateTime  @default(now()) @db.Timestamptz(6)
+  updated_at    DateTime? @updatedAt @db.Timestamptz(6)
+  last_login_at DateTime? @db.Timestamptz(6)
+
+  exchange_accounts ExchangeAccount[]
+  bots              Bot[]
+  risk_limit        RiskLimit?
+  telegram_link     TelegramLink?
+  bot_shares        BotShare[]
+
+  @@index([email], map: "idx_user_email")
+  @@index([disabled])
+  @@map("users")
+}
+
+// ═══════════════════════════════════════════════════════════════
+// VENUES Y CREDENCIALES
+// ═══════════════════════════════════════════════════════════════
+
+enum Venue {
+  HYPERLIQUID
+  LIGHTER
+  ASTER
+}
+
+enum AccountStatus {
+  PENDING
+  VERIFIED
+  ACTIVE
+  ERROR
+  REVOKED
+}
+
+/// Credencial de firma delegada de un usuario en un venue.
+///
+/// El secreto NUNCA se guarda en claro: se cifra con AES-256-GCM usando una
+/// clave de datos (DEK) aleatoria, y esa DEK se cifra a su vez con la clave
+/// maestra del servidor. Esta tabla, robada entera y sin la maestra, no permite
+/// firmar ni una sola orden.
+///
+/// Con `paper = true` la fila no representa ninguna credencial: es una cuenta de
+/// SIMULACIÓN, sin sobre criptográfico y sin nada que firmar. Ver ese campo.
+model ExchangeAccount {
+  id      String @id(map: "pk_exchange_account_id") @default(uuid())
+  user_id String
+  user    User   @relation(fields: [user_id], references: [id], onDelete: Cascade)
+
+  venue  Venue
+  label  String        @db.VarChar(64)
+  status AccountStatus @default(PENDING)
+
+  /// Dato PÚBLICO que identifica la cuenta en el venue (dirección de wallet o
+  /// índice de cuenta). Se guarda en claro a propósito: la app lo enseña y no
+  /// permite hacer nada por sí solo.
+  public_ref String @db.VarChar(128)
+
+  // ── Sobre criptográfico ──
+  //
+  // Nulos SOLO en las cuentas de simulación, que no tienen credencial que
+  // guardar. La invariante la defiende un CHECK en la base —Prisma no lo
+  // expresa— porque una cuenta real sin sobre es una cuenta que no puede
+  // operar, y eso tiene que fallar al escribir, no al firmar:
+  //
+  //   ck_exchange_account_credentials CHECK (paper OR enc_payload IS NOT NULL)
+  //
+  // Se guardan nulos y no cadenas vacías a propósito: una cuenta de simulación
+  // no debe tener nada que un `envelope.open()` pueda intentar descifrar.
+  enc_payload String? @db.Text
+  enc_dek     String? @db.Text
+  enc_iv      String? @db.VarChar(64)
+  enc_tag     String? @db.VarChar(64)
+  /// Identifica con qué clave maestra se cifró: permite rotarla sin downtime.
+  enc_key_id  String? @db.VarChar(32)
+
+  /// true = cuenta de SIMULACIÓN: no tiene credenciales y no puede firmar nada.
+  ///
+  /// Sus bots operan contra el simulador con precios REALES de mainnet, que es
+  /// justo el punto: probar una estrategia sin abrir cuenta en ningún exchange
+  /// ni entregar una clave privada. El adaptador se construye con
+  /// `createPublicAdapter(venue, { dryRun: true })`, así que ni siquiera existe
+  /// un firmante al que se le pudiera escapar una orden.
+  ///
+  /// Se autocrea una por venue al dar de alta al usuario. No se borra ni se
+  /// verifica: no hay nada que verificar.
+  paper Boolean @default(false)
+
+  /// Capital de partida del simulador, en la quote. Solo en cuentas paper.
+  ///
+  /// Existe porque simular con 10.000 cuando piensas invertir 500 no enseña
+  /// nada: el tamaño del capital es lo que decide cuántos niveles de la
+  /// escalera caben y a qué apalancamiento efectivo se acaba operando.
+  paper_balance Decimal? @db.Decimal(38, 18)
+
+  /// true = el usuario ha firmado la aprobación de comisiones del venue.
+  builder_approved Boolean @default(false)
+  testnet          Boolean @default(false)
+
+  last_verified_at DateTime? @db.Timestamptz(6)
+  last_error       String?   @db.Text
+
+  created_at DateTime  @default(now()) @db.Timestamptz(6)
+  updated_at DateTime? @updatedAt @db.Timestamptz(6)
+
+  bots Bot[]
+
+  /// La RED forma parte de la clave: sin ella, llamar «Principal» a la cuenta de
+  /// mainnet impedia llamar «Principal» a la de testnet del mismo venue, con un
+  /// choque que ni siquiera mencionaba la red. Son dos cuentas distintas en dos
+  /// libros distintos y no tienen por que competir por el nombre.
+  ///
+  /// Y `paper` por el mismo motivo llevado al extremo: la conexion de simulacion
+  /// ni siquiera tiene nombre propio —la pantalla la llama «Simulacion» sin
+  /// mirar este campo, y renombrarla esta prohibido—, asi que no puede quitarle
+  /// la etiqueta a una conexion de verdad. Sin esto, quien ya tuviera una real
+  /// llamada «Simulacion» se quedaba sin la suya simulada en ese venue.
+  @@unique([user_id, venue, testnet, label, paper], map: "uq_exchange_account_label")
+  @@index([user_id, status])
+  @@map("exchange_accounts")
+}
+
+/// El sandbox de un bot simulado.
+///
+/// Existe para que la simulación sobreviva a un reinicio del worker. El saldo,
+/// las posiciones y las órdenes en reposo vivían solo en la memoria del
+/// `DryRunAdapter`, así que un redespliegue —o un reequilibrado de leases hacia
+/// otro worker— devolvía el saldo al de partida y borraba las posiciones,
+/// mientras `bot_orders`, `bot_fills` y `bot_cycles` seguían ahí: el bot quedaba
+/// desincronizado con su propio libro y el usuario veía un motor roto justo en
+/// la fase en la que decide si se atreve a operar de verdad.
+///
+/// La clave es el BOT y no la cuenta, y esa es la diferencia que lo hace
+/// correcto: los leases del motor son por bot, así que colgándolo de la cuenta
+/// dos bots simulados en procesos distintos escribían aquí a la vez. Colgado del
+/// bot, el lease que ya protege `bot_orders` y `bot_cycles` protege también
+/// esto, sin ninguna vigilancia añadida.
+///
+/// Cada bot arranca con el capital que diga `exchange_accounts.paper_balance`.
+model PaperState {
+  bot_id String @id(map: "pk_paper_state_bot")
+  bot    Bot    @relation(fields: [bot_id], references: [id], onDelete: Cascade)
+
+  balance      Decimal @db.Decimal(38, 18)
+  realized_pnl Decimal @db.Decimal(38, 18)
+  fees_paid    Decimal @db.Decimal(38, 18)
+  /// Contador de ids del simulador. Se guarda para que tras un reinicio los ids
+  /// no vuelvan a empezar en 1 y choquen con los de las órdenes ya guardadas.
+  seq          Int     @default(0)
+
+  /// Posiciones abiertas y órdenes en reposo, serializadas por el propio
+  /// simulador (`DryRunAdapter.exportState`). Son JSON y no tablas porque nadie
+  /// las consulta por separado: se leen enteras al abrir el adaptador y se
+  /// escriben enteras al cambiar. Darles esquema propio sería inventar un
+  /// segundo libro de órdenes al lado del que ya lleva `bot_orders`.
+  positions Json
+  orders    Json
+
+  /// Se incrementa en cada reinicio de la simulación.
+  ///
+  /// Es lo que hace segura la carrera con un adaptador que siga vivo en un
+  /// worker: al guardar compara el epoch que cargó, y si no casa descarta su
+  /// escritura. Sin esto, un adaptador cerrándose por inactividad pisaba el
+  /// reinicio con el estado viejo unos segundos después de pedirlo.
+  epoch Int @default(0)
+
+  updated_at DateTime @updatedAt @db.Timestamptz(6)
+
+  @@map("paper_states")
+}
+
+/// Caché de metadatos de mercado. Sin tick y step no se puede construir una
+/// orden válida, así que esto se refresca por cron y se consulta en cada
+/// validación y en cada preview.
+model Market {
+  id     Int    @id @default(autoincrement())
+  venue  Venue
+  symbol String @db.VarChar(32)
+
+  /// Red del venue a la que pertenece esta ficha.
+  ///
+  /// Forma parte de la CLAVE, no es un adorno: los mercados de testnet no son
+  /// los de mainnet. Aster lista otro conjunto de pares, Lighter usa otros
+  /// `market_id`, y el tick y el step difieren. Sin esta columna el cron de
+  /// sincronizacion escribia las dos redes en la misma fila y la ultima en
+  /// pasar dejaba a la otra construyendo ordenes con la spec equivocada.
+  testnet Boolean @default(false)
+
+  canonical String @db.VarChar(32)
+  base      String @db.VarChar(16)
+  quote     String @db.VarChar(16)
+
+  tick_size    Decimal  @db.Decimal(38, 18)
+  step_size    Decimal  @db.Decimal(38, 18)
+  min_notional Decimal? @db.Decimal(38, 18)
+  min_qty      Decimal? @db.Decimal(38, 18)
+  max_qty      Decimal? @db.Decimal(38, 18)
+
+  max_leverage   Int
+  price_decimals Int
+  qty_decimals   Int
+  active         Boolean @default(true)
+
+  updated_at DateTime @updatedAt @db.Timestamptz(6)
+
+  @@unique([venue, testnet, symbol], map: "uq_market_venue_symbol")
+  @@index([canonical])
+  @@map("markets")
+}
+
+// ═══════════════════════════════════════════════════════════════
+// BOTS
+// ═══════════════════════════════════════════════════════════════
+
+enum StrategyKind {
+  GRID_CLASSIC
+  NEUTRAL_GRID
+  TDCA
+  MARTINGALE
+  GRIDMART
+  MARKET_MAKER
+  MARKET_MAKER_V2
+}
+
+enum BotStatus {
+  DRAFT
+  STARTING
+  RUNNING
+  PAUSED
+  STOPPING
+  STOPPED
+  ERROR
+  LIQUIDATED
+}
+
+enum Direction {
+  LONG
+  SHORT
+  NEUTRAL
+}
+
+enum MarginMode {
+  CROSS
+  ISOLATED
+}
+
+model Bot {
+  id      String @id(map: "pk_bot_id") @default(uuid())
+  user_id String
+  user    User   @relation(fields: [user_id], references: [id], onDelete: Cascade)
+
+  exchange_account_id String
+  exchange_account    ExchangeAccount @relation(fields: [exchange_account_id], references: [id], onDelete: Cascade)
+
+  name     String       @db.VarChar(64)
+  venue    Venue
+  symbol   String       @db.VarChar(32)
+  strategy StrategyKind
+  status   BotStatus    @default(DRAFT)
+
+  direction   Direction
+  leverage    Int
+  margin_mode MarginMode @default(ISOLATED)
+
+  /// Margen asignado al bot, desnormalizado desde la configuracion vigente.
+  /// Vive aqui y no solo en la revision porque el ROI, el leaderboard y las
+  /// guardas de riesgo lo consultan constantemente, y hacer un join contra
+  /// bot_config_revisions por config_version en cada listado seria caro.
+  total_investment Decimal @default(0) @db.Decimal(38, 18)
+
+  /// Versión de configuración vigente. Apunta a BotConfigRevision.version.
+  config_version Int @default(1)
+
+  /// true = el bot opera contra el simulador, no contra el venue. Se decide al
+  /// crearlo y no se puede cambiar: mezclar simulado y real en el mismo bot
+  /// haría que su histórico de PnL no significara nada.
+  dry_run Boolean @default(false)
+
+  // El arrendamiento (lease) que garantiza UN solo worker por bot vive ENTERO
+  // en Redis (`crypton:lease:bot:<id>`, ver LeaseService). Aquí hubo un
+  // `lease_owner`/`lease_expires_at` con su índice que no escribía nadie: dos
+  // fuentes de verdad sobre el papel, una sola en la práctica, y un índice
+  // que solo costaba escrituras.
+
+  started_at DateTime? @db.Timestamptz(6)
+  stopped_at DateTime? @db.Timestamptz(6)
+  last_tick_at DateTime? @db.Timestamptz(6)
+  last_error String?   @db.Text
+  note       String?   @db.VarChar(256)
+
+  created_at DateTime  @default(now()) @db.Timestamptz(6)
+  updated_at DateTime? @updatedAt @db.Timestamptz(6)
+
+  revisions BotConfigRevision[]
+  levels    BotLevel[]
+  orders    BotOrder[]
+  cycles    BotCycle[]
+  events    BotEvent[]
+  commands  BotCommand[]
+  snapshots BotSnapshot[]
+  mm_stats  BotMmStat?
+  share     BotShare?
+  /// Solo en los simulados: el sandbox contra el que operan.
+  paper_state PaperState?
+  /// Backtests lanzados sobre su configuración. Ver `BacktestRun`.
+  backtests   BacktestRun[]
+
+  /// OJO: en la base hay además un índice ÚNICO PARCIAL que Prisma no sabe
+  /// declarar y que por tanto NO aparece aquí:
+  ///
+  ///   uq_bot_live_account_symbol ON (exchange_account_id, symbol)
+  ///     WHERE status IN (STARTING, RUNNING, PAUSED, STOPPING)
+  ///       AND dry_run = false
+  ///
+  /// Impide dos bots REALES vivos sobre el mismo par y cuenta. En un DEX la
+  /// posición es única por cuenta y símbolo: dos bots verían la posición del
+  /// otro como propia.
+  ///
+  /// Los SIMULADOS quedan fuera porque su posición vive en su propio simulador y
+  /// no compite con nadie. Estuvieron dentro de la regla una temporada, y con
+  /// razón: mientras el simulador fue uno por CUENTA, dos simulados sobre el
+  /// mismo par se pisaban igual que dos reales. Desde que cada bot tiene el suyo
+  /// (`PaperState`) eso ya no pasa. Ver las migraciones
+  /// 20260822120000_engine_hardening, 20260822140000_pair_exclusivity_real_only,
+  /// 20260826120000_paper_accounts y
+  /// 20260826142000_pair_exclusivity_simulated_exempt.
+  @@index([user_id, status])
+  @@index([venue, symbol])
+  @@map("bots")
+}
+
+/// Historial de configuración. NUNCA se sobrescribe: cada cambio es una fila
+/// nueva. Es lo que permite responder a "¿por qué el bot hizo esto?" mirando
+/// qué configuración estaba vigente en ese momento.
+model BotConfigRevision {
+  id     BigInt @id @default(autoincrement())
+  bot_id String
+  bot    Bot    @relation(fields: [bot_id], references: [id], onDelete: Cascade)
+
+  version Int
+  config  Json
+  /// Solo los campos que cambiaron respecto de la revisión anterior.
+  diff    Json?
+  /// HOT | WARM | COLD — cómo se aplicó.
+  apply_level String? @db.VarChar(8)
+  applied_by  String? @db.VarChar(64)
+
+  created_at DateTime @default(now()) @db.Timestamptz(6)
+
+  @@unique([bot_id, version], map: "uq_bot_config_version")
+  @@index([bot_id, created_at])
+  @@map("bot_config_revisions")
+}
+
+enum LevelKind {
+  BASE
+  SAFETY
+  GRID_BUY
+  GRID_SELL
+  TAKE_PROFIT
+  STOP_LOSS
+  QUOTE_BID
+  QUOTE_ASK
+  /// La orden con la que el VENUE cerro la posicion, no una nuestra.
+  ///
+  /// No es un nivel de la escalera: no cuenta como entrada, no ocupa indice y no
+  /// esta en el enum de `@crypton/shared` —el que gobierna el vocabulario de los
+  /// client-order-id— a proposito. Vive solo aqui porque solo es una columna:
+  /// lo que hace es que una liquidacion pueda anotarse en el ledger y que el
+  /// historial pueda decir POR QUE se cerro la posicion.
+  LIQUIDATION
+}
+
+enum LevelState {
+  PLANNED
+  PLACED
+  FILLED
+  CANCELED
+}
+
+/// La escalera DESEADA. Es el estado objetivo contra el que reconcilia el motor.
+model BotLevel {
+  id     BigInt @id @default(autoincrement())
+  bot_id String
+  bot    Bot    @relation(fields: [bot_id], references: [id], onDelete: Cascade)
+
+  cycle_seq   Int
+  kind        LevelKind
+  level_index Int
+  state       LevelState @default(PLANNED)
+
+  target_price Decimal @db.Decimal(38, 18)
+  target_qty   Decimal @db.Decimal(38, 18)
+  reduce_only  Boolean @default(false)
+
+  client_order_id String @db.VarChar(64)
+
+  updated_at DateTime @updatedAt @db.Timestamptz(6)
+
+  @@unique([bot_id, client_order_id], map: "uq_bot_level_coid")
+  @@index([bot_id, state])
+  @@map("bot_levels")
+}
+
+enum OrderStatus {
+  PENDING
+  OPEN
+  PARTIALLY_FILLED
+  FILLED
+  CANCELED
+  REJECTED
+  EXPIRED
+}
+
+enum OrderSide {
+  BUY
+  SELL
+}
+
+enum OrderKind {
+  LIMIT
+  MARKET
+  POST_ONLY
+}
+
+/// Órdenes REALES en el venue.
+///
+/// `client_order_id` es único a nivel global y es la clave de idempotencia: el
+/// motor consulta por él antes de colocar nada, así que un reintento tras un
+/// timeout nunca duplica una posición.
+model BotOrder {
+  id     BigInt @id @default(autoincrement())
+  bot_id String
+  bot    Bot    @relation(fields: [bot_id], references: [id], onDelete: Cascade)
+
+  client_order_id String  @unique(map: "uq_bot_order_coid") @db.VarChar(64)
+  /// El mismo id traducido al formato del venue (hex, entero o string).
+  venue_client_id String? @db.VarChar(64)
+  venue_order_id  String? @db.VarChar(64)
+
+  level_kind  LevelKind
+  level_index Int
+  cycle_seq   Int
+
+  side        OrderSide
+  kind        OrderKind
+  price       Decimal     @db.Decimal(38, 18)
+  qty         Decimal     @db.Decimal(38, 18)
+  filled_qty  Decimal     @default(0) @db.Decimal(38, 18)
+  avg_price   Decimal?    @db.Decimal(38, 18)
+  status      OrderStatus @default(PENDING)
+  reduce_only Boolean     @default(false)
+
+  raw_error String? @db.Text
+
+  placed_at  DateTime  @default(now()) @db.Timestamptz(6)
+  updated_at DateTime  @updatedAt @db.Timestamptz(6)
+  closed_at  DateTime? @db.Timestamptz(6)
+
+  fills BotFill[]
+
+  @@index([bot_id, status])
+  @@index([bot_id, cycle_seq])
+  /// `recordFill` busca por `venue_client_id` y por `venue_order_id`, y
+  /// `syncOrderState` actualiza por `venue_client_id`. Se hace en CADA
+  /// ejecución: sin estos índices, cada fill recorría la tabla entera.
+  @@index([bot_id, venue_client_id])
+  @@index([bot_id, venue_order_id])
+  @@map("bot_orders")
+}
+
+/// Ledger inmutable de ejecuciones.
+///
+/// `venue_fill_id` es único POR ORDEN: reprocesar el mismo mensaje de
+/// WebSocket (que pasa en cada reconexión) no puede contabilizar la misma
+/// ejecución dos veces.
+model BotFill {
+  id           BigInt   @id @default(autoincrement())
+  bot_order_id BigInt
+  order        BotOrder @relation(fields: [bot_order_id], references: [id], onDelete: Cascade)
+
+  venue_fill_id String    @db.VarChar(96)
+  side          OrderSide
+  price         Decimal   @db.Decimal(38, 18)
+  qty           Decimal   @db.Decimal(38, 18)
+  fee           Decimal   @default(0) @db.Decimal(38, 18)
+  fee_asset     String    @default("USDC") @db.VarChar(16)
+  is_taker      Boolean   @default(false)
+
+  executed_at DateTime @db.Timestamptz(6)
+  created_at  DateTime @default(now()) @db.Timestamptz(6)
+
+  /// La unicidad NO puede ser global. Los ids llegan crudos del venue (`tid` en
+  /// Hyperliquid, `t` en Aster) y su espacio es POR VENUE: dos venues pueden
+  /// emitir el mismo número. Con unicidad global, la segunda ejecución chocaba
+  /// con P2002 y `recordFill` la descartaba EN SILENCIO — fuera del ledger y
+  /// fuera del PnL del ciclo. Es el mismo fallo que ya se corrigió para
+  /// `venue_order_id`.
+  @@unique([bot_order_id, venue_fill_id], map: "uq_bot_fill_order_venue_id")
+  @@index([bot_order_id])
+  @@map("bot_fills")
+}
+
+/// Un ciclo: apertura → take profit → cooldown → siguiente.
+model BotCycle {
+  id     BigInt @id @default(autoincrement())
+  bot_id String
+  bot    Bot    @relation(fields: [bot_id], references: [id], onDelete: Cascade)
+
+  seq       Int
+  opened_at DateTime  @default(now()) @db.Timestamptz(6)
+  closed_at DateTime? @db.Timestamptz(6)
+
+  entries_filled Int      @default(0)
+  last_entry_at  DateTime? @db.Timestamptz(6)
+  /// Índices de nivel ya ejecutados en este ciclo.
+  filled_level_indexes Int[]
+  cooldown_until       DateTime? @db.Timestamptz(6)
+
+  anchor_price  Decimal? @db.Decimal(38, 18)
+  average_entry Decimal? @db.Decimal(38, 18)
+  exit_avg      Decimal? @db.Decimal(38, 18)
+  qty           Decimal  @default(0) @db.Decimal(38, 18)
+  realized_pnl  Decimal  @default(0) @db.Decimal(38, 18)
+  fees          Decimal  @default(0) @db.Decimal(38, 18)
+
+  /// Estado propio de la estrategia (recompras de GridMart, última cotización
+  /// del market maker...). Ver CycleState.scratch en @crypton/shared.
+  scratch Json @default("{}")
+
+  @@unique([bot_id, seq], map: "uq_bot_cycle_seq")
+  @@index([bot_id, closed_at])
+  @@map("bot_cycles")
+}
+
+enum EventSeverity {
+  DEBUG
+  INFO
+  WARN
+  ERROR
+  CRITICAL
+}
+
+/// Bitácora de auditoría del bot: alimenta el timeline de la app y las alertas.
+model BotEvent {
+  id     BigInt @id @default(autoincrement())
+  bot_id String
+  bot    Bot    @relation(fields: [bot_id], references: [id], onDelete: Cascade)
+
+  type     String        @db.VarChar(48)
+  severity EventSeverity @default(INFO)
+  message  String        @db.Text
+  payload  Json?
+
+  created_at DateTime @default(now()) @db.Timestamptz(6)
+
+  @@index([bot_id, created_at(sort: Desc)])
+  @@index([severity, created_at(sort: Desc)])
+  @@map("bot_events")
+}
+
+// ═══════════════════════════════════════════════════════════════
+// BITÁCORA DE ACTIVIDAD
+// ═══════════════════════════════════════════════════════════════
+
+/// Quién ejecuta la acción. ANON = petición sin sesión válida.
+enum ActorKind {
+  USER
+  ADMIN
+  WORKER
+  SYSTEM
+  ANON
+}
+
+/// Bitácora transversal de operaciones. Se activa con `AUDIT_LOG_ENABLE`.
+///
+/// NO duplica `bot_events`, que ya registra la vida de cada bot y cuelga de su
+/// `bot_id`. Aquí entra justo lo que allí NO CABE, porque `bot_events.bot_id`
+/// es obligatorio y en cascada:
+///
+///   · Acciones sin bot: entrar, reautenticarse, dar de alta una credencial de
+///     firma, cambiar límites de riesgo, borrar la cuenta.
+///   · Acciones de ADMIN sobre la cuenta de otro.
+///   · Fallos HTTP, que hoy no dejan rastro en ninguna parte.
+///   · Ciclo de vida del worker: leases perdidos, barridos fallidos.
+///   · `emergencyCancelAll`, que cancela todo un símbolo en el venue cuando el
+///     bot ya no existe — y que hoy NO se puede registrar precisamente porque
+///     la clave foránea de `bot_events` lo impide.
+///
+/// Ninguna columna admite el cuerpo de una petición: lo que entra en `meta` lo
+/// decide una lista blanca por acción. Ver `AuditService` y `@Audit()`.
+model ActivityLog {
+  id BigInt @id @default(autoincrement())
+
+  actor ActorKind
+
+  /// SIN clave foránea a `users`, y es la decisión que da sentido a la tabla.
+  /// Borrar la cuenta es el evento que más importa conservar, y en cascada se
+  /// borraría justo su propio rastro. Es un UUID: una vez borrada la fila de
+  /// `users` no identifica a nadie por sí solo.
+  actor_id String? @db.VarChar(64)
+
+  /// Tampoco con clave foránea, por el mismo motivo: se registran acciones
+  /// sobre bots que ya se han borrado.
+  bot_id String? @db.VarChar(64)
+
+  /// Acción en notación `dominio.verbo`: `exchange_account.create`,
+  /// `risk.kill_switch`, `auth.step_up`, `worker.lease_lost`.
+  action   String        @db.VarChar(64)
+  severity EventSeverity @default(INFO)
+  /// OK | DENIED | ERROR.
+  outcome  String        @db.VarChar(12)
+  message  String?       @db.Text
+
+  /// PATRÓN de ruta (`/bots/:id`), nunca la URL.
+  ///
+  /// `GET /auth/google/callback` recibe el código de OAuth y el `state` en el
+  /// query string, y la vuelta a la app lleva el vale de sesión. Guardar la URL
+  /// entera sería almacenar credenciales de un solo uso en claro. Además, el
+  /// patrón evita una cardinalidad infinita por los UUID de las rutas.
+  route       String? @db.VarChar(160)
+  method      String? @db.VarChar(8)
+  status_code Int?
+  duration_ms Int?
+  /// Dato personal: por eso esta tabla se purga (`RETENTION_AUDIT_DAYS`).
+  ip          String? @db.VarChar(45)
+  request_id  String? @db.VarChar(36)
+
+  /// Solo campos declarados en la lista blanca de cada acción.
+  meta Json?
+
+  created_at DateTime @default(now()) @db.Timestamptz(6)
+
+  /// Los tres indices llevan `map` con el nombre que les puso su migracion.
+  ///
+  /// Sin el, Prisma los nombra a su manera —`activity_log_actor_id_created_at_idx`—
+  /// y el esquema deja de describir lo que hay en la base: `migrate diff` salia
+  /// con deriva SIEMPRE, y una deriva permanente esconde las de verdad, que es
+  /// justo para lo que sirve ese comando. El nombre bueno es el de la base: el
+  /// resto de la tabla sigue la misma convencion (`pk_`, `uq_`, `idx_`).
+  ///
+  /// El listado por defecto.
+  @@index([created_at(sort: Desc)], map: "idx_activity_created")
+  /// «Qué ha hecho este usuario».
+  @@index([actor_id, created_at(sort: Desc)], map: "idx_activity_actor")
+  /// «Todos los PANIC», «todas las altas de credencial».
+  @@index([action, created_at(sort: Desc)], map: "idx_activity_action")
+
+  /// OJO: en la base hay ademas un CUARTO indice, parcial, que Prisma no sabe
+  /// declarar y que por tanto NO aparece aqui:
+  ///
+  ///   idx_activity_failures ON (created_at DESC) WHERE outcome <> 'OK'
+  ///
+  /// Responde a «¿esta todo bien o hay errores?», y es parcial porque solo
+  /// indexa las filas malas: en un sistema sano son una fraccion diminuta. Se
+  /// documenta aqui por el mismo motivo que `uq_bot_live_account_symbol` en
+  /// `Bot`: un indice que no esta en el esquema es un indice que alguien borra
+  /// sin saber que existia. Ver la migracion 20260822180000_activity_log.
+  @@map("activity_log")
+}
+
+/// Bandeja de comandos de la API hacia el motor.
+///
+/// Existe porque el bus de Redis es pub/sub: se entrega a quien está escuchando
+/// en ese instante y no deja rastro. Si el worker dueño estaba reiniciándose, o
+/// reconectando a Redis, o el bot todavía no había sido adoptado, el comando se
+/// perdía EN SILENCIO — y la API ya había respondido `accepted`. Para un PANIC,
+/// con dinero abierto en el venue, eso es inaceptable.
+///
+/// Ahora la fila es la verdad y el mensaje del bus solo acelera la entrega: si
+/// el aviso se pierde, el runner encuentra el comando en su siguiente tick.
+model BotCommand {
+  id     BigInt @id @default(autoincrement())
+  bot_id String
+  bot    Bot    @relation(fields: [bot_id], references: [id], onDelete: Cascade)
+
+  command String @db.VarChar(32)
+  /// Quién lo pidió. Null = lo generó el propio sistema (kill-switch, plan).
+  requested_by String? @db.VarChar(64)
+
+  /// Argumentos del comando, para los pocos que los llevan.
+  ///
+  /// Existe por ADJUST_MARGIN: «ajusta el margen» sin importe ni sentido no
+  /// significa nada, y el resto de comandos son verbos sin argumentos. Va aquí
+  /// y no en el mensaje del bus porque la fila es la ENTREGA —el bus solo
+  /// adelanta el momento—, y un aporte de margen que llega sin su importe es
+  /// peor que uno que no llega.
+  payload Json?
+
+  /// Lo toma el worker que lo va a ejecutar. El paso de null a no-null se hace
+  /// con un update condicional, que es lo que impide que dos entregas del mismo
+  /// comando —el aviso del bus y el barrido del tick— lo ejecuten dos veces.
+  claimed_at  DateTime? @db.Timestamptz(6)
+  claimed_by  String?   @db.VarChar(64)
+  executed_at DateTime? @db.Timestamptz(6)
+  error       String?   @db.Text
+
+  created_at DateTime @default(now()) @db.Timestamptz(6)
+
+  @@index([bot_id, created_at])
+  @@map("bot_commands")
+}
+
+/// Contadores propios de market making, uno por bot.
+///
+/// Vive aparte de `bots` y de `bot_snapshots` por dos motivos. Son contadores
+/// MONOTÓNICOS que se incrementan en cada ejecución, no una foto periódica:
+/// meterlos en la serie temporal obligaría a recorrerla entera para saber
+/// cuántos fills lleva el bot. Y solo tienen sentido para dos de las siete
+/// estrategias, así que ensanchar `bots` con diez columnas nulas para las otras
+/// cinco no sale a cuenta.
+///
+/// Las definiciones no son universales; las nuestras están en
+/// `MarketMakerStats` (@crypton/shared) y la app las enseña al pie.
+model BotMmStat {
+  bot_id String @id
+  bot    Bot    @relation(fields: [bot_id], references: [id], onDelete: Cascade)
+
+  fills       Int @default(0)
+  buy_fills   Int @default(0)
+  sell_fills  Int @default(0)
+  /// `bot_fills.is_taker` agregado: cuánto del flujo se está cobrando de verdad
+  /// como maker. Un market maker con muchos taker fills no está haciendo su
+  /// trabajo, y hasta ahora ese dato se guardaba sin que nadie lo mirase.
+  maker_fills Int @default(0)
+  taker_fills Int @default(0)
+
+  /// Pares casados: cada ejecución que REDUCE posición cierra uno.
+  closed_cycles Int @default(0)
+
+  /// Diferencial capturado ANTES de comisiones. Es el «grid profit» de la ficha.
+  gross_matched_profit Decimal @default(0) @db.Decimal(38, 18)
+  fees_paid            Decimal @default(0) @db.Decimal(38, 18)
+
+  /// Máximos históricos. Son el denominador de «efficiency» y de la APR: sin
+  /// ellos, un bot que solo tuvo capital diez minutos parecería infinitamente
+  /// rentable.
+  peak_inventory Decimal @default(0) @db.Decimal(38, 18)
+  peak_margin    Decimal @default(0) @db.Decimal(38, 18)
+
+  last_fill_at DateTime? @db.Timestamptz(6)
+  updated_at   DateTime  @updatedAt @db.Timestamptz(6)
+
+  @@map("bot_mm_stats")
+}
+
+/// Serie temporal por minuto. Alimenta gráficas, ROI y leaderboard.
+model BotSnapshot {
+  id     BigInt @id @default(autoincrement())
+  bot_id String
+  bot    Bot    @relation(fields: [bot_id], references: [id], onDelete: Cascade)
+
+  equity            Decimal  @db.Decimal(38, 18)
+  position_qty      Decimal  @db.Decimal(38, 18)
+  average_entry     Decimal? @db.Decimal(38, 18)
+  mark_price        Decimal  @db.Decimal(38, 18)
+  unrealized_pnl    Decimal  @db.Decimal(38, 18)
+  realized_pnl_acc  Decimal  @db.Decimal(38, 18)
+  margin_used       Decimal  @db.Decimal(38, 18)
+  liquidation_price Decimal? @db.Decimal(38, 18)
+  open_orders       Int      @default(0)
+
+  taken_at DateTime @default(now()) @db.Timestamptz(6)
+
+  @@index([bot_id, taken_at(sort: Desc)])
+  @@map("bot_snapshots")
+}
+
+// ═══════════════════════════════════════════════════════════════
+// RIESGO Y NOTIFICACIONES
+// ═══════════════════════════════════════════════════════════════
+
+/// Guardas que el motor evalúa en CADA tick, antes de colocar nada.
+model RiskLimit {
+  id      String @id @default(uuid())
+  user_id String @unique
+  user    User   @relation(fields: [user_id], references: [id], onDelete: Cascade)
+
+  max_notional_per_bot Decimal? @db.Decimal(38, 18)
+  max_total_notional   Decimal? @db.Decimal(38, 18)
+  max_leverage         Int?
+  max_open_bots        Int?
+  max_daily_loss       Decimal? @db.Decimal(38, 18)
+  /// Al superarse esta caída, el bot se pausa solo y se avisa.
+  kill_switch_drawdown_pct Decimal? @db.Decimal(10, 4)
+  /// Distancia a liquidación por debajo de la cual se emite alerta crítica.
+  liquidation_alert_pct Decimal? @default(10) @db.Decimal(10, 4)
+
+  updated_at DateTime @updatedAt @db.Timestamptz(6)
+
+  @@map("risk_limits")
+}
+
+model TelegramLink {
+  id      String @id @default(uuid())
+  user_id String @unique
+  user    User   @relation(fields: [user_id], references: [id], onDelete: Cascade)
+
+  chat_id   String? @db.VarChar(32)
+  link_code String? @unique @db.VarChar(16)
+  /// Caducidad del código de vinculación.
+  ///
+  /// Sin ella, todo el que pulsó «vincular» y no terminó dejaba un código
+  /// válido PARA SIEMPRE. Como el canje entra por Telegram y no por HTTP,
+  /// ningún límite de peticiones lo protegía, y cada intento se contrasta
+  /// contra todos los códigos vivos a la vez: la probabilidad de acertar crecía
+  /// con el número de vinculaciones pendientes. Quien acertara recibía las
+  /// operaciones y avisos de liquidación de la víctima, y la desvinculaba a
+  /// ella en silencio.
+  link_code_expires_at DateTime? @db.Timestamptz(6)
+  verified_at          DateTime? @db.Timestamptz(6)
+  /// Qué eventos quiere recibir: { fills, cycles, errors, risk, liquidation, daily }
+  prefs Json @default("{}")
+
+  created_at DateTime @default(now()) @db.Timestamptz(6)
+
+  @@map("telegram_links")
+}
+
+// ═══════════════════════════════════════════════════════════════
+// COMUNIDAD
+// ═══════════════════════════════════════════════════════════════
+
+/// Configuración compartida para copy-trading.
+///
+/// `config_blob` va SANEADA: sin credenciales y con los importes expresados en
+/// porcentaje del capital, nunca en valor absoluto. Copiar un bot no debe
+/// revelar cuánto dinero mueve su autor ni desplegar su tamaño sobre la cuenta
+/// de otra persona.
+model BotShare {
+  id     String @id @default(uuid())
+  bot_id String @unique
+  bot    Bot    @relation(fields: [bot_id], references: [id], onDelete: Cascade)
+
+  user_id String
+  user    User   @relation(fields: [user_id], references: [id], onDelete: Cascade)
+
+  share_code  String  @unique @db.VarChar(16)
+  config_blob Json
+  public      Boolean @default(false)
+  copies_count Int    @default(0)
+
+  created_at DateTime @default(now()) @db.Timestamptz(6)
+
+  @@index([public, copies_count(sort: Desc)])
+  @@map("bot_shares")
+}
+
+enum LeaderboardPeriod {
+  DAY
+  WEEK
+  MONTH
+  ALL
+}
+
+/// Ranking materializado por cron: calcularlo en caliente con miles de
+/// snapshots por bot haría inusable la pantalla.
+model LeaderboardEntry {
+  id     BigInt @id @default(autoincrement())
+  bot_id String
+
+  period LeaderboardPeriod
+
+  venue    Venue
+  symbol   String       @db.VarChar(32)
+  strategy StrategyKind
+
+  roi_pct        Decimal @db.Decimal(18, 6)
+  aum            Decimal @db.Decimal(38, 18)
+  total_pnl      Decimal @db.Decimal(38, 18)
+  uptime_seconds Int
+  rank           Int
+
+  computed_at DateTime @default(now()) @db.Timestamptz(6)
+
+  @@unique([bot_id, period], map: "uq_leaderboard_bot_period")
+  @@index([period, rank])
+  @@map("leaderboard_entries")
+}
+
+// ═══════════════════════════════════════════════════════════════
+// BACKTESTS (solo ADMIN)
+// ═══════════════════════════════════════════════════════════════
+
+enum BacktestSource {
+  BINANCE
+  BYBIT
+}
+
+/// Una ejecución de backtest, con su configuración y su resultado.
+///
+/// Se guarda —en vez de servir el resultado y olvidarlo— por UNA razón concreta:
+/// lo que hace útil un backtest no es el número suelto, es comparar dos ajustes
+/// sobre el MISMO periodo. Sin persistencia, esa comparación exige tener las dos
+/// pestañas abiertas y fiarse de la memoria.
+///
+/// La ejecución es SÍNCRONA: no hay columnas de estado ni de reclamo porque no
+/// hay cola. Está medido: una rejilla de cien niveles sobre treinta días en velas
+/// de cinco minutos son unos siete segundos de CPU, muy por debajo del
+/// interceptor de ochenta segundos de la API. Meter un worker, un lease y un
+/// canal de progreso para eso habría sido infraestructura que no hace falta.
+model BacktestRun {
+  id String @id(map: "pk_backtest_run_id") @default(uuid())
+
+  /// El bot del que salió la configuración. Nulo = configuración suelta, que el
+  /// esquema ya admite aunque la API todavía no la ofrezca.
+  bot_id String?
+  bot    Bot?    @relation(fields: [bot_id], references: [id], onDelete: SetNull)
+
+  /// El administrador que lo lanzó. Se conserva aunque borre su cuenta: es
+  /// trazabilidad, y por eso no hay cascada.
+  requested_by String
+
+  venue    Venue
+  symbol   String       @db.VarChar(32)
+  strategy StrategyKind
+
+  /// Instantánea COMPLETA de la configuración usada.
+  ///
+  /// No es una referencia a `bot_config_revisions` a propósito: el bot puede
+  /// cambiar mañana, y un resultado que apunta a una configuración que ya no
+  /// existe deja de significar nada.
+  config         Json
+  config_version Int?
+
+  source        BacktestSource
+  /// El símbolo que se pidió DE VERDAD a la fuente: `BTCUSDT`, no `BTC`.
+  source_symbol String         @db.VarChar(32)
+  market_type   String         @db.VarChar(8)
+  interval      String         @db.VarChar(8)
+  from_ms       BigInt
+  to_ms         BigInt
+
+  /// Saldo inicial, comisiones, deslizamiento, margen de mantenimiento,
+  /// diferencial sintético y recorrido de la vela.
+  ///
+  /// Van juntos y se guardan enteros porque son EXACTAMENTE lo que hace
+  /// comparables dos ejecuciones: dos resultados con comisiones distintas no se
+  /// pueden poner uno al lado del otro.
+  params Json
+
+  bars        Int
+  ticks       Int
+  fills_total Int
+  duration_ms Int
+
+  metrics Json
+  /// Curva de equity ya agregada, conservando los extremos de cada cubo.
+  ///
+  /// Se remuestrea DESPUÉS de calcular el drawdown máximo sobre la serie
+  /// completa: al revés, el remuestreo escondería justo el peor momento.
+  equity_curve Json
+  /// Velas para el gráfico, agregadas. Agregadas y no muestreadas: una vela
+  /// muestreada pierde las mechas, y las mechas son lo que ejecutó las órdenes.
+  candles  Json
+  warnings Json
+
+  created_at DateTime @default(now()) @db.Timestamptz(6)
+
+  fills BacktestFill[]
+
+  @@index([bot_id, created_at])
+  @@index([requested_by, created_at])
+  @@map("backtest_runs")
+}
+
+/// Las ejecuciones simuladas de un backtest.
+///
+/// En tabla propia y no dentro del JSON del run: un market maker sobre treinta
+/// días produce decenas de miles, y meterlas en una columna obligaría a leerlas
+/// todas para pintar una ventana del gráfico.
+model BacktestFill {
+  id     BigInt      @id @default(autoincrement())
+  run_id String
+  run    BacktestRun @relation(fields: [run_id], references: [id], onDelete: Cascade)
+
+  ts          BigInt
+  side        OrderSide
+  level_kind  LevelKind?
+  level_index Int?
+  cycle_seq   Int
+
+  price    Decimal @db.Decimal(38, 18)
+  qty      Decimal @db.Decimal(38, 18)
+  fee      Decimal @db.Decimal(38, 18)
+  is_taker Boolean
+
+  liquidation        Boolean @default(false)
+  position_after     Decimal @db.Decimal(38, 18)
+  realized_acc_after Decimal @db.Decimal(38, 18)
+
+  @@index([run_id, ts])
+  @@map("backtest_fills")
+}

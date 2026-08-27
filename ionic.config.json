@@ -1,0 +1,13 @@
+{
+  "projects": {
+    "app": {
+      "name": "app",
+      "integrations": {
+        "capacitor": {}
+      },
+      "type": "angular-standalone",
+      "root": "apps/app"
+    }
+  },
+  "defaultProject": "app"
+}

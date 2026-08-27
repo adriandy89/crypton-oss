@@ -1,0 +1,298 @@
+/* Pantalla de datos: aprovecha el ancho en un monitor. Ver global.scss. */
+:host {
+  --page-max: var(--content-wide);
+}
+
+/* ── Filtros ──
+   Pegada arriba: la lista tiene cientos de filas y, sin esto, cambiar de
+   plataforma obliga a subir del todo primero. Va con fondo opaco y borde
+   inferior porque las filas pasan por debajo. */
+.filters {
+  position: sticky;
+  top: 0;
+  z-index: 2;
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  padding: 10px var(--space-4);
+  background: var(--surface-base);
+  border-bottom: 1px solid var(--border-subtle);
+}
+
+/* 38 px y en una sola línea. Antes eran 32 px y el rótulo largo —«Todas las
+   plataformas»— partía la pastilla en dos renglones; el corto va en la
+   pastilla y el largo, en el desplegable. */
+.chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  flex-shrink: 0;
+  height: 38px;
+  padding: 0 12px;
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-pill);
+  background: var(--surface-1);
+  color: var(--text-2);
+  font-family: var(--font-ui);
+  font-size: 12.5px;
+  font-weight: 600;
+  white-space: nowrap;
+
+  .lead {
+    font-size: 15px;
+    color: var(--text-3);
+  }
+
+  .caret {
+    font-size: 12px;
+    opacity: 0.8;
+    transition: transform 0.18s ease;
+  }
+
+  /* Filtro PUESTO: la pastilla se enciende. Sin esto, una lista filtrada y una
+     sin filtrar se ven igual y el usuario cree que faltan pares. */
+  &.on {
+    border-color: rgba(var(--brand-2-rgb), 0.5);
+    background: rgba(var(--brand-2-rgb), 0.12);
+    color: var(--text-1);
+
+    .lead {
+      color: var(--brand-2);
+    }
+  }
+
+  &.open {
+    border-color: var(--border-strong);
+
+    .caret {
+      transform: rotate(180deg);
+    }
+  }
+}
+
+/* Cuántos pares se están enseñando. */
+.count {
+  margin-inline-start: auto;
+  font-size: 11px;
+  font-weight: 700;
+  color: var(--text-2);
+}
+
+/* Estado del feed. Un precio caducado sin avisar engaña más que no tener
+   precio, y en un móvil la conexión se cae constantemente.
+
+   Dice si los precios ESTÁN LLEGANDO, no cuándo llegaron: la hora relativa
+   («hace 3 s») obliga a leer el reloj en cada pasada de detección de cambios y
+   era el origen del NG0100 de esta pantalla. */
+.stamp {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  flex-shrink: 0;
+  font-size: 10px;
+  white-space: nowrap;
+  color: var(--text-3);
+
+  /* Fallando: se pinta en el color de alarma. Antes un backend caído y una
+     lista sin datos se veían EXACTAMENTE igual. */
+  &.bad {
+    color: var(--signal-warn);
+  }
+
+  .dot {
+    width: 5px;
+    height: 5px;
+    border-radius: 50%;
+    background: var(--text-3);
+
+    &.live {
+      background: var(--pnl-up);
+      animation: pulse 1.4s ease-in-out infinite;
+    }
+
+    &.bad {
+      background: var(--signal-warn);
+    }
+  }
+}
+
+@keyframes pulse {
+  50% {
+    opacity: 0.25;
+  }
+}
+
+/* En pantallas estrechas el número de pares es lo primero que sobra: los dos
+   filtros y la frescura del precio no se pueden recortar. */
+@media (max-width: 360px) {
+  .count {
+    display: none;
+  }
+
+  .stamp {
+    margin-inline-start: auto;
+  }
+}
+
+/* ── Desplegables de los filtros ── */
+ion-popover.picker {
+  --width: 268px;
+  --offset-y: 6px;
+
+  .opts {
+    padding: 6px;
+  }
+
+  /* 46 px: se tocan con el pulgar y sin mirar, que es como se usa un filtro
+     mientras se recorre una lista. */
+  .opt {
+    display: flex;
+    align-items: center;
+    gap: var(--space-2);
+    width: 100%;
+    min-height: 46px;
+    padding: 0 10px;
+    border: 0;
+    border-radius: var(--radius-xs);
+    background: transparent;
+    color: var(--text-2);
+    font-family: var(--font-ui);
+    font-size: 13.5px;
+    font-weight: 600;
+    text-align: start;
+
+    .txt {
+      flex-grow: 1;
+      min-width: 0;
+    }
+
+    em {
+      display: block;
+      margin-top: 1px;
+      font-size: 10.5px;
+      font-style: normal;
+      font-weight: 500;
+      color: var(--text-3);
+    }
+
+    /* Cuántos pares hay en esa plataforma. Es lo que convierte «Lighter» en
+       una decisión informada antes de tocarla. */
+    .tally {
+      flex-shrink: 0;
+      font-size: 10.5px;
+      font-weight: 700;
+      color: var(--text-3);
+    }
+
+    ion-icon {
+      flex-shrink: 0;
+      font-size: 17px;
+      color: var(--brand-2);
+      visibility: hidden;
+    }
+
+    &.on {
+      background: var(--surface-2);
+      color: var(--text-1);
+
+      ion-icon {
+        visibility: visible;
+      }
+    }
+  }
+}
+
+.list {
+  padding-bottom: 40px;
+}
+
+/* 66 px: caben el par, la plataforma, el volumen, el precio y el cambio sin que
+   nada se corte a 360 px, que es donde esto se rompe primero. */
+.mkt {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-height: 66px;
+  padding: 0 var(--space-4);
+  border-bottom: 1px solid rgba(46, 43, 82, 0.55);
+  cursor: pointer;
+
+  &:active {
+    background: var(--surface-1);
+  }
+}
+
+/* 44 px de objetivo táctil aunque la estrella mida 20: por debajo de eso, en
+   una fila de 66 px se marca un favorito sin querer al hacer scroll. */
+.fav {
+  flex-shrink: 0;
+  width: 44px;
+  height: 44px;
+  margin-inline-start: -12px;
+  display: grid;
+  place-items: center;
+  border: 0;
+  background: transparent;
+  color: var(--text-3);
+
+  ion-icon {
+    font-size: 19px;
+  }
+
+  &.on {
+    color: var(--signal-warn);
+  }
+}
+
+.id {
+  flex-grow: 1;
+  min-width: 0;
+}
+
+.top {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+}
+
+.pair {
+  font-size: 15px;
+  font-weight: 700;
+  letter-spacing: -0.015em;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.sub {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-top: 3px;
+  font-size: 10.5px;
+  color: var(--text-3);
+}
+
+/* Ancho mínimo fijo: lo que cede al estrecharse la pantalla es el nombre del
+   par, nunca el precio. */
+.px {
+  flex-shrink: 0;
+  min-width: 84px;
+  text-align: end;
+
+  b {
+    display: block;
+    font-size: 14px;
+    font-weight: 700;
+    letter-spacing: -0.015em;
+  }
+
+  em {
+    display: block;
+    margin-top: 2px;
+    font-size: 11.5px;
+    font-weight: 700;
+    font-style: normal;
+  }
+}

@@ -1,0 +1,105 @@
+<ion-header>
+  <ion-toolbar>
+    <ion-buttons slot="start"><ion-back-button defaultHref="/profile" /></ion-buttons>
+    <ion-title>Seguridad</ion-title>
+  </ion-toolbar>
+</ion-header>
+
+<ion-content>
+  @if (!profile.profile()) {
+    <div class="center"><ion-spinner name="crescent" /></div>
+  } @else {
+    <!-- ══ Cómo se entra ══ -->
+    <ion-list inset="true">
+      <ion-item lines="none">
+        <ion-label>
+          <h3>Acceso con Google</h3>
+          <p>{{ profile.profile()!.email }}</p>
+        </ion-label>
+        <ion-note slot="end" color="success">Activo</ion-note>
+      </ion-item>
+
+      <ion-note class="aviso">
+        Es la única forma de entrar. No tenemos ninguna contraseña tuya: la tecleas en google.com y
+        nunca pasa por aquí. Solo recibimos tu correo.
+      </ion-note>
+    </ion-list>
+
+    <!-- ══ Lo que se protege en Google ══ -->
+    <ion-list inset="true">
+      <ion-item lines="none">
+        <ion-label>
+          <h3>Verificación en dos pasos</h3>
+          <p>Se configura en tu cuenta de Google y protege también a CRYPTON.</p>
+        </ion-label>
+      </ion-item>
+
+      <div class="aviso-critico">
+        <ion-icon name="warning-outline" />
+        Tu cuenta de Google es la llave de esta. Si alguien entra en ella, entra aquí. Actívale la
+        verificación en dos pasos, y mejor con una llave de seguridad o con los avisos del móvil que
+        con SMS.
+      </div>
+
+      <div class="acciones">
+        <ion-button expand="block" fill="outline" (click)="abrirSeguridadDeGoogle()">
+          <ion-icon slot="start" name="open-outline" />
+          Abrir la seguridad de mi cuenta de Google
+        </ion-button>
+      </div>
+    </ion-list>
+
+    <!-- ══ Sesiones ══ -->
+    <ion-list inset="true">
+      <ion-item lines="none">
+        <ion-label>
+          <h3>Sesiones abiertas</h3>
+          <p>Cierra la sesión en todos los dispositivos, incluido este.</p>
+        </ion-label>
+      </ion-item>
+
+      <ion-note class="aviso">
+        Es lo que hay que hacer si sospechas que alguien ha usado tu cuenta. Después, revisa también
+        los accesos de tu cuenta de Google.
+      </ion-note>
+
+      <div class="acciones">
+        <ion-button
+          expand="block"
+          fill="outline"
+          [disabled]="ocupado()"
+          (click)="cerrarTodasLasSesiones()"
+        >
+          @if (ocupado()) {
+            <ion-spinner name="crescent" />
+          } @else {
+            Cerrar todas las sesiones
+          }
+        </ion-button>
+      </div>
+    </ion-list>
+
+    <!-- ══ Zona irreversible ══ -->
+    <ion-list inset="true" class="peligro">
+      <ion-item lines="none">
+        <ion-label>
+          <h3>Borrar la cuenta</h3>
+          <p>
+            Se borra todo y no hay vuelta atrás. Las posiciones que tengas abiertas en el exchange
+            no se cierran.
+          </p>
+        </ion-label>
+      </ion-item>
+
+      <ion-note class="aviso">
+        Te pediremos identificarte otra vez con Google antes de borrar nada.
+      </ion-note>
+
+      <div class="acciones">
+        <ion-button expand="block" fill="outline" color="danger" (click)="borrarCuenta()">
+          Borrar mi cuenta
+        </ion-button>
+      </div>
+    </ion-list>
+  }
+</ion-content>

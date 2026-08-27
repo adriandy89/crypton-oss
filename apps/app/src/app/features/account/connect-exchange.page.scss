@@ -1,0 +1,83 @@
+.title {
+  font-family: var(--font-display);
+  font-size: 16px;
+  font-weight: 700;
+  letter-spacing: -0.02em;
+  margin: var(--space-5) 0 var(--space-2);
+}
+
+.steps {
+  margin: 0 0 var(--space-2);
+  padding-left: var(--space-5);
+  font-size: 13px;
+  line-height: 1.6;
+  color: var(--text-2);
+
+  li {
+    margin-bottom: var(--space-1);
+  }
+}
+
+// Aviso de seguridad: va arriba del todo y con peso visual porque es lo unico
+// de esta pantalla que, si se ignora, puede costarle a alguien todos sus fondos.
+.safe {
+  display: flex;
+  gap: 11px;
+  padding: var(--space-4);
+  border-radius: var(--radius-md);
+  background: rgba(var(--pnl-up-rgb), 0.09);
+  border: 1px solid rgba(var(--pnl-up-rgb), 0.3);
+  font-size: 13px;
+  line-height: 1.55;
+
+  ion-icon {
+    flex-shrink: 0;
+    font-size: 20px;
+    color: var(--pnl-up);
+    margin-top: 1px;
+  }
+}
+
+.danger {
+  display: flex;
+  gap: 11px;
+  padding: var(--space-4);
+  border-radius: var(--radius-md);
+  margin-top: var(--space-3);
+  background: rgba(var(--pnl-down-rgb), 0.13);
+  border: 1px solid rgba(var(--pnl-down-rgb), 0.3);
+  color: var(--pnl-down);
+  font-size: 13px;
+  line-height: 1.55;
+
+  ion-icon {
+    flex-shrink: 0;
+    font-size: 20px;
+    margin-top: 1px;
+  }
+}
+
+.foot {
+  display: block;
+  padding: var(--space-3) var(--space-2) 0;
+  font-size: 12px;
+  line-height: 1.55;
+  color: var(--text-3);
+}
+
+// Aire entre lo que se lee y lo que se pulsa.
+//
+// Ionic deja 4 px por encima de un boton, y con eso el aviso de arriba y el
+// boton se leen como una sola pieza: el dedo llega antes que la lectura, justo
+// en las dos decisiones caras de esta pantalla —irse a Google y mandar una
+// clave privada—. Es la misma separacion que usa `.next` en el asistente de
+// bots, para que la pantalla no invente su propio ritmo.
+.pad > ion-button {
+  margin-top: var(--space-5);
+}
+
+// La portezuela de reautenticacion: una tarjeta y un boton en una pantalla por
+// lo demas vacia. Sin este respiro la tarjeta queda colgando del segmento.
+.gate {
+  padding-top: var(--space-5);
+}

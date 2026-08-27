@@ -1,0 +1,42 @@
+{
+  "name": "@crypton/exchange-core",
+  "version": "0.1.0",
+  "license": "AGPL-3.0-only",
+  "private": true,
+  "description": "Adaptadores de DEX (Hyperliquid, Lighter, Aster) tras una interfaz única. Todo lo específico de cada venue —símbolos, precisión, firma, códigos de error— muere aquí dentro.",
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "dev": "tsc -p tsconfig.json --watch",
+    "test": "jest",
+    "test:watch": "jest --watch",
+    "lint": "echo noop"
+  },
+  "dependencies": {
+    "@crypton/shared": "workspace:*",
+    "@nktkas/hyperliquid": "^0.33.3",
+    "decimal.js": "^10.6.0",
+    "ethers": "^6.17.0",
+    "rxjs": "^7.8.1",
+    "ws": "^8.21.3",
+    "zklighter-sdk": "^1.3.0"
+  },
+  "devDependencies": {
+    "@types/jest": "^30.0.0",
+    "@types/node": "^24.0.0",
+    "@types/ws": "^8.18.1",
+    "jest": "^30.0.0",
+    "ts-jest": "^29.2.5",
+    "typescript": "^5.7.3"
+  },
+  "jest": {
+    "preset": "ts-jest",
+    "testEnvironment": "node",
+    "rootDir": "src",
+    "testRegex": "\\.spec\\.ts$",
+    "moduleNameMapper": {
+      "^@crypton/shared$": "<rootDir>/../../shared/src/index.ts"
+    }
+  }
+}

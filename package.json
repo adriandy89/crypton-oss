@@ -1,0 +1,35 @@
+{
+  "name": "crypton",
+  "version": "0.1.0",
+  "license": "AGPL-3.0-only",
+  "private": true,
+  "description": "CRYPTON — plataforma no custodial de bots de trading sobre DEX (Hyperliquid, Lighter, Aster)",
+  "packageManager": "pnpm@10.28.1",
+  "engines": {
+    "node": ">=22.12"
+  },
+  "scripts": {
+    "api": "pnpm --filter api start:dev",
+    "worker": "pnpm --filter worker start:dev",
+    "app": "pnpm --filter app start",
+    "android": "pnpm --filter app exec ionic cap run android -l --external",
+    "build": "pnpm -r build",
+    "build:packages": "pnpm --filter \"./packages/**\" build",
+    "test": "pnpm -r test",
+    "test:isolation": "pnpm --filter api test:e2e",
+    "test:strategies": "pnpm --filter strategy-core test",
+    "test:adapters": "pnpm --filter exchange-core test",
+    "test:backtest": "pnpm --filter @crypton/backtest test",
+    "lint": "pnpm -r lint",
+    "prisma:migrate": "pnpm --filter api prisma:migrate",
+    "prisma:deploy": "pnpm --filter api prisma:deploy",
+    "infra:up": "docker compose -f docker/docker-compose.infra.yml up -d",
+    "infra:down": "docker compose -f docker/docker-compose.infra.yml down",
+    "setup": "node scripts/setup-env.mjs",
+    "infra:logs": "docker compose -f docker/docker-compose.infra.yml logs -f",
+    "stack:up": "docker compose -f docker/docker-compose.yml up -d --build",
+    "stack:down": "docker compose -f docker/docker-compose.yml down",
+    "stack:logs": "docker compose -f docker/docker-compose.yml logs -f api worker",
+    "check:env": "node scripts/check-env.mjs"
+  }
+}

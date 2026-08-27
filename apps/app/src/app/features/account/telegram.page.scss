@@ -1,0 +1,95 @@
+.intro {
+  text-align: center;
+  padding: var(--space-6) var(--space-5) var(--space-5);
+
+  ion-icon {
+    font-size: 38px;
+    color: var(--text-3);
+    margin-bottom: var(--space-3);
+  }
+
+  h2 {
+    font-family: var(--font-display);
+    font-size: 18px;
+    font-weight: 700;
+    letter-spacing: -0.02em;
+    margin: 0 0 var(--space-2);
+  }
+
+  p {
+    font-size: 13px;
+    color: var(--text-2);
+    line-height: 1.6;
+    margin: 0;
+  }
+
+  ion-button {
+    margin-top: var(--space-4);
+  }
+}
+
+.linked {
+  display: flex;
+  align-items: center;
+  gap: 13px;
+  padding: var(--space-4);
+  border-radius: var(--radius-md);
+  background: rgba(var(--pnl-up-rgb), 0.09);
+  border: 1px solid rgba(var(--pnl-up-rgb), 0.28);
+  margin-bottom: var(--space-2);
+
+  ion-icon {
+    font-size: 22px;
+    color: var(--pnl-up);
+  }
+
+  strong {
+    font-size: 15px;
+    font-weight: 700;
+    letter-spacing: -0.015em;
+  }
+
+  p {
+    margin: 2px 0 0;
+    font-size: 12px;
+    color: var(--text-2);
+  }
+}
+
+// El codigo se muestra grande y en monoespaciada: hay que poder leerlo de un
+// vistazo o teclearlo a mano si el enlace profundo no abre Telegram. Va en el
+// cian de marca y no en verde: no es un resultado, es algo que hay que copiar.
+.code-box {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  align-items: center;
+  padding: var(--space-5);
+  border-radius: var(--radius-md);
+  background: var(--surface-1);
+  border: 1px dashed var(--border-strong);
+  margin-bottom: var(--space-4);
+
+  .label {
+    font-size: 12px;
+    color: var(--text-2);
+  }
+
+  code {
+    font-family: var(--font-num);
+    font-variant-numeric: tabular-nums;
+    font-size: 19px;
+    font-weight: 600;
+    letter-spacing: 0.06em;
+    color: var(--brand-2);
+  }
+}
+
+.foot {
+  display: block;
+  padding: var(--space-4) var(--space-2);
+  font-size: 12px;
+  line-height: 1.55;
+  color: var(--text-3);
+  text-align: center;
+}

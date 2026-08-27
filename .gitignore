@@ -1,0 +1,36 @@
+# deps / builds
+node_modules/
+dist/
+*.tsbuildinfo
+www/
+.angular/
+out-tsc/
+
+# prisma generated client
+apps/api/generated/
+apps/worker/generated/
+
+# android build outputs (el proyecto nativo SÍ se commitea)
+apps/app/android/app/build/
+apps/app/android/build/
+apps/app/android/.gradle/
+apps/app/android/local.properties
+apps/app/android/capacitor-cordova-android-plugins/build/
+
+# env & secrets — NUNCA subir la clave maestra ni las claves de firma.
+# Aplica a docker/.env, apps/api/.env y apps/worker/.env.
+.env
+.env.*
+!.env.example
+*.keystore
+*.jks
+*.pem
+
+# ajustes locales de herramientas
+.claude/settings.local.json
+
+# logs / misc
+*.log
+.DS_Store
+coverage/
+.nyc_output/

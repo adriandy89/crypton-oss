@@ -1,0 +1,57 @@
+.hero {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: var(--space-2);
+  padding: var(--space-6) var(--space-4) var(--space-3);
+  text-align: center;
+}
+
+.avatar {
+  display: grid;
+  place-items: center;
+  width: 84px;
+  height: 84px;
+  border-radius: 50%;
+  color: #fff;
+  font-family: var(--font-display);
+  font-size: 30px;
+  font-weight: 700;
+  letter-spacing: 0.01em;
+  box-shadow: var(--shadow-1);
+}
+
+.hero h2 {
+  margin: var(--space-1) 0 0;
+  font-family: var(--font-display);
+  font-size: 21px;
+  font-weight: 700;
+  letter-spacing: -0.025em;
+}
+
+.email {
+  margin: 0;
+  font-size: 13px;
+  color: var(--text-2);
+}
+
+.aviso {
+  display: block;
+  padding: var(--space-1) var(--space-4) var(--space-3);
+  font-size: 12px;
+  line-height: 1.55;
+  color: var(--text-3);
+}
+
+.acciones {
+  padding: var(--space-2) var(--space-4) var(--space-6);
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+}
+
+.error {
+  font-size: 12px;
+  text-align: center;
+  color: var(--ion-color-danger);
+}

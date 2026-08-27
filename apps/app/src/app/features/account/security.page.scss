@@ -1,0 +1,40 @@
+.acciones {
+  padding: var(--space-2) var(--space-4) var(--space-4);
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+}
+
+.aviso {
+  display: block;
+  padding: 0 var(--space-4) var(--space-3);
+  font-size: 12px;
+  line-height: 1.55;
+  color: var(--text-3);
+}
+
+/* La cuenta de Google es la llave de esta: si alguien entra ahi, entra aqui.
+   Es el aviso mas importante de la pantalla y por eso es el unico con relleno. */
+.aviso-critico {
+  display: flex;
+  gap: var(--space-2);
+  align-items: flex-start;
+  margin: var(--space-1) var(--space-4) var(--space-2);
+  padding: var(--space-3);
+  font-size: 12.5px;
+  line-height: 1.5;
+  color: var(--pnl-down);
+  background: rgba(var(--pnl-down-rgb), 0.1);
+  border: 1px solid rgba(var(--pnl-down-rgb), 0.22);
+  border-radius: var(--radius-sm);
+}
+
+.aviso-critico ion-icon {
+  flex-shrink: 0;
+  font-size: 17px;
+  margin-top: 1px;
+}
+
+.peligro ion-label h3 {
+  color: var(--pnl-down);
+}

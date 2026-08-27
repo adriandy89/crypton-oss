@@ -1,0 +1,279 @@
+<ion-header class="ion-no-border">
+  <ion-toolbar>
+    <ion-buttons slot="start">
+      <ion-back-button defaultHref="/tabs/account" text="" />
+    </ion-buttons>
+    <ion-title>Backtest</ion-title>
+  </ion-toolbar>
+</ion-header>
+
+<ion-content>
+  <!--
+    El aviso va ARRIBA y siempre, no plegado al final. Un resultado de backtest
+    sin sus limitaciones al lado invita a tomarlo por una promesa, y lo que es
+    es una reconstruccion con hipotesis.
+  -->
+  <ui-notice tone="warn" icon="warning-outline">
+    Reproduce la configuracion de un bot simulado sobre velas historicas de otro
+    mercado. No es una prediccion: mira siempre los limites al pie del resultado.
+  </ui-notice>
+
+  <!-- ── Formulario ──────────────────────────────────────────────── -->
+  <section class="form">
+    <label class="campo">
+      <span>Bot simulado</span>
+      <ion-select
+        interface="action-sheet"
+        placeholder="Elige un bot"
+        [value]="botId()"
+        (ionChange)="botId.set($any($event).detail.value)"
+      >
+        @for (b of simulados(); track b.id) {
+          <ion-select-option [value]="b.id">{{ b.name }} · {{ b.symbol }}</ion-select-option>
+        }
+      </ion-select>
+    </label>
+
+    @if (simulados().length === 0) {
+      <ui-notice tone="info">
+        No tienes ningun bot de simulacion. El backtest solo se lanza sobre ellos.
+      </ui-notice>
+    }
+
+    <label class="campo">
+      <span>Fuente de las velas</span>
+      <ion-segment
+        [value]="source()"
+        (ionChange)="source.set($any($event).detail.value)"
+      >
+        @for (s of backtests.sources() ?? []; track s.id) {
+          <ion-segment-button [value]="s.id">{{ s.id }}</ion-segment-button>
+        }
+      </ion-segment>
+    </label>
+
+    <label class="campo">
+      <span>Intervalo</span>
+      <ion-segment
+        scrollable
+        [value]="interval()"
+        (ionChange)="interval.set($any($event).detail.value)"
+      >
+        @for (iv of intervalos(); track iv) {
+          <ion-segment-button [value]="iv">{{ intervalLabel(iv) }}</ion-segment-button>
+        }
+      </ion-segment>
+    </label>
+
+    <label class="campo">
+      <span>Periodo</span>
+      <ion-segment [value]="dias()" (ionChange)="dias.set($any($event).detail.value)">
+        @for (a of atajos; track a.dias) {
+          <ion-segment-button [value]="a.dias">{{ a.label }}</ion-segment-button>
+        }
+      </ion-segment>
+    </label>
+
+    <!-- El numero de velas se enseña ANTES de mandar nada: descubrir el tope
+         despues de esperar es la peor forma de enterarse. -->
+    <p class="barras" [class.mal]="demasiadas()">
+      ≈ {{ barras() }} velas
+      @if (demasiadas()) {
+        · demasiadas, usa un intervalo mayor o menos dias
+      }
+    </p>
+
+    <ui-collapsible title="Avanzado" icon="options-outline">
+      <label class="campo">
+        <span>Simbolo de origen alternativo</span>
+        <ion-input
+          placeholder="se compone solo: BTCUSDT"
+          [value]="symbolOverride()"
+          (ionInput)="symbolOverride.set($any($event).detail.value ?? '')"
+        />
+        <small>
+          Solo si el par se llama distinto en la fuente. En Binance, «kPEPE» es
+          «1000PEPEUSDT».
+        </small>
+      </label>
+
+      <label class="campo">
+        <span>Capital inicial</span>
+        <ion-input
+          type="number"
+          placeholder="el del bot"
+          [value]="startingBalance()"
+          (ionInput)="startingBalance.set($any($event).detail.value ?? '')"
+        />
+      </label>
+
+      <div class="dos">
+        <label class="campo">
+          <span>Comision maker</span>
+          <ion-input
+            [value]="makerFeeRate()"
+            (ionInput)="makerFeeRate.set($any($event).detail.value ?? '')"
+          />
+        </label>
+        <label class="campo">
+          <span>Comision taker</span>
+          <ion-input
+            [value]="takerFeeRate()"
+            (ionInput)="takerFeeRate.set($any($event).detail.value ?? '')"
+          />
+        </label>
+      </div>
+
+      <div class="dos">
+        <label class="campo">
+          <span>Deslizamiento</span>
+          <ion-input
+            [value]="slippageRate()"
+            (ionInput)="slippageRate.set($any($event).detail.value ?? '')"
+          />
+        </label>
+        <label class="campo">
+          <span>Diferencial (bps)</span>
+          <ion-input
+            type="number"
+            [value]="spreadBps()"
+            (ionInput)="spreadBps.set(+($any($event).detail.value ?? 2))"
+          />
+        </label>
+      </div>
+
+      <label class="campo">
+        <span>Recorrido de la vela</span>
+        <ion-segment [value]="barPath()" (ionChange)="barPath.set($any($event).detail.value)">
+          <ion-segment-button value="NEAREST_FIRST">Plausible</ion-segment-button>
+          <ion-segment-button value="PESSIMISTIC">Pesimista</ion-segment-button>
+        </ion-segment>
+        <small>
+          Una vela no dice si el maximo llego antes que el minimo. «Pesimista»
+          asume siempre el orden que mas duele.
+        </small>
+      </label>
+    </ui-collapsible>
+
+    <ion-button expand="block" [disabled]="!puedeLanzar()" (click)="lanzar()">
+      @if (running()) {
+        <ion-spinner name="dots" />
+      } @else {
+        <ion-icon name="play-outline" slot="start" />
+        Ejecutar
+      }
+    </ion-button>
+
+    @if (error()) {
+      <ui-notice tone="danger" icon="warning-outline">{{ error() }}</ui-notice>
+    }
+  </section>
+
+  <!-- ── Resultado ───────────────────────────────────────────────── -->
+  @if (result(); as r) {
+    <section class="resultado">
+      <div class="stats">
+        <ui-stat
+          label="Resultado neto"
+          [value]="signed(r.metrics.netPnlPct) + ' %'"
+          [tone]="+r.metrics.netPnl >= 0 ? 'ok' : 'danger'"
+        />
+        <!-- La comparacion que de verdad decide: un +8 % en un mercado que
+             subio un 40 % no es un buen resultado. -->
+        <ui-stat
+          label="Comprar y mantener"
+          [value]="signed(r.metrics.buyAndHoldPct) + ' %'"
+          [tone]="bateBuyHold() ? '' : 'warn'"
+        />
+        <ui-stat label="Caida maxima" [value]="'-' + r.metrics.maxDrawdownPct + ' %'" tone="danger" />
+        <ui-stat label="Comisiones" [value]="money(r.metrics.feesPaid)" />
+        <ui-stat label="Ciclos cerrados" [value]="r.metrics.cyclesClosed" />
+        <ui-stat
+          label="Liquidaciones"
+          [value]="r.metrics.liquidations"
+          [tone]="r.metrics.liquidations > 0 ? 'danger' : ''"
+        />
+        <ui-stat label="Ejecuciones" [value]="r.metrics.fills" />
+        <ui-stat label="Duracion media de ciclo" [value]="duracion(r.metrics.avgCycleMs)" />
+      </div>
+
+      @if (!bateBuyHold()) {
+        <ui-notice tone="warn">
+          Esta configuracion NO bate a comprar y mantener en este periodo.
+        </ui-notice>
+      }
+
+      <h3>Precio y operaciones</h3>
+      <div class="grafico">
+        <app-price-chart
+          [candles]="velas()"
+          [markers]="marcadores()"
+          [showVolume]="false"
+          kind="candles"
+          [scaleKey]="r.meta.generatedAt + ':precio'"
+        />
+      </div>
+
+      <h3>Capital</h3>
+      <div class="grafico">
+        <app-price-chart
+          [candles]="curvaEquity()"
+          kind="area"
+          [showVolume]="false"
+          [scaleKey]="r.meta.generatedAt + ':equity'"
+        />
+      </div>
+
+      <h3>Caida desde maximos</h3>
+      <div class="grafico">
+        <app-price-chart
+          [candles]="curvaDrawdown()"
+          kind="area"
+          [showVolume]="false"
+          [scaleKey]="r.meta.generatedAt + ':dd'"
+        />
+      </div>
+
+      <p class="meta">
+        {{ r.meta.sourceSymbol }} en {{ r.meta.source }} · {{ r.metrics.bars }} velas de
+        {{ intervalLabel(r.meta.interval) }} · {{ r.meta.durationMs }} ms
+      </p>
+
+      <!-- Los limites, siempre y sin plegar. -->
+      <h3>Que NO reproduce esto</h3>
+      <ul class="limites">
+        @for (w of r.warnings; track w) {
+          <li>{{ w }}</li>
+        }
+      </ul>
+    </section>
+  }
+
+  <!-- ── Historial ───────────────────────────────────────────────── -->
+  <section class="historial">
+    <h3>Ejecuciones anteriores</h3>
+    @if (historial().length === 0) {
+      <ui-empty-state title="Todavia no has lanzado ninguna" icon="play-outline">
+        Guardarlas es lo que permite comparar dos ajustes sobre el mismo periodo.
+      </ui-empty-state>
+    } @else {
+      @for (h of historial(); track h.id) {
+        <div class="fila">
+          <div class="izq">
+            <strong>{{ h.symbol }}</strong>
+            <ui-badge>{{ h.interval }}</ui-badge>
+            <span class="fecha">{{ fecha(h.from_ms) }} → {{ fecha(h.to_ms) }}</span>
+          </div>
+          <div class="der">
+            <span [class.ok]="+h.metrics.netPnl >= 0" [class.mal]="+h.metrics.netPnl < 0">
+              {{ signed(h.metrics.netPnlPct) }} %
+            </span>
+            <ion-button fill="clear" size="small" (click)="borrar(h.id)">
+              <ion-icon name="trash-outline" slot="icon-only" />
+            </ion-button>
+          </div>
+        </div>
+      }
+    }
+  </section>
+</ion-content>

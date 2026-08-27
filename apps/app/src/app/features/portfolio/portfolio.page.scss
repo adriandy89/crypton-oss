@@ -1,0 +1,209 @@
+.pad {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+}
+
+/* El hero es la unica superficie con el mesh de marca de toda la app: si
+   estuviera en mas sitios competiria con el rojo y el verde del resultado. */
+.hero {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 7px;
+
+  .k {
+    font-size: 12px;
+    font-weight: 600;
+    letter-spacing: 0.04em;
+    text-transform: uppercase;
+    color: var(--text-2);
+  }
+
+  .v {
+    font-size: 40px;
+    font-weight: 700;
+    line-height: 1;
+    letter-spacing: -0.035em;
+  }
+
+  /* Solo la cifra principal lleva realce, y solo cuando hay algo que celebrar
+     o que lamentar: en cero seria ruido. */
+  .v.c-success {
+    text-shadow: 0 0 26px rgba(var(--pnl-up-rgb), 0.4);
+  }
+
+  .v.c-danger {
+    text-shadow: 0 0 26px rgba(var(--pnl-down-rgb), 0.32);
+  }
+
+  .sub {
+    font-size: 12px;
+    color: var(--text-2);
+  }
+
+  .sub b {
+    font-weight: 600;
+    color: var(--text-1);
+  }
+}
+
+/* El total SIMULADO. Misma estructura que el de arriba pero deliberadamente
+   mas pequeño y sin realce: es la misma cifra sobre dinero que no existe, y
+   darle el mismo peso visual invitaria a leerla como si lo fuera. */
+.simhero {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 5px;
+  margin-bottom: 10px;
+
+  .k {
+    font-size: 11px;
+    font-weight: 600;
+    letter-spacing: 0.04em;
+    text-transform: uppercase;
+    color: var(--text-2);
+  }
+
+  .v {
+    font-size: 26px;
+    font-weight: 700;
+    line-height: 1;
+    letter-spacing: -0.03em;
+  }
+
+  .sub {
+    font-size: 12px;
+    color: var(--text-2);
+  }
+}
+
+.stats {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px;
+}
+
+.positions {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.pos {
+  display: flex;
+  flex-direction: column;
+  gap: 11px;
+  cursor: pointer;
+
+  .line {
+    display: flex;
+    align-items: flex-start;
+    justify-content: space-between;
+    gap: 10px;
+  }
+
+  .sym {
+    display: flex;
+    flex-direction: column;
+    gap: 3px;
+    min-width: 0;
+  }
+
+  h3 {
+    margin: 0;
+    font-size: 15px;
+    font-weight: 700;
+    letter-spacing: -0.015em;
+  }
+
+  .meta {
+    margin: 0;
+    font-size: 11px;
+    color: var(--text-3);
+  }
+
+  .row {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 10px;
+    font-size: 13px;
+  }
+
+  // La cantidad y el precio medio son una cadena larga sin espacios: sin punto
+  // de corte empujaba al resultado fuera de la tarjeta.
+  .qty {
+    min-width: 0;
+    color: var(--text-2);
+    overflow-wrap: anywhere;
+  }
+
+  .row .num:last-child {
+    flex-shrink: 0;
+  }
+
+  .row .num:last-child {
+    font-weight: 600;
+  }
+}
+
+.liq {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding-top: 10px;
+  border-top: 1px solid var(--border-subtle);
+  font-size: 11px;
+  color: var(--text-3);
+
+  ion-icon {
+    font-size: 13px;
+  }
+
+  &.hot {
+    color: var(--signal-warn);
+  }
+}
+
+/* ── Pantallas grandes ───────────────────────────────────────────────────
+   Es una pantalla de metricas: aqui el ancho si se aprovecha. */
+:host {
+  --page-max: var(--content-wide);
+}
+
+@media (min-width: 900px) {
+  /* El resultado total a la izquierda y las cuatro cifras de apoyo a su
+     derecha. Estirar el hero a 1080 px no ayuda —una cifra sola en una banda
+     enorme se lee peor— pero dejar ese hueco vacio tampoco. */
+  .pad {
+    display: grid;
+    grid-template-columns: minmax(0, 480px) minmax(0, 1fr);
+    gap: var(--space-3);
+    align-items: start;
+  }
+
+  .hero {
+    grid-column: 1;
+    height: 100%;
+    justify-content: center;
+  }
+
+  .stats {
+    grid-column: 2;
+  }
+
+  /* Las posiciones ocupan el ancho entero, en dos columnas. */
+  ui-section,
+  .positions,
+  ui-empty-state {
+    grid-column: 1 / -1;
+  }
+
+  .positions {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    align-items: start;
+  }
+}

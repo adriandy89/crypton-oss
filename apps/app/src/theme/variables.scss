@@ -1,0 +1,199 @@
+/*
+ * Tema oscuro fijo — dirección "Aurora".
+ *
+ * No hay modo claro a proposito: la app se mira a menudo de noche y con
+ * graficos de precios, donde un fondo blanco molesta; y mantener dos paletas
+ * coherentes en una interfaz llena de codigos de color con significado (verde =
+ * beneficio, rojo = perdida, ambar = aviso) es una fuente de errores sutiles.
+ *
+ * El archivo tiene dos capas y el orden importa:
+ *
+ *   1. PRIMITIVAS. Los tokens del diseño. Es lo unico que se toca para
+ *      cambiar el aspecto de la app, y es lo unico que deberia consumir
+ *      nuestro SCSS.
+ *   2. PUENTE A IONIC. Las variables --ion-* se DERIVAN de las primitivas.
+ *      Asi los componentes de Ionic (toolbar, item, alert, toast, select...)
+ *      salen del mismo sistema sin tener que estilarlos uno a uno.
+ *
+ * Antes el fondo era #06080d con las tarjetas en #0e121b: ocho puntos de
+ * luminosidad de separacion, que con el brillo bajo del movil hacen que no se
+ * distinga el contenedor del fondo. La rampa de superficies de abajo abre esa
+ * distancia y ademas templa el negro hacia el indigo.
+ */
+:root {
+  /* ------------------------------------------------------------------ *
+   * 1. PRIMITIVAS
+   * ------------------------------------------------------------------ */
+
+  /* Superficies. Cada escalon es un nivel de elevacion, no un gris al azar. */
+  --surface-base: #141328; /* fondo de pagina */
+  --surface-1: #1c1b36; /* tarjetas, items, listas */
+  --surface-2: #252244; /* dentro de una tarjeta: bandas, campos */
+  --surface-3: #302c56; /* estado activo, seleccionado, hover */
+  --surface-bar: #1a1932; /* toolbar y tab bar, un pelo sobre el fondo */
+
+  /* Los dos tokens -rgb que quedan existen para alimentar a Ionic, que pide
+     los colores descompuestos (--ion-background-color-rgb, --ion-text-color-rgb).
+     Para transparencias propias se usa rgba(var(--pnl-down-rgb), .12) y demas. */
+  --surface-base-rgb: 20, 19, 40;
+
+  --border-subtle: #2e2b52;
+  --border-strong: #413c6e;
+
+  /* Marca. Deliberadamente distinta del verde de beneficio: antes
+     --ion-color-primary y --ion-color-success eran el mismo #2dd4a7, y un
+     boton de marca era indistinguible de una cifra en ganancia. */
+  --brand: #8b5cf6; /* violeta: mesh, rellenos, acento */
+  --brand-strong: #7c4ddb; /* violeta para botones con texto blanco (5.3:1) */
+  --brand-2: #22d3ee; /* cian: enlaces, activo, interactivo (8.9:1) */
+  --brand-rgb: 139, 92, 246;
+  --brand-2-rgb: 34, 211, 238;
+  --brand-gradient: linear-gradient(140deg, #8b5cf6, #22d3ee);
+
+  /* Señal financiera. Esto NO es decoracion: es lo que distingue ganar de
+     perder de un vistazo. No se cambia por gusto. */
+  --pnl-up: #2dd4a7;
+  --pnl-down: #f0616d;
+  --pnl-flat: #9d98c0;
+  --signal-warn: #f0b429;
+  --pnl-up-rgb: 45, 212, 167;
+  --pnl-down-rgb: 240, 97, 109;
+  --signal-warn-rgb: 240, 180, 41;
+
+  --text-1: #eae8f7;
+  --text-2: #9d98c0;
+  --text-3: #8d89aa;
+  --text-1-rgb: 234, 232, 247;
+
+  /* Radios. Antes se usaban 4, 5, 8, 9, 10, 11, 12, 13, 14, 15 y 16 px sin
+     criterio; esta es la escala completa y no hay mas. */
+  --radius-xs: 8px;
+  --radius-sm: 12px;
+  --radius-md: 18px;
+  --radius-lg: 22px;
+  --radius-pill: 999px;
+
+  --space-1: 4px;
+  --space-2: 8px;
+  --space-3: 12px;
+  --space-4: 16px;
+  --space-5: 22px;
+  --space-6: 32px;
+
+  --shadow-1: 0 2px 10px rgba(6, 4, 18, 0.4);
+  --shadow-2: 0 10px 26px rgba(139, 92, 246, 0.42);
+  --shadow-dock: 0 -2px 24px rgba(6, 4, 18, 0.55);
+
+  /* Anchos de la columna de contenido en pantallas grandes.
+     La app es de movil y esa vista manda; en un monitor, estirar una lista a
+     1900 px no la mejora, la hace ilegible. Solo hay dos medidas:
+       --content-max   ajustes, formularios y detalle (una columna de lectura)
+       --content-wide  pantallas de listas y metricas, que si aprovechan el ancho
+     Cada pagina elige la suya con --page-max en su :host; por defecto, la
+     estrecha. Ver la seccion "Pantallas grandes" de global.scss. */
+  --content-max: 720px;
+  --content-wide: 1080px;
+
+  /* Tipografia. Las tres caras van empaquetadas en assets/fonts como woff2
+     variables (84 kB en total, todos los pesos) — nunca por CDN: en un movil
+     sin red un CDN deja la app sin fuente. Ver global.scss. */
+  --font-display: 'Sora', 'Plus Jakarta Sans', system-ui, sans-serif;
+  --font-ui: 'Plus Jakarta Sans', system-ui, -apple-system, sans-serif;
+  --font-num: 'JetBrains Mono', ui-monospace, 'SF Mono', monospace;
+
+  /* ------------------------------------------------------------------ *
+   * 2. PUENTE A IONIC — todo derivado de lo de arriba
+   * ------------------------------------------------------------------ */
+
+  --ion-font-family: var(--font-ui);
+
+  --ion-color-primary: #7c4ddb;
+  --ion-color-primary-rgb: 124, 77, 219;
+  --ion-color-primary-contrast: #ffffff;
+  --ion-color-primary-contrast-rgb: 255, 255, 255;
+  --ion-color-primary-shade: #6d44c1;
+  --ion-color-primary-tint: #8a5fdf;
+
+  --ion-color-secondary: #22d3ee;
+  --ion-color-secondary-rgb: 34, 211, 238;
+  --ion-color-secondary-contrast: #08262b;
+  --ion-color-secondary-contrast-rgb: 8, 38, 43;
+  --ion-color-secondary-shade: #1ebad1;
+  --ion-color-secondary-tint: #38d7f0;
+
+  --ion-color-tertiary: #8b5cf6;
+  --ion-color-tertiary-rgb: 139, 92, 246;
+  --ion-color-tertiary-contrast: #ffffff;
+  --ion-color-tertiary-contrast-rgb: 255, 255, 255;
+  --ion-color-tertiary-shade: #7a51d8;
+  --ion-color-tertiary-tint: #976cf7;
+
+  --ion-color-success: #2dd4a7;
+  --ion-color-success-rgb: 45, 212, 167;
+  --ion-color-success-contrast: #04120d;
+  --ion-color-success-contrast-rgb: 4, 18, 13;
+  --ion-color-success-shade: #28bb93;
+  --ion-color-success-tint: #42d8b0;
+
+  --ion-color-warning: #f0b429;
+  --ion-color-warning-rgb: 240, 180, 41;
+  --ion-color-warning-contrast: #1a1200;
+  --ion-color-warning-contrast-rgb: 26, 18, 0;
+  --ion-color-warning-shade: #d39e24;
+  --ion-color-warning-tint: #f2bc3e;
+
+  --ion-color-danger: #f0616d;
+  --ion-color-danger-rgb: 240, 97, 109;
+  --ion-color-danger-contrast: #ffffff;
+  --ion-color-danger-contrast-rgb: 255, 255, 255;
+  --ion-color-danger-shade: #d35560;
+  --ion-color-danger-tint: #f2717c;
+
+  --ion-color-medium: #9d98c0;
+  --ion-color-medium-rgb: 157, 152, 192;
+  --ion-color-medium-contrast: #141328;
+  --ion-color-medium-contrast-rgb: 20, 19, 40;
+  --ion-color-medium-shade: #8a86a9;
+  --ion-color-medium-tint: #a7a3c6;
+
+  --ion-background-color: var(--surface-base);
+  --ion-background-color-rgb: var(--surface-base-rgb);
+  --ion-text-color: var(--text-1);
+  --ion-text-color-rgb: var(--text-1-rgb);
+
+  /* Rampa de pasos de Ionic. La usan por dentro sus componentes; se mantiene
+     alineada con la rampa de superficies para que un ion-alert o un
+     ion-select no aparezcan con un gris de otro tema.
+
+     La rampa va COMPLETA, de 50 a 950 y sin saltarse ningun escalon. Faltaban
+     450, 550, 650, 750, 850 y 950, y eso no era cosmetico: los componentes de
+     Ionic que piden un escalon ausente caen a su valor por defecto, que esta
+     pensado para tema claro. La hoja de acciones pide --ion-color-step-850
+     para el texto de sus botones y se quedaba con el #262626 de reserva: casi
+     negro sobre nuestro fondo casi negro. La hoja se abria en blanco. */
+  --ion-color-step-50: #1a1932;
+  --ion-color-step-100: #1c1b36;
+  --ion-color-step-150: #252244;
+  --ion-color-step-200: #2e2b52;
+  --ion-color-step-250: #302c56;
+  --ion-color-step-300: #413c6e;
+  --ion-color-step-350: #4a4479;
+  --ion-color-step-400: #534d85;
+  --ion-color-step-450: #5e588f;
+  --ion-color-step-500: #6a6399;
+  --ion-color-step-550: #7770a4;
+  --ion-color-step-600: #837cae;
+  --ion-color-step-650: #908ab7;
+  --ion-color-step-700: #9d98c0;
+  --ion-color-step-750: #aca7ca;
+  --ion-color-step-800: #bbb6d4;
+  --ion-color-step-850: #c9c4de;
+  --ion-color-step-900: #d7d3e8;
+  --ion-color-step-950: #e0ddef;
+
+  --ion-item-background: var(--surface-1);
+  --ion-toolbar-background: var(--surface-bar);
+  --ion-tab-bar-background: var(--surface-bar);
+  --ion-card-background: var(--surface-1);
+  --ion-border-color: var(--border-subtle);
+}

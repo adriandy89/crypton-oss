@@ -1,0 +1,84 @@
+# CRYPTON — INFRAESTRUCTURA (Postgres + Redis)
+#
+#   docker compose -f docker-compose.infra.yml up -d      →  pnpm infra:up
+#
+# ┌──────────────────────────────────────────────────────────────────────────┐
+# │  ESTE FICHERO ESTÁ SEPARADO DEL DE LA APLICACIÓN A PROPÓSITO.            │
+# │                                                                          │
+# │  Aquí viven los DATOS. Si estuviera todo en un solo compose, un          │
+# │  `docker compose down` durante un despliegue se llevaría por delante la  │
+# │  base de datos, y un `down -v` destruiría los volúmenes.                 │
+# │                                                                          │
+# │  Con la separación, desplegar la aplicación es literalmente incapaz de   │
+# │  tocar los datos: son dos proyectos de compose distintos.                │
+# │                                                                          │
+# │  NUNCA ejecutes `down -v` sobre este fichero salvo que quieras borrar    │
+# │  todas las credenciales de exchange y el histórico de los bots.          │
+# └──────────────────────────────────────────────────────────────────────────┘
+#
+# Crea la red `crypton-network`; el compose de la aplicación la consume como
+# externa. Levanta SIEMPRE este primero.
+
+name: crypton-infra
+
+services:
+  db:
+    container_name: crypton-db
+    image: postgres:18-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:-crypton}
+      POSTGRES_USER: ${POSTGRES_USER:-postgres}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-postgres}
+      # Evita que el locale del host cambie el orden de los índices de texto.
+      POSTGRES_INITDB_ARGS: '--encoding=UTF8 --locale=C'
+    ports:
+      # Publicado para que la API y el worker puedan correr en el host contra
+      # esta misma base. El puerto no es el 5432 estándar a propósito: convive
+      # con otros stacks de Postgres en la misma máquina.
+      - '${DB_PORT:-5341}:5432'
+    volumes:
+      - db-data:/var/lib/postgresql
+    command: ['-c', 'max_connections=200']
+    healthcheck:
+      test: ['CMD-SHELL', 'pg_isready -U ${POSTGRES_USER:-postgres} -d ${POSTGRES_DB:-crypton}']
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
+
+  redis:
+    container_name: crypton-redis
+    image: redis:8.4.0-alpine
+    restart: unless-stopped
+    ports:
+      - '${REDIS_PORT:-6381}:6379'
+    # La contraseña va en el command: la imagen oficial no la lee de una variable
+    # de entorno.
+    command: >
+      redis-server
+      --save 20 1
+      --loglevel warning
+      --requirepass ${REDIS_PASSWORD:-changeme}
+    volumes:
+      - redis-data:/data
+    healthcheck:
+      test: ['CMD-SHELL', 'redis-cli -a "${REDIS_PASSWORD:-changeme}" ping | grep -q PONG']
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+
+volumes:
+  # Nombres EXPLÍCITOS y no derivados del proyecto: si algún día se renombra el
+  # proyecto de compose, los volúmenes derivados quedarían huérfanos y arrancaría
+  # una base vacía como si no hubiera pasado nada. Fijándolos, eso no puede
+  # ocurrir por accidente.
+  db-data:
+    name: crypton-db-data
+  redis-data:
+    name: crypton-redis-data
+
+networks:
+  default:
+    name: crypton-network

@@ -1,0 +1,95 @@
+.list {
+  padding: var(--space-3) var(--space-4) 96px;
+  display: flex;
+  flex-direction: column;
+  gap: 11px;
+}
+
+.bot {
+  display: flex;
+  flex-direction: column;
+  gap: 13px;
+  cursor: pointer;
+
+  .row {
+    display: flex;
+    align-items: flex-start;
+    justify-content: space-between;
+    gap: 10px;
+  }
+
+  .id {
+    display: flex;
+    flex-direction: column;
+    gap: 5px;
+    min-width: 0;
+  }
+
+  h3 {
+    margin: 0;
+    font-size: 15.5px;
+    font-weight: 700;
+    letter-spacing: -0.02em;
+  }
+
+  /* Texto y pastillas en la misma linea, con hueco propio: antes `.net` traia
+     ademas un `margin-left` que se sumaba al `gap` y dejaba las dos etiquetas
+     separadas por 12 px de una y 6 px de la otra. */
+  .meta {
+    margin: 0;
+    display: flex;
+    align-items: center;
+    flex-wrap: wrap;
+    gap: 5px 7px;
+    font-size: 11px;
+    line-height: 1.4;
+    color: var(--text-3);
+  }
+}
+
+/* Las cuatro cifras de la tarjeta.
+ *
+ * Dos columnas en el movil estrecho y cuatro a partir de 400 px. No es una
+ * preferencia: en cuatro columnas a 360 px cada una mide unos 68 px y un
+ * «+1.234,56» en monoespaciada mide 76, asi que la cifra se salia de su columna
+ * y acababa pisando el borde de la tarjeta. El punto de corte es el ancho a
+ * partir del cual las cuatro caben de verdad. */
+.grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 11px var(--space-3);
+}
+
+@media (min-width: 400px) {
+  .grid {
+    grid-template-columns: repeat(4, minmax(0, 1fr));
+    gap: 8px;
+  }
+}
+
+/* El kill-switch es la accion mas destructiva de la app y vive en la cabecera,
+   donde se pulsa sin querer. El recuadro lo separa del resto del toolbar. */
+.kill {
+  --border-radius: var(--radius-sm);
+  --padding-start: 0;
+  --padding-end: 0;
+  --background: rgba(var(--pnl-down-rgb), 0.11);
+  --background-hover: rgba(var(--pnl-down-rgb), 0.18);
+  width: 44px;
+  min-height: 44px;
+  border: 1px solid rgba(var(--pnl-down-rgb), 0.26);
+  border-radius: var(--radius-sm);
+}
+
+/* ── Pantallas grandes ────────────────────────────────────────────────── */
+:host {
+  --page-max: var(--content-wide);
+}
+
+@media (min-width: 900px) {
+  .list {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    align-items: start;
+  }
+}

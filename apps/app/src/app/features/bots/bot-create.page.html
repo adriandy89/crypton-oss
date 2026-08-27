@@ -1,0 +1,492 @@
+<ion-header>
+  <ion-toolbar>
+    <ion-buttons slot="start">
+      @if (step() === 'venue') {
+        <ion-back-button defaultHref="/tabs/bots" />
+      } @else {
+        <ion-button (click)="back()">Atrás</ion-button>
+      }
+    </ion-buttons>
+    <ion-title>Nuevo bot</ion-title>
+  </ion-toolbar>
+</ion-header>
+
+<ion-content>
+  <!-- Indicador de paso: un asistente sin él deja al usuario sin saber cuánto
+       queda ni si puede volver atrás sin perder lo escrito. -->
+  <div class="steps">
+    @for (s of STEPS; track s.key) {
+      <button
+        type="button"
+        [class.on]="step() === s.key"
+        [class.done]="canGoTo(s.key)"
+        [disabled]="!canGoTo(s.key)"
+        (click)="goTo(s.key)"
+      >
+        {{ s.label }}
+      </button>
+    }
+  </div>
+
+  @if (busy()) {
+    <div class="center"><ion-spinner name="crescent" /></div>
+  }
+
+  <!-- ═══ 1. CUENTA Y PAR ═══ -->
+  @if (step() === 'venue' && !busy()) {
+    <div class="pad">
+      @if (accounts().length === 0) {
+        <!-- Dos ramas, no una: quien tiene una conexión rota SÍ conectó un
+             exchange, y mandarle a añadir otra le deja dos credenciales y el
+             mismo problema. Lo que necesita es reverificar la que ya tiene. -->
+        @if (conexionesRotas()) {
+          <ui-empty-state icon="alert-circle-outline" title="Tu conexión no está operativa">
+            <p>
+              Conectaste un exchange, pero su credencial ya no verifica: puede haberse revocado
+              desde el propio exchange o haber caducado. Un bot creado sobre ella no podría colocar
+              ni una orden.
+            </p>
+            <ion-button routerLink="/tabs/account">Revisar mis conexiones</ion-button>
+          </ui-empty-state>
+        } @else {
+          <ui-empty-state icon="link-outline" title="Antes necesitas conectar un exchange">
+            <p>
+              Se conecta con una API wallet sin permiso de retirada. Tus fondos no se mueven de tu
+              cuenta del exchange en ningún momento.
+            </p>
+            <!-- [queryParams] y no «?next=» dentro de la cadena: routerLink trata
+                 la cadena como un array de comandos y codificaría el «?» como
+                 parte de la ruta. -->
+            <ion-button routerLink="/accounts/new" [queryParams]="{ next: '/bots/new' }">
+              Conectar exchange
+            </ion-button>
+          </ui-empty-state>
+        }
+      } @else {
+        <!-- Misma columna que el resto del asistente: `<ion-list inset>` traia
+             su propio margen y dejaba este bloque desalineado con el boton de
+             abajo y con los pasos siguientes. -->
+        <!-- El aviso va PEGADO al desplegable y no sustituyendolo: con la
+             conexion de simulacion siempre presente, el paso nunca se queda
+             vacio, asi que quien tiene la credencial revocada veria «Simulacion»
+             y nada mas. Puede seguir y simular; lo que no puede es quedarse sin
+             saber por que su conexion no esta. -->
+        @if (conexionesRotas()) {
+          <ui-notice tone="warn">
+            Tu conexión de exchange ya no verifica: puede haberse revocado desde el propio
+            exchange o haber caducado. Un bot real sobre ella no colocaría ni una orden.
+            Mientras tanto puedes seguir en <b>simulación</b>.
+            <a routerLink="/tabs/account">Revisar mis conexiones</a>
+          </ui-notice>
+        }
+
+        <ui-card flush class="fields">
+          <div class="fld">
+            <div class="fhead">
+              <span>Conexión</span>
+              <span class="req">*</span>
+            </div>
+            <ion-select
+              interface="popover"
+              placeholder="Elige una conexión"
+              [value]="accountId()"
+              (ionChange)="selectAccount($event.detail.value)"
+            >
+              <!-- La simulacion se nombra por lo que es, no por su etiqueta: es
+                   lo unico que distingue «probar» de «operar» en esta lista, y
+                   confundirlo aqui es confundir el dinero. -->
+              @for (a of accounts(); track a.id) {
+                <ion-select-option [value]="a.id">
+                  @if (a.paper) {
+                    {{ a.venue }} · simulación (sin claves)
+                  } @else {
+                    {{ a.venue }} · {{ a.label }}{{ a.testnet ? ' (testnet)' : '' }}
+                  }
+                </ion-select-option>
+              }
+            </ion-select>
+          </div>
+
+          @if (accountId()) {
+            <div class="fld sep">
+              <div class="fhead">
+                <span>Par</span>
+                <span class="req">*</span>
+              </div>
+              <ion-select
+                interface="popover"
+                placeholder="Elige un par"
+                [value]="symbol()"
+                (ionChange)="symbol.set($event.detail.value)"
+              >
+                @for (m of markets(); track m.symbol) {
+                  <ion-select-option [value]="m.symbol">
+                    {{ m.canonical }} (hasta {{ m.max_leverage }}×)
+                  </ion-select-option>
+                }
+              </ion-select>
+              <p class="fhelp">El apalancamiento máximo lo fija el mercado, no la plataforma.</p>
+            </div>
+          }
+        </ui-card>
+
+        <ion-button
+          expand="block"
+          class="next"
+          [disabled]="!accountId() || !symbol()"
+          (click)="step.set('strategy')"
+        >
+          Continuar
+        </ion-button>
+
+        <!-- Tambien aqui: si esta apagado, se dice por que. -->
+        @if (venueBlockedReason(); as motivo) {
+          <p class="why">{{ motivo }}</p>
+        }
+      }
+    </div>
+  }
+
+  <!-- ═══ 2. ESTRATEGIA ═══ -->
+  @if (step() === 'strategy' && !busy()) {
+    <div class="pad">
+      <div class="cards">
+        @for (s of strategies(); track s.kind) {
+          <!-- El icono de ayuda va FUERA de la tarjeta: la tarjeta ya es un
+               <button> y anidar botones es HTML invalido, ademas de dejar sin
+               salida a un lector de pantalla. Asi se puede leer que hace la
+               estrategia ANTES de elegirla. -->
+          <div class="srow">
+            <button class="scard" [class.risky]="isRisky(s.kind)" (click)="selectStrategy(s.kind)">
+              <div class="line">
+                <h3>{{ strategyLabel(s.kind) }}</h3>
+                @if (isRisky(s.kind)) {
+                  <ui-badge size="sm" tone="down" caps>riesgo alto</ui-badge>
+                }
+              </div>
+              <p>{{ strategyBlurb(s.kind) }}</p>
+            </button>
+            <ui-strategy-help [kind]="s.kind" [fields]="s.fields" />
+          </div>
+        }
+      </div>
+    </div>
+  }
+
+  <!-- ═══ 3. PARAMETROS ═══ -->
+  @if (step() === 'params' && !busy()) {
+    <div class="pad">
+      <div class="titlerow">
+        <h2 class="title">{{ strategyLabel(strategyKind()) }}</h2>
+        @if (strategy(); as descriptor) {
+          <ui-strategy-help [kind]="descriptor.kind" [fields]="descriptor.fields" variant="inline" />
+        }
+      </div>
+
+      @if (copiedFrom(); as origen) {
+        <div class="copied">
+          <ion-icon name="warning-outline" />
+          <div>
+            Configuración copiada de <strong>{{ origen }}</strong
+            >, ya redimensionada a tu capital. Revisa los parámetros y, sobre todo, el peor caso del
+            siguiente paso: el resultado del original <strong>no predice el tuyo</strong>.
+          </div>
+        </div>
+      }
+
+      <p class="hint">
+        Cada campo trae su rango y su valor por defecto. Podrás cambiar casi todos después, incluso
+        con el bot en marcha.
+      </p>
+
+      <!-- El saldo real, fijado arriba. Va FUERA de cualquier `ui-card`: la
+           tarjeta declara `overflow: hidden` y eso rompe el `sticky`. -->
+      <ui-capital-header
+        [snapshot]="capital()"
+        [pair]="pairLabel()"
+        [mark]="mark()"
+        [changePct]="changePct()"
+        [priceDecimals]="market()?.price_decimals ?? null"
+        (refresh)="refreshWallet()"
+      />
+
+      <!-- ═══ Configuraciones sugeridas ═══
+           Va aqui, despues del capital y antes del primer campo: es donde el
+           usuario ya tiene delante el par, el precio y su saldo, que es lo que
+           necesita para juzgar si una propuesta le encaja. Fuera de cualquier
+           `ui-card flush`, que declara `overflow: hidden`. -->
+      <ui-recommendations
+        [set]="recommendations()"
+        [loading]="recoLoading()"
+        [error]="recoError()"
+        [applied]="appliedProfile()"
+        [stale]="recoStale()"
+        (apply)="applyRecommendation($event)"
+        (retry)="loadRecommendations()"
+      />
+      @if (!recommendations() && !recoLoading() && !recoError()) {
+        <ion-button
+          size="small"
+          fill="outline"
+          class="reco-cta"
+          [disabled]="!hasCapital()"
+          (click)="loadRecommendations()"
+        >
+          Proponer configuraciones
+        </ion-button>
+      }
+
+      @for (g of basicGroups(); track g.key) {
+        @if (basicGroups().length > 1) {
+          <h3 class="section">{{ g.title }}</h3>
+        }
+        <ui-card flush class="fields">
+          @for (f of g.fields; track f.key) {
+            <!-- El capital se pinta con su propio control: es el unico campo
+                 que se dimensiona contra el saldo de la cuenta. -->
+            @if (f.key === 'totalInvestment') {
+              <ui-amount-field
+                [field]="f"
+                [value]="value(f.key)"
+                [error]="errorFor(f.key)"
+                [available]="available()"
+                [showMutability]="true"
+                (valueChange)="setValue(f.key, $event)"
+              />
+            } @else {
+              <ui-field
+                [field]="f"
+                [value]="value(f.key)"
+                [error]="errorFor(f.key)"
+                [showMutability]="true"
+                (valueChange)="setValue(f.key, $event)"
+              />
+            }
+          }
+        </ui-card>
+      }
+
+      <!-- Riesgo EN VIVO, con el mismo codigo que ejecutara el motor. -->
+      <ui-risk-meter
+        [preview]="livePreview()"
+        [available]="available()"
+        [decimals]="market()?.price_decimals ?? null"
+        [emptyText]="riskEmptyText()"
+      />
+
+      @if (advancedCount() > 0) {
+        <ui-card flush class="fields adv">
+          <!-- Se abre solo si esconde algo que falta: un obligatorio vacio
+               detras de un colapsable cerrado es un boton apagado sin causa
+               visible en ninguna parte de la pantalla. -->
+          <ui-collapsible
+            title="Más parámetros"
+            [count]="advancedCount()"
+            [startOpen]="advancedHasProblem()"
+          >
+            @for (g of advancedGroups(); track g.key) {
+              <h4 class="subsection">{{ g.title }}</h4>
+              @for (f of g.fields; track f.key) {
+                <ui-field
+                  [field]="f"
+                  [value]="value(f.key)"
+                  [error]="errorFor(f.key)"
+                  [showMutability]="true"
+                  (valueChange)="setValue(f.key, $event)"
+                />
+              }
+            }
+          </ui-collapsible>
+        </ui-card>
+      }
+
+      <!-- Los topes de riesgo del propio usuario, avisados AQUI. Antes esto era
+           un 403 del servidor al pulsar «Crear bot», con el formulario ya
+           entero y sin forma de saber cuanto había que bajar. -->
+      @for (l of limitIssues(); track l.message) {
+        <div class="warn" [class.err]="l.severity === 'ERROR'">
+          <ion-icon name="warning-outline" />
+          <span>{{ l.message }}</span>
+        </div>
+      }
+
+      @for (w of warnings(); track w) {
+        <div class="warn">
+          <ion-icon name="warning-outline" />
+          <span>{{ w }}</span>
+        </div>
+      }
+
+      <ion-button
+        expand="block"
+        class="next"
+        [disabled]="previewing() || !paramsComplete()"
+        (click)="runPreview()"
+      >
+        @if (previewing()) {
+          <ion-spinner name="crescent" />
+        } @else {
+          Calcular la escalera
+        }
+      </ion-button>
+
+      <!-- Un boton apagado SIEMPRE dice por que, y justo debajo. -->
+      @if (paramsBlockedReason(); as motivo) {
+        <p class="why">{{ motivo }}</p>
+      }
+    </div>
+  }
+
+  <!-- ═══ 4. REVISION ═══ -->
+  @if (step() === 'preview' && preview(); as p) {
+    <div class="pad">
+      <h2 class="title">Esto es lo que se colocará</h2>
+      <p class="hint">
+        Calculado con el mismo código que ejecutará el motor. Si algún nivel es inválido en este
+        mercado, el bot no se crea.
+      </p>
+
+      @if (showQuotePreview()) {
+        <ui-card class="qprev">
+          <ui-quote-preview [preview]="p" />
+        </ui-card>
+      }
+
+      <div class="ladder">
+        @for (lv of p.levels; track lv.index) {
+          <div class="lvl" [class.bad]="lv.violations.length > 0" [class.sell]="lv.side === 'SELL'">
+            <span class="kind">{{ lv.kind }}#{{ lv.index }}</span>
+            <span class="price">{{ lv.price }}</span>
+            <span class="qty">{{ lv.qty }}</span>
+            <span class="dist">{{ lv.distancePct }} %</span>
+            @if (lv.violations.length) {
+              <p class="viol">{{ lv.violations.join(' ') }}</p>
+            }
+          </div>
+        }
+      </div>
+
+      <!-- El peor caso es LA cifra que hay que leer antes de arrancar. -->
+      <div class="worst">
+        <h3>Si se ejecuta la escalera entera</h3>
+        <div class="wgrid">
+          <div>
+            <span class="k">Exposición total</span>
+            <span class="v">{{ money(p.worstCaseNotional) }}</span>
+          </div>
+          <div>
+            <span class="k">Margen usado</span>
+            <span class="v">{{ money(p.worstCaseMargin) }}</span>
+          </div>
+          <div>
+            <span class="k">Precio medio</span>
+            <span class="v">{{ p.worstCaseAverageEntry ?? '—' }}</span>
+          </div>
+          <div>
+            <span class="k">Liquidación estimada</span>
+            <span class="v danger">{{ p.estimatedLiquidationPrice ?? '—' }}</span>
+          </div>
+          <div>
+            <span class="k">Aguanta un movimiento de</span>
+            <span class="v">{{
+              p.liquidationDistancePct ? p.liquidationDistancePct + ' %' : '—'
+            }}</span>
+          </div>
+          <div>
+            <span class="k">Objetivo de beneficio</span>
+            <span class="v">{{ p.takeProfitPrice ?? '—' }}</span>
+          </div>
+        </div>
+      </div>
+
+      @if (p.issues.length) {
+        <div class="issues">
+          @for (i of p.issues; track i.message) {
+            <div class="issue" [class.err]="i.severity === 'ERROR'">
+              <ion-icon name="warning-outline" />
+              <span>{{ i.message }}</span>
+            </div>
+          }
+        </div>
+      }
+
+      <!-- `ui-card` y no `<ion-list inset>`: la lista de Ionic trae SU PROPIO
+           margen lateral, que se sumaba al de `.pad` y dejaba este bloque
+           metido 16 px mas adentro que la escalera y que el peor caso, justo
+           encima. Ahora todo el paso comparte una sola columna. -->
+      <ui-card flush class="fields">
+        <div class="fld">
+          <div class="fhead">
+            <span>Nombre del bot</span>
+            <span class="req">*</span>
+          </div>
+          <ion-input
+            [ngModel]="name()"
+            (ngModelChange)="name.set($event)"
+            name="botName"
+            placeholder="Rejilla BTC conservadora"
+          />
+          <p class="fhelp">Para reconocerlo entre los demás. Podrás cambiarlo después.</p>
+        </div>
+
+        <!-- Con una conexion de SIMULACION el interruptor deja de ser una
+             preferencia: esa conexion no tiene claves y el servidor rechaza un
+             bot real sobre ella. Se enseña bloqueado y encendido, con el motivo
+             escrito, en vez de esconderlo: quien lo busque tiene que poder ver
+             por que no puede tocarlo. -->
+        <div class="srow">
+          <div class="slbl">
+            <span>Modo simulación</span>
+            @if (paperAccount()) {
+              <p>Esta conexión no tiene claves: solo puede simular. Conecta un exchange para operar de verdad.</p>
+            } @else {
+              <p>No sale ni un céntimo de tu cuenta: el bot opera contra el simulador.</p>
+            }
+          </div>
+          <ion-toggle
+            [ngModel]="simulando()"
+            (ngModelChange)="dryRun = $event"
+            [disabled]="!!paperAccount()"
+            name="dryRun"
+          />
+        </div>
+
+        <div class="srow">
+          <div class="slbl">
+            <span>Arrancar al crear</span>
+            <p>Apagado, el bot queda en borrador y lo arrancas tú cuando quieras.</p>
+          </div>
+          <ion-toggle [(ngModel)]="startActive" name="startActive" />
+        </div>
+      </ui-card>
+
+      @if (!simulando()) {
+        <div class="realwarn">
+          <ion-icon name="warning-outline" />
+          <span>
+            Este bot operará con <strong>dinero real</strong>. Puedes perder todo el margen
+            asignado.
+          </span>
+        </div>
+      }
+
+      <ion-button
+        expand="block"
+        class="next"
+        [disabled]="!canCreate() || busy()"
+        (click)="create()"
+      >
+        @if (busy()) {
+          <ion-spinner name="crescent" />
+        } @else {
+          Crear bot
+        }
+      </ion-button>
+
+      <!-- Mismo contrato que en el paso 3: si esta apagado, se dice por que. -->
+      @if (createBlockedReason(); as motivo) {
+        <p class="why">{{ motivo }}</p>
+      }
+    </div>
+  }
+</ion-content>

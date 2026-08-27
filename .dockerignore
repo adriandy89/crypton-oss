@@ -1,0 +1,37 @@
+# Lo que NO viaja al contexto de construcción.
+#
+# Importa más de lo que parece: las imágenes hacen `COPY packages/ packages/` y
+# `COPY apps/<x>/ apps/<x>/`, así que sin esta lista se copiarían los
+# node_modules del equipo —compilados para otro sistema operativo— encima de los
+# que acaba de instalar la imagen. Además del tamaño, es una fuente de fallos
+# difíciles de leer.
+
+# Dependencias y artefactos de compilación
+**/node_modules
+**/dist
+**/www
+**/.angular
+**/coverage
+**/*.tsbuildinfo
+
+# Proyectos nativos: la imagen web no los necesita y pesan mucho
+apps/app/android
+apps/app/ios
+
+# Secretos: que no acaben nunca dentro de una imagen
+**/.env
+**/.env.local
+**/.env.*.local
+!**/.env.example
+
+# Control de versiones y herramientas
+.git
+.gitignore
+.github
+.vscode
+.idea
+**/*.log
+**/.DS_Store
+
+# El propio stack de despliegue
+docker/

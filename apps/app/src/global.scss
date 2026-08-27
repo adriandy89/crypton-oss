@@ -1,0 +1,1278 @@
+/* Nucleo de Ionic. El orden importa: primero core, luego la capa estructural
+   y por ultimo los ajustes por plataforma. */
+@import '@ionic/angular/css/core.css';
+@import '@ionic/angular/css/normalize.css';
+@import '@ionic/angular/css/structure.css';
+@import '@ionic/angular/css/typography.css';
+@import '@ionic/angular/css/display.css';
+
+@import '@ionic/angular/css/padding.css';
+@import '@ionic/angular/css/text-alignment.css';
+@import '@ionic/angular/css/text-transformation.css';
+@import '@ionic/angular/css/flex-utils.css';
+
+/* ---------------------------------------------------------------------- *
+ * Tipografia
+ *
+ * Tres caras variables, subconjunto latino, servidas desde el propio APK.
+ * Nada de CDN: en un movil sin cobertura un CDN deja la app sin fuente, y
+ * ademas evita filtrar la IP del usuario a un tercero al abrir la app.
+ * Son 84 kB en total y cubren todos los pesos de cada familia.
+ * ---------------------------------------------------------------------- */
+@font-face {
+  font-family: 'Sora';
+  font-style: normal;
+  font-weight: 400 700;
+  font-display: swap;
+  src: url('/assets/fonts/sora-var-latin.woff2') format('woff2');
+}
+
+@font-face {
+  font-family: 'Plus Jakarta Sans';
+  font-style: normal;
+  font-weight: 400 700;
+  font-display: swap;
+  src: url('/assets/fonts/plus-jakarta-sans-var-latin.woff2') format('woff2');
+}
+
+@font-face {
+  font-family: 'JetBrains Mono';
+  font-style: normal;
+  font-weight: 400 600;
+  font-display: swap;
+  src: url('/assets/fonts/jetbrains-mono-var-latin.woff2') format('woff2');
+}
+
+body {
+  font-family: var(--font-ui);
+  -webkit-font-smoothing: antialiased;
+}
+
+/* Toda cifra que el usuario tenga que comparar va con digitos de ancho fijo.
+   En una pantalla llena de numeros, alinearlos es la diferencia entre leer y
+   tener que descifrar. */
+.mono,
+.num,
+[class*='num'] {
+  font-family: var(--font-num);
+  font-variant-numeric: tabular-nums;
+}
+
+/* ---------------------------------------------------------------------- *
+ * Chrome de Ionic
+ *
+ * Se estila aqui y no en cada pagina a proposito: son quince pantallas con
+ * la misma cabecera, el mismo segmento y los mismos campos. Ademas global.scss
+ * no entra en el presupuesto `anyComponentStyle` (6 kB), asi que sacar estilo
+ * de las hojas de pagina a este archivo tambien las descarga.
+ * ---------------------------------------------------------------------- */
+ion-content {
+  --background: var(--surface-base);
+}
+
+/* Sitio para la franja de red.
+ *
+ * `ion-app` no coloca a sus hijos: la pagina que hay dentro del outlet es
+ * `.ion-page`, y esa es `position: absolute` con `inset: 0`, asi que un hermano
+ * puesto delante no le quitaria ni un pixel — la franja quedaria pintada DEBAJO
+ * de la pantalla, invisible. Con `ion-app` en columna y el outlet como caja
+ * flexible y posicionada, la pagina resuelve su `inset` contra el outlet y la
+ * franja ocupa alto de verdad.
+ *
+ * `:has()` acota la regla al caso en que la franja existe: sin ella, el arbol
+ * queda exactamente como estaba. */
+ion-app:has(ui-network-banner) {
+  display: flex;
+  flex-direction: column;
+
+  > ion-router-outlet {
+    position: relative;
+    flex: 1 1 auto;
+    /* Sin esto, un `flex: 1` con contenido dentro no baja de su tamano
+       intrinseco y el outlet desborda la pantalla por abajo. */
+    min-height: 0;
+    contain: layout size style;
+  }
+}
+
+ion-header {
+  &::after {
+    display: none; /* la sombra por defecto de Ionic, que aqui sobra */
+  }
+}
+
+ion-toolbar {
+  --background: var(--surface-base);
+  --border-width: 0;
+  --padding-start: var(--space-2);
+  --padding-end: var(--space-2);
+  --min-height: 52px;
+}
+
+ion-title {
+  font-family: var(--font-display);
+  font-size: 26px;
+  font-weight: 700;
+  letter-spacing: -0.025em;
+  padding-inline: var(--space-3);
+}
+
+/* Las pantallas de detalle llevan boton de volver y su titulo va mas discreto:
+   el protagonista ahi es el contenido, no el rotulo. */
+ion-toolbar:has(ion-back-button) ion-title {
+  font-size: 18px;
+  letter-spacing: -0.015em;
+}
+
+ion-back-button {
+  --color: var(--text-1);
+  --icon-font-size: 26px;
+}
+
+ion-tab-bar {
+  --background: var(--surface-bar);
+  --border: 1px solid var(--border-subtle);
+  --color: var(--text-3);
+  --color-selected: var(--brand-2);
+  padding-top: 6px;
+  padding-bottom: 4px;
+  height: auto;
+  min-height: 58px;
+}
+
+ion-tab-button {
+  --padding-top: 4px;
+  --padding-bottom: 4px;
+
+  ion-label {
+    font-size: 10.5px;
+    font-weight: 600;
+    margin-top: 3px;
+  }
+
+  ion-icon {
+    font-size: 23px;
+  }
+}
+
+/* Segmento: pildora sobre superficie, con la seleccion en el degradado de
+   marca. Ionic lo pinta por defecto como una barra gris que no distingue. */
+ion-segment {
+  --background: var(--surface-1);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-pill);
+  padding: 4px;
+  gap: 4px;
+}
+
+ion-segment-button {
+  --background: transparent;
+  --background-checked: transparent;
+  --background-hover: transparent;
+  --color: var(--text-2);
+  --color-checked: #fff;
+  --indicator-color: transparent;
+  --border-radius: var(--radius-pill);
+  --padding-top: 0;
+  --padding-bottom: 0;
+  min-height: 44px;
+  font-size: 13px;
+  font-weight: 600;
+  text-transform: none;
+  letter-spacing: 0;
+
+  &.segment-button-checked {
+    background: var(--brand-gradient);
+    border-radius: var(--radius-pill);
+  }
+
+  &::part(indicator) {
+    display: none;
+  }
+}
+
+/* En el detalle del bot el segmento tiene cinco pestanas y no cabe como
+   pildora: alli se comporta como pestanas subrayadas. */
+ion-segment.seg-tabs {
+  --background: transparent;
+  border: 0;
+  border-bottom: 1px solid var(--border-subtle);
+  border-radius: 0;
+  padding: 0;
+  gap: 0;
+
+  ion-segment-button {
+    --color-checked: var(--brand-2);
+    min-height: 44px;
+    font-size: 12.5px;
+
+    &.segment-button-checked {
+      background: transparent;
+      border-radius: 0;
+      box-shadow: inset 0 -2px 0 var(--brand-2);
+    }
+  }
+}
+
+ion-button {
+  --border-radius: var(--radius-sm);
+  --box-shadow: none;
+  font-family: var(--font-ui);
+  font-weight: 700;
+  font-size: 14px;
+  letter-spacing: 0;
+  text-transform: none;
+  min-height: 46px;
+
+  &[size='small'] {
+    min-height: 44px;
+    font-size: 12.5px;
+  }
+
+  &[fill='outline'] {
+    --border-width: 1px;
+  }
+}
+
+ion-fab-button {
+  --background: var(--brand-gradient);
+  --background-activated: var(--brand-strong);
+  --background-hover: var(--brand-gradient);
+  --color: #16112c;
+  --border-radius: var(--radius-lg);
+  --box-shadow: var(--shadow-2);
+  width: 56px;
+  height: 56px;
+}
+
+/* Listas y filas. `inset` es el patron de la casa para agrupar ajustes. */
+ion-list {
+  background: transparent;
+
+  &[inset] {
+    border-radius: var(--radius-md);
+    border: 1px solid var(--border-subtle);
+    margin: 0 var(--space-4) var(--space-3);
+    overflow: hidden;
+  }
+}
+
+/* Una lista `inset` dentro de `.pad` no pone su propio margen lateral.
+ *
+ * El margen de arriba existe para las pantallas que cuelgan la lista
+ * directamente de `ion-content` (seguridad, por ejemplo). Cuando ademas hay un
+ * `.pad`, los dos se suman: en «Conectar exchange», en «Telegram» y en «Límites
+ * de riesgo» los campos quedaban 32 px adentro mientras el titulo y el texto
+ * que los encabezan estaban a 16 px, y las dos columnas de texto no caian sobre
+ * la misma vertical. Gana por especificidad tambien sobre la regla de pantallas
+ * grandes del final del archivo. */
+.pad ion-list[inset] {
+  margin-inline: 0;
+}
+
+ion-list-header {
+  padding-inline: var(--space-1);
+  min-height: 30px;
+
+  ion-label {
+    font-size: 13px;
+    font-weight: 700;
+    letter-spacing: -0.01em;
+    color: var(--text-1);
+  }
+}
+
+ion-item {
+  --background: var(--surface-1);
+  --border-color: var(--border-subtle);
+  --padding-start: var(--space-4);
+  --inner-padding-end: var(--space-4);
+  --min-height: 54px;
+  font-size: 14px;
+
+  ion-label h2 {
+    font-size: 16px;
+    font-weight: 700;
+    letter-spacing: -0.015em;
+  }
+
+  ion-label h3 {
+    font-size: 14px;
+    font-weight: 700;
+    letter-spacing: -0.01em;
+  }
+
+  ion-label p {
+    font-size: 11.5px;
+    line-height: 1.45;
+    color: var(--text-3);
+  }
+
+  ion-icon[slot='start'] {
+    margin-inline-end: var(--space-3);
+    font-size: 20px;
+    color: var(--text-2);
+  }
+}
+
+/* Campos de formulario: relleno propio en vez de la linea inferior de Ionic,
+   que sobre fondo oscuro casi no se ve. */
+ion-input,
+ion-textarea,
+ion-select {
+  --background: var(--surface-2);
+  --color: var(--text-1);
+  --placeholder-color: var(--text-3);
+  --placeholder-opacity: 1;
+  --padding-start: 14px;
+  --padding-end: 14px;
+  --padding-top: 11px;
+  --padding-bottom: 11px;
+  --border-radius: var(--radius-sm);
+  font-size: 14px;
+
+  &.label-stacked,
+  &.select-label-placement-stacked {
+    --padding-top: 8px;
+  }
+}
+
+ion-input.in-item,
+ion-textarea.in-item,
+ion-select.in-item {
+  --background: transparent;
+  --padding-start: 0;
+}
+
+/* Fuera el selector nativo de `type="number"`.
+   Se dibuja pegado al borde derecho del input, exactamente donde `ui-field`
+   coloca la unidad del campo (`.unit`, en `right: 12px`): se pisaban, y «USDC»
+   se leia «USD(» con dos flechas encima. Ademas mide unos 13 px, que en un
+   movil no se puede pulsar. Lo sustituye el stepper propio de `ui-field`. */
+input[type='number'] {
+  -moz-appearance: textfield;
+  appearance: textfield;
+
+  &::-webkit-outer-spin-button,
+  &::-webkit-inner-spin-button {
+    -webkit-appearance: none;
+    appearance: none;
+    margin: 0;
+  }
+}
+
+ion-toggle {
+  --track-background: var(--surface-3);
+  --track-background-checked: var(--brand);
+  --handle-background: var(--text-2);
+  --handle-background-checked: #fff;
+}
+
+/* La pastilla propia de la app es <ui-badge>; esto solo alinea las que pinta
+   Ionic por su cuenta para que no desentonen. `line-height: 1` por la misma
+   razon que alli: sin el, la caja crece por debajo del texto y la palabra
+   queda descentrada. */
+ion-badge {
+  --padding-top: 5px;
+  --padding-bottom: 5px;
+  --padding-start: 10px;
+  --padding-end: 10px;
+  border-radius: var(--radius-pill);
+  font-family: var(--font-ui);
+  font-size: 11px;
+  font-weight: 700;
+  line-height: 1;
+  letter-spacing: 0.01em;
+}
+
+ion-note {
+  font-size: 12px;
+  color: var(--text-3);
+}
+
+ion-spinner {
+  color: var(--brand-2);
+}
+
+ion-refresher-content {
+  --color: var(--text-2);
+}
+
+/* Superposiciones. Sin esto salen con el gris por defecto de Ionic y rompen
+   la paleta justo en el momento en que el usuario confirma algo caro. */
+ion-alert,
+ion-action-sheet,
+ion-popover,
+ion-toast {
+  --background: var(--surface-1);
+  --color: var(--text-1);
+}
+
+ion-alert {
+  --backdrop-opacity: 0.6;
+
+  .alert-wrapper {
+    border-radius: var(--radius-md) !important;
+    border: 1px solid var(--border-subtle);
+  }
+
+  .alert-title {
+    font-family: var(--font-display);
+    font-weight: 700;
+  }
+
+  .alert-message {
+    color: var(--text-2);
+    font-size: 13px;
+    line-height: 1.5;
+  }
+}
+
+/* Hoja de acciones.
+ *
+ * Se estila con VARIABLES y no con reglas de clase: Ionic la sirve con
+ * encapsulacion «scoped», asi que sus propias reglas llevan una clase extra
+ * (`.action-sheet-button.sc-ion-action-sheet-md`) y ganan por especificidad a
+ * cualquier `ion-action-sheet .clase` que se escriba aqui. Las pocas reglas de
+ * clase que quedan abajo llevan a proposito elemento + dos clases para pasar
+ * por encima. Ver tambien la rampa --ion-color-step-* de variables.scss.
+ *
+ * Y el techo de altura no es un capricho: con diez botones la hoja crecia
+ * hasta ocupar la pantalla entera, el fondo oscurecido desaparecia y con el la
+ * unica salida a mano si no se veia el boton de cerrar. Ahora siempre queda
+ * una franja de fondo que se puede tocar para cerrar.
+ */
+ion-action-sheet {
+  --backdrop-opacity: 0.6;
+  --max-height: calc(100% - 96px);
+  --max-width: 520px;
+  --button-background-selected: var(--surface-3);
+  --button-background-selected-opacity: 1;
+  --button-color: var(--text-1);
+  --button-color-activated: var(--text-1);
+  --button-color-focused: var(--text-1);
+  --button-color-hover: var(--text-1);
+  --button-color-selected: var(--brand-2);
+}
+
+ion-action-sheet .action-sheet-container .action-sheet-title {
+  font-family: var(--font-display);
+  font-size: 15px;
+  font-weight: 700;
+  letter-spacing: -0.015em;
+  color: var(--text-1);
+}
+
+ion-action-sheet .action-sheet-container .action-sheet-sub-title {
+  font-size: 12.5px;
+  line-height: 1.45;
+  color: var(--text-2);
+}
+
+ion-action-sheet .action-sheet-container .action-sheet-button {
+  font-size: 14.5px;
+  font-weight: 600;
+}
+
+/* Rojo para lo que no se puede deshacer: cerrar una posicion a mercado no se
+   parece en nada a pausar un bot, y en modo material Ionic los pinta igual. */
+ion-action-sheet .action-sheet-button.action-sheet-destructive {
+  color: var(--pnl-down);
+}
+
+ion-action-sheet .action-sheet-button.action-sheet-cancel {
+  color: var(--text-2);
+  font-weight: 700;
+}
+
+/* El grupo de cancelar va separado y no hace scroll: es la salida, y tiene que
+   estar siempre donde el pulgar la encuentre. */
+ion-action-sheet .action-sheet-container .action-sheet-group-cancel {
+  border-top: 1px solid var(--border-subtle);
+}
+
+ion-action-sheet .action-sheet-container .action-sheet-group:first-child {
+  border-radius: var(--radius-md) var(--radius-md) 0 0;
+}
+
+/* ---------------------------------------------------------------------- *
+ * Hoja de ajustes del gráfico (`ion-modal.opts` de chart.page.html)
+ *
+ * Vive aqui y no en chart.page.scss por el presupuesto `anyComponentStyle`
+ * de 6 kB: la hoja de esa pagina ya lo rozaba. Todo va colgado de
+ * `ion-modal.opts`, asi que no toca ninguna otra pantalla.
+ *
+ * La hoja se abre a media pantalla y se puede subir del todo o arrastrar
+ * hacia abajo hasta cerrarla. El tope de 0.72 es deliberado: deja siempre a
+ * la vista una franja del fondo oscurecido, que es donde el dedo va
+ * instintivamente a tocar para cerrar.
+ * ---------------------------------------------------------------------- */
+ion-modal.opts {
+  --background: var(--surface-1);
+  --border-radius: var(--radius-md) var(--radius-md) 0 0;
+  --backdrop-opacity: 0.6;
+
+  ion-content.optbody {
+    --background: var(--surface-1);
+    --padding-start: var(--space-4);
+    --padding-end: var(--space-4);
+    --padding-bottom: calc(var(--space-4) + env(safe-area-inset-bottom));
+  }
+
+  .opthead {
+    display: flex;
+    align-items: center;
+    gap: var(--space-3);
+    padding-top: var(--space-2);
+    padding-bottom: var(--space-1);
+
+    h2 {
+      flex-grow: 1;
+      margin: 0;
+      font-family: var(--font-display);
+      font-size: 17px;
+      font-weight: 700;
+      letter-spacing: -0.02em;
+    }
+
+    /* 44 px: es la salida principal de una pantalla que se abre encima de
+       todo, y fallar el toque aqui es justo lo que hacia que la vista
+       anterior pareciera bloqueada. */
+    .x {
+      flex-shrink: 0;
+      width: 44px;
+      height: 44px;
+      display: grid;
+      place-items: center;
+      padding: 0;
+      border: 0;
+      border-radius: var(--radius-pill);
+      background: var(--surface-2);
+      color: var(--text-1);
+
+      ion-icon {
+        font-size: 20px;
+      }
+    }
+  }
+
+  section {
+    padding: var(--space-3) 0;
+    border-top: 1px solid rgba(46, 43, 82, 0.6);
+
+    &:first-of-type {
+      border-top: 0;
+    }
+  }
+
+  .lbl {
+    margin-bottom: var(--space-2);
+    font-size: 10.5px;
+    font-weight: 700;
+    letter-spacing: 0.06em;
+    text-transform: uppercase;
+    color: var(--text-3);
+  }
+
+  /* Quince pastillas en rejilla: cuatro filas cortas frente a los quince
+     renglones de lista que no cabian en ninguna pantalla. `auto-fill` con un
+     minimo de 60 px reparte solo, del movil estrecho al monitor. */
+  .ivgrid {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(60px, 1fr));
+    gap: var(--space-2);
+  }
+
+  .duo {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: var(--space-2);
+  }
+
+  .chip {
+    min-height: 44px;
+    padding: 0 var(--space-2);
+    border: 1px solid var(--border-subtle);
+    border-radius: var(--radius-xs);
+    background: var(--surface-2);
+    color: var(--text-1);
+    font-family: var(--font-ui);
+    font-size: 13px;
+    font-weight: 600;
+
+    &.wide {
+      font-size: 14px;
+    }
+
+    &.on {
+      border-color: transparent;
+      background: var(--brand-gradient);
+      color: #fff;
+      font-weight: 700;
+    }
+
+    /* Apagado, no escondido: el usuario ve que la app conoce ese intervalo y
+       que quien no lo sirve es la plataforma. */
+    &:disabled {
+      border-style: dashed;
+      background: transparent;
+      color: #4d4873;
+    }
+  }
+
+  .note {
+    margin: var(--space-2) 0 0;
+    font-size: 11.5px;
+    line-height: 1.5;
+    color: var(--text-3);
+  }
+
+  /* Interruptor propio y no un `ion-toggle` suelto: toda la fila es area de
+     toque, que es como se usa un ajuste con el pulgar. */
+  .switch {
+    display: flex;
+    align-items: center;
+    gap: var(--space-3);
+    width: 100%;
+    min-height: 52px;
+    padding: 0;
+    border: 0;
+    background: transparent;
+    text-align: start;
+
+    /* Una fila que no hace nada tiene que verse como que no hace nada.
+       Lo usa «Escala automática»: mientras el encuadre ya es automático no hay
+       nada que deshacer, y sin esto se veía idéntica a una fila pulsable. */
+    &:disabled {
+      opacity: 0.5;
+    }
+
+    .who {
+      flex-grow: 1;
+      min-width: 0;
+    }
+
+    b {
+      display: block;
+      font-family: var(--font-ui);
+      font-size: 14px;
+      font-weight: 700;
+      color: var(--text-1);
+    }
+
+    em {
+      display: block;
+      margin-top: 2px;
+      font-size: 11px;
+      font-style: normal;
+      color: var(--text-3);
+    }
+
+    .track {
+      position: relative;
+      flex-shrink: 0;
+      width: 46px;
+      height: 28px;
+      border-radius: var(--radius-pill);
+      background: var(--surface-3);
+      transition: background 0.18s ease;
+
+      &.on {
+        background: var(--brand);
+      }
+    }
+
+    .knob {
+      position: absolute;
+      top: 3px;
+      inset-inline-start: 3px;
+      width: 22px;
+      height: 22px;
+      border-radius: 50%;
+      background: var(--text-2);
+      transition:
+        transform 0.18s ease,
+        background 0.18s ease;
+    }
+
+    .track.on .knob {
+      transform: translateX(18px);
+      background: #fff;
+    }
+  }
+
+  ion-button {
+    margin-top: var(--space-3);
+  }
+}
+
+ion-popover {
+  --width: 260px;
+
+  &::part(content) {
+    border-radius: var(--radius-sm);
+    border: 1px solid var(--border-subtle);
+  }
+}
+
+ion-toast {
+  --border-radius: var(--radius-sm);
+  --box-shadow: var(--shadow-1);
+}
+
+/* ---------------------------------------------------------------------- *
+ * Utilidades compartidas
+ *
+ * `pnlColor()` de core/utils devuelve 'success' | 'danger' | 'medium', y las
+ * plantillas lo pegan con [class]="'c-' + pnlColor(x)". Vivian repetidas en
+ * cuatro hojas de pagina; ahora estan aqui una sola vez.
+ * ---------------------------------------------------------------------- */
+.c-success {
+  color: var(--pnl-up);
+}
+
+.c-danger {
+  color: var(--pnl-down);
+}
+
+.c-medium {
+  color: var(--pnl-flat);
+}
+
+/* Etiqueta de plataforma.
+ *
+ * Vive aqui porque estaba COPIADA en `markets-list.page.scss` y en
+ * `chart.page.scss` con la misma paleta: dos sitios donde tocar cuando entre un
+ * cuarto exchange, y donde una de las dos copias se quedaria atras.
+ *
+ * No es un <ui-badge> con tono: los tonos de la app son semanticos —verde es
+ * beneficio, rojo es perdida, ambar es aviso— y el color de un venue no
+ * significa nada de eso; solo tiene que ser SIEMPRE el mismo, que es lo que se
+ * lee antes que el texto cuando la lista mezcla las tres plataformas. Lo que si
+ * comparte con <ui-badge> es la caja: interlineado 1 y relleno vertical de 4 px
+ * para que la palabra no llegue al borde de la pastilla.
+ */
+.venue {
+  display: inline-flex;
+  align-items: center;
+  flex-shrink: 0;
+  box-sizing: border-box;
+  min-height: 19px;
+  padding: 4px 7px;
+  border-radius: var(--radius-xs);
+  font-family: var(--font-ui);
+  font-size: 9.5px;
+  font-weight: 700;
+  line-height: 1;
+  letter-spacing: 0.02em;
+  white-space: nowrap;
+
+  &[data-v='HYPERLIQUID'] {
+    color: #6ee7d3;
+    background: rgba(45, 212, 167, 0.13);
+  }
+
+  &[data-v='LIGHTER'] {
+    color: #a89bf5;
+    background: rgba(139, 92, 246, 0.15);
+  }
+
+  &[data-v='ASTER'] {
+    color: #f3c86a;
+    background: rgba(240, 180, 41, 0.13);
+  }
+}
+
+/* Contenedor estandar de pagina y caja de carga centrada.
+ *
+ * Las dos estaban ademas COPIADAS en seis hojas de pagina, siempre con el mismo
+ * cuerpo salvo el `min-height` de `.center`, que bailaba entre 55vh y 60vh
+ * segun la pantalla: el mismo spinner saltaba de sitio al navegar. Aqui una
+ * vez y valen para las quince, incluidas las que se escriban despues. Una
+ * pagina que necesite mas puede seguir anadiendo lo suyo (portfolio y cuenta le
+ * ponen a `.pad` un `display: flex` propio, que se suma a este relleno). */
+.pad {
+  padding: var(--space-3) var(--space-4) 40px;
+}
+
+.center {
+  display: grid;
+  place-items: center;
+  min-height: 55vh;
+}
+
+/* ---------------------------------------------------------------------- *
+ * Pantallas grandes
+ *
+ * La vista de movil es la que manda y no se toca: todo lo de abajo vive
+ * dentro de media queries. En un monitor, lo que estropea una app movil
+ * estirada no es que se vea grande, es que una linea de texto de 1900 px no
+ * se puede leer y una tarjeta de ancho completo pierde toda su forma.
+ *
+ * El arreglo es una sola idea: el contenido se limita a una columna centrada.
+ * El ancho lo elige cada pagina con --page-max (ver variables.scss); las de
+ * lectura se quedan en --content-max y las de datos usan --content-wide.
+ *
+ * Se hace sobre ::part(scroll) —el contenedor de scroll de ion-content— en
+ * lugar de sobre cada contenedor de cada pagina: asi entra una vez y vale
+ * para las quince pantallas, incluidas las que se escriban despues.
+ * ---------------------------------------------------------------------- */
+@media (min-width: 768px) {
+  ion-content::part(scroll) {
+    max-width: var(--page-max, var(--content-max));
+    margin-inline: auto;
+  }
+
+  /* El titulo y los botones de la cabecera se alinean con la columna en vez
+     de quedarse pegados a los bordes de la pantalla. */
+  ion-toolbar {
+    --padding-start: max(var(--space-2), calc((100% - var(--page-max, var(--content-max))) / 2));
+    --padding-end: max(var(--space-2), calc((100% - var(--page-max, var(--content-max))) / 2));
+  }
+
+  /* El FAB flota sobre el contenido, no en la esquina de la pantalla: a 1900 px
+     acababa a medio metro de la lista a la que pertenece. */
+  ion-fab[horizontal='end'] {
+    inset-inline-end: max(
+      var(--space-4),
+      calc((100% - var(--page-max, var(--content-max))) / 2 + var(--space-4))
+    );
+  }
+
+  /* La barra inferior pasa a ser un dock centrado. Una barra de 1900 px con
+     cuatro iconos diminutos en medio no se lee como navegacion. */
+  ion-tab-bar {
+    /* `width` y no `max-width`: Ionic le pone `contain: strict`, que incluye
+       contencion de tamano, asi que su ancho intrinseco es cero y con solo
+       max-width + margin auto la barra colapsaba a 2 px. */
+    width: min(560px, calc(100% - var(--space-6)));
+    margin: 0 auto var(--space-3);
+    border-radius: var(--radius-lg);
+    border: 1px solid var(--border-subtle);
+    box-shadow: var(--shadow-dock);
+    overflow: hidden;
+  }
+
+  /* Las listas `inset` ya tienen su propio margen lateral; centrarlas exige
+     anular el margin-inline que trae. */
+  ion-list[inset] {
+    margin-inline: var(--space-4);
+  }
+
+  /* Un segmento de tres opciones repartido en 1080 px deja los rotulos flotando
+     lejisimos unos de otros. Se queda con su tamano de control y centrado.
+     Las pestanas del detalle (.seg-tabs) si ocupan todo: son pestanas, y ahi
+     el subrayado marca el ancho de cada seccion. */
+  ion-segment:not(.seg-tabs) {
+    max-width: 520px;
+    margin-inline: auto;
+  }
+}
+
+/* ── Leyenda de capas del gráfico (`.legend` de chart.page.html) ──────────
+   Vive aqui y no en `chart.page.scss` por el presupuesto `anyComponentStyle`
+   que fija `angular.json` (6 kB de aviso): esa hoja ya lo rozaba y el aviso de
+   «no se han podido cargar las ordenes» la paso de largo por ocho bytes. Es la
+   misma razon por la que ya estan aqui la hoja de opciones del grafico y los
+   estilos del segmento.
+
+   Es leyenda e interruptor a la vez: explica que significa cada color y deja
+   apagarlo, en la misma fila. */
+.legend {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 6px var(--space-4) 2px;
+  overflow-x: auto;
+  scrollbar-width: none;
+
+  &::-webkit-scrollbar {
+    display: none;
+  }
+
+  button {
+    display: inline-flex;
+    align-items: center;
+    gap: 5px;
+    flex-shrink: 0;
+    /* Bajo del mínimo de 44 px a propósito y solo aquí: es una leyenda que
+       ADEMÁS conmuta, no un control primario, y llevarla a 44 px robaría al
+       gráfico un 8 % de la altura en un móvil pequeño. Se compensa con
+       separación generosa entre elementos. */
+    min-height: 34px;
+    padding: 0;
+    border: 0;
+    background: transparent;
+    color: var(--text-2);
+    font-family: var(--font-ui);
+    font-size: 10px;
+    font-weight: 600;
+
+    &.off {
+      color: #4d4873;
+
+      .sw,
+      .tri {
+        opacity: 0.35;
+      }
+    }
+  }
+
+  /* La capa de previstas cuelga de la escalera: apagada esa, esta no tiene
+     nada de lo que ser el plan. */
+  button.sub:disabled {
+    opacity: 0.45;
+  }
+
+  .sw {
+    width: 12px;
+    height: 2px;
+    border-radius: 1px;
+    flex-shrink: 0;
+
+    &.buy {
+      background: var(--pnl-up);
+    }
+
+    &.liq {
+      background: var(--pnl-down);
+    }
+
+    /* Punteado y atenuado, igual que la linea en el grafico: lo que separa un
+       nivel previsto de una orden puesta es la intensidad, nunca el tono. */
+    &.plan {
+      height: 0;
+      border-top: 2px dotted var(--pnl-up);
+      opacity: 0.55;
+    }
+  }
+
+  /* Lo que el grafico NO esta enseñando. Ambar y no gris: es una omision, y una
+     omision callada en una pantalla de ordenes se lee como un cero. */
+  .warnpill {
+    flex-shrink: 0;
+    padding: 2px 7px;
+    border-radius: var(--radius-xs);
+    background: rgba(var(--signal-warn-rgb), 0.14);
+    color: var(--signal-warn);
+    font-size: 9.5px;
+    font-weight: 700;
+    line-height: 1.5;
+    white-space: nowrap;
+  }
+
+  .tri {
+    width: 0;
+    height: 0;
+    flex-shrink: 0;
+    border-bottom: 6px solid var(--pnl-up);
+    border-left: 4px solid transparent;
+    border-right: 4px solid transparent;
+  }
+
+  .liqdist {
+    margin-inline-start: auto;
+    flex-shrink: 0;
+    font-size: 10px;
+    color: var(--text-3);
+
+    &.warn {
+      color: var(--signal-warn);
+    }
+
+    &.danger {
+      color: var(--pnl-down);
+      font-weight: 700;
+    }
+  }
+}
+
+/* ── Ficha de market making ───────────────────────────────────────────────
+   Vive aqui y no en `bot-detail.page.scss` por el presupuesto de estilos por
+   componente que fija `angular.json` (6 kB de aviso, 10 kB de error): esa hoja
+   ya iba por 8 kB. Es la misma razon por la que ya estan aqui los estilos del
+   segmento y de la hoja de opciones del grafico. */
+.mm-tiles {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: var(--space-2);
+  margin-bottom: var(--space-3);
+}
+
+@media (min-width: 640px) {
+  .mm-tiles {
+    grid-template-columns: repeat(4, minmax(0, 1fr));
+  }
+}
+
+/* Las definiciones no son universales, asi que se explican donde se leen: sin
+   esta nota, «efficiency» invita a compararse con la de otra plataforma que la
+   calcula de otra forma. */
+.mm-foot {
+  margin: var(--space-3) 0 0;
+  font-size: 11.5px;
+  line-height: 1.5;
+  color: var(--text-3);
+}
+
+/* ---------------------------------------------------------------------- *
+ * Manual de estrategia (`ion-modal.help` de `ui-strategy-help`)
+ *
+ * Vive aqui y no en el componente por el presupuesto `anyComponentStyle` de
+ * 6 kB: el chrome de una pantalla completa no cabe en una hoja de componente.
+ * Es el mismo reparto que ya usa `ion-modal.opts`. Todo cuelga de
+ * `ion-modal.help`, asi que no toca ninguna otra pantalla.
+ *
+ * A pantalla completa y no como hoja parcial: el market maker V2 documenta
+ * cuarenta y ocho opciones, y leer eso por una rendija del 72 % no es leerlo.
+ * ---------------------------------------------------------------------- */
+ion-modal.help {
+  --background: var(--surface-base);
+  --backdrop-opacity: 0.6;
+
+  ion-content.helpbody {
+    --background: var(--surface-base);
+    --padding-start: var(--space-4);
+    --padding-end: var(--space-4);
+    --padding-bottom: calc(var(--space-6) + env(safe-area-inset-bottom));
+  }
+
+  .helphead {
+    display: flex;
+    align-items: center;
+    gap: var(--space-3);
+    padding-top: calc(var(--space-2) + env(safe-area-inset-top));
+    padding-bottom: var(--space-1);
+
+    h2 {
+      flex-grow: 1;
+      margin: 0;
+      font-family: var(--font-display);
+      font-size: 19px;
+      font-weight: 700;
+      letter-spacing: -0.02em;
+    }
+
+    /* 44 px: es la unica salida de una pantalla que se abre encima de todo. */
+    .x {
+      flex-shrink: 0;
+      width: 44px;
+      height: 44px;
+      display: grid;
+      place-items: center;
+      padding: 0;
+      border: 0;
+      border-radius: var(--radius-pill);
+      background: var(--surface-2);
+      color: var(--text-1);
+
+      ion-icon {
+        font-size: 20px;
+      }
+    }
+  }
+
+  .lead {
+    margin: var(--space-2) 0 var(--space-3);
+    font-size: 14.5px;
+    line-height: 1.5;
+    color: var(--text-1);
+  }
+
+  .tags {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px;
+    margin-bottom: var(--space-2);
+  }
+
+  section {
+    padding: var(--space-4) 0;
+    border-top: 1px solid var(--border-subtle);
+  }
+
+  h3 {
+    margin: 0 0 var(--space-2);
+    font-family: var(--font-display);
+    font-size: 15px;
+    font-weight: 700;
+    color: var(--text-1);
+  }
+
+  h3.sub {
+    margin-top: var(--space-4);
+  }
+
+  section > p {
+    margin: 0;
+    font-size: 13.5px;
+    line-height: 1.6;
+    color: var(--text-2);
+  }
+
+  .steps {
+    margin: 0;
+    padding-left: 1.15em;
+    display: flex;
+    flex-direction: column;
+    gap: 9px;
+    font-size: 13.5px;
+    line-height: 1.55;
+    color: var(--text-2);
+  }
+
+  .marks {
+    margin: 0;
+    padding: 0;
+    list-style: none;
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    font-size: 13.5px;
+    line-height: 1.55;
+    color: var(--text-2);
+
+    li {
+      position: relative;
+      padding-left: 1.15em;
+    }
+
+    li::before {
+      position: absolute;
+      left: 0;
+      font-weight: 700;
+    }
+  }
+
+  .marks.good li::before {
+    content: '+';
+    color: var(--pnl-up);
+  }
+
+  .marks.bad li::before {
+    content: '−';
+    color: var(--pnl-down);
+  }
+
+  .ej {
+    margin-top: var(--space-3);
+    padding: var(--space-3);
+    border: 1px solid var(--border-subtle);
+    border-radius: var(--radius-sm);
+    background: var(--surface-1);
+
+    h4 {
+      margin: 0;
+      font-size: 13.5px;
+      font-weight: 700;
+      color: var(--text-1);
+    }
+
+    .market {
+      margin: 4px 0 var(--space-2);
+      font-size: 11.5px;
+      color: var(--text-3);
+    }
+
+    .out {
+      margin: var(--space-2) 0 0;
+      font-size: 13px;
+      line-height: 1.55;
+      color: var(--text-2);
+    }
+  }
+
+  .setup {
+    margin: 0;
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+
+    > div {
+      display: flex;
+      align-items: baseline;
+      justify-content: space-between;
+      gap: var(--space-3);
+    }
+
+    dt {
+      font-size: 12px;
+      color: var(--text-3);
+    }
+
+    dd {
+      margin: 0;
+      font-size: 12.5px;
+      font-weight: 600;
+      text-align: right;
+      color: var(--text-1);
+    }
+  }
+
+  .note {
+    margin: 0 0 var(--space-2);
+    font-size: 12.5px;
+    line-height: 1.9;
+    color: var(--text-3);
+  }
+
+  .opt {
+    padding: var(--space-3) 0;
+    border-top: 1px solid rgba(46, 43, 82, 0.55);
+
+    &:first-child {
+      border-top: 0;
+    }
+
+    .opthead {
+      display: flex;
+      align-items: center;
+      flex-wrap: wrap;
+      gap: 6px 8px;
+    }
+
+    .name {
+      font-size: 13.5px;
+      font-weight: 700;
+      color: var(--text-1);
+    }
+
+    .risky {
+      font-size: 14px;
+      color: var(--signal-warn);
+    }
+
+    .facts {
+      margin: 5px 0 0;
+      font-size: 11px;
+      color: var(--text-3);
+    }
+
+    p {
+      margin: 6px 0 0;
+      font-size: 13px;
+      line-height: 1.55;
+      color: var(--text-2);
+    }
+
+    .affects span,
+    .tipline span {
+      font-weight: 700;
+      color: var(--text-1);
+    }
+
+    .tipline {
+      color: var(--text-3);
+    }
+  }
+
+  .warn {
+    margin: var(--space-5) 0 0;
+    padding: var(--space-3);
+    border-radius: var(--radius-sm);
+    background: rgba(var(--signal-warn-rgb), 0.1);
+    color: var(--signal-warn);
+    font-size: 12.5px;
+    line-height: 1.55;
+  }
+}

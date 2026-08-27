@@ -1,0 +1,38 @@
+/* https://angular.dev/reference/configs/file-structure */
+{
+  "compileOnSave": false,
+  "compilerOptions": {
+    "baseUrl": "./",
+    "outDir": "./dist/out-tsc",
+    // Los paquetes compartidos se consumen como FUENTE TypeScript: la app los
+    // compila dentro de su propio programa, sin build previo. Es lo que permite
+    // que el preview de una estrategia se calcule en el movil con exactamente
+    // el mismo codigo que ejecutara el motor en el servidor.
+    "paths": {
+      "@crypton/shared": ["../../packages/shared/src/index.ts"],
+      "@crypton/strategy-core": ["../../packages/strategy-core/src/index.ts"]
+    },
+    "forceConsistentCasingInFileNames": true,
+    "esModuleInterop": true,
+    "strict": true,
+    "noImplicitOverride": true,
+    "noPropertyAccessFromIndexSignature": true,
+    "noImplicitReturns": true,
+    "noFallthroughCasesInSwitch": true,
+    "sourceMap": true,
+    "declaration": false,
+    "experimentalDecorators": true,
+    "moduleResolution": "bundler",
+    "importHelpers": true,
+    "target": "es2022",
+    "module": "es2020",
+    "skipLibCheck": true,
+    "useDefineForClassFields": false
+  },
+  "angularCompilerOptions": {
+    "enableI18nLegacyMessageIdFormat": false,
+    "strictInjectionParameters": true,
+    "strictInputAccessModifiers": true,
+    "strictTemplates": true
+  }
+}

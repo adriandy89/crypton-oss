@@ -1,0 +1,90 @@
+<ion-header>
+  <ion-toolbar>
+    <ion-buttons slot="start"><ion-back-button defaultHref="/tabs/account" /></ion-buttons>
+    <ion-title>Telegram</ion-title>
+  </ion-toolbar>
+</ion-header>
+
+<ion-content>
+  @if (loading()) {
+    <div class="center"><ion-spinner name="crescent" /></div>
+  } @else {
+    <div class="pad">
+      @if (telegram.status()?.linked) {
+        <!-- ── Ya vinculado ── -->
+        <div class="linked">
+          <ion-icon name="paper-plane-outline" />
+          <div>
+            <strong>Telegram conectado</strong>
+            <p>Vinculado el {{ shortDate(telegram.status()?.verifiedAt) }}</p>
+          </div>
+        </div>
+
+        <ion-list inset="true">
+          <ion-list-header><ion-label>Qué quieres recibir</ion-label></ion-list-header>
+
+          @for (row of rows; track row.key) {
+            <ion-item>
+              <ion-toggle
+                [checked]="!!telegram.status()?.prefs?.[row.key]"
+                (ionChange)="toggle(row.key, $event.detail.checked)"
+              >
+                <ion-label class="ion-text-wrap">
+                  <h3>{{ row.label }}</h3>
+                  <p>{{ row.help }}</p>
+                </ion-label>
+              </ion-toggle>
+            </ion-item>
+          }
+        </ion-list>
+
+        <ion-note class="foot">
+          Los avisos se agrupan antes de enviarse: una ráfaga de eventos llega
+          como un solo mensaje legible en lugar de veinte notificaciones que
+          acabarías silenciando.
+        </ion-note>
+
+        <ion-button expand="block" fill="clear" color="danger" (click)="unlink()">
+          Desvincular Telegram
+        </ion-button>
+      } @else {
+        <!-- ── Sin vincular ── -->
+        <div class="intro">
+          <ion-icon name="paper-plane-outline" />
+          <h2>Recibe los avisos de tus bots</h2>
+          <p>
+            Genera un código y envíalo al bot. Ese paso es el que demuestra que
+            el chat es tuyo: sin él, cualquiera podría dirigir tus alertas a otro
+            sitio.
+          </p>
+        </div>
+
+        @if (code(); as generado) {
+          <div class="code-box">
+            <span class="label">Envía este comando al bot</span>
+            <code>/start {{ generado }}</code>
+          </div>
+
+          <ion-button expand="block" (click)="openTelegram()">
+            <ion-icon slot="start" name="open-outline" />
+            Abrir Telegram
+          </ion-button>
+
+          <ion-button expand="block" fill="outline" (click)="copyCode()">
+            <ion-icon slot="start" name="copy-outline" />
+            Copiar comando
+          </ion-button>
+
+          <ion-note class="foot">
+            Cuando el bot te responda, vuelve aquí y refresca. El código se
+            inválida al usarlo.
+          </ion-note>
+        } @else {
+          <ion-button expand="block" [disabled]="busy()" (click)="generate()">
+            @if (busy()) { <ion-spinner name="crescent" /> } @else { Generar código }
+          </ion-button>
+        }
+      }
+    </div>
+  }
+</ion-content>

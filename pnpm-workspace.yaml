@@ -1,0 +1,19 @@
+packages:
+  - 'apps/*'
+  - 'packages/*'
+
+# Prisma 7 y los signers nativos de los DEX traen binarios: sin esto pnpm los
+# instala pero no ejecuta sus scripts de build y fallan en tiempo de ejecución.
+onlyBuiltDependencies:
+  - '@prisma/client'
+  - '@prisma/engines'
+  - prisma
+  - bcrypt
+  - esbuild
+  - sharp
+  - '@nestjs/core'
+  - '@parcel/watcher'
+  - unrs-resolver
+  # Firmante nativo de Lighter (zklighter-sdk): sin su build, la firma de
+  # órdenes falla en tiempo de ejecución.
+  - koffi
