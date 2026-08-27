@@ -23,6 +23,29 @@ Licencia [AGPL-3.0](LICENSE).
 
 ---
 
+## Cómo se ve
+
+La app es la misma en web y en Android: Ionic compilado a las dos, sin una
+pantalla escrita dos veces.
+
+| Bots en marcha | El bot por dentro |
+|---|---|
+| ![Lista de bots en la pestaña Simulados: un Market Maker V2 sobre ETH en Hyperliquid, con PnL, ROI, órdenes vivas y distancia a liquidación](docs/img/lista-bots.webp) | ![Detalle del bot sobre el gráfico de ETH/USDC: escalera de órdenes BID y ASK, precio medio y ejecuciones marcadas sobre las velas](docs/img/detalle-bot.webp) |
+| Cada bot enseña su PnL, su ROI y **a qué distancia está la liquidación**, que es el número que de verdad importa cuando hay apalancamiento. Los simulados llevan su etiqueta y conviven con los reales en el mismo par. | La escalera tendida sobre las velas —`BID#1`, `ASK#1`, el precio medio— y las ejecuciones marcadas donde ocurrieron. Es lo que hay en el libro del venue ahora mismo, no una reconstrucción a posteriori. |
+
+Y el asistente de creación, que empieza por lo que más pesa: qué estrategia, y
+con cuánto riesgo.
+
+![Asistente de nuevo bot, paso de estrategia: las siete estrategias en tarjetas, con Martingala y GridMart marcadas como riesgo alto](docs/img/selector-estrategias.webp)
+
+El riesgo va declarado en la tarjeta, antes de elegir —Martingala y GridMart
+llevan su aviso desde el primer paso—. Y el formulario de cada estrategia lo
+genera la app sola a partir de `meta.fields`: no hay una pantalla escrita a mano
+por estrategia, así que añadir una al registro de `strategy-core` la hace
+aparecer aquí. Ver [Estrategias](#estrategias).
+
+---
+
 ## Qué hay aquí
 
 ```
