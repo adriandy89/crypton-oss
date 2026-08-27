@@ -58,6 +58,7 @@ INFRA := docker compose -f docker/docker-compose.infra.yml
 PKG_DIST := packages/shared/dist/index.js \
   packages/strategy-core/dist/index.js \
   packages/exchange-core/dist/index.js \
+  packages/backtest/dist/index.js \
   packages/db/dist/src/index.js
 
 .DEFAULT_GOAL := help

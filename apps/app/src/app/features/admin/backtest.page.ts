@@ -184,11 +184,34 @@ export class AdminBacktestPage implements OnInit {
     addIcons({ playOutline, trashOutline, warningOutline });
   }
 
+  /**
+   * El enlace entrante va PRIMERO; lo que toca la red, dentro de un `try`.
+   *
+   * Antes esto era un `Promise.all` a pelo, y un rechazo de `loadSources()` se
+   * llevaba por delante las tres líneas siguientes sin que lo viera nadie: el
+   * signal `error` solo lo escribía `lanzar()`. La pantalla quedaba con los dos
+   * segmentos SIN BOTONES —`sources()` se queda en `null` y tanto la plantilla
+   * como `intervalos()` hacen `?? []`—, sin el bot que traía el enlace, sin
+   * historial, y sin un solo aviso. El fallo no se descubría hasta pulsar
+   * Ejecutar, y entonces salía como un error del `POST`, que no era el problema.
+   *
+   * Cada parte se recupera por separado a propósito: que no haya fuentes no es
+   * motivo para perder el bot preseleccionado ni el historial, que son las dos
+   * cosas que sí se pueden seguir enseñando.
+   */
   async ngOnInit(): Promise<void> {
-    await Promise.all([this.backtests.loadSources(), this.bots.refresh()]);
-    // Se puede llegar desde el detalle de un bot con el id ya puesto.
+    // Se puede llegar desde el detalle de un bot con el id ya puesto. No pasa
+    // por la red, así que se aplica antes de que nada pueda fallar.
     const desdeRuta = this.route.snapshot.queryParamMap.get('botId');
     if (desdeRuta) this.botId.set(desdeRuta);
+
+    try {
+      await Promise.all([this.backtests.loadSources(), this.bots.refresh()]);
+    } catch (e) {
+      this.error.set(errorText(e));
+    }
+
+    // Fuera del `try`: ya trae el suyo, y es accesorio.
     await this.cargarHistorial();
   }
 

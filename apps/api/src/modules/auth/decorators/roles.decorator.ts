@@ -11,6 +11,6 @@ export const ROLES_KEY = 'roles';
  * corto de leer que un guard, y `activity.controller.ts` dejó escrito que el
  * momento de introducirlo sería «cuando aparezca el cuarto caso».
  *
- * El módulo de backtests trae siete rutas de golpe, así que ese momento llegó.
+ * El módulo de backtests trae seis rutas de golpe, así que ese momento llegó.
  */
 export const Roles = (...roles: Role[]) => SetMetadata(ROLES_KEY, roles);
