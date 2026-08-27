@@ -39,6 +39,24 @@ import { MarketsService } from '../markets';
  * Todo pasa por `createPublicAdapter`: son datos públicos y no hay motivo para
  * descifrar la clave de nadie para leerlos.
  */
+/**
+ * El cuerpo de la respuesta del venue, en texto y sin que esto pueda fallar.
+ *
+ * `JSON.stringify` a secas no sirve por dos motivos. Revienta con referencias
+ * circulares, y aquí se llama DENTRO de un `catch`: la excepción se llevaría por
+ * delante el manejador y convertiría un 503 honesto en un 500. Y sobre un
+ * `Error` devuelve `"{}"`, que es exactamente perder lo que se queria registrar.
+ */
+function cuerpoCrudo(raw: unknown): string {
+  if (typeof raw === 'string') return raw;
+  if (raw instanceof Error) return raw.message;
+  try {
+    return JSON.stringify(raw) ?? '';
+  } catch {
+    return '(cuerpo no serializable)';
+  }
+}
+
 @Injectable()
 export class MarketDataService implements OnModuleDestroy {
   private readonly logger = new Logger(MarketDataService.name);
@@ -390,8 +408,7 @@ export class MarketDataService implements OnModuleDestroy {
       // kilobytes: en `warn` inundaría el log cada 30 s.
       const crudo = e instanceof ExchangeError ? e.raw : undefined;
       if (crudo !== undefined) {
-        const texto = typeof crudo === 'string' ? crudo : JSON.stringify(crudo);
-        this.logger.debug(`${venue} respondió: ${shortMessage(texto, 600)}`);
+        this.logger.debug(`${venue} respondió: ${shortMessage(cuerpoCrudo(crudo), 600)}`);
       }
 
       // Un corte del venue no es una avería nuestra y se dice distinto: al
