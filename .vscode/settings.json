@@ -28,7 +28,6 @@
     "**/dist/**": true,
     "**/www/**": true,
     "**/.angular/**": true,
-    "**/.astro/**": true,
     "**/generated/**": true,
     "**/coverage/**": true
   },
@@ -37,7 +36,6 @@
     "**/dist": true,
     "**/www": true,
     "**/.angular": true,
-    "**/.astro": true,
     "**/generated": true,
     "**/coverage": true,
     "**/pnpm-lock.yaml": true
