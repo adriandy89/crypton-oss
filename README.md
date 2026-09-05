@@ -346,6 +346,34 @@ escalera y el peor caso con el capital propio antes de poner dinero.
 
 ---
 
+## Analítica, backtest y bitácora
+
+Lo que llegó con los specs 002-007 (el registro de decisiones está en [`specs/`](specs/README.md)):
+
+- **El bot con su historia.** Curva del resultado acumulado (de 8 h a 30 d, con el cero visible y
+  la peor caída), ciclos cerrados, coste de comisiones y reparto maker/taker; la escalera ordenada
+  por precio con la distancia de cada nivel; el historial de cambios de configuración y la
+  cronología por ciclo (órdenes, ejecuciones y sucesos en una sola lista); CSV al portapapeles.
+- **La cartera.** Capital frente a exposición, reparto por símbolo, posiciones ordenadas por
+  riesgo y la curva agregada de la cartera, que el worker materializa cada cinco minutos en
+  `portfolio_snapshots` para que un bot borrado no reescriba el pasado.
+- **El gráfico.** La escalera y la liquidación sobre las velas con jerarquía de rótulos, los
+  sucesos del bot como marcadores, el precio medio como serie, un panel de resultado opcional y
+  las acciones del bot sin salir del gráfico.
+- **Backtest para todos**, sobre los bots simulados propios: reabrir una ejecución guardada,
+  tabla de operaciones y comparación de dos ejecuciones lado a lado. El simulador modela las
+  órdenes condicionales, así que un `stopLossPct` ya no cierra la posición en el acto.
+- **Panel operativo** (administradores): la bitácora `activity_log` con resumen por acción,
+  «solo fallos» y filtros.
+- **La distancia a liquidación** la calcula el servidor una sola vez y las cuatro pantallas
+  enseñan el mismo número, con el mismo semáforo.
+
+Y una **metodología**: `specs/README.md` es la constitución (desarrollo dirigido por
+especificación) y `CLAUDE.md` la memoria del proyecto para trabajar con un agente sin romper
+nada.
+
+---
+
 ## Sin planes ni suscripciones
 
 No hay niveles de pago, ni cupos por tier, ni pasarela: todo lo que hace la
@@ -525,7 +553,7 @@ verificar que las órdenes aparecen en la web del DEX → subir capital despacio
 
 ## Verificado contra infraestructura real
 
-El esquema está materializado (21 tablas) y tanto la API como el worker arrancan
+El esquema está materializado (22 tablas) y tanto la API como el worker arrancan
 y responden. Comprobado por HTTP: acceso con Google, límites de riesgo creados al
 entrar por primera vez y los 122 campos de las siete estrategias con su
 mutabilidad.
