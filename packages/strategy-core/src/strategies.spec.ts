@@ -39,6 +39,33 @@ describe('gridClassic.plan', () => {
     expect(byKind(orders, LevelKind.GRID_SELL)).toHaveLength(0);
   });
 
+  /**
+   * Spec 001 — test de confirmación de F-15 (parte Grid Classic).
+   *
+   * Tras cerrar un ciclo, `cycleAfterFill` devuelve `cycleId: null`
+   * (`cycle-accounting.ts:195`) y el motor adopta ese estado tal cual con
+   * `scratch.cycleSeq = N+1` (`bot-store.ts:692`); nadie repone el id hasta
+   * una readopción. El motor reconcilia, firma el stop y graba las filas con
+   * `scratch.cycleSeq`, así que el plan no puede irse a 0 solo porque falte
+   * el id. Está en ROJO a propósito hasta que llegue la corrección aprobada.
+   */
+  it('el id de nivel lleva el mismo cycleSeq que el motor aunque el ciclo no tenga id', () => {
+    const plan = (cycleId: string | null) =>
+      getStrategy(StrategyKind.GRID_CLASSIC).plan(
+        makeContext({
+          strategy: StrategyKind.GRID_CLASSIC,
+          config,
+          price: '100',
+          cycle: { cycleId, scratch: { cycleSeq: 3 } },
+        }),
+      );
+    const conId = plan('c-3').orders.map((o) => o.clientOrderId);
+    const sinId = plan(null).orders.map((o) => o.clientOrderId);
+
+    expect(parseCoid(conId[0])?.cycleSeq).toBe(3);
+    expect(sinId).toEqual(conId);
+  });
+
   it('una línea comprada pasa a vender en la línea inmediatamente superior', () => {
     const ctx = makeContext({
       strategy: StrategyKind.GRID_CLASSIC,

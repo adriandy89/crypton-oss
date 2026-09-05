@@ -338,6 +338,17 @@ export class BotRunner {
   private readonly quarantine = new Map<string, string>();
 
   /**
+   * Forma del stop loss cuyo rechazo ya se anunció en CRITICAL.
+   *
+   * El stop NO entra en la cuarentena de arriba: un nivel de escalera puede
+   * esperar a que cambie la escalera, la red de seguridad no. Se reintenta en
+   * cada tick mientras haya posición. Pero avisar en cada tick sería un
+   * CRITICAL en el Telegram del usuario cada quince segundos, así que el aviso
+   * sale UNA vez por forma —precio y cantidad— y vuelve a salir si cambia.
+   */
+  private stopRechazoAvisado: string | null = null;
+
+  /**
    * ¿Sigue la posición pudiendo crecer en este tick?
    *
    * Se calcula una vez por tick y lo consulta `revisarOrden`. Es lo que
@@ -841,13 +852,18 @@ export class BotRunner {
       if (order.levelKind === 'STOP_LOSS') this.stopLossVivo = false;
       // Cuarentena por FORMA, no por id: en cuanto entre otra ejecución la
       // cantidad cambia, la forma cambia y se vuelve a intentar sola. Es lo que
-      // hace que esto se cure sin intervención.
-      this.quarantine.set(order.clientOrderId, shape);
-      await this.event(veredicto.tipo, veredicto.severidad, veredicto.mensaje, {
-        clientOrderId: order.clientOrderId,
-        qty: order.qty,
-        price: order.price,
-      });
+      // hace que esto se cure sin intervención. El stop loss no entra: ver
+      // `cuarentena`.
+      this.cuarentena(order, shape);
+      const severidad = this.severidadDeRechazo(order, shape, veredicto.severidad);
+      if (severidad) {
+        await this.event(
+          veredicto.tipo,
+          severidad,
+          veredicto.mensaje + (order.levelKind === 'STOP_LOSS' ? this.protectionNote : ''),
+          { clientOrderId: order.clientOrderId, qty: order.qty, price: order.price },
+        );
+      }
       return;
     }
 
@@ -892,7 +908,11 @@ export class BotRunner {
       await store.confirmOrder(order.clientOrderId, ack);
       this.quarantine.delete(order.clientOrderId);
       this.placeFailures = 0;
-      if (order.levelKind === 'STOP_LOSS') this.stopLossVivo = true;
+      if (order.levelKind === 'STOP_LOSS') {
+        this.stopLossVivo = true;
+        // Colocado: el siguiente rechazo, si lo hay, vuelve a merecer su aviso.
+        this.stopRechazoAvisado = null;
+      }
     } catch (e) {
       const err = e as ExchangeError;
       if (order.levelKind === 'STOP_LOSS') this.stopLossVivo = false;
@@ -902,23 +922,31 @@ export class BotRunner {
       // que el nivel cae por debajo del mínimo del venue. Se registra UNA vez y
       // el bot sigue con el resto de la escalera.
       if (err.kind === 'RULES') {
-        this.quarantine.set(order.clientOrderId, shape);
-        await this.event(
-          'ORDER_REJECTED',
-          'WARN',
-          `${order.levelKind}#${order.levelIndex} ${order.side} ${order.qty} @ ${order.price} ` +
-            `rechazada (${motivo}): ${err.message}`,
-          { clientOrderId: order.clientOrderId },
-        );
+        this.cuarentena(order, shape);
+        const severidad = this.severidadDeRechazo(order, shape, 'WARN');
+        if (severidad) {
+          await this.event(
+            'ORDER_REJECTED',
+            severidad,
+            `${order.levelKind}#${order.levelIndex} ${order.side} ${order.qty} @ ${order.price} ` +
+              `rechazada (${motivo}): ${err.message}` +
+              (order.levelKind === 'STOP_LOSS' ? this.protectionNote : ''),
+            { clientOrderId: order.clientOrderId },
+          );
+        }
         return;
       }
       if (err.kind === 'INSUFFICIENT_FUNDS') {
-        this.quarantine.set(order.clientOrderId, shape);
-        await this.event(
-          'INSUFFICIENT_FUNDS',
-          'ERROR',
-          `Sin margen para ${order.levelKind}#${order.levelIndex}. La escalera queda incompleta.`,
-        );
+        this.cuarentena(order, shape);
+        const severidad = this.severidadDeRechazo(order, shape, 'ERROR');
+        if (severidad) {
+          await this.event(
+            'INSUFFICIENT_FUNDS',
+            severidad,
+            `Sin margen para ${order.levelKind}#${order.levelIndex}. La escalera queda incompleta.` +
+              (order.levelKind === 'STOP_LOSS' ? this.protectionNote : ''),
+          );
+        }
         return;
       }
 
@@ -961,20 +989,55 @@ export class BotRunner {
       // La lista de mensajes conocidos nunca va a estar completa —cada venue
       // nombra lo mismo distinto—, así que la red no puede ser esa lista: es
       // esto. Se registra en ERROR, con el detalle, y el bot sigue vivo.
-      this.quarantine.set(order.clientOrderId, shape);
-      await this.event(
-        'ORDER_REJECTED',
-        'ERROR',
-        `${order.levelKind}#${order.levelIndex} ${order.side} ${order.qty} @ ${order.price} ` +
-          `rechazada por el exchange (${motivo}): ${err.message}`,
-        { clientOrderId: order.clientOrderId, kind: err.kind },
-      );
+      this.cuarentena(order, shape);
+      const severidad = this.severidadDeRechazo(order, shape, 'ERROR');
+      if (severidad) {
+        await this.event(
+          'ORDER_REJECTED',
+          severidad,
+          `${order.levelKind}#${order.levelIndex} ${order.side} ${order.qty} @ ${order.price} ` +
+            `rechazada por el exchange (${motivo}): ${err.message}` +
+            (order.levelKind === 'STOP_LOSS' ? this.protectionNote : ''),
+          { clientOrderId: order.clientOrderId, kind: err.kind },
+        );
+      }
     }
   }
 
   /** Identidad de una orden a efectos de cuarentena: si cambia, se reintenta. */
   private shapeOf(order: DesiredOrder): string {
     return `${order.side}:${order.type}:${order.price}:${order.qty}`;
+  }
+
+  /**
+   * Un rechazo que NO se va a reintentar hasta que cambie la forma… salvo que
+   * sea el stop loss. Antes el stop pasaba por las mismas puertas que un nivel
+   * cualquiera: rechazado por reglas o vetado por el mínimo del venue, su id
+   * entraba aquí con su forma, y como precio y cantidad salen de la posición,
+   * la forma no cambiaba mientras la posición no cambiara: posición apalancada
+   * sin red, indefinidamente, con un INFO o un WARN en la bitácora (001/F-32).
+   */
+  private cuarentena(order: DesiredOrder, shape: string): void {
+    if (order.levelKind === 'STOP_LOSS') return;
+    this.quarantine.set(order.clientOrderId, shape);
+  }
+
+  /**
+   * Severidad de un rechazo: la del veredicto o del error, salvo para el stop
+   * loss, que es SIEMPRE crítica —es la red de la posición— y va con la
+   * coletilla que dice en voz alta que no consta colocado. Devuelve `null` si
+   * ese mismo rechazo del stop ya se anunció con esta forma: se sigue
+   * reintentando, pero en silencio.
+   */
+  private severidadDeRechazo(
+    order: DesiredOrder,
+    shape: string,
+    severidad: 'INFO' | 'WARN' | 'ERROR' | 'CRITICAL',
+  ): 'INFO' | 'WARN' | 'ERROR' | 'CRITICAL' | null {
+    if (order.levelKind !== 'STOP_LOSS') return severidad;
+    if (this.stopRechazoAvisado === shape) return null;
+    this.stopRechazoAvisado = shape;
+    return 'CRITICAL';
   }
 
   // ═══════════════════════════════════════════════════════════════

@@ -222,7 +222,15 @@ export class AccountHub implements OnModuleDestroy {
       if (!pending) {
         pending = this.create(key, exchangeAccountId, botId, venue, dryRun, testnet);
         this.opening.set(key, pending);
-        void pending.finally(() => this.opening.delete(key));
+        // `then(limpiar, limpiar)` y NO `finally()`: la promesa que devuelve
+        // `finally` hereda el rechazo de `pending`, y como nadie la esperaba, un
+        // fallo al abrir la cuenta —una conexión de exchange borrada con un bot
+        // vivo, un hipo de la base al adoptar— era un `unhandledRejection` que
+        // `main.ts` convierte en apagar el proceso: caían los 250 bots del
+        // worker. `pending` sí se espera justo debajo; esta copia solo limpia
+        // el mapa y no debe fallar nunca (001/F-31).
+        const limpiar = () => this.opening.delete(key);
+        void pending.then(limpiar, limpiar);
       }
       entry = await pending;
     }

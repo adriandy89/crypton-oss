@@ -1,6 +1,7 @@
 import { Observable, Subject } from 'rxjs';
 import {
   D,
+  OrderStatus,
   ExchangeError,
   Venue,
   type Balance,
@@ -536,6 +537,149 @@ describe('DryRunAdapter', () => {
     await sim.getTicker('BTC');
 
     expect(fills).toHaveLength(1);
+  });
+
+  // ── Órdenes condicionales (001/F-45, corregido en el spec 004) ──
+  // El motor manda el stop-loss como MARKET con `triggerPrice` y los tres
+  // adaptadores reales lo traducen a la orden condicional del venue. El
+  // simulador lo ejecutaba EN EL ACTO como orden a mercado: toda posición con
+  // stop se cerraba nada más abrirse, en simulación y en backtest.
+
+  describe('órdenes condicionales', () => {
+    /** Posición larga de 1 BTC abierta a mercado, sin comisiones ni deslizamiento. */
+    const conLargo = async (opts: { slippageRate?: string; leverage?: number } = {}) => {
+      const source = new StubSource();
+      const sim = new DryRunAdapter(source, {
+        makerFeeRate: '0',
+        takerFeeRate: '0',
+        slippageRate: opts.slippageRate ?? '0',
+      });
+      await sim.getTicker('BTC');
+      if (opts.leverage) await sim.setLeverage('BTC', opts.leverage, 'ISOLATED');
+      await sim.placeOrder(order({ type: 'MARKET', clientOrderId: 'entrada' }));
+      return { source, sim };
+    };
+
+    /** Mueve el mercado y deja que el simulador lo vea: casa en `getTicker`, como en los demás tests. */
+    const mover = async (sim: DryRunAdapter, source: StubSource, bid: string, ask: string) => {
+      source.move(bid, ask);
+      await sim.getTicker('BTC');
+    };
+
+    /** El stop tal y como lo emite `withStopLoss` más el `intent` que añade el motor. */
+    const stop = (over: Partial<Parameters<DryRunAdapter['placeOrder']>[0]> = {}) =>
+      order({
+        type: 'MARKET',
+        side: 'SELL',
+        price: '90',
+        triggerPrice: '90',
+        qty: '1',
+        reduceOnly: true,
+        intent: 'SL',
+        clientOrderId: 'sl',
+        ...over,
+      });
+
+    it('un stop se queda en reposo: la posición sigue abierta y la orden espera', async () => {
+      const { sim } = await conLargo();
+      const ack = await sim.placeOrder(stop());
+      expect(ack.status).toBe(OrderStatus.OPEN);
+      expect(await sim.getPositions()).toHaveLength(1);
+      expect(await sim.getOpenOrders()).toHaveLength(1);
+    });
+
+    it('se dispara cuando el precio de marca cruza el disparador: a mercado, taker y con deslizamiento', async () => {
+      const { source, sim } = await conLargo({ slippageRate: '0.001' });
+      const fills: Fill[] = [];
+      sim.streamFills().subscribe((f) => fills.push(f));
+      await sim.placeOrder(stop());
+
+      await mover(sim, source, '95', '95.2');
+      expect(await sim.getPositions()).toHaveLength(1);
+
+      await mover(sim, source, '89', '89.2');
+      expect(await sim.getPositions()).toHaveLength(0);
+      expect(await sim.getOpenOrders()).toHaveLength(0);
+      expect(fills).toHaveLength(1);
+      expect(fills[0].isTaker).toBe(true);
+      // Al precio del DISPARADOR con el deslizamiento en contra —el mismo
+      // supuesto de camino continuo con el que las limit se llenan a su precio—,
+      // no al bid del tick, que con el paso de vela del backtest puede estar muy
+      // por debajo.
+      expect(fills[0].price).toBe('89.91');
+    });
+
+    it('sin intención declarada, el sentido sale del precio de marca al colocarla', async () => {
+      const { source, sim } = await conLargo();
+      await sim.placeOrder(stop({ intent: undefined }));
+      // Por encima del disparador no pasa nada: una venta con el disparador por
+      // debajo de la marca es un stop, no un take-profit.
+      await mover(sim, source, '105', '105.2');
+      expect(await sim.getOpenOrders()).toHaveLength(1);
+      await mover(sim, source, '89.5', '89.7');
+      expect(await sim.getOpenOrders()).toHaveLength(0);
+      expect(await sim.getPositions()).toHaveLength(0);
+    });
+
+    it('un take-profit condicional se dispara al alza y no a la baja', async () => {
+      const { source, sim } = await conLargo();
+      await sim.placeOrder(
+        stop({ intent: 'TP', price: '110', triggerPrice: '110', clientOrderId: 'tp' }),
+      );
+      await mover(sim, source, '95', '95.2');
+      expect(await sim.getOpenOrders()).toHaveLength(1);
+      await mover(sim, source, '111', '111.2');
+      expect(await sim.getOpenOrders()).toHaveLength(0);
+      expect(sim.stats().realizedPnl).toBe(D('110').minus('100.1').toFixed());
+    });
+
+    it('el stop se dispara antes que la liquidación cuando está por encima de ella', async () => {
+      // A 10× la liquidación de una entrada a 100,1 ronda 90,6; el stop a 95
+      // tiene que cerrar la posición ANTES aunque el tick baje de golpe a 80.
+      const { source, sim } = await conLargo({ leverage: 10 });
+      const fills: Fill[] = [];
+      sim.streamFills().subscribe((f) => fills.push(f));
+      await sim.placeOrder(stop({ price: '95', triggerPrice: '95' }));
+      await mover(sim, source, '80', '80.2');
+      expect(fills).toHaveLength(1);
+      expect(fills[0].liquidation).toBeUndefined();
+      expect(fills[0].price).toBe('95');
+      expect(sim.stats().realizedPnl).toBe(D('95').minus('100.1').toFixed());
+    });
+
+    it('un stop por DEBAJO de la liquidación no salva nada: liquida el venue', async () => {
+      const { source, sim } = await conLargo({ leverage: 10 });
+      const fills: Fill[] = [];
+      sim.streamFills().subscribe((f) => fills.push(f));
+      await sim.placeOrder(stop({ price: '85', triggerPrice: '85' }));
+      await mover(sim, source, '80', '80.2');
+      expect(fills).toHaveLength(1);
+      expect(fills[0].liquidation).toBe(true);
+      expect(await sim.getOpenOrders()).toHaveLength(0);
+    });
+
+    it('sobrevive al guardado del estado: al importarlo sigue esperando su disparo', async () => {
+      const { source, sim } = await conLargo();
+      await sim.placeOrder(stop());
+      const otro = new DryRunAdapter(source, {
+        takerFeeRate: '0',
+        slippageRate: '0',
+        initialState: sim.exportState(),
+      });
+      await otro.getTicker('BTC');
+      expect(await otro.getOpenOrders()).toHaveLength(1);
+      expect(await otro.getPositions()).toHaveLength(1);
+      await mover(otro, source, '89', '89.2');
+      expect(await otro.getPositions()).toHaveLength(0);
+    });
+
+    it('cancelar una condicional la retira, como a cualquier otra', async () => {
+      const { source, sim } = await conLargo();
+      await sim.placeOrder(stop());
+      await sim.cancelOrder({ symbol: 'BTC', clientOrderId: 'sl' });
+      await mover(sim, source, '89', '89.2');
+      expect(await sim.getPositions()).toHaveLength(1);
+    });
   });
 
   // ── Ajuste de margen ─────────────────────────────────────────

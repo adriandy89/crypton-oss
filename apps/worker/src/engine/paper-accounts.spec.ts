@@ -291,6 +291,36 @@ describe('AccountHub — un sandbox por bot, una fuente por venue', () => {
   const abrir = (hub: AccountHub, botId: string, symbol: string) =>
     hub.open(ACCOUNT_ID, botId, VENUE, symbol, true, false);
 
+  /**
+   * Spec 001, F-31. `open()` guarda la promesa de `create()` en `opening` y la
+   * limpia con `void pending.finally(...)`. La promesa DERIVADA de `.finally()`
+   * hereda el rechazo y nadie la captura: si abrir la cuenta falla —la conexión
+   * se borró con un bot vivo, la base no responde—, Node emite
+   * `unhandledRejection` y `main.ts` apaga el worker ENTERO con todos sus bots.
+   * Que `await pending` en el llamante capture la original no protege a la
+   * derivada.
+   *
+   * Cómo se detecta: dentro del sandbox de jest, un `process.on` del test NO
+   * recibe los eventos del proceso real, así que aquí no se escucha nada. Es el
+   * propio jest quien atrapa el rechazo sin manejar y lo atribuye al test en
+   * curso, que aparece en rojo con el mensaje del error. Mientras exista el
+   * hueco este test falla; cuando se corrija, pasa sin tocarlo. Las dos vueltas
+   * del bucle de eventos son para que el rechazo aflore antes de que termine.
+   */
+  it('un fallo al abrir la cuenta no deja un rechazo sin manejar', async () => {
+    const { hub, credentials } = buildHub();
+    credentials.openAdapter.mockRejectedValue(new Error('conexión de exchange borrada'));
+
+    // Cuenta REAL (dryRun = false): es el camino que pasa por `openAdapter`.
+    await expect(hub.open(ACCOUNT_ID, 'bot-a', VENUE, 'BTC', false, false)).rejects.toThrow(
+      /borrada/,
+    );
+    await new Promise((r) => setTimeout(r, 0));
+    await new Promise((r) => setTimeout(r, 0));
+
+    await hub.onModuleDestroy();
+  });
+
   it('cada bot simulado recibe SU simulador, no uno compartido', async () => {
     // Es toda la razón de ser del cambio: con un simulador por cuenta, dos bots
     // sobre el mismo par se promediaban la entrada y se cerraban el take profit.

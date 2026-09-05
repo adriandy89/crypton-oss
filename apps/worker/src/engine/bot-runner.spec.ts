@@ -919,6 +919,45 @@ describe('reutilización de ids por estrategia', () => {
     });
   });
 
+  describe('un stop loss rechazado no se abandona en cuarentena', () => {
+    /**
+     * Spec 001, F-32. El stop loss pasa por las mismas puertas que un nivel de
+     * escalera: si el venue lo rechaza por reglas, su id entra en cuarentena por
+     * FORMA y, como precio y cantidad salen de la posicion, la forma no cambia
+     * hasta que cambie la posicion. Resultado: posicion apalancada sin red, con
+     * un solo WARN en la bitacora y sin un segundo intento. Un nivel de
+     * escalera puede esperar; la red de seguridad, no.
+     *
+     * Hoy FALLA (un solo intento): es la confirmacion del hallazgo, en rojo
+     * hasta que llegue la correccion.
+     */
+    it('un rechazo por reglas del stop se reintenta y avisa en CRITICAL', async () => {
+      const severidades: { type: string; severity: string }[] = [];
+      const { runner, adapter } = build(
+        { orders: [], immediate: [] },
+        {
+          event: jest.fn(async (_bot: unknown, type: string, severity: string) => {
+            severidades.push({ type, severity });
+          }) as never,
+        },
+        { stopLossPct: '10' },
+      );
+      adapter.position = conPos();
+      adapter.placeError = new ExchangeError('RULES', 'min notional', Venue.HYPERLIQUID);
+
+      await runner.start();
+      await runner.handleCommand('RESUME');
+      await new Promise((r) => setTimeout(r, 30));
+
+      const intentos = adapter.calls.filter((c) => c.startsWith('place:') && c.includes('SL'));
+      // Dos ticks, dos intentos: la red de seguridad no se da por perdida.
+      expect(intentos.length).toBeGreaterThanOrEqual(2);
+      // Y el usuario se entera con la severidad que corresponde a «sin stop».
+      expect(severidades.some((e) => e.severity === 'CRITICAL')).toBe(true);
+      await runner.dispose();
+    });
+  });
+
   describe('limite de perdida diaria por bot', () => {
     /**
      * `maxDailyLossPct` estaba declarado, tipado y etiquetado desde el principio

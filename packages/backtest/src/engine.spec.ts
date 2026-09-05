@@ -223,3 +223,41 @@ describe('runReplay', () => {
     }
   });
 });
+
+/**
+ * El stop-loss en el replay (001/F-45, corregido en el spec 004).
+ *
+ * El simulador ejecutaba el stop —MARKET con `triggerPrice`— en el acto: toda
+ * posición con `stopLossPct` se cerraba nada más abrirse pagando taker, y la
+ * estrategia volvía a entrar en bucle. El backtest devolvía resultados falsos
+ * para cualquier configuración con stop, que es la de quien más cuidado tiene.
+ */
+describe('runReplay — stop-loss', () => {
+  it('una caída que no llega al stop deja la posición abierta y no vende nada', async () => {
+    // De 100 a 96 se llena el nivel de compra de ~97,1; el stop, un 10 % por
+    // debajo de la entrada, queda en ~87 y no se toca. Antes de la corrección
+    // aquí salía una venta en el mismo tick que la compra.
+    const r = await run(rampa(20, 100, 96), { stopLossPct: '10' });
+    expect(r.fills.filter((f) => f.side === 'BUY').length).toBeGreaterThan(0);
+    expect(r.fills.filter((f) => f.side === 'SELL')).toHaveLength(0);
+    expect(r.fills.some((f) => f.levelKind === 'STOP_LOSS')).toBe(false);
+    // El ciclo sigue abierto al final: la posición no se ha cerrado.
+    expect(r.cycles.at(-1)?.closedAt).toBeNull();
+  });
+
+  it('una caída que cruza el stop lo ejecuta una vez, y después de la entrada, no con ella', async () => {
+    const r = await run(rampa(60, 100, 70), { stopLossPct: '10' });
+    const compras = r.fills.filter((f) => f.side === 'BUY');
+    const stops = r.fills.filter((f) => f.levelKind === 'STOP_LOSS');
+    expect(compras.length).toBeGreaterThan(0);
+    expect(stops.length).toBeGreaterThan(0);
+    // El stop se dispara DESPUÉS de la primera compra, cuando el precio ha
+    // bajado de verdad: como mínimo un 10 % por debajo de la primera entrada.
+    const primera = compras[0];
+    expect(stops[0].ts).toBeGreaterThan(primera.ts);
+    expect(Number(stops[0].price)).toBeLessThanOrEqual(Number(primera.price) * 0.9 + 0.1);
+    // Y es una salida como taker: cruza el libro al dispararse.
+    expect(stops[0].isTaker).toBe(true);
+    expect(r.fills.some((f) => f.liquidation)).toBe(false);
+  });
+});

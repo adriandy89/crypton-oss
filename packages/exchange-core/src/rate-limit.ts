@@ -1,5 +1,5 @@
-import { isRetryable, toExchangeError } from './errors';
-import type { Venue } from '@crypton/shared';
+import { isRetryable, messageOf, toExchangeError } from './errors';
+import { ExchangeError, type Venue } from '@crypton/shared';
 
 /**
  * Limitador de caudal.
@@ -90,6 +90,18 @@ export async function withRetry<T>(fn: () => Promise<T>, opts: RetryOptions = {}
  * Por eso, ante un error reintentable no se reenvía a ciegas: primero se
  * pregunta al venue si la operación llegó a surtir efecto (`verify` devuelve el
  * acuse si la orden ya está allí, o null si no), y solo se reintenta si no.
+ *
+ * Y si la PREGUNTA falla, no se reenvía: el estado es DESCONOCIDO, que no es lo
+ * mismo que «no entró». Aquí un `verify().catch(() => null)` los confundía, y
+ * justo en los escenarios en que el primer envío pudo entrar sin respuesta —503
+ * sostenido (Aster: «the execution status is UNKNOWN and could have been a
+ * success»), 429, nonce rechazado, `getRecentFills` caído en Lighter— se
+ * mandaba la misma orden otra vez. Una MARKET ya ejecutada no está entre las
+ * abiertas: la segunda DOBLABA la posición (001/F-68). Se lanza y quien llama
+ * marca la fila como rechazada; el tick siguiente reconcilia contra el venue: si
+ * la orden entró, la reconoce como propia por su id y repone la fila; si no,
+ * la vuelve a colocar. Es la única forma de no equivocarse en ninguno de los
+ * dos sentidos.
  */
 export async function withWriteRetry<T>(
   send: () => Promise<T>,
@@ -107,7 +119,19 @@ export async function withWriteRetry<T>(
       lastError = e;
       if (!isRetryable(e) || i === attempts - 1) break;
 
-      const landed = await verify().catch(() => null);
+      let landed: T | null;
+      try {
+        landed = await verify();
+      } catch (verifyError) {
+        const original = toExchangeError(lastError, opts.venue);
+        throw new ExchangeError(
+          original.kind,
+          `Estado desconocido tras «${original.message}»: la comprobación de si la orden entró ` +
+            `también falló (${messageOf(verifyError)}). No se reenvía; la reconciliación del ` +
+            'siguiente tick decide.',
+          opts.venue,
+        );
+      }
       if (landed !== null) return landed;
 
       await sleep(base * 2 ** i);

@@ -476,17 +476,33 @@ export class LighterAdapter implements ExchangeAdapter {
    */
   private async signedWrite<T>(fn: (signer: SignerClient) => Promise<T>): Promise<T> {
     const client = await this.signerReady();
+    let result: T;
     try {
-      return await fn(client);
+      result = await fn(client);
     } catch (e) {
       if (!/invalid nonce/i.test(messageOf(e))) throw e;
-      await (
-        client as unknown as {
-          nonce_manager: { hard_refresh_nonce(apiKeyIndex: number): Promise<void> };
-        }
-      ).nonce_manager.hard_refresh_nonce(this.creds.apiKeyIndex);
+      await this.refreshNonce(client);
       return fn(client);
     }
+    // El SDK 1.3.0 NO lanza ante un rechazo de nonce: `process_api_key_and_nonce`
+    // captura toda excepción y devuelve la tupla `[null, null, 'invalid nonce']`,
+    // y además decrementa el contador al no reconocer el mensaje de axios
+    // («Request failed with status code 400»). El `catch` de arriba no veía
+    // nada, `unwrap()` lo convertía en un FATAL fuera de aquí y el contador
+    // quedaba desalineado para siempre: ni stop, ni cancelación, ni PANIC
+    // volvían a entrar (001/F-01). Se mira la tupla ANTES de devolverla.
+    if (!nonceRechazado(result)) return result;
+    await this.refreshNonce(client);
+    return fn(client);
+  }
+
+  /** Relee el contador de nonce del venue. Ver `signerReady` y `signedWrite`. */
+  private refreshNonce(client: SignerClient): Promise<void> {
+    return (
+      client as unknown as {
+        nonce_manager: { hard_refresh_nonce(apiKeyIndex: number): Promise<void> };
+      }
+    ).nonce_manager.hard_refresh_nonce(this.creds.apiKeyIndex);
   }
 
   /** Convierte la tupla `[..., error]` del SDK en una excepción clasificada. */
@@ -1093,8 +1109,17 @@ export class LighterAdapter implements ExchangeAdapter {
     const baseAmount = scaled(req.qty, spec.qtyDecimals);
     const price = scaled(req.price ?? '0', spec.priceDecimals);
     const isAsk = req.side === 'SELL';
+    const condicional = Boolean(req.triggerPrice);
 
-    if (req.type === 'MARKET') {
+    // Solo la MARKET SIN disparador va por aquí. El stop que inyecta el motor es
+    // `MARKET` CON `triggerPrice`, y esta rama miraba el tipo antes que el
+    // disparador: llamaba a `create_market_order`, que el SDK expande sin
+    // trigger, y salía una IOC inmediata con tope = precio del stop. Para una
+    // venta reduce-only con tope por debajo del bid el secuenciador ejecutaba
+    // al instante: la «protección» cerraba la posición nada más colocarse, y
+    // con ciclo nuevo el bot volvía a entrar y a salir (001/F-46). La rama de
+    // abajo, con `ORDER_TYPE_STOP_LOSS`, existía y era inalcanzable.
+    if (req.type === 'MARKET' && !condicional) {
       // También la rama MARKET verifica antes de reenviar. Es donde el reenvío
       // a ciegas hace más daño: una market ya ejecutada no aparece entre las
       // abiertas, así que sin mirar las ejecuciones se reenviaría y la posición
@@ -1129,18 +1154,45 @@ export class LighterAdapter implements ExchangeAdapter {
       );
     }
 
+    // Un disparador a MERCADO es IOC, como hace el propio SDK en
+    // `create_sl_order`/`create_tp_order`; el resto, GTT (o post-only).
+    const disparoAMercado = condicional && req.type === 'MARKET';
     const timeInForce =
       req.type === 'POST_ONLY'
         ? SignerClient.ORDER_TIME_IN_FORCE_POST_ONLY
-        : SignerClient.ORDER_TIME_IN_FORCE_GOOD_TILL_TIME;
+        : disparoAMercado
+          ? SignerClient.ORDER_TIME_IN_FORCE_IMMEDIATE_OR_CANCEL
+          : SignerClient.ORDER_TIME_IN_FORCE_GOOD_TILL_TIME;
 
     // El sentido del disparo lo declara quien pide la orden: un take-profit
-    // etiquetado como stop-loss se dispararía al revés.
-    const orderType = req.triggerPrice
-      ? req.intent === 'TP'
-        ? SignerClient.ORDER_TYPE_TAKE_PROFIT_LIMIT
-        : SignerClient.ORDER_TYPE_STOP_LOSS_LIMIT
+    // etiquetado como stop-loss se dispararía al revés. Y el TIPO distingue el
+    // disparador a mercado (2 y 4: cruzan el libro al dispararse) del
+    // disparador a limit (3 y 5: dejan una limit en reposo).
+    const orderType = condicional
+      ? req.type === 'MARKET'
+        ? req.intent === 'TP'
+          ? SignerClient.ORDER_TYPE_TAKE_PROFIT
+          : SignerClient.ORDER_TYPE_STOP_LOSS
+        : req.intent === 'TP'
+          ? SignerClient.ORDER_TYPE_TAKE_PROFIT_LIMIT
+          : SignerClient.ORDER_TYPE_STOP_LOSS_LIMIT
       : SignerClient.ORDER_TYPE_LIMIT;
+
+    // Precio de EJECUCIÓN de un disparador a mercado: el peor que se acepta una
+    // vez disparado. Con precio = disparador la IOC no cruzaría en un mercado
+    // que ya se ha movido en contra —que es exactamente cuándo se dispara un
+    // stop— y el venue la cancelaría sin cerrar nada: la posición quedaría sin
+    // red creyendo tenerla. Se deja un 5 % de holgura en contra, el mismo margen
+    // que aplica Hyperliquid a sus órdenes a mercado. Para el resto, el precio
+    // pedido.
+    const precioEjecucion = disparoAMercado
+      ? scaled(
+          D(req.triggerPrice as string)
+            .mul(isAsk ? '0.95' : '1.05')
+            .toFixed(spec.priceDecimals, isAsk ? Decimal.ROUND_DOWN : Decimal.ROUND_UP),
+          spec.priceDecimals,
+        )
+      : price;
 
     return withWriteRetry(
       async () => {
@@ -1151,7 +1203,7 @@ export class LighterAdapter implements ExchangeAdapter {
               marketId,
               clientIndex,
               baseAmount,
-              price,
+              precioEjecucion,
               isAsk,
               orderType,
               timeInForce,
@@ -1995,4 +2047,16 @@ function leverageFromMarginFraction(fraction: string | number | undefined): numb
   const value = Number(fraction);
   if (!Number.isFinite(value) || value <= 0) return 1;
   return Math.max(1, Math.round(10_000 / value));
+}
+
+/**
+ * ¿Es esta respuesta del SDK una tupla `[…, 'invalid nonce']`?
+ *
+ * El error viaja como ÚLTIMO elemento y como texto; el venue responde
+ * `{"code":21104,"message":"invalid nonce"}` y el SDK lo deja pasar tal cual.
+ */
+function nonceRechazado(result: unknown): boolean {
+  if (!Array.isArray(result) || result.length === 0) return false;
+  const error: unknown = result[result.length - 1];
+  return typeof error === 'string' && /invalid nonce/i.test(error);
 }

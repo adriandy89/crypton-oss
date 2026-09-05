@@ -288,7 +288,15 @@ export const gridClassic: Strategy<GridClassicConfig> = {
     const ref = D(ctx.ticker.mark);
     const isLong = cfg.direction !== 'SHORT';
     const holding = new Set(ctx.cycle.filledLevelIndexes);
-    const seq = ctx.cycle.cycleId ? Number(ctx.cycle.scratch['cycleSeq'] ?? 0) : 0;
+    // El MISMO `cycleSeq` que el motor, tenga o no id el ciclo. Aquí iba
+    // `ctx.cycle.cycleId ? … : 0`, y en el motor el id es nulo desde el primer
+    // cierre de ciclo (`cycleAfterFill` lo devuelve así y nadie lo repone hasta
+    // una readopción): el plan emitía `.0.GBi` mientras el motor reconciliaba,
+    // firmaba el stop y grababa las filas con `.N.`. En Hyperliquid y Lighter,
+    // con ids opacos, las órdenes de hace dos ciclos pasaban por ajenas —nunca
+    // se cancelaban— y tras una readopción se tendía una segunda compra por
+    // línea. Las otras seis estrategias siempre lo hicieron así (001/F-15).
+    const seq = Number(ctx.cycle.scratch['cycleSeq'] ?? 0);
 
     const lower = D(cfg.lowerPrice);
     const upper = D(cfg.upperPrice);

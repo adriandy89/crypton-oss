@@ -429,6 +429,18 @@ export async function runReplay(opts: ReplayOptions): Promise<ReplayOutput> {
         qty: o.qty,
         clientOrderId: o.clientOrderId,
         reduceOnly: o.reduceOnly === true,
+        // El disparador y su sentido viajan como en el motor real
+        // (`bot-runner.ts`): sin ellos, el stop-loss —MARKET con
+        // `triggerPrice`— llegaba al simulador como una orden a mercado sin
+        // más y se ejecutaba en el acto (001/F-45). Era el segundo eslabón del
+        // mismo fallo: el simulador no conocía las condicionales, y el replay
+        // ni siquiera le decía que lo eran.
+        ...(o.triggerPrice
+          ? {
+              triggerPrice: o.triggerPrice,
+              intent: o.levelKind === 'TAKE_PROFIT' ? ('TP' as const) : ('SL' as const),
+            }
+          : {}),
       })
       .catch(() => undefined);
   }

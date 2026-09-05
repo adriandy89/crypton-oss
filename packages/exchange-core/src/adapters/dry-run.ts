@@ -91,11 +91,19 @@ export interface DryRunOptions {
   runId?: string;
 }
 
+/**
+ * Hacia dónde tiene que moverse el precio de marca para disparar una orden
+ * condicional: `DOWN` (un stop de largo, un take-profit de corto) o `UP`.
+ */
+export type TriggerDir = 'DOWN' | 'UP';
+
 interface SimOrder {
   req: PlaceOrderRequest;
   venueOrderId: string;
   createdAt: number;
   filledQty: Decimal;
+  /** Solo en las condicionales (`req.triggerPrice`). Ver `triggerDirOf`. */
+  triggerDir?: TriggerDir;
 }
 
 /**
@@ -123,6 +131,8 @@ export interface DryRunState {
     venueOrderId: string;
     createdAt: number;
     filledQty: string;
+    /** Opcional: un estado guardado antes del spec 004 no lo trae y se deduce al importar. */
+    triggerDir?: TriggerDir;
   }[];
 }
 
@@ -272,6 +282,7 @@ export class DryRunAdapter implements ExchangeAdapter {
         venueOrderId: o.venueOrderId,
         createdAt: o.createdAt,
         filledQty: o.filledQty.toFixed(),
+        ...(o.triggerDir ? { triggerDir: o.triggerDir } : {}),
       })),
     };
   }
@@ -304,11 +315,17 @@ export class DryRunAdapter implements ExchangeAdapter {
 
     this.orders.clear();
     for (const o of state.orders) {
+      // Un estado guardado antes de que existieran las condicionales trae
+      // ordenes con `triggerPrice` y sin sentido: se deduce por `intent` o por
+      // el lado, sin precio de marca (aun no hay ticker).
+      const trigger = D(o.req.triggerPrice ?? 0);
+      const triggerDir = o.triggerDir ?? (trigger.gt(0) ? triggerDirOf(o.req, null) : undefined);
       this.orders.set(o.clientOrderId, {
         req: o.req,
         venueOrderId: o.venueOrderId,
         createdAt: o.createdAt,
         filledQty: D(o.filledQty),
+        ...(triggerDir ? { triggerDir } : {}),
       });
     }
   }
@@ -447,6 +464,29 @@ export class DryRunAdapter implements ExchangeAdapter {
   async placeOrder(req: PlaceOrderRequest): Promise<OrderAck> {
     const ticker = this.lastTicker.get(req.symbol) ?? (await this.getTicker(req.symbol));
     const venueOrderId = 'sim-' + ++this.seq;
+
+    // Una orden con disparador es CONDICIONAL: se queda esperando a que el
+    // precio de marca la cruce, como la orden nativa a la que los adaptadores
+    // reales la traducen. Antes entraba por la rama de MARKET y se ejecutaba en
+    // el acto: toda posicion con stop-loss se cerraba nada mas abrirse, en
+    // simulacion y en backtest, y volvia a entrar en bucle (001/F-45).
+    if (D(req.triggerPrice ?? 0).gt(0)) {
+      const mark = D(ticker.mark || ticker.last || 0);
+      this.orders.set(req.clientOrderId, {
+        req,
+        venueOrderId,
+        createdAt: this.clock(),
+        filledQty: D(0),
+        triggerDir: triggerDirOf(req, mark.gt(0) ? mark : null),
+      });
+      this.notifyChange();
+      return {
+        clientOrderId: req.clientOrderId,
+        venueOrderId,
+        status: OrderStatus.OPEN,
+        ts: this.clock(),
+      };
+    }
 
     if (req.type === 'MARKET') {
       // Una orden a mercado cruza el libro: paga taker y se lleva el
@@ -644,10 +684,16 @@ export class DryRunAdapter implements ExchangeAdapter {
    * lo que determina de verdad si alguien cruzaría contra nuestra orden.
    */
   private matchRestingOrders(symbol: string, ticker: Ticker): void {
-    // La liquidación se comprueba ANTES de casar: si el precio ha llegado tan
-    // lejos que el venue habría cerrado la posición, las órdenes en reposo de
-    // ese símbolo ya no existían para ejecutarse. Al revés —casar primero— la
-    // simulación regalaría un rebote que en el venue no ocurre.
+    // Las condicionales van ANTES que la liquidación: un stop por encima de la
+    // liquidación se dispara al pasar el precio por él, y en un tick que cruza
+    // los dos el camino real pasó primero por el stop. Un stop por DEBAJO de la
+    // liquidación no se dispara nunca: ahí llega antes el venue.
+    this.fireTriggers(symbol, ticker);
+
+    // La liquidación se comprueba ANTES de casar las limit: si el precio ha
+    // llegado tan lejos que el venue habría cerrado la posición, las órdenes en
+    // reposo de ese símbolo ya no existían para ejecutarse. Al revés —casar
+    // primero— la simulación regalaría un rebote que en el venue no ocurre.
     if (this.checkLiquidation(symbol, ticker)) return;
 
     const bid = D(ticker.bid);
@@ -655,6 +701,8 @@ export class DryRunAdapter implements ExchangeAdapter {
 
     for (const [coid, order] of [...this.orders]) {
       if (order.req.symbol !== symbol) continue;
+      // Las condicionales esperan a su disparador; aquí solo se casan las limit.
+      if (order.triggerDir) continue;
       const price = D(order.req.price ?? 0);
       const touched =
         order.req.side === 'BUY' ? ask.gt(0) && ask.lte(price) : bid.gt(0) && bid.gte(price);
@@ -665,6 +713,52 @@ export class DryRunAdapter implements ExchangeAdapter {
       // Se ejecuta al precio LIMIT, no al de mercado: una orden en reposo que
       // se toca se llena a su propio precio, nunca mejor.
       this.executeFill(order.req, price, remaining, order.venueOrderId, false);
+    }
+  }
+
+  /**
+   * Dispara las condicionales cuyo disparador ha cruzado el precio de marca.
+   *
+   * Se usa el precio de MARCA, como para liquidar, porque es el que usan los
+   * venues para disparar stops y take-profits. Una `MARKET` disparada cruza el
+   * libro AL PRECIO DEL DISPARADOR con taker y deslizamiento en contra: es el
+   * mismo supuesto de camino continuo con el que las limit se llenan a su
+   * precio, y con el paso de vela del backtest el bid del tick puede estar muy
+   * por debajo del stop sin que en el mercado real hubiera habido hueco. Una
+   * `LIMIT` disparada (stop-limit) pasa a ser una limit en reposo y se casa
+   * como las demás desde el siguiente precio.
+   *
+   * Un stop más allá de la liquidación no se dispara: si el precio ha cruzado
+   * los dos, el venue liquidó antes de llegar a él, y `checkLiquidation` es
+   * quien cierra.
+   */
+  private fireTriggers(symbol: string, ticker: Ticker): void {
+    const mark = D(ticker.mark || ticker.last || 0);
+    if (mark.lte(0)) return;
+    const pos = this.positions.get(symbol);
+    const liq = pos && !pos.qty.isZero() ? this.liquidationOf(symbol, pos) : null;
+
+    for (const [coid, order] of [...this.orders]) {
+      if (order.req.symbol !== symbol || !order.triggerDir) continue;
+      const trigger = D(order.req.triggerPrice ?? 0);
+      const crossed = order.triggerDir === 'DOWN' ? mark.lte(trigger) : mark.gte(trigger);
+      if (!crossed) continue;
+      if (liq && pos) {
+        const beyondLiq = pos.qty.gt(0) ? trigger.lt(liq) : trigger.gt(liq);
+        if (beyondLiq) continue;
+      }
+
+      this.orders.delete(coid);
+      const remaining = D(order.req.qty).minus(order.filledQty);
+      if (order.req.type === 'MARKET') {
+        const slip = D(1).plus(order.req.side === 'BUY' ? this.slippage : this.slippage.neg());
+        this.executeFill(order.req, trigger.mul(slip), remaining, order.venueOrderId, true);
+      } else {
+        const { triggerPrice: _disparada, ...req } = order.req;
+        void _disparada;
+        this.orders.set(coid, { ...order, req, triggerDir: undefined });
+        this.notifyChange();
+      }
     }
   }
 
@@ -908,4 +1002,22 @@ export class DryRunAdapter implements ExchangeAdapter {
       positions: this.positions.size,
     };
   }
+}
+
+/**
+ * Sentido del disparo de una condicional.
+ *
+ * Manda `intent`, que es lo que el motor rellena y lo que los venues exigen. Sin
+ * él —`withStopLoss` no lo pone—, se deduce de dónde está el disparador respecto
+ * al precio de marca al colocarla, como hace Hyperliquid: por debajo, se dispara
+ * al bajar; por encima, al subir. Y sin precio de marca (un estado importado
+ * antes del primer ticker), por el lado: una venta condicional suele ser el stop
+ * de un largo y una compra, el de un corto.
+ */
+export function triggerDirOf(req: PlaceOrderRequest, mark: Decimal | null): TriggerDir {
+  if (req.intent === 'SL') return req.side === 'SELL' ? 'DOWN' : 'UP';
+  if (req.intent === 'TP') return req.side === 'SELL' ? 'UP' : 'DOWN';
+  const trigger = D(req.triggerPrice ?? 0);
+  if (mark && mark.gt(0) && trigger.gt(0)) return trigger.lt(mark) ? 'DOWN' : 'UP';
+  return req.side === 'SELL' ? 'DOWN' : 'UP';
 }
