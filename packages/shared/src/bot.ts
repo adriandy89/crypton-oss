@@ -216,15 +216,36 @@ export interface PreviewResult {
 
 // ── Vistas para la app ────────────────────────────────────────────────────
 
+/**
+ * Lo que devuelve `GET /bots` por cada bot, y lo que la app pinta en la lista,
+ * la cartera y el gráfico. Es UN solo tipo a propósito: la API lo declara como
+ * tipo de retorno y la app lo importa tal cual, así que un campo que se añada o
+ * se quite en un lado deja de compilar en el otro. Antes había tres copias —esta,
+ * la forma que devolvía la API y una tercera mantenida a mano en la app— y la
+ * métrica de riesgo nº 1 llevaba meses declarada aquí sin que nadie la
+ * rellenara (spec 002, F-01 y F-04).
+ */
 export interface BotSummary {
   id: string;
   name: string;
   venue: Venue;
+  /** Red del venue en la que opera. Sale de su cuenta, no de una columna suya. */
+  testnet: boolean;
+  /**
+   * Corre sobre una conexión de SIMULACIÓN, sin claves.
+   *
+   * No es lo mismo que `dryRun`: un bot simulado puede correr sobre una conexión
+   * REAL, y ese sí gasta cuota y convive con los demás bots de esa cuenta. Esto
+   * es lo que separa el resultado de mentira del de verdad en la cartera.
+   */
+  paper: boolean;
   symbol: string;
   strategy: StrategyKind;
   status: BotStatus;
   direction: Direction;
   leverage: number;
+  dryRun: boolean;
+  /** Lo que el usuario puso. Es el denominador del ROI y el «capital asignado» de la cartera. */
   totalInvestment: string;
   realizedPnl: string;
   unrealizedPnl: string;
@@ -234,8 +255,17 @@ export interface BotSummary {
   liquidationPrice: string | null;
   /** % de caída que aguanta antes de liquidar. La métrica de riesgo nº 1. */
   liquidationDistancePct: string | null;
+  /**
+   * Miniserie del resultado acumulado de las últimas 24 h, un punto por hora y
+   * en orden temporal, para la tarjeta de la lista. Opcional: solo la sirve el
+   * listado, y solo se permite en una lista si viaja en la MISMA respuesta que
+   * ella —una petición por fila serían veinte, y ~3,4 MB para veinte rectángulos.
+   */
+  spark?: string[];
   openOrders: number;
   uptimeSeconds: number;
+  note: string | null;
+  lastError: string | null;
   startedAt: string | null;
   updatedAt: string;
 }

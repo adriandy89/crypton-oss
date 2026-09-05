@@ -1,11 +1,16 @@
 import type {
+  BotSummary,
   Candle,
   CandleInterval,
   CapitalSnapshot,
   FieldMeta,
   LevelPreview,
+  MarketFeatures,
   MarketTicker,
   Mutability,
+  PortfolioEquityPoint,
+  PortfolioEquitySeries,
+  PortfolioRange,
   PreviewResult,
   StrategyMeta,
   VenueCapabilities,
@@ -20,13 +25,18 @@ import type {
  * dejaran de coincidir.
  */
 export type {
+  BotSummary,
   Candle,
   CandleInterval,
   CapitalSnapshot,
   FieldMeta,
   LevelPreview,
+  MarketFeatures,
   MarketTicker,
   Mutability,
+  PortfolioEquityPoint,
+  PortfolioEquitySeries,
+  PortfolioRange,
   PreviewResult,
   StrategyMeta,
   VenueCapabilities,
@@ -101,41 +111,10 @@ export interface Market {
   active: boolean;
 }
 
-export interface BotSummary {
-  id: string;
-  name: string;
-  venue: Venue;
-  /** Red del venue en la que opera. Sale de su cuenta, no de una columna suya. */
-  testnet: boolean;
-  /**
-   * Corre sobre una conexion de SIMULACION, sin claves.
-   *
-   * No es lo mismo que `dryRun`: un bot simulado puede correr sobre una
-   * conexion REAL, y ese si gasta cuota y convive con los demas bots de esa
-   * cuenta. Esto es lo que separa el resultado de mentira del de verdad en la
-   * cartera.
-   */
-  paper: boolean;
-  symbol: string;
-  strategy: StrategyKind;
-  status: BotStatus;
-  direction: 'LONG' | 'SHORT' | 'NEUTRAL';
-  leverage: number;
-  dryRun: boolean;
-  realizedPnl: string;
-  unrealizedPnl: string;
-  roiPct: string;
-  positionQty: string;
-  averageEntry: string | null;
-  liquidationPrice: string | null;
-  openOrders: number;
-  uptimeSeconds: number;
-  note: string | null;
-  lastError: string | null;
-  startedAt: string | null;
-  updatedAt: string;
-}
-
+// `BotSummary` viene de `@crypton/shared` y se reexporta arriba: era la tercera
+// copia del mismo objeto —la compartida, la que devolvía la API y esta— y las
+// tres divergían (spec 002, F-04). Ahora la API lo declara como tipo de retorno
+// y aquí solo se lee.
 export interface BotDetail extends BotSummary {
   /**
    * Conexión sobre la que opera. Llega desde siempre —el detalle devuelve la
@@ -170,9 +149,30 @@ export interface BotCycle {
   cooldown_until: string | null;
   anchor_price: string | null;
   average_entry: string | null;
+  /** Precio medio de SALIDA del ciclo. La base lo guarda desde siempre; faltaba declararlo. */
+  exit_avg: string | null;
   qty: string;
   realized_pnl: string;
   fees: string;
+}
+
+/** Un cambio de una revisión, tal y como lo escribió `PATCH /bots/:id/config`. */
+export interface ConfigChange {
+  key: string;
+  from?: unknown;
+  to?: unknown;
+  mutability?: Mutability;
+  labelKey?: string;
+}
+
+/** Una entrada de `GET /bots/:id/revisions` (spec 006). La v1 no tiene `diff`. */
+export interface BotConfigRevision {
+  id: string;
+  version: number;
+  createdAt: string;
+  applyLevel: Mutability | null;
+  appliedBy: string | null;
+  diff: ConfigChange[] | null;
 }
 
 export interface BotSnapshot {

@@ -12,6 +12,7 @@ import {
   type Candle,
   type CandleInterval,
   venueKey,
+  type MarketFeatures,
   type MarketTicker,
   type VenueCapabilities,
 } from '@crypton/shared';
@@ -26,6 +27,8 @@ import { Venue } from '@crypton/db';
 import { CacheService, VenueBudgetProvider } from 'src/libs';
 import { ConfigService } from '@nestjs/config';
 import { MarketsService } from '../markets';
+// Una funcion PURA del advisor, no su servicio: entran velas, sale un objeto.
+import { buildFeatures } from '../advisor/market-features';
 
 /**
  * Datos de mercado en vivo: capacidades, velas y precios de 24 h.
@@ -56,6 +59,13 @@ function cuerpoCrudo(raw: unknown): string {
     return '(cuerpo no serializable)';
   }
 }
+
+/** Las series que piden los rasgos: las mismas que usa el advisor (12 dias de 1 h, 5 meses de 1 d). */
+const FEATURE_BARS_1H = 300;
+const FEATURE_BARS_1D = 150;
+const FEATURES_TTL_S = 300;
+/** Centinela de la cache negativa: «este par no tiene rasgos todavia». */
+const SIN_RASGOS = { none: true } as const;
 
 @Injectable()
 export class MarketDataService implements OnModuleDestroy {
@@ -220,6 +230,40 @@ export class MarketDataService implements OnModuleDestroy {
    * saliendo solo de aquí es lo que un tick no trae —volumen de 24 h, máximo y
    * mínimo del día— y los pares que nadie mira.
    */
+  /**
+   * Rasgos de un par: volatilidad, ATR, rango de 30 d, tendencia y eficiencia.
+   *
+   * Es la misma funcion que alimenta al advisor, con las mismas series —300
+   * velas de 1 h y 150 de 1 d— para que el grafico y la recomendacion no puedan
+   * decir cosas distintas del mismo par. Cinco minutos de cache: los rasgos se
+   * mueven con las velas de una hora, no con cada tick. `null` sin velas
+   * suficientes; mejor nada que un numero inventado con aspecto de calculado.
+   */
+  async features(venue: Venue, symbol: string, testnet = false): Promise<MarketFeatures | null> {
+    const clave = `md:features:${venue}:${symbol}:${testnet ? 't' : 'm'}`;
+    const cacheado = await this.cache.get<MarketFeatures | typeof SIN_RASGOS>(clave);
+    if (cacheado) return 'none' in cacheado ? null : cacheado;
+
+    const market = await this.markets.getSpec(venue, symbol, testnet);
+    const [velas1h, velas1d] = await Promise.all([
+      this.candles(venue, symbol, '1h', { limit: FEATURE_BARS_1H, testnet }),
+      this.candles(venue, symbol, '1d', { limit: FEATURE_BARS_1D, testnet }).catch(
+        (): Candle[] => [],
+      ),
+    ]);
+    // El precio de referencia es el cierre de la ultima vela horaria, que es la
+    // vela en formacion —a lo sumo 15 s vieja en cache—. Antes se pedia ademas la
+    // lista entera de tickers del venue para leer un solo `last`.
+    const mark = velas1h.at(-1)?.c ?? '0';
+    const rasgos = buildFeatures(velas1h, velas1d, market, mark);
+    // La AUSENCIA tambien se cachea. Un par recien listado —menos de 30 velas
+    // horarias— gana una vela por hora, asi que cinco minutos de cache negativa no
+    // esconden nada; sin ella, cada apertura de su grafico pagaba dos series al
+    // venue, y en Lighter ese presupuesto lo comparten los bots.
+    await this.cache.set(clave, rasgos ?? SIN_RASGOS, FEATURES_TTL_S);
+    return rasgos;
+  }
+
   async tickers(venue?: Venue, testnet = false): Promise<MarketTicker[]> {
     const venues = venue ? [venue] : Object.values(Venue);
     const rows = await Promise.all(

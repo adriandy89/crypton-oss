@@ -1,8 +1,28 @@
 import { DestroyRef, Injectable, inject, signal } from '@angular/core';
-import { Subject } from 'rxjs';
+import { Subject, filter, throttleTime } from 'rxjs';
 import { environment } from '../../../environments/environment';
 import { AuthService } from '../auth/auth.service';
 import type { BotStreamEvent } from '../models';
+
+/**
+ * Ventana de agrupacion de los eventos de UN bot.
+ *
+ * El evento `FILL` del servidor no trae el precio ni la cantidad como campos
+ * —solo dentro de su mensaje de texto—, asi que la unica forma correcta de
+ * pintar una ejecucion nueva es volver a pedir el detalle. Y un market maker
+ * ejecuta a rafagas: sin esta ventana, cada fill de una rafaga disparaba su
+ * propia tanda de peticiones (spec 002, F-05).
+ *
+ * Se agrupa con `throttleTime` y NO con `debounceTime`: con rebote, una rafaga
+ * continua reinicia la espera en cada evento y la pantalla no se refrescaria
+ * nunca. Con `leading` hay refresco inmediato en el primer evento —que es el
+ * que el usuario esta mirando— y con `trailing` queda garantizado otro al
+ * cerrar la ventana, que recoge todo lo que paso dentro.
+ *
+ * Vive aqui y no en cada pantalla porque dos copias de esta politica ya se
+ * desalinearon una vez: el grafico agrupaba y el detalle no.
+ */
+export const BOT_COALESCE_MS = 1_500;
 
 /** Un 401 del flujo: la sesion ha caducado y hay que renovarla, no reintentar. */
 class StreamUnauthorized extends Error {}
@@ -68,6 +88,21 @@ export class StreamService {
    * pantalla de bots.
    */
   readonly stream = this.events$.asObservable();
+
+  /**
+   * Los eventos de un bot concreto, ya agrupados. `botId` es una funcion y no un
+   * valor porque el grafico cambia de bot sin destruirse; se evalua en cada
+   * evento.
+   */
+  ofBot(botId: () => string | null) {
+    return this.stream.pipe(
+      filter((ev) => {
+        const id = botId();
+        return id !== null && ev.botId === id;
+      }),
+      throttleTime(BOT_COALESCE_MS, undefined, { leading: true, trailing: true }),
+    );
+  }
 
   /** Precios en vivo. Ver `MarketDataService`, que es quien los consume. */
   readonly ticks = this.ticks$.asObservable();

@@ -1,4 +1,5 @@
 import {
+  BadRequestException,
   Body,
   Controller,
   Delete,
@@ -19,6 +20,7 @@ import { Observable } from 'rxjs';
 import { IdParamDto } from 'src/libs';
 import { Audit } from 'src/libs';
 import { GetUserInfo, JwtAuthGuard, type SessionUser } from '../auth';
+import { BotSeriesService } from './bot-series.service';
 import { BotsSseService } from './bots-sse.service';
 import { BotsService } from './bots.service';
 import {
@@ -28,6 +30,7 @@ import {
   HistoryQueryDto,
   ListBotsQueryDto,
   PreviewBotDto,
+  SnapshotsQueryDto,
   RenameBotDto,
   UpdateBotConfigDto,
 } from './dtos';
@@ -40,6 +43,7 @@ export class BotsController {
   constructor(
     private readonly bots: BotsService,
     private readonly sse: BotsSseService,
+    private readonly series: BotSeriesService,
   ) {}
 
   // ── Catálogo y preview (antes de que exista bot alguno) ──────────
@@ -104,8 +108,15 @@ export class BotsController {
 
   @Get()
   @ApiOperation({ summary: 'Lista los bots del usuario con su estado y PnL' })
-  list(@GetUserInfo() user: SessionUser, @Query() query: ListBotsQueryDto) {
-    return this.bots.list(user.id, query);
+  async list(@GetUserInfo() user: SessionUser, @Query() query: ListBotsQueryDto) {
+    const bots = await this.bots.list(user.id, query);
+    // La miniserie viaja CON la lista, en una sola consulta para todos los bots:
+    // una peticion por tarjeta serian veinte. Si falla, la lista sale igual sin
+    // ella: es analitica, no estado.
+    const sparks = await this.series
+      .sparks(bots.map((b) => b.id))
+      .catch(() => new Map<string, string[]>());
+    return bots.map((b) => ({ ...b, spark: sparks.get(b.id) ?? [] }));
   }
 
   @Audit('bot.create', {
@@ -227,6 +238,20 @@ export class BotsController {
     return this.bots.events(user.id, id, q.limit ?? 100, q.offset ?? 0);
   }
 
+  @Get(':id/revisions')
+  @ApiOperation({
+    summary: 'Historial de configuración del bot',
+    description:
+      'Una entrada por versión, de la más nueva a la más vieja, con qué cambió (`diff`) y cómo se aplicó (HOT, WARM o COLD). Sin la configuración completa: la vigente la sirve `GET /bots/:id`.',
+  })
+  revisions(
+    @GetUserInfo() user: SessionUser,
+    @Param() { id }: IdParamDto,
+    @Query() q: HistoryQueryDto,
+  ) {
+    return this.bots.revisions(user.id, id, q.limit ?? 50, q.offset ?? 0);
+  }
+
   /**
    * Ficha de market making: diferencial capturado, pares casados, marcas de
    * agua y eficiencia.
@@ -243,11 +268,21 @@ export class BotsController {
 
   @Get(':id/snapshots')
   @ApiOperation({ summary: 'Serie temporal de equity, posición y PnL' })
-  snapshots(
+  async snapshots(
     @GetUserInfo() user: SessionUser,
     @Param() { id }: IdParamDto,
-    @Query() q: HistoryQueryDto,
+    @Query() q: SnapshotsQueryDto,
   ) {
-    return this.bots.snapshots(user.id, id, q.limit ?? 500);
+    if (q.fromMs === undefined) return this.bots.snapshots(user.id, id, q.limit ?? 500);
+    // Con rango: primero la propiedad —un select de una columna— y despues el
+    // servicio de series, que no comprueba nada por si mismo. Hasta cuatro filas
+    // por cubo —primera, minima, maxima y ultima— para que el peor momento
+    // sobreviva al dibujo. Un rango vacio o del reves es un error del cliente,
+    // no una serie vacia.
+    const toMs = q.toMs ?? Date.now();
+    if (toMs <= q.fromMs)
+      throw new BadRequestException('El rango de la serie esta vacio o del reves.');
+    await this.bots.assertOwn(user.id, id);
+    return this.series.inRange(id, q.fromMs, toMs, q.points);
   }
 }

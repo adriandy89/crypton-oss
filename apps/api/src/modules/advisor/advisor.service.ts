@@ -2,14 +2,7 @@ import { Injectable, Logger } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import type { Venue } from '@crypton/db';
 import { getStrategy } from '@crypton/strategy-core';
-import type {
-  BotConfig,
-  Candle,
-  MarketSpec,
-  MarketTicker,
-  PreviewResult,
-  StrategyKind,
-} from '@crypton/shared';
+import type { BotConfig, PreviewResult, StrategyKind } from '@crypton/shared';
 import { CacheService } from 'src/libs';
 import { MarketDataService } from '../market-data';
 import { MarketsService } from '../markets';
@@ -23,7 +16,7 @@ import {
   type Profile,
 } from './build';
 import { OpenRouterClient } from './openrouter.client';
-import { buildFeatures, featuresBucket, type MarketFeatures } from './market-features';
+import { featuresBucket, type MarketFeatures } from './market-features';
 import { PROMPT_VERSION } from './prompt';
 import { coerceConfig, enforceCouplings } from './sanitize';
 
@@ -69,8 +62,6 @@ export interface RecommendationSet {
 }
 
 /** Velas que se piden. Los dos son escalones de la cuantizacion de la API. */
-const BARS_1H = 300;
-const BARS_1D = 150;
 
 /**
  * Cuanto vive una tanda de perillas en cache.
@@ -137,7 +128,7 @@ export class AdvisorService {
   ): Promise<RecommendationSet> {
     const testnet = input.testnet === true;
     const market = await this.markets.getSpec(input.venue, input.symbol, testnet);
-    const features = await this.features(input.venue, input.symbol, testnet, market);
+    const features = await this.features(input.venue, input.symbol, testnet);
 
     const vacio: RecommendationSet = {
       strategy: input.strategy,
@@ -549,29 +540,18 @@ export class AdvisorService {
    * Rasgos del mercado. Sin velas suficientes devuelve `null` y el bloque se
    * apaga con un motivo: es preferible a inventar una recomendacion sobre datos
    * a medias.
+   *
+   * Los calcula `MarketDataService.features`, que es lo que pinta la franja del
+   * grafico: una sola tuberia y una sola cache para que grafico y recomendacion
+   * no puedan decir cosas distintas del mismo par. Aqui solo se traga el fallo.
    */
   private async features(
     venue: Venue,
     symbol: string,
     testnet: boolean,
-    market: MarketSpec,
   ): Promise<MarketFeatures | null> {
     try {
-      const [velas1h, velas1d, tickers] = await Promise.all([
-        this.marketData.candles(venue, symbol, '1h', {
-          limit: BARS_1H,
-          testnet,
-        }),
-        this.marketData
-          .candles(venue, symbol, '1d', { limit: BARS_1D, testnet })
-          .catch((): Candle[] => []),
-        // Sin ticker se cae al ultimo cierre: es un precio peor pero real, y
-        // mejor que no poder recomendar nada.
-        this.marketData.tickers(venue, testnet).catch((): MarketTicker[] => []),
-      ]);
-      const ticker = tickers.find((t) => t.symbol === symbol);
-      const mark = ticker?.last ?? velas1h[velas1h.length - 1]?.c ?? '0';
-      return buildFeatures(velas1h, velas1d, market, mark);
+      return await this.marketData.features(venue, symbol, testnet);
     } catch (e) {
       this.logger.debug(`Sin rasgos de mercado para ${venue}:${symbol}: ${String(e)}`);
       return null;

@@ -26,15 +26,13 @@ const bot = {
 };
 
 const db = {
-  bot: { findUnique: jest.fn().mockResolvedValue(bot) },
-  botConfigRevision: {
-    findFirst: jest.fn().mockResolvedValue({ config: {}, version: 1 }),
-  },
+  bot: { findFirst: jest.fn().mockResolvedValue(bot) },
+  botConfigRevision: { findFirst: jest.fn().mockResolvedValue({ config: {}, version: 1 }) },
   backtestRun: {
     create: jest.fn(),
     findMany: jest.fn(),
-    findUnique: jest.fn(),
-    delete: jest.fn(),
+    findFirst: jest.fn(),
+    deleteMany: jest.fn(),
   },
   backtestFill: { createMany: jest.fn(), findMany: jest.fn() },
 };
@@ -65,7 +63,7 @@ const dto = (over: Partial<CreateBacktestDto> = {}): CreateBacktestDto => ({
 
 beforeEach(() => {
   jest.clearAllMocks();
-  db.bot.findUnique.mockResolvedValue(bot);
+  db.bot.findFirst.mockResolvedValue(bot);
   cache.setnx.mockResolvedValue(true);
 });
 
@@ -100,9 +98,39 @@ describe('BacktestsService — fuentes', () => {
   });
 });
 
+describe('BacktestsService — propiedad (spec 004)', () => {
+  it('el bot se busca SIEMPRE con el usuario: el de otro es un 404, no un 403', async () => {
+    db.bot.findFirst.mockResolvedValue(null);
+    await expect(svc().run(dto(), 'u1')).rejects.toThrow(/no existe/);
+    const where = db.bot.findFirst.mock.calls[0][0].where as Record<string, unknown>;
+    expect(where).toEqual({ id: bot.id, user_id: 'u1' });
+  });
+
+  it('la lista es solo del usuario, con o sin filtro de bot', async () => {
+    db.backtestRun.findMany.mockResolvedValue([]);
+    await svc().list('u1', {});
+    await svc().list('u1', { botId: bot.id });
+    const wheres = db.backtestRun.findMany.mock.calls.map(
+      (c) => (c[0] as { where: unknown }).where,
+    );
+    expect(wheres).toEqual([{ requested_by: 'u1' }, { requested_by: 'u1', bot_id: bot.id }]);
+  });
+
+  it('el detalle y las ejecuciones de otro son 404, y el borrado de otro no borra nada', async () => {
+    db.backtestRun.findFirst.mockResolvedValue(null);
+    await expect(svc().detail('u1', 'run-ajeno')).rejects.toThrow(/no existe/);
+    await expect(svc().fills('u1', 'run-ajeno')).rejects.toThrow(/no existe/);
+    expect(db.backtestFill.findMany).not.toHaveBeenCalled();
+    await svc().remove('u1', 'run-ajeno');
+    expect(db.backtestRun.deleteMany).toHaveBeenCalledWith({
+      where: { id: 'run-ajeno', requested_by: 'u1' },
+    });
+  });
+});
+
 describe('BacktestsService — validación', () => {
   it('un bot que no existe es 404', async () => {
-    db.bot.findUnique.mockResolvedValue(null);
+    db.bot.findFirst.mockResolvedValue(null);
     await expect(svc().run(dto(), 'admin')).rejects.toThrow(/no existe/);
   });
 
@@ -110,7 +138,7 @@ describe('BacktestsService — validación', () => {
     // Sobre un bot real, el resultado invitaría a compararlo con su histórico de
     // verdad, y no son lo mismo: aquí no hay libro, ni funding, ni las otras
     // posiciones de la cuenta.
-    db.bot.findUnique.mockResolvedValue({ ...bot, dry_run: false });
+    db.bot.findFirst.mockResolvedValue({ ...bot, dry_run: false });
     await expect(svc().run(dto(), 'admin')).rejects.toThrow(/simulación/);
   });
 
@@ -172,7 +200,7 @@ describe('BacktestsService — validación', () => {
   it('las validaciones baratas NO llegan a tomar el cerrojo', async () => {
     // El orden importa: un rango mal escrito no debe dejar el backtesting
     // bloqueado para los demás mientras el usuario corrige.
-    db.bot.findUnique.mockResolvedValue({ ...bot, dry_run: false });
+    db.bot.findFirst.mockResolvedValue({ ...bot, dry_run: false });
     await expect(svc().run(dto(), 'admin')).rejects.toThrow();
     expect(cache.setnx).not.toHaveBeenCalled();
   });

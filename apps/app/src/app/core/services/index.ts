@@ -1,3 +1,4 @@
+export * from './activity.service';
 export * from './advisor.service';
 export * from './backtests.service';
 export * from './bots.service';
@@ -6,6 +7,7 @@ export * from './leaderboard.service';
 export * from './market-data.service';
 export * from './markets.service';
 export * from './network.service';
+export * from './portfolio.service';
 export * from './profile.service';
 export * from './risk.service';
 export * from './stream.service';

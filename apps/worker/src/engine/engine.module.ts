@@ -7,6 +7,7 @@ import { CredentialsService } from './credentials.service';
 import { EngineService } from './engine.service';
 import { LeaseService } from './lease.service';
 import { PaperStateStore } from './paper-state.store';
+import { PortfolioSnapshotsService } from './portfolio-snapshots.service';
 import { RetentionService } from './retention.service';
 
 @Module({
@@ -20,6 +21,7 @@ import { RetentionService } from './retention.service';
     AccountHub,
     PaperStateStore,
     RetentionService,
+    PortfolioSnapshotsService,
   ],
   exports: [EngineService, LeaseService],
 })

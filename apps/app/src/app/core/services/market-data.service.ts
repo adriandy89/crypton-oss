@@ -8,6 +8,7 @@ import { StreamService } from './stream.service';
 import type {
   Candle,
   CandleInterval,
+  MarketFeatures,
   MarketTicker,
   Venue,
   VenueCapabilities,
@@ -693,6 +694,20 @@ export class MarketDataService {
    * un bot no vuelva a pedir lo mismo; el refresco de verdad lo hace `refresh`,
    * que salta el cache a proposito.
    */
+  /**
+   * Rasgos del par para la franja de veredicto del grafico. Los calcula el
+   * SERVIDOR con la misma funcion que alimenta al advisor: calcularlos aqui
+   * crearia dos verdades, y pediria dos series que el grafico no carga. `null`
+   * sin velas suficientes, y la franja no se pinta.
+   */
+  async features(venue: Venue, symbol: string): Promise<MarketFeatures | null> {
+    return firstValueFrom(
+      this.http.get<MarketFeatures | null>(`${this.base}/features`, {
+        params: { venue, symbol, testnet: String(this.network.testnet()) },
+      }),
+    );
+  }
+
   async candles(
     venue: Venue,
     symbol: string,

@@ -1,6 +1,7 @@
 import {
   D,
   Decimal,
+  muestreoPorExtremos,
   type BacktestEquityPoint,
   type BacktestMetrics,
   type Candle,
@@ -138,6 +139,11 @@ function drawdownOf(serie: ReplayState[]): {
  * Un `slice` cada N puntos borraría el pico del drawdown, y entonces el gráfico
  * mentiría justo sobre la cifra que se está mirando. De cada cubo se conservan
  * el primero, el mínimo, el máximo y el último, en orden temporal.
+ *
+ * El muestreo vive en `@crypton/shared` (`muestreoPorExtremos`) y no aquí: la
+ * curva de un bot en vivo se pinta con la misma función, y si fueran dos
+ * implementaciones una acabaría escondiendo el peor momento que la otra enseña.
+ * Aquí solo queda traducir cada punto elegido a lo que viaja al cliente.
  */
 function downsampleExtrema(
   serie: ReplayState[],
@@ -154,24 +160,12 @@ function downsampleExtrema(
     };
   };
 
-  if (serie.length <= max) return serie.map(punto);
-
-  const cubo = Math.ceil(serie.length / (max / 4));
-  const out: BacktestEquityPoint[] = [];
-  for (let i = 0; i < serie.length; i += cubo) {
-    const tramo = serie.slice(i, i + cubo);
-    let min = tramo[0];
-    let maxP = tramo[0];
-    for (const p of tramo) {
-      if (p.equity.lt(min.equity)) min = p;
-      if (p.equity.gt(maxP.equity)) maxP = p;
-    }
-    const elegidos = [tramo[0], min, maxP, tramo[tramo.length - 1]]
-      .filter((p, idx, arr) => arr.findIndex((q) => q.ts === p.ts) === idx)
-      .sort((a, b) => a.ts - b.ts);
-    out.push(...elegidos.map(punto));
-  }
-  return out;
+  return muestreoPorExtremos(
+    serie,
+    max,
+    (p) => p.equity,
+    (p) => p.ts,
+  ).map(punto);
 }
 
 /**

@@ -73,9 +73,9 @@
              saber por que su conexion no esta. -->
         @if (conexionesRotas()) {
           <ui-notice tone="warn">
-            Tu conexión de exchange ya no verifica: puede haberse revocado desde el propio
-            exchange o haber caducado. Un bot real sobre ella no colocaría ni una orden.
-            Mientras tanto puedes seguir en <b>simulación</b>.
+            Tu conexión de exchange ya no verifica: puede haberse revocado desde el propio exchange
+            o haber caducado. Un bot real sobre ella no colocaría ni una orden. Mientras tanto
+            puedes seguir en <b>simulación</b>.
             <a routerLink="/tabs/account">Revisar mis conexiones</a>
           </ui-notice>
         }
@@ -179,7 +179,11 @@
       <div class="titlerow">
         <h2 class="title">{{ strategyLabel(strategyKind()) }}</h2>
         @if (strategy(); as descriptor) {
-          <ui-strategy-help [kind]="descriptor.kind" [fields]="descriptor.fields" variant="inline" />
+          <ui-strategy-help
+            [kind]="descriptor.kind"
+            [fields]="descriptor.fields"
+            variant="inline"
+          />
         }
       </div>
 
@@ -356,9 +360,17 @@
         @for (lv of p.levels; track lv.index) {
           <div class="lvl" [class.bad]="lv.violations.length > 0" [class.sell]="lv.side === 'SELL'">
             <span class="kind">{{ lv.kind }}#{{ lv.index }}</span>
-            <span class="price">{{ lv.price }}</span>
-            <span class="qty">{{ lv.qty }}</span>
-            <span class="dist">{{ lv.distancePct }} %</span>
+            <span class="price num">{{ price(lv.price, decimales()) }}</span>
+            <span class="qty num">{{ qty(lv.qty, decimalesQty()) }}</span>
+            <span class="dist num">{{ pct(lv.distancePct) }}</span>
+            <!-- El acumulado hasta este nivel es «el numero que importa de
+                 verdad» segun el propio contrato, y no se pintaba. En una
+                 martingala de doce niveles es lo unico que dice cuanto habra
+                 puesto si se llena hasta aqui. -->
+            <p class="cum num">
+              hasta aquí: {{ money(lv.cumulativeNotional) }} de exposición ·
+              {{ money(lv.cumulativeMargin) }} de margen
+            </p>
             @if (lv.violations.length) {
               <p class="viol">{{ lv.violations.join(' ') }}</p>
             }
@@ -438,7 +450,10 @@
           <div class="slbl">
             <span>Modo simulación</span>
             @if (paperAccount()) {
-              <p>Esta conexión no tiene claves: solo puede simular. Conecta un exchange para operar de verdad.</p>
+              <p>
+                Esta conexión no tiene claves: solo puede simular. Conecta un exchange para operar
+                de verdad.
+              </p>
             } @else {
               <p>No sale ni un céntimo de tu cuenta: el bot opera contra el simulador.</p>
             }

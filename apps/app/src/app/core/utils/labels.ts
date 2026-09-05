@@ -124,3 +124,75 @@ export function intervalLabel(interval: string): string {
   if (interval === '1w') return '1S';
   return interval.replace(/([hd])$/, (m) => m.toUpperCase());
 }
+
+/**
+ * Lo que dice cada suceso del motor, en castellano.
+ *
+ * La pestaña de eventos es la unica pantalla que existe para mirar cuando algo
+ * no cuadra, y pintaba las constantes crudas —`RISK_GUARD_TRIPPED`,
+ * `FAIR_PRICE_STALE`— en mayusculas y en ingles (spec 002, F-08). La lista es
+ * la que emite el worker (`bot-runner.ts`, `notifier.service.ts`) mas el alta
+ * de la API; un tipo nuevo que no este aqui sale con su constante, como hacen
+ * las demas funciones de este fichero, para que añadir un evento en el motor no
+ * rompa la pantalla.
+ */
+export const EVENT_LABELS: Record<string, string> = {
+  BOT_CREATED: 'Bot creado',
+  BOT_STARTED: 'Bot arrancado',
+  BOT_PAUSED: 'Bot pausado',
+  BOT_RESUMED: 'Bot reanudado',
+  BOT_STOPPED: 'Bot parado',
+  BOT_ADOPTED: 'Adoptado por otro worker',
+  BOT_REPAIRED: 'Resincronizado con el exchange',
+  START_FAILED: 'No se pudo arrancar',
+  CONFIG_RELOADED: 'Configuracion recargada',
+  FILL: 'Ejecucion',
+  CYCLE_CLOSED: 'Ciclo cerrado',
+  SAFETY_ADDED: 'Orden de seguridad añadida',
+  ADD_SAFETY_SKIPPED: 'Orden de seguridad omitida',
+  GRID_REANCHORED: 'Reticula recentrada',
+  ORDERS_CANCELED: 'Ordenes canceladas',
+  ORDER_REJECTED: 'Orden rechazada por el exchange',
+  ORDER_UNVIABLE: 'Orden inviable en este mercado',
+  ORDER_RETRY: 'Orden reintentada',
+  INSUFFICIENT_FUNDS: 'Fondos insuficientes',
+  POSITION_BELOW_MINIMUM: 'Resto por debajo del minimo del venue',
+  EXIT_PENDING_MIN_SIZE: 'Salida pendiente: tamaño minimo',
+  CLOSE_SKIPPED: 'Cierre omitido',
+  LEVERAGE_SKIPPED: 'Apalancamiento no aplicado',
+  POSITION_MODE_SKIPPED: 'Modo de posicion no aplicado',
+  MARGIN_ADJUSTED: 'Margen ajustado',
+  MARKET_SPEC_CHANGED: 'El mercado cambio sus reglas',
+  FAIR_PRICE_STALE: 'Precio de referencia desfasado',
+  FAIR_PRICE_UNAVAILABLE: 'Precio de referencia no disponible',
+  RISK_GUARD_TRIPPED: 'Guarda de riesgo disparada',
+  LIQUIDATION_NEAR: 'Liquidacion cerca',
+  LIQUIDATED: 'Posicion liquidada',
+  PANIC: 'Panico: todo cancelado y cerrado',
+  TICK_ERROR: 'Error en un ciclo del motor',
+  STREAM_ERROR: 'Error en la conexion en vivo',
+  AUTH_ERROR: 'Credencial rechazada por el exchange',
+  ACTION_FAILED: 'Accion fallida',
+};
+
+export function eventLabel(type: string): string {
+  return EVENT_LABELS[type] ?? type;
+}
+
+/**
+ * Estado de una orden, en castellano. El detalle pintaba `PARTIALLY_FILLED` al
+ * lado de un nivel que el grafico ya llamaba `GRID#3` (spec 002, F-09).
+ */
+export const ORDER_STATUS_LABELS: Record<string, string> = {
+  PENDING: 'enviando',
+  OPEN: 'en el libro',
+  PARTIALLY_FILLED: 'parcial',
+  FILLED: 'ejecutada',
+  CANCELED: 'cancelada',
+  REJECTED: 'rechazada',
+  EXPIRED: 'caducada',
+};
+
+export function orderStatusLabel(status: string): string {
+  return ORDER_STATUS_LABELS[status] ?? status;
+}

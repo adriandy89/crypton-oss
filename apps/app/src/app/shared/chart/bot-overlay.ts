@@ -1,4 +1,5 @@
-import type { BotDetail, BotFill, BotLevel, BotOrder } from '../../core/models';
+import { agruparSucesos } from '@crypton/shared';
+import type { BotDetail, BotEvent, BotFill, BotLevel, BotOrder } from '../../core/models';
 
 /**
  * Traduce el estado de un bot a lo que se pinta encima del grafico.
@@ -38,6 +39,11 @@ export interface OverlayLine {
    * gordas: un nivel planificado no protege nada mientras no este puesto.
    */
   ghost: boolean;
+  /**
+   * Si lleva rotulo en el eje de precios. Lo decide `conRotulos()` al final de
+   * `buildBotOverlay`; ausente, vale `!ghost`, que era la regla de antes.
+   */
+  axisLabel?: boolean;
 }
 
 /** Una ejecucion ya hecha, como marcador en su precio real. */
@@ -53,6 +59,21 @@ export interface OverlayMarker {
   /** Cuantas ejecuciones se han fundido aqui. 1 = una sola. */
   count: number;
   text: string;
+}
+
+/**
+ * Un suceso del bot —o varios de la misma vela— como marcador sobre la barra.
+ *
+ * No lleva precio: un suceso ocurre en un instante, no en un precio, así que se
+ * ancla a la vela y no a la escala. `tone` decide forma y color: cuadrado ámbar
+ * para lo grave, círculo neutro para lo que solo explica (spec 005, R-2).
+ */
+export interface OverlayEventMarker {
+  id: string;
+  timeMs: number;
+  tone: 'warn' | 'info';
+  text: string;
+  count: number;
 }
 
 export interface BotOverlay {
@@ -75,8 +96,14 @@ export interface BotOverlay {
   skipped: number;
 }
 
-/** Rotulo corto de un nivel: `GRID_BUY` + 3 -> `GRID#3`. */
-function levelTitle(level: { level_kind: string; level_index: number }): string {
+/**
+ * Rotulo corto de un nivel: `GRID_BUY` + 3 -> `GRID#3`.
+ *
+ * Exportado para que el detalle del bot use el MISMO rotulo que el grafico: la
+ * misma orden se llamaba `GRID_BUY#3` en una pantalla y `GRID#3` en la de al
+ * lado, a un toque de distancia (spec 002, F-09).
+ */
+export function levelTitle(level: { level_kind: string; level_index: number }): string {
   const short: Record<string, string> = {
     BASE: 'BASE',
     SAFETY: 'SAF',
@@ -348,10 +375,45 @@ export function buildBotOverlay(
   // ledger de fills, que es otra llamada. Devolver aqui un array siempre vacio
   // invitaba a usarlo y a no ver ni un marcador sin entender por que.
   return {
-    lines: collapse(lines, opts.priceDecimals),
+    lines: conRotulos(collapse(lines, opts.priceDecimals)),
     span: prices.length ? { min: Math.min(...prices), max: Math.max(...prices) } : null,
     skipped,
   };
+}
+
+/** A partir de cuantas ordenes de la escalera dejan de rotularse todas. */
+const MAX_ROTULOS_ESCALERA = 4;
+
+/**
+ * Que lineas llevan rotulo en el eje.
+ *
+ * Una martingala de doce niveles pintaba doce etiquetas en el eje y no se leia
+ * ninguna: el motor grafico ya bajaba la densidad de las marcas de precio a
+ * partir de cuatro lineas y `collapse` fundia los empates, pero eso era un
+ * parche sobre un problema de forma. Lo que el operador lee de una escalera no
+ * son doce precios: es hasta donde llega. Asi que con mas de cuatro ordenes
+ * vivas se rotulan solo los EXTREMOS de cada lado —la compra mas baja y la
+ * venta mas alta— y la BASE, y el resto quedan como trazos: siguen ahi, con su
+ * tono y su trazo, pero sin pelearse por el eje. Lo que no es escalera —precio
+ * medio, take profit, stop, liquidacion— se rotula siempre: son las lineas que
+ * dicen donde se acaba la partida. Las previstas siguen sin rotulo, como antes.
+ */
+function conRotulos(lines: OverlayLine[]): OverlayLine[] {
+  const escalera = lines.filter((l) => !l.ghost && (l.kind === 'buy' || l.kind === 'sell'));
+  if (escalera.length <= MAX_ROTULOS_ESCALERA) {
+    return lines.map((l) => ({ ...l, axisLabel: !l.ghost }));
+  }
+  const conEtiqueta = new Set<string>();
+  const compras = escalera.filter((l) => l.kind === 'buy');
+  const ventas = escalera.filter((l) => l.kind === 'sell');
+  if (compras.length) conEtiqueta.add(compras.reduce((a, b) => (b.price < a.price ? b : a)).id);
+  if (ventas.length) conEtiqueta.add(ventas.reduce((a, b) => (b.price > a.price ? b : a)).id);
+  const base = escalera.find((l) => l.title.startsWith('BASE'));
+  if (base) conEtiqueta.add(base.id);
+  return lines.map((l) => ({
+    ...l,
+    axisLabel: !l.ghost && ((l.kind !== 'buy' && l.kind !== 'sell') || conEtiqueta.has(l.id)),
+  }));
 }
 
 /**
@@ -369,7 +431,7 @@ export function buildBotOverlay(
  * Busqueda binaria por la ultima vela que empieza en o antes de la ejecucion. La
  * serie viene ascendente de la API (ver `loadCandles`).
  */
-function bucketOf(at: number, span: number, bars: readonly number[] | null): number {
+export function bucketOf(at: number, span: number, bars: readonly number[] | null): number {
   if (!bars) return Math.floor(at / span) * span;
   // Anterior a la primera vela cargada: se queda en ella. El marcador cae en el
   // borde izquierdo del grafico, que es donde de verdad esta su vela.
@@ -486,4 +548,57 @@ export function buildFillMarkers(
       // el motor grafico espera los marcadores en orden creciente de tiempo.
       .sort((a, b) => a.timeMs - b.timeMs)
   );
+}
+
+/**
+ * Rótulos cortos de los sucesos que se pintan. `eventLabel()` da la frase
+ * entera para la bitácora; sobre una vela caben ocho letras.
+ */
+const EVENT_SHORT: Record<string, string> = {
+  GRID_REANCHORED: 'RECENTRO',
+  SAFETY_ADDED: 'SAF+',
+  MARGIN_ADJUSTED: 'MARGEN',
+  CONFIG_RELOADED: 'CONFIG',
+  RISK_GUARD_TRIPPED: 'GUARDA',
+  LIQUIDATION_NEAR: 'LIQ',
+  LIQUIDATED: 'LIQUIDADO',
+  ORDER_REJECTED: 'RECHAZO',
+  ORDER_UNVIABLE: 'INVIABLE',
+  ORDER_RETRY: 'REINTENTO',
+  INSUFFICIENT_FUNDS: 'FONDOS',
+  PANIC: 'PÁNICO',
+  AUTH_ERROR: 'AUTH',
+  STREAM_ERROR: 'FLUJO',
+  TICK_ERROR: 'ERROR',
+  FAIR_PRICE_STALE: 'PRECIO',
+  FAIR_PRICE_UNAVAILABLE: 'PRECIO',
+  MARKET_SPEC_CHANGED: 'REGLAS',
+  START_FAILED: 'ARRANQUE',
+  ACTION_FAILED: 'FALLO',
+};
+
+/**
+ * Marcadores de suceso, a partir de la bitácora del bot (spec 005, R-2).
+ *
+ * Misma tubería que `buildFillMarkers`: se agrupan por vela —con las velas
+ * cargadas mandando sobre la aritmética, ver `bucketOf`— y salen ascendentes.
+ * Qué entra y cómo se funde lo decide `agruparSucesos` en `@crypton/shared`,
+ * que es lo que tiene test; aquí solo se ponen los rótulos.
+ */
+export function buildEventMarkers(
+  events: readonly BotEvent[],
+  opts: { bucketMs: number; barsMs?: readonly number[] },
+): OverlayEventMarker[] {
+  const span = Number.isFinite(opts.bucketMs) && opts.bucketMs > 0 ? opts.bucketMs : 60_000;
+  const bars = opts.barsMs && opts.barsMs.length > 0 ? opts.barsMs : null;
+  const grupos = agruparSucesos(
+    events.map((e) => ({ type: e.type, severity: e.severity, at: Date.parse(e.created_at) })),
+    (at) => bucketOf(at, span, bars),
+  );
+  return grupos.map((g) => {
+    const corto = EVENT_SHORT[g.tipos[0]] ?? g.tipos[0];
+    const text =
+      g.count === 1 ? corto : g.tipos.length === 1 ? `${corto} ×${g.count}` : `${g.count} sucesos`;
+    return { id: `${g.t}:${g.tono}`, timeMs: g.t, tone: g.tono, text, count: g.count };
+  });
 }

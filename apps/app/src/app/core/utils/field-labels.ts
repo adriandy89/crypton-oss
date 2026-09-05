@@ -398,11 +398,20 @@ export const groupLabel = (group: string): string => GROUP_LABELS[group] ?? grou
  * comportamiento antiguo (des-camelizar) en vez de mostrar la clave cruda:
  * una estrategia nueva sale legible aunque nadie haya traducido sus campos.
  */
-export function fieldLabel(field: FieldMeta): string {
+export function fieldLabel(field: Pick<FieldMeta, 'key' | 'labelKey'>): string {
   const known = FIELD_LABELS[field.labelKey];
   if (known) return known;
   const leaf = field.labelKey.split('.').pop() ?? field.key;
   return leaf.replace(/([A-Z])/g, ' $1').replace(/^./, (c) => c.toUpperCase());
+}
+
+/**
+ * Nombre legible de un campo del que solo se tiene la clave del diccionario y
+ * la del campo: el historial de revisiones trae `labelKey` y `key`, no el
+ * `FieldMeta` entero. Sin `labelKey` se des-camaliza la clave, como siempre.
+ */
+export function labelDeClave(labelKey: string | undefined, key: string): string {
+  return fieldLabel({ key, labelKey: labelKey ?? key });
 }
 
 /**

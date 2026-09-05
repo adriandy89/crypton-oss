@@ -4,7 +4,7 @@ import dotenv from 'dotenv';
 import { defineConfig } from 'prisma/config';
 
 /**
- * Configuración de Prisma para migraciones y semilla.
+ * Configuración de Prisma para migraciones (esta edición no tiene semilla).
  *
  * `DATABASE_URL` NO tiene un fichero propio en este paquete a propósito: sería
  * una cuarta copia de la misma cadena de conexión, y las copias se

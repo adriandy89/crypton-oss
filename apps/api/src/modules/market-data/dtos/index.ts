@@ -181,3 +181,26 @@ export class WatchDto {
   @IsBoolean()
   testnet?: boolean;
 }
+
+/**
+ * Rasgos de un par: ATR, rango, tendencia y eficiencia de Kaufman.
+ *
+ * Mismo saneado de simbolo que las velas —lista negra, no blanca— y la red
+ * transformada a mano, por lo mismo que alli.
+ */
+export class FeaturesQueryDto {
+  @IsEnum(Venue)
+  venue: Venue;
+
+  @IsString()
+  @IsNotEmpty()
+  @MaxLength(32)
+  // eslint-disable-next-line no-control-regex -- el rango de control esta a proposito: es el saneado que rechaza caracteres de control en un simbolo
+  @Matches(/^[^\s,:|\u0000-\u001f]+$/)
+  symbol: string;
+
+  @IsOptional()
+  @Transform(({ value }) => value === true || value === 'true')
+  @IsBoolean()
+  testnet?: boolean;
+}

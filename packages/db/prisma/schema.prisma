@@ -61,6 +61,7 @@ model User {
   risk_limit        RiskLimit?
   telegram_link     TelegramLink?
   bot_shares        BotShare[]
+  portfolio_snapshots PortfolioSnapshot[]
 
   @@index([email], map: "idx_user_email")
   @@index([disabled])
@@ -816,6 +817,41 @@ model BotSnapshot {
 
   @@index([bot_id, taken_at(sort: Desc)])
   @@map("bot_snapshots")
+}
+
+/// El resultado agregado de la cartera, materializado (spec 003).
+///
+/// Una fila por usuario y red cada cinco minutos, escrita por el worker a partir
+/// del ÚLTIMO snapshot de cada bot real con dato reciente. Se materializa en vez
+/// de agregar `bot_snapshots` al vuelo por dos razones que la agregación no
+/// puede resolver: un bot borrado se lleva sus snapshots (`onDelete: Cascade`) y
+/// la suma de los que existen hoy sería la historia de los supervivientes, no la
+/// de la cartera; y la pestaña de aterrizaje no puede pagar un GROUP BY sobre
+/// 43 200 filas por bot en cada apertura. 105 filas al día por usuario y red.
+///
+/// `pnl = realized + unrealized`, la misma definición que `bot_snapshots.equity`:
+/// es resultado, no patrimonio. Los saldos del venue no entran aquí.
+model PortfolioSnapshot {
+  id      BigInt  @id @default(autoincrement())
+  user_id String
+  user    User    @relation(fields: [user_id], references: [id], onDelete: Cascade)
+  /// Red del venue. Testnet y mainnet son libros distintos y no se mezclan.
+  testnet Boolean
+
+  realized   Decimal @db.Decimal(38, 18)
+  unrealized Decimal @db.Decimal(38, 18)
+  pnl        Decimal @db.Decimal(38, 18)
+  /// Σ total_investment de los bots que aportan: lo que el usuario puso.
+  invested   Decimal @db.Decimal(38, 18)
+  /// Σ |posición| × precio medio: lo que hay abierto en el mercado.
+  exposure   Decimal @db.Decimal(38, 18)
+  /// Cuántos bots aportaron. Cuando baja, uno dejó de sumar; el pasado no cambia.
+  bots       Int
+
+  taken_at DateTime @default(now()) @db.Timestamptz(6)
+
+  @@index([user_id, testnet, taken_at(sort: Desc)])
+  @@map("portfolio_snapshots")
 }
 
 // ═══════════════════════════════════════════════════════════════

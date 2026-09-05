@@ -149,20 +149,92 @@
   }
 }
 
+/* La distancia a liquidacion, como barra ademas de como numero: el riesgo se
+   ve sin leer, y con el mismo semaforo que la lista y el detalle. */
 .liq {
   display: flex;
   align-items: center;
-  gap: 6px;
+  gap: 9px;
   padding-top: 10px;
   border-top: 1px solid var(--border-subtle);
   font-size: 11px;
   color: var(--text-3);
 
   ion-icon {
+    flex-shrink: 0;
     font-size: 13px;
   }
 
+  ui-liq-meter {
+    flex-grow: 1;
+  }
+
   &.hot {
+    color: var(--signal-warn);
+  }
+}
+
+.liqp {
+  margin: -4px 0 0;
+  font-size: 11px;
+  color: var(--text-3);
+}
+
+.gauge {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+
+  .grow {
+    display: flex;
+    align-items: baseline;
+    justify-content: space-between;
+    gap: 8px;
+  }
+
+  .k {
+    font-size: 12px;
+    color: var(--text-2);
+  }
+
+  b {
+    font-size: 13.5px;
+    font-weight: 700;
+    letter-spacing: -0.01em;
+  }
+}
+
+.alloc {
+  display: flex;
+  flex-direction: column;
+  gap: 9px;
+
+  .r {
+    display: grid;
+    grid-template-columns: 72px minmax(0, 1fr) 44px;
+    align-items: center;
+    gap: 10px;
+  }
+
+  .sym {
+    font-size: 12px;
+    font-weight: 700;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .pc {
+    font-size: 12px;
+    font-weight: 600;
+    color: var(--text-2);
+    text-align: right;
+  }
+
+  .warn {
+    margin: 2px 0 0;
+    font-size: 11px;
+    line-height: 1.5;
     color: var(--signal-warn);
   }
 }
@@ -197,6 +269,8 @@
   /* Las posiciones ocupan el ancho entero, en dos columnas. */
   ui-section,
   .positions,
+  .gauge,
+  .alloc,
   ui-empty-state {
     grid-column: 1 / -1;
   }

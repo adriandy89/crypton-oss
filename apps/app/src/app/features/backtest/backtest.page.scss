@@ -1,5 +1,6 @@
-/* Pantalla de administración: densidad alta y cero adorno. Quien entra aquí
-   viene a leer números, no a que se los presenten. */
+/* Densidad alta y cero adorno: quien entra aquí viene a leer números, no a que
+   se los presenten. Nació como pantalla de administración y se abrió a todos en
+   el spec 004; la densidad se queda. */
 
 ion-content {
   --padding-start: var(--space-4);
@@ -9,6 +10,7 @@ ion-content {
 
 .form,
 .resultado,
+.comparacion,
 .historial {
   display: flex;
   flex-direction: column;
@@ -64,6 +66,15 @@ ion-content {
   }
 }
 
+.origen {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  margin: 0;
+  font-size: 12px;
+  color: var(--ion-color-medium);
+}
+
 .stats {
   display: grid;
   grid-template-columns: repeat(auto-fill, minmax(140px, 1fr));
@@ -77,6 +88,12 @@ h3 {
   letter-spacing: 0.03em;
   text-transform: uppercase;
   color: var(--ion-color-medium);
+
+  .cuantas {
+    font-weight: 500;
+    letter-spacing: 0;
+    text-transform: none;
+  }
 }
 
 .grafico {
@@ -84,7 +101,8 @@ h3 {
   position: relative;
 }
 
-.meta {
+.meta,
+.ayuda {
   margin: 0;
   font-size: 11px;
   color: var(--ion-color-medium);
@@ -104,6 +122,68 @@ h3 {
   }
 }
 
+/* Las tablas de operaciones y de comparación: monoespaciada donde hay cifras,
+   y con desplazamiento horizontal propio para que la página no lo tenga. */
+.ops-wrap {
+  overflow-x: auto;
+}
+
+.ops,
+.cmp {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 11.5px;
+
+  th,
+  td {
+    padding: 5px 6px;
+    border-bottom: 1px solid var(--ion-color-step-100, #1e1e1e);
+    text-align: left;
+    white-space: nowrap;
+  }
+
+  th {
+    font-size: 10px;
+    font-weight: 700;
+    letter-spacing: 0.04em;
+    text-transform: uppercase;
+    color: var(--ion-color-medium);
+  }
+
+  .num {
+    text-align: right;
+    font-family: var(--font-num);
+  }
+
+  .ciclo {
+    color: var(--ion-color-medium);
+  }
+
+  i {
+    font-style: normal;
+    color: var(--ion-color-medium);
+  }
+
+  /* Una liquidación se lee distinto de una operación del bot. */
+  tr.liq td {
+    color: var(--ion-color-danger);
+  }
+
+  .ok {
+    color: var(--ion-color-success);
+  }
+
+  .mal {
+    color: var(--ion-color-danger);
+  }
+
+  tr.sub td {
+    font-size: 10.5px;
+    color: var(--ion-color-medium);
+    white-space: normal;
+  }
+}
+
 .fila {
   display: flex;
   align-items: center;
@@ -112,12 +192,23 @@ h3 {
   padding: var(--space-2) 0;
   border-bottom: 1px solid var(--ion-color-step-100, #1e1e1e);
 
+  &.sel {
+    background: var(--surface-2);
+  }
+
+  /* La fila entera se abre al tocarla: es un botón sin adorno. */
   .izq {
     display: flex;
     align-items: center;
     gap: var(--space-2);
     min-width: 0;
+    padding: 0;
+    border: 0;
+    background: transparent;
+    color: var(--text-1);
+    font: inherit;
     font-size: 13px;
+    text-align: left;
   }
 
   .fecha {

@@ -8,6 +8,7 @@ import {
 } from '@nestjs/common';
 import {
   D,
+  liquidationDistancePct,
   liquidationOfPosition,
   venueKey,
   walletCacheKeys,
@@ -17,6 +18,7 @@ import {
   type MarketMakerStats,
   type Position,
   type PreviewResult,
+  type BotSummary,
 } from '@crypton/shared';
 import type { DryRunState } from '@crypton/exchange-core';
 
@@ -453,6 +455,49 @@ export class BotsService {
     };
   }
 
+  /**
+   * Comprueba que el bot es del usuario, y nada más: un `select` de una columna.
+   *
+   * Existe para que otros servicios —las series agregadas— puedan exigir la
+   * propiedad sin pedir una fila entera ni reutilizar un endpoint de datos como
+   * guarda. 404 si no es suyo, igual que `mustOwn`.
+   */
+  async assertOwn(userId: string, id: string): Promise<void> {
+    const bot = await this.db.bot.findFirst({
+      where: { id, user_id: userId },
+      select: { id: true },
+    });
+    if (!bot) throw new NotFoundException('Bot no encontrado.');
+  }
+
+  /**
+   * Precios vivos de la caché de tickers para un conjunto de bots: UNA lectura
+   * por (venue, red), no una por bot. Una combinación sin caché simplemente no
+   * está en el mapa, y quien lo consulta cae al precio del snapshot.
+   */
+  private async liveMarks(
+    bots: readonly { venue: Venue; symbol: string; testnet: boolean }[],
+  ): Promise<Map<string, string>> {
+    const out = new Map<string, string>();
+    const combos = new Map<string, { venue: Venue; testnet: boolean }>();
+    for (const b of bots)
+      combos.set(venueKey(b.venue, b.testnet), { venue: b.venue, testnet: b.testnet });
+    await Promise.all(
+      [...combos.values()].map(async ({ venue, testnet }) => {
+        const tickers = await this.cache
+          .get<{ symbol: string; mark?: string; last?: string }[]>(
+            `md:tickers:${venueKey(venue, testnet)}`,
+          )
+          .catch(() => null);
+        for (const t of tickers ?? []) {
+          const mark = t.mark ?? t.last;
+          if (mark) out.set(markKey(venue, t.symbol, testnet), mark);
+        }
+      }),
+    );
+    return out;
+  }
+
   /** Precio de marca de la instantánea de tickers. `null` si aún no hay. */
   private async markPrice(venue: Venue, symbol: string): Promise<string | null> {
     // Siempre mainnet: una conexión de simulación no vive en otro sitio.
@@ -528,7 +573,12 @@ export class BotsService {
   // CRUD
   // ═══════════════════════════════════════════════════════════════
 
-  async list(userId: string, query: ListBotsQueryDto) {
+  /**
+   * Declarado con el contrato compartido: si aquí falta un campo que la app lee,
+   * o sobra uno que no está en el contrato, no compila. Las fechas salen ya como
+   * ISO —es lo que el JSON hacía por su cuenta— para que el tipo diga la verdad.
+   */
+  async list(userId: string, query: ListBotsQueryDto): Promise<BotSummary[]> {
     const bots = await this.db.bot.findMany({
       where: {
         user_id: userId,
@@ -559,6 +609,10 @@ export class BotsService {
       },
     });
 
+    const marks = await this.liveMarks(
+      bots.map((b) => ({ venue: b.venue, symbol: b.symbol, testnet: b.exchange_account.testnet })),
+    );
+
     return bots.map((bot) => ({
       id: bot.id,
       name: bot.name,
@@ -574,11 +628,15 @@ export class BotsService {
       status: bot.status,
       direction: bot.direction,
       leverage: bot.leverage,
-      ...this.metricsOf(bot, bot.snapshots[0] ?? null),
+      ...this.metricsOf(
+        bot,
+        bot.snapshots[0] ?? null,
+        marks.get(markKey(bot.venue, bot.symbol, bot.exchange_account.testnet)) ?? null,
+      ),
       note: bot.note,
       lastError: bot.last_error,
-      startedAt: bot.started_at,
-      updatedAt: bot.updated_at,
+      startedAt: bot.started_at?.toISOString() ?? null,
+      updatedAt: bot.updated_at?.toISOString() ?? bot.created_at.toISOString(),
     }));
   }
 
@@ -613,15 +671,23 @@ export class BotsService {
     ]);
 
     const strategy = getStrategy(bot.strategy);
+    const red = await this.networkOf(bot.exchange_account_id);
+    const marks = await this.liveMarks([
+      { venue: bot.venue, symbol: bot.symbol, testnet: red.testnet },
+    ]);
     return {
       ...bot,
       // Las MISMAS métricas calculadas que devuelve el listado. Si el detalle
       // solo trajera la fila cruda, la app tendría que recalcular ROI y PnL por
       // su cuenta y las dos pantallas acabarían mostrando cifras distintas.
-      ...this.metricsOf(bot, snapshot),
+      ...this.metricsOf(
+        bot,
+        snapshot,
+        marks.get(markKey(bot.venue, bot.symbol, red.testnet)) ?? null,
+      ),
       // Y la misma red que el listado, por el mismo motivo: la pantalla tiene
       // que poder decir en qué libro opera este bot sin deducirlo de nada.
-      ...(await this.networkOf(bot.exchange_account_id)),
+      ...red,
       config: revision?.config ?? {},
       // Se envían los descriptores junto al bot para que la pantalla de ajustes
       // sepa qué puede cambiarse en caliente sin una segunda petición.
@@ -642,7 +708,15 @@ export class BotsService {
     };
   }
 
-  /** Métricas derivadas del último snapshot. Compartidas por listado y detalle. */
+  /**
+   * Métricas derivadas del último snapshot. Compartidas por listado y detalle.
+   *
+   * `markLive` es el precio de la caché de tickers (30 s), si lo hay. La
+   * distancia a liquidación se mide contra él y no contra el `mark_price` del
+   * snapshot: un bot parado con posición escribe su último snapshot al parar y
+   * no vuelve a escribir, así que su distancia quedaría congelada durante días
+   * mientras el mercado se mueve. Sin ticker se cae al del snapshot.
+   */
   private metricsOf(
     bot: {
       total_investment: { toString(): string };
@@ -654,9 +728,11 @@ export class BotsService {
       unrealized_pnl: { toString(): string };
       position_qty: { toString(): string };
       average_entry: { toString(): string } | null;
+      mark_price: { toString(): string };
       liquidation_price: { toString(): string } | null;
       open_orders: number;
     } | null,
+    markLive: string | null = null,
   ) {
     const invested = D(bot.total_investment.toString());
     const realized = D(snapshot?.realized_pnl_acc?.toString() ?? 0);
@@ -664,12 +740,26 @@ export class BotsService {
 
     return {
       dryRun: bot.dry_run,
+      // El capital que el usuario puso. Sin él la cartera solo podía sumar el
+      // nocional de las posiciones abiertas y rotularlo «capital asignado», que
+      // contaba cero para un bot con la escalera tendida sin ejecutar y el
+      // triple para uno a 3× (spec 002, F-03).
+      totalInvestment: invested.toFixed(),
       realizedPnl: realized.toFixed(),
       unrealizedPnl: unrealized.toFixed(),
       roiPct: invested.gt(0) ? realized.plus(unrealized).div(invested).mul(100).toFixed(2) : '0.00',
       positionQty: snapshot?.position_qty?.toString() ?? '0',
       averageEntry: snapshot?.average_entry?.toString() ?? null,
       liquidationPrice: snapshot?.liquidation_price?.toString() ?? null,
+      // La métrica de riesgo nº 1, con la MISMA función que usan el worker para
+      // la alerta de cercanía y el preview del asistente (`liquidationDistancePct`
+      // de `@crypton/shared`), y contra el precio más fresco que hay. El contrato
+      // compartido la declaraba desde el principio y nadie la rellenaba, así que
+      // cada pantalla se la inventó: la cartera y la lista la medían contra el
+      // precio de entrada —una propiedad estática de la posición que no se mueve
+      // con el mercado— y solo el gráfico contra el precio vivo (spec 002, F-01
+      // y F-02).
+      liquidationDistancePct: liquidationDistanceOf(snapshot, markLive),
       openOrders: snapshot?.open_orders ?? 0,
       uptimeSeconds: bot.started_at
         ? Math.floor((Date.now() - bot.started_at.getTime()) / 1000)
@@ -1247,6 +1337,33 @@ export class BotsService {
     });
   }
 
+  /**
+   * El historial de configuración, de la más nueva a la más vieja (spec 006).
+   *
+   * `bot_config_revisions` se escribe en cada creación y cada cambio desde el
+   * principio y nadie lo leía. Sale sin la configuración completa: ya la sirve
+   * el detalle para la vigente, y lo que se quiere leer es qué cambió y cómo se
+   * aplicó, que es el `diff` y el nivel.
+   */
+  async revisions(userId: string, id: string, limit = 50, offset = 0) {
+    await this.mustOwn(userId, id);
+    const filas = await this.db.botConfigRevision.findMany({
+      where: { bot_id: id },
+      orderBy: { version: 'desc' },
+      take: limit,
+      skip: offset,
+      select: {
+        id: true,
+        version: true,
+        diff: true,
+        apply_level: true,
+        applied_by: true,
+        created_at: true,
+      },
+    });
+    return filas.map(revisionPublica);
+  }
+
   async snapshots(userId: string, id: string, limit = 500) {
     await this.mustOwn(userId, id);
     return this.db.botSnapshot.findMany({
@@ -1432,4 +1549,73 @@ export class BotsService {
       await adapter.close().catch(() => undefined);
     }
   }
+}
+
+/**
+ * Distancia porcentual del precio a la liquidación: cuánto tiene que moverse el
+ * precio en contra para que el venue cierre la posición. `null` sin posición
+ * apalancada o sin precio —y null, no cero: un cero se leería como «a punto de
+ * liquidar»—. Es una función suelta y no un método para que se pueda probar sin
+ * construir el servicio, y por dentro es `liquidationDistancePct` de
+ * `@crypton/shared`: la misma fórmula que el worker y el preview, no una tercera.
+ */
+export function liquidationDistanceOf(
+  snapshot: {
+    mark_price: { toString(): string };
+    liquidation_price: { toString(): string } | null;
+  } | null,
+  markLive: string | null = null,
+): string | null {
+  if (!snapshot || snapshot.liquidation_price === null) return null;
+  const mark = D(markLive ?? snapshot.mark_price.toString());
+  const liq = D(snapshot.liquidation_price.toString());
+  if (!mark.isFinite() || !liq.isFinite() || mark.lte(0) || liq.lte(0)) return null;
+  return liquidationDistancePct(mark, liq).toFixed(2);
+}
+
+/** Clave del mapa de precios vivos: venue, símbolo y red. */
+function markKey(venue: Venue, symbol: string, testnet: boolean): string {
+  return `${venueKey(venue, testnet)}:${symbol}`;
+}
+
+/** Un cambio del `diff` tal y como lo escribió `updateConfig`. Solo `key` es obligatoria. */
+export interface CambioDeConfig {
+  key: string;
+  from?: unknown;
+  to?: unknown;
+  mutability?: string;
+  labelKey?: string;
+}
+
+/**
+ * Una revisión tal y como sale al cable (spec 006, R-2).
+ *
+ * Función suelta para poder probarla sin construir el servicio, como
+ * `liquidationDistanceOf`. El `diff` es un `Json` sin forma garantizada —la v1
+ * lo tiene nulo—, así que se lee con tolerancia: si no es una lista se
+ * descarta, y dentro de la lista solo cuentan los elementos con `key`. Una fila
+ * ilegible no puede tirar el historial entero.
+ */
+export function revisionPublica(fila: {
+  id: bigint;
+  version: number;
+  diff: unknown;
+  apply_level: string | null;
+  applied_by: string | null;
+  created_at: Date;
+}) {
+  const diff = Array.isArray(fila.diff)
+    ? fila.diff.filter(
+        (c): c is CambioDeConfig =>
+          typeof c === 'object' && c !== null && typeof (c as { key?: unknown }).key === 'string',
+      )
+    : null;
+  return {
+    id: fila.id.toString(),
+    version: fila.version,
+    createdAt: fila.created_at.toISOString(),
+    applyLevel: fila.apply_level,
+    appliedBy: fila.applied_by,
+    diff,
+  };
 }

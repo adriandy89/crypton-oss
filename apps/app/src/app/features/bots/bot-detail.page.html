@@ -94,44 +94,106 @@
           <p class="note">{{ b.note }}</p>
         }
 
-        <div class="metrics">
-          <div>
-            <span class="k">PnL realizado</span>
-            <span class="v" [class]="'c-' + pnlColor(b.realizedPnl)">{{
-              signed(b.realizedPnl)
-            }}</span>
+        <!-- Una frase que contesta «esta ganando o solo esta abierto». Sale de
+             los ciclos cerrados y de la serie, que llevaban meses servidos y sin
+             pintar. Se calla con menos de tres ciclos: no hay nada que resumir. -->
+        @if (veredicto(); as v) {
+          <ui-notice
+            [tone]="v.tone"
+            [icon]="v.tone === 'ok' ? 'trending-up-outline' : 'information-circle-outline'"
+          >
+            {{ v.texto }}
+          </ui-notice>
+        }
+
+        <!-- ── Resultado acumulado ──
+             «Resultado», nunca «equity» ni «capital»: la columna `equity` de
+             bot_snapshots es realized + unrealized, o sea PnL. El cero de la
+             curva es fijo: sin el, ir de -40 a -10 se lee como una remontada. -->
+        <div class="bd-res">
+          <div class="bd-res-top">
+            <div>
+              <span class="bd-lbl">Resultado acumulado</span>
+              <div class="bd-big num" [class]="'bd-big num c-' + pnlColor(total())">
+                {{ signed(total()) }}
+              </div>
+              <div class="bd-split">
+                <b class="num">{{ signed(b.realizedPnl) }}</b> realizado ·
+                <b class="num">{{ signed(b.unrealizedPnl) }}</b> abierto
+              </div>
+            </div>
+            @if (ventana(); as w) {
+              <!-- La ventana REAL. Son 500 filas a una por minuto, 8 h 20 min:
+                   se dice, en vez de prometer un dia que la serie no tiene. -->
+              <span class="bd-win">últimas {{ w }}</span>
+            }
           </div>
-          <div>
-            <span class="k">PnL no realizado</span>
-            <span class="v" [class]="'c-' + pnlColor(b.unrealizedPnl)">{{
-              signed(b.unrealizedPnl)
-            }}</span>
+
+          <!-- La ventana. «8 h» es lo que la ruta servia de siempre; las demas
+               las agrega el servidor. Lo que la serie cubre DE VERDAD lo dice la
+               pastilla de arriba, no este selector. -->
+          <div class="bd-range">
+            @for (r of rangos; track r) {
+              <button type="button" [class.on]="rango() === r" (click)="setRango(r)">
+                {{ r }}
+              </button>
+            }
           </div>
-          <div>
-            <span class="k">ROI</span>
-            <span class="v" [class]="'c-' + pnlColor(b.roiPct)">{{ pct(b.roiPct) }}</span>
-          </div>
-          <div>
-            <span class="k">Posición</span>
-            <span class="v">{{ qty(b.positionQty) }}</span>
-          </div>
-          <div>
-            <span class="k">Precio medio</span>
-            <span class="v">{{ price(b.averageEntry) }}</span>
-          </div>
-          <div>
-            <span class="k">Liquidación</span>
-            <span class="v c-danger">{{ price(b.liquidationPrice) }}</span>
-          </div>
-          <div>
-            <span class="k">Órdenes vivas</span>
-            <span class="v">{{ b.openOrders }}</span>
-          </div>
-          <div>
-            <span class="k">Activo</span>
-            <span class="v">{{ uptime(b.uptimeSeconds) }}</span>
+
+          @let v = vista();
+          @if (v) {
+            <div class="bd-plot">
+              <ui-spark
+                mode="area"
+                [points]="v.puntos"
+                [breaks]="v.cortes"
+                [baseline]="0"
+                [height]="72"
+                [mark]="peorIdx()"
+                [label]="
+                  'Resultado acumulado: de ' +
+                  signed(v.primero) +
+                  ' a ' +
+                  signed(v.ultimo) +
+                  ', peor caída ' +
+                  money(v.peorCaida)
+                "
+              />
+            </div>
+          } @else {
+            <!-- Puede no haber puntos EN ESTA VENTANA y sí en otra: un bot parado
+                 hace tres días no tiene nada en «24h» y sí en «30d». -->
+            <p class="bd-empty">Sin puntos en esta ventana.</p>
+          }
+          <!-- El ROI viene con el bot, no con la serie: se ve aunque no haya
+               serie, que era lo que pasaba antes de que el bot escribiera su
+               primer punto o cuando la retención ya lo había purgado. -->
+          <div class="bd-foot3">
+            <ui-stat label="ROI" [value]="pct(b.roiPct)" [tone]="pnlColor(b.roiPct)" />
+            <ui-stat
+              label="Peor caída"
+              [value]="v ? '−' + money(v.peorCaida) : '—'"
+              [tone]="v && v.peorCaida !== '0' ? 'danger' : ''"
+            />
+            <ui-stat label="En mercado" [value]="enMercado() ? enMercado() + ' %' : '—'" />
           </div>
         </div>
+
+        <!-- ── Riesgo ──
+             UN solo numero, el que calcula el servidor contra el precio de
+             mercado, el mismo que en cartera, lista y grafico. Y con semaforo:
+             antes esta cifra salia siempre en rojo, al 3 % y al 60 %. -->
+        @if (liqDist() !== null) {
+          <div class="bd-risk">
+            <ui-liq-meter [pct]="b.liquidationDistancePct" label="Aguanta una caída de" />
+            <p class="bd-risk-foot num">
+              Liquidación estimada en <b>{{ price(b.liquidationPrice) }}</b>
+              @if (b.snapshot?.mark_price) {
+                · precio <b>{{ price(b.snapshot?.mark_price) }}</b>
+              }
+            </p>
+          </div>
+        }
 
         <!-- ── Margen de la posición aislada ──
              Solo aparece con margen AISLADO y posición abierta, que es cuando
@@ -151,6 +213,107 @@
             </span>
             <ion-icon name="chevron-forward-outline" class="chev" />
           </button>
+        }
+
+        <div class="metrics">
+          <div>
+            <span class="k">Posición</span>
+            <span class="v">{{ qty(b.positionQty) }}</span>
+          </div>
+          <div>
+            <span class="k">Precio medio</span>
+            <span class="v">{{ price(b.averageEntry) }}</span>
+          </div>
+          <div>
+            <span class="k">Órdenes vivas</span>
+            <span class="v">{{ b.openOrders }}</span>
+          </div>
+          <!-- Comisiones para las SIETE estrategias. Antes solo las veia el
+               market maker; las otras cinco no tenian ni una cifra de coste. -->
+          <div>
+            <span class="k">Comisiones (ciclos cerrados)</span>
+            <span class="v" [class]="'v c-' + (ciclos().comisiones === '0' ? 'medium' : 'danger')">
+              {{ ciclos().comisiones === '0' ? '—' : '−' + money(ciclos().comisiones) }}
+            </span>
+          </div>
+          <div>
+            <span class="k">Activo</span>
+            <span class="v">{{ uptime(b.uptimeSeconds) }}</span>
+          </div>
+          <div>
+            <span class="k">Ciclo actual</span>
+            <span class="v">{{ b.cycle ? '#' + b.cycle.seq : '—' }}</span>
+          </div>
+        </div>
+
+        <!-- ── Ciclos cerrados ──
+             GET /bots/:id/cycles, servido desde siempre y nunca pintado. -->
+        @if (ciclos().cerrados > 0 || reparto()) {
+          @if (ciclos().cerrados > 0) {
+            <h3 class="section bd-row">
+              Ciclos cerrados <span class="bd-why">últimos {{ ciclos().cerrados }}</span>
+              <!-- Al portapapeles, como CSV: para llevárselo a una hoja (spec 006). -->
+              <button type="button" class="bd-copy" (click)="copiarCiclos()">Copiar CSV</button>
+            </h3>
+            <div class="bd-card">
+              <div class="bd-bars">
+                <ui-spark
+                  mode="bars"
+                  [points]="ciclos().barras"
+                  [height]="44"
+                  [label]="'Resultado de los últimos ' + ciclos().cerrados + ' ciclos cerrados'"
+                />
+              </div>
+              <div class="bd-foot3">
+                <ui-stat
+                  label="En verde"
+                  [value]="ciclos().aciertoPct ? money(ciclos().aciertoPct, 0) + ' %' : '—'"
+                />
+                <ui-stat label="Duración mediana" [value]="dur(ciclos().duracionMedianaMs)" />
+                <ui-stat
+                  label="Resultado medio"
+                  [value]="signed(ciclos().beneficioMedio)"
+                  [tone]="pnlColor(ciclos().beneficioMedio)"
+                />
+              </div>
+            </div>
+          }
+
+          <!-- ── Que cuesta operar ──
+               El reparto maker/taker NO espera a que cierre un ciclo: un market
+               maker en sus primeras horas tiene decenas de ejecuciones y ningún
+               ciclo cerrado, y esa cifra es la que dice si está funcionando. -->
+          <h3 class="section">Qué cuesta operar</h3>
+          <div class="bd-card bd-cost">
+            @if (ciclos().cerrados > 0) {
+              <p class="bd-sum">
+                Neto de los ciclos cerrados
+                <b class="num" [class]="'num c-' + pnlColor(ciclos().neto)">{{
+                  signed(ciclos().neto)
+                }}</b>
+                · comisiones <b class="num c-danger">−{{ money(ciclos().comisiones) }}</b>
+                @if (costePct(); as cp) {
+                  · se llevan el <b class="num">{{ money(cp, 1) }} %</b> de lo capturado
+                }
+              </p>
+            }
+            @if (reparto(); as r) {
+              <ui-meter
+                [segments]="[
+                  { value: r.maker, tone: 'brand' },
+                  { value: r.taker, tone: 'neutral' },
+                ]"
+                label="Reparto entre ejecuciones como maker y como taker"
+              />
+              <div class="bd-legend">
+                <span
+                  ><i class="brand"></i>{{ r.makerPct ? money(r.makerPct, 1) : '—' }} % como
+                  maker</span
+                >
+                <span><i class="neutral"></i>{{ r.taker }} como taker</span>
+              </div>
+            }
+          </div>
         }
 
         <!-- ── Ficha de market making ──
@@ -180,59 +343,61 @@
             <ui-stat label="Peak margin" [value]="money(mm.peakMargin)" size="lg" />
           </div>
 
-          <div class="metrics">
-            <div>
-              <span class="k">Realizado (tras comisiones)</span>
-              <span class="v" [class]="'c-' + pnlColor(mm.realizedPnl)">{{
-                signed(mm.realizedPnl)
-              }}</span>
+          <!-- Diez metricas de diagnostico, plegadas: las dos que deciden si el
+               bot funciona —cuanto se ejecuta como maker y cuanto se llevan las
+               comisiones— ya estan arriba, en «Que cuesta operar». -->
+          <ui-collapsible title="Más métricas del market maker" [count]="9">
+            <div class="metrics">
+              <div>
+                <span class="k">Realizado (tras comisiones)</span>
+                <span class="v" [class]="'c-' + pnlColor(mm.realizedPnl)">{{
+                  signed(mm.realizedPnl)
+                }}</span>
+              </div>
+              <div>
+                <span class="k">Comisiones pagadas</span>
+                <span class="v">{{ money(mm.feesPaid) }}</span>
+              </div>
+              <div>
+                <span class="k">PnL de inventario</span>
+                <span class="v" [class]="'c-' + pnlColor(mm.inventoryPnl)">{{
+                  signed(mm.inventoryPnl)
+                }}</span>
+              </div>
+              <div>
+                <span class="k">Efficiency</span>
+                <span class="v">{{ mm.efficiencyPct ? mm.efficiencyPct + ' %' : '—' }}</span>
+              </div>
+              <div>
+                <span class="k">APR</span>
+                <span class="v">{{ mm.aprPct ? mm.aprPct + ' %' : '—' }}</span>
+              </div>
+              <div>
+                <span class="k">Peak inventory</span>
+                <span class="v">{{ money(mm.peakInventory) }}</span>
+              </div>
+              <div>
+                <span class="k">Fills</span>
+                <span class="v">{{ mm.fills }}</span>
+              </div>
+              <div>
+                <span class="k">Compras / ventas</span>
+                <span class="v">{{ mm.buyFills }} / {{ mm.sellFills }}</span>
+              </div>
+              <div>
+                <span class="k">Último fill</span>
+                <span class="v">{{ mm.lastFillAt ? shortDate(mm.lastFillAt) : '—' }}</span>
+              </div>
             </div>
-            <div>
-              <span class="k">Comisiones pagadas</span>
-              <span class="v">{{ money(mm.feesPaid) }}</span>
-            </div>
-            <div>
-              <span class="k">PnL de inventario</span>
-              <span class="v" [class]="'c-' + pnlColor(mm.inventoryPnl)">{{
-                signed(mm.inventoryPnl)
-              }}</span>
-            </div>
-            <div>
-              <span class="k">Efficiency</span>
-              <span class="v">{{ mm.efficiencyPct ? mm.efficiencyPct + ' %' : '—' }}</span>
-            </div>
-            <div>
-              <span class="k">APR</span>
-              <span class="v">{{ mm.aprPct ? mm.aprPct + ' %' : '—' }}</span>
-            </div>
-            <div>
-              <span class="k">Peak inventory</span>
-              <span class="v">{{ money(mm.peakInventory) }}</span>
-            </div>
-            <div>
-              <span class="k">Fills</span>
-              <span class="v">{{ mm.fills }}</span>
-            </div>
-            <div>
-              <span class="k">Compras / ventas</span>
-              <span class="v">{{ mm.buyFills }} / {{ mm.sellFills }}</span>
-            </div>
-            <div>
-              <span class="k">Ejecutado como maker</span>
-              <span class="v">{{ makerPct() ?? '—' }}</span>
-            </div>
-            <div>
-              <span class="k">Último fill</span>
-              <span class="v">{{ mm.lastFillAt ? shortDate(mm.lastFillAt) : '—' }}</span>
-            </div>
-          </div>
 
-          <p class="mm-foot">
-            «Grid profit» es el diferencial capturado antes de comisiones; «realizado» es esa misma
-            cifra ya con las comisiones restadas. «Efficiency» es el diferencial capturado sobre el
-            mayor margen que el bot llegó a inmovilizar, y la APR anualiza el beneficio total sobre
-            ese mismo margen. Son definiciones nuestras: no las compares con las de otra plataforma.
-          </p>
+            <p class="mm-foot">
+              «Grid profit» es el diferencial capturado antes de comisiones; «realizado» es esa
+              misma cifra ya con las comisiones restadas. «Efficiency» es el diferencial capturado
+              sobre el mayor margen que el bot llegó a inmovilizar, y la APR anualiza el beneficio
+              total sobre ese mismo margen. Son definiciones nuestras: no las compares con las de
+              otra plataforma.
+            </p>
+          </ui-collapsible>
         }
 
         @if (b.cycle; as c) {
@@ -278,20 +443,18 @@
             reales y engañaría a quien lo copiase.
           </ui-notice>
 
-          <!-- Atajo al backtest, solo para administradores. Se llega con el bot
-               ya elegido: es el camino natural, porque quien lo pide está
+          <!-- Atajo al backtest (para todos desde el spec 004). Se llega con el
+               bot ya elegido: es el camino natural, porque quien lo pide está
                mirando este bot justo ahora. -->
-          @if (esAdmin()) {
-            <ion-button
-              expand="block"
-              fill="outline"
-              [routerLink]="['/admin/backtest']"
-              [queryParams]="{ botId: b.id }"
-            >
-              <ion-icon name="flask-outline" slot="start" />
-              Probar sobre histórico
-            </ion-button>
-          }
+          <ion-button
+            expand="block"
+            fill="outline"
+            [routerLink]="['/backtest']"
+            [queryParams]="{ botId: b.id }"
+          >
+            <ion-icon name="flask-outline" slot="start" />
+            Probar sobre histórico
+          </ion-button>
         } @else if (publicado()) {
           <ui-notice tone="ok" icon="trophy-outline">
             Publicado en el ranking · {{ b.share?.copies ?? 0 }} copia(s).
@@ -349,18 +512,41 @@
     @if (tab() === 'escalera') {
       <div class="pad">
         <p class="hint">
-          Órdenes que el bot mantiene vivas ahora mismo en el exchange. Se recalculan en cada ciclo:
-          lo que ves aquí es el estado real, no una proyección.
+          Órdenes que el bot mantiene vivas ahora mismo en el exchange, ordenadas por precio y con
+          el precio de ahora en su sitio. Se recalculan en cada ciclo: lo que ves aquí es el estado
+          real, no una proyección.
         </p>
-        @if (bot()!.openOrdersList.length) {
+        @if (escalera().length) {
           <div class="ladder">
-            @for (o of bot()!.openOrdersList; track o.client_order_id) {
-              <div class="lvl" [class.buy]="o.side === 'BUY'" [class.sell]="o.side === 'SELL'">
-                <span class="kind">{{ o.level_kind }}#{{ o.level_index }}</span>
-                <span class="price">{{ price(o.price) }}</span>
-                <span class="qty">{{ qty(o.qty) }}</span>
-                <span class="side">{{ o.side }}</span>
-              </div>
+            @for (row of escalera(); track $index) {
+              @switch (row.kind) {
+                @case ('now') {
+                  <div class="bd-now">
+                    <span class="num"
+                      >ahora <b>{{ price(row.price) }}</b></span
+                    ><i></i>
+                  </div>
+                }
+                @case ('liq') {
+                  <div class="bd-liqrow">
+                    <span class="num"
+                      >liquidación <b>{{ price(row.price) }}</b></span
+                    ><i></i>
+                  </div>
+                }
+                @case ('level') {
+                  <div
+                    class="lvl"
+                    [class.buy]="row.o.side === 'BUY'"
+                    [class.sell]="row.o.side === 'SELL'"
+                  >
+                    <span class="kind">{{ levelTitle(row.o) }}</span>
+                    <span class="price">{{ price(row.o.price) }}</span>
+                    <span class="qty">{{ qty(row.o.qty) }}</span>
+                    <span class="side">{{ row.dist !== null ? pct(row.dist) : row.o.side }}</span>
+                  </div>
+                }
+              }
             }
           </div>
         } @else {
@@ -373,6 +559,10 @@
     @if (tab() === 'ordenes') {
       <div class="pad">
         @if (orders().length) {
+          <div class="bd-tools">
+            <span class="bd-why">últimas {{ orders().length }}</span>
+            <button type="button" class="bd-copy" (click)="copiarOrdenes()">Copiar CSV</button>
+          </div>
           <div class="orders">
             @for (o of orders(); track o.client_order_id) {
               <div class="ord">
@@ -386,11 +576,11 @@
                     [class.filled]="o.status === 'FILLED'"
                     [class.rejected]="o.status === 'REJECTED'"
                   >
-                    {{ o.status }}
+                    {{ orderStatusLabel(o.status) }}
                   </span>
                 </div>
                 <div class="line small">
-                  <span>{{ o.level_kind }}#{{ o.level_index }} · ciclo {{ o.cycle_seq }}</span>
+                  <span>{{ levelTitle(o) }} · ciclo {{ o.cycle_seq }}</span>
                   <span>{{ shortDate(o.placed_at) }}</span>
                 </div>
                 @if (o.raw_error) {
@@ -471,6 +661,44 @@
           }
         </ui-card>
 
+        <!-- ── Historial de cambios (spec 006) ──
+             `bot_config_revisions` se escribe desde siempre y no se leía. Cada
+             entrada dice qué cambió, con el nombre legible del campo y los
+             valores de antes y de después, y cómo se aplicó. La configuración
+             completa no viaja: la vigente es la de arriba. -->
+        @if (revisions().length) {
+          <h3 class="section">
+            Historial de cambios
+            <span class="bd-why">
+              {{ revisions().length }} {{ revisions().length === 1 ? 'versión' : 'versiones' }}
+            </span>
+          </h3>
+          <ui-card flush class="bd-hist">
+            @for (r of revisions(); track r.version) {
+              <div class="rev">
+                <div class="line">
+                  <span class="v num">v{{ r.version }}</span>
+                  @if (r.applyLevel) {
+                    <ui-mutability-badge [level]="r.applyLevel" />
+                  }
+                  <span class="when">{{ shortDate(r.createdAt) }}</span>
+                </div>
+                @if (r.version === 1) {
+                  <p class="what">Creación del bot</p>
+                } @else if (r.diff?.length) {
+                  <ul class="what">
+                    @for (c of r.diff; track c.key) {
+                      <li>{{ cambioTexto(c) }}</li>
+                    }
+                  </ul>
+                } @else {
+                  <p class="what">Sin detalle de los cambios</p>
+                }
+              </div>
+            }
+          </ui-card>
+        }
+
         @if (dirty()) {
           <div class="save-bar">
             <ion-button fill="clear" (click)="discard()">Descartar</ion-button>
@@ -489,24 +717,74 @@
     <!-- ═══ EVENTOS ═══ -->
     @if (tab() === 'eventos') {
       <div class="pad">
-        <p class="hint">
-          Bitacora completa de lo que ha hecho el bot y por qué. Es lo que hay que mirar cuando algo
-          no cuadra.
-        </p>
-        @if (events().length) {
-          <div class="events">
-            @for (e of events(); track e.id) {
-              <div class="ev" [class]="'sev-' + e.severity.toLowerCase()">
-                <div class="line">
-                  <span class="type">{{ e.type }}</span>
-                  <span class="when">{{ shortDate(e.created_at) }}</span>
+        <!-- Dos lecturas del mismo dato (spec 006): la bitácora plana de
+             siempre, y «por ciclo», que funde órdenes, ejecuciones y sucesos en
+             una lista por ciclo. Las ejecuciones solo se piden al abrir la
+             segunda. -->
+        <div class="bd-range">
+          <button
+            type="button"
+            [class.on]="vistaEventos() === 'bitacora'"
+            (click)="verEventos('bitacora')"
+          >
+            Bitácora
+          </button>
+          <button
+            type="button"
+            [class.on]="vistaEventos() === 'ciclos'"
+            (click)="verEventos('ciclos')"
+          >
+            Por ciclo
+          </button>
+        </div>
+
+        @if (vistaEventos() === 'bitacora') {
+          <p class="hint">
+            Bitacora completa de lo que ha hecho el bot y por qué. Es lo que hay que mirar cuando
+            algo no cuadra.
+          </p>
+          @if (events().length) {
+            <div class="events">
+              @for (e of events(); track e.id) {
+                <div class="ev" [class]="'sev-' + e.severity.toLowerCase()">
+                  <div class="line">
+                    <span class="type">{{ eventLabel(e.type) }}</span>
+                    <span class="when">{{ shortDate(e.created_at) }}</span>
+                  </div>
+                  <p>{{ e.message }}</p>
                 </div>
-                <p>{{ e.message }}</p>
-              </div>
-            }
-          </div>
+              }
+            </div>
+          } @else {
+            <p class="empty-note">Sin eventos todavía.</p>
+          }
         } @else {
-          <p class="empty-note">Sin eventos todavía.</p>
+          <p class="hint">
+            Qué pasó en cada ciclo, en orden: órdenes, ejecuciones y sucesos. Las órdenes y las
+            ejecuciones van al ciclo que declaran; los sucesos, al que estaba abierto a esa hora.
+          </p>
+          @if (fills() === null) {
+            <p class="empty-note">Cargando las ejecuciones…</p>
+          } @else if (cronologia().length) {
+            <div class="bd-tl">
+              @for (g of cronologia(); track g.seq) {
+                <h4>{{ rotuloDeCiclo(g.seq, g.desde, g.hasta) }}</h4>
+                @for (e of g.entradas; track e.id) {
+                  <div class="it" [class]="'it t-' + e.tono + ' k-' + e.tipo">
+                    <span class="when num">{{ fecha(e.at) }}</span>
+                    <span class="body">
+                      <span class="title">{{ e.titulo }}</span>
+                      @if (e.detalle) {
+                        <span class="det">{{ e.detalle }}</span>
+                      }
+                    </span>
+                  </div>
+                }
+              }
+            </div>
+          } @else {
+            <p class="empty-note">Sin nada que ordenar todavía.</p>
+          }
         }
       </div>
     }
@@ -524,114 +802,7 @@
      Mezclarlos en una sola frase es exactamente el malentendido caro: alguien
      sube el capital asignado creyendo que así defiende la posición, la escalera
      se recoloca, y la liquidación sigue donde estaba. -->
-<ion-modal
-  class="opts margin-sheet"
-  [isOpen]="marginOpen()"
-  [initialBreakpoint]="0.9"
-  [breakpoints]="[0, 0.9]"
-  handleBehavior="cycle"
-  (ionModalDidDismiss)="marginOpen.set(false)"
->
-  <ng-template>
-    <ion-content class="optbody margin-body">
-      <header class="opthead">
-        <h2>Ajustar margen</h2>
-        <button type="button" class="x" (click)="closeMarginSheet()" aria-label="Cerrar">
-          <ion-icon name="close-outline" />
-        </button>
-      </header>
-
-      @if (bot(); as b) {
-        <ion-segment
-          class="margin-seg"
-          [value]="marginAction()"
-          (ionChange)="marginAction.set($any($event.detail.value))"
-        >
-          <ion-segment-button value="ADD">Aportar</ion-segment-button>
-          <ion-segment-button value="REMOVE">Retirar</ion-segment-button>
-        </ion-segment>
-
-        @if (marginAction() === 'ADD') {
-          <p class="margin-lead">
-            El importe sale de tu margen libre y entra en la caja de esta posición.
-            <strong>Aleja el precio de liquidación</strong>, ahora en
-            {{ price(b.liquidationPrice) }}, sin comprar ni vender nada.
-          </p>
-        } @else {
-          <p class="margin-lead danger">
-            Sacas colateral de esta posición y vuelve a tu margen libre.
-            <strong>Acerca el precio de liquidación</strong>, ahora en
-            {{ price(b.liquidationPrice) }}. Si el mercado se mueve en contra, se liquidará antes.
-          </p>
-        }
-
-        <label class="margin-amount">
-          <span class="lbl">Importe</span>
-          <input
-            type="number"
-            inputmode="decimal"
-            min="0"
-            step="0.01"
-            placeholder="0.00"
-            [ngModel]="marginAmount()"
-            (ngModelChange)="marginAmount.set($event)"
-          />
-        </label>
-
-        @if (freeMargin(); as free) {
-          <div class="margin-free">
-            <span>Margen libre: {{ money(free) }}</span>
-            @if (marginAction() === 'ADD') {
-              <!-- Sin atajo al 100 %: dejar la cuenta sin un céntimo libre es
-                   lo que impide pagar la siguiente comisión, y es el mismo
-                   criterio que ya aplica `ui-amount-field` al capital. -->
-              <div class="chips">
-                <button type="button" (click)="fillMargin(0.25)">25%</button>
-                <button type="button" (click)="fillMargin(0.5)">50%</button>
-                <button type="button" (click)="fillMargin(0.75)">75%</button>
-              </div>
-            }
-          </div>
-        }
-
-        @if (marginAction() === 'ADD') {
-          <div class="margin-toggle">
-            <ion-toggle
-              [checked]="marginCountAsCapital()"
-              (ionChange)="marginCountAsCapital.set($any($event.detail.checked))"
-            >
-              Contar como capital del bot
-            </ion-toggle>
-            @if (marginCountAsCapital()) {
-              <p class="hint warn">
-                Además sube el capital asignado del bot, así que el ROI y la APR reflejarán el
-                dinero real que tienes puesto.
-                <strong>Cancela y vuelve a colocar las órdenes abiertas.</strong>
-                No cambia la liquidación más de lo que ya lo hace el aporte.
-              </p>
-            } @else {
-              <p class="hint">
-                Solo mueve la liquidación. El ROI y la APR se seguirán calculando sobre el capital
-                asignado actual, así que saldrán más altos de lo que corresponde al dinero puesto.
-              </p>
-            }
-          </div>
-        }
-
-        <ion-button
-          expand="block"
-          class="margin-go"
-          [color]="marginAction() === 'REMOVE' ? 'danger' : 'primary'"
-          [disabled]="marginBusy()"
-          (click)="submitMargin()"
-        >
-          @if (marginBusy()) {
-            <ion-spinner name="crescent" />
-          } @else {
-            {{ marginAction() === 'ADD' ? 'Aportar margen' : 'Retirar margen' }}
-          }
-        </ion-button>
-      }
-    </ion-content>
-  </ng-template>
-</ion-modal>
+<!-- La hoja de ajuste de margen es un componente compartido con el gráfico
+     (spec 005, R-4): un solo formulario, un solo aviso de que retirar ACERCA
+     la liquidación, un solo interruptor de contabilidad. -->
+<ui-margin-sheet [bot]="bot()" [(open)]="marginOpen" (sent)="refreshAfterAction()" />

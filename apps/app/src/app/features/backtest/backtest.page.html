@@ -14,8 +14,8 @@
     es una reconstruccion con hipotesis.
   -->
   <ui-notice tone="warn" icon="warning-outline">
-    Reproduce la configuracion de un bot simulado sobre velas historicas de otro
-    mercado. No es una prediccion: mira siempre los limites al pie del resultado.
+    Reproduce la configuracion de un bot simulado sobre velas historicas de otro mercado. No es una
+    prediccion: mira siempre los limites al pie del resultado.
   </ui-notice>
 
   <!-- ── Formulario ──────────────────────────────────────────────── -->
@@ -36,16 +36,14 @@
 
     @if (simulados().length === 0) {
       <ui-notice tone="info">
-        No tienes ningun bot de simulacion. El backtest solo se lanza sobre ellos.
+        No tienes ningun bot de simulacion. El backtest solo se lanza sobre ellos: reproduce una
+        configuracion, no una cuenta.
       </ui-notice>
     }
 
     <label class="campo">
       <span>Fuente de las velas</span>
-      <ion-segment
-        [value]="source()"
-        (ionChange)="source.set($any($event).detail.value)"
-      >
+      <ion-segment [value]="source()" (ionChange)="source.set($any($event).detail.value)">
         @for (s of backtests.sources() ?? []; track s.id) {
           <ion-segment-button [value]="s.id">{{ s.id }}</ion-segment-button>
         }
@@ -92,8 +90,7 @@
           (ionInput)="symbolOverride.set($any($event).detail.value ?? '')"
         />
         <small>
-          Solo si el par se llama distinto en la fuente. En Binance, «kPEPE» es
-          «1000PEPEUSDT».
+          Solo si el par se llama distinto en la fuente. En Binance, «kPEPE» es «1000PEPEUSDT».
         </small>
       </label>
 
@@ -149,8 +146,8 @@
           <ion-segment-button value="PESSIMISTIC">Pesimista</ion-segment-button>
         </ion-segment>
         <small>
-          Una vela no dice si el maximo llego antes que el minimo. «Pesimista»
-          asume siempre el orden que mas duele.
+          Una vela no dice si el maximo llego antes que el minimo. «Pesimista» asume siempre el
+          orden que mas duele.
         </small>
       </label>
     </ui-collapsible>
@@ -172,6 +169,20 @@
   <!-- ── Resultado ───────────────────────────────────────────────── -->
   @if (result(); as r) {
     <section class="resultado">
+      <!-- De donde sale lo que se ve: recien lanzado, o guardado tal dia. Una
+           ejecucion reabierta pinta EXACTAMENTE lo que se pinto al lanzarla. -->
+      @if (origen(); as o) {
+        <p class="origen">
+          @if (o.tipo === 'guardada') {
+            <ui-badge size="sm" tone="neutral">guardada</ui-badge>
+            {{ r.meta.botName ?? r.meta.symbol }} · ejecucion del {{ o.en }}
+          } @else {
+            <ui-badge size="sm" tone="brand">nueva</ui-badge>
+            {{ r.meta.botName ?? r.meta.symbol }} · guardada en el historial
+          }
+        </p>
+      }
+
       <div class="stats">
         <ui-stat
           label="Resultado neto"
@@ -185,7 +196,11 @@
           [value]="signed(r.metrics.buyAndHoldPct) + ' %'"
           [tone]="bateBuyHold() ? '' : 'warn'"
         />
-        <ui-stat label="Caida maxima" [value]="'-' + r.metrics.maxDrawdownPct + ' %'" tone="danger" />
+        <ui-stat
+          label="Caida maxima"
+          [value]="'-' + r.metrics.maxDrawdownPct + ' %'"
+          tone="danger"
+        />
         <ui-stat label="Comisiones" [value]="money(r.metrics.feesPaid)" />
         <ui-stat label="Ciclos cerrados" [value]="r.metrics.cyclesClosed" />
         <ui-stat
@@ -234,6 +249,58 @@
         />
       </div>
 
+      <!-- ── Operaciones ──
+           La tabla ensena las ultimas; el CSV se lleva todas las que llegaron.
+           Un market maker produce miles y pintarlas todas en un movil no ayuda
+           a leer ninguna. -->
+      <h3 class="bd-row">
+        Operaciones
+        <span class="cuantas">
+          {{ operaciones().length }} de {{ r.fills.length }}{{ r.fillsTruncated ? '+' : '' }}
+        </span>
+        <button type="button" class="bd-copy" (click)="copiarOperaciones()">Copiar CSV</button>
+      </h3>
+      @if (r.fills.length) {
+        <div class="ops-wrap">
+          <table class="ops">
+            <thead>
+              <tr>
+                <th>Cuando</th>
+                <th>Lado</th>
+                <th>Nivel</th>
+                <th class="num">Precio</th>
+                <th class="num">Cantidad</th>
+                <th class="num">Comision</th>
+                <th class="num">Posicion</th>
+              </tr>
+            </thead>
+            <tbody>
+              @for (f of operaciones(); track f.ts + f.side + f.cycleSeq + f.price) {
+                <tr [class.liq]="f.liquidation">
+                  <td>{{ fechaHora(f.ts) }}</td>
+                  <td>
+                    <ui-badge size="sm" square [tone]="f.side === 'BUY' ? 'up' : 'down'">
+                      {{ f.side === 'BUY' ? 'C' : 'V' }}
+                    </ui-badge>
+                  </td>
+                  <td>
+                    {{ nivel(f) }} <span class="ciclo">#{{ f.cycleSeq }}</span>
+                  </td>
+                  <td class="num">{{ f.price }}</td>
+                  <td class="num">{{ f.qty }}</td>
+                  <td class="num">
+                    {{ money(f.fee, 4) }}<i>{{ f.isTaker ? ' t' : ' m' }}</i>
+                  </td>
+                  <td class="num">{{ f.positionAfter }}</td>
+                </tr>
+              }
+            </tbody>
+          </table>
+        </div>
+      } @else {
+        <p class="meta">Ninguna operacion en este periodo.</p>
+      }
+
       <p class="meta">
         {{ r.meta.sourceSymbol }} en {{ r.meta.source }} · {{ r.metrics.bars }} velas de
         {{ intervalLabel(r.meta.interval) }} · {{ r.meta.durationMs }} ms
@@ -249,26 +316,78 @@
     </section>
   }
 
+  <!-- ── Comparacion ──
+       Dos ejecuciones guardadas lado a lado, metrica a metrica. Sin graficas
+       superpuestas: dos escalas de dinero en un eje es el error de grafico
+       numero uno. -->
+  @if (comparacion(); as c) {
+    <section class="comparacion">
+      <h3 class="bd-row">
+        Comparacion
+        <button type="button" class="bd-copy" (click)="quitarComparacion()">Quitar</button>
+      </h3>
+      <table class="cmp">
+        <thead>
+          <tr>
+            <th></th>
+            <th>A · {{ fecha(c.a.created_at) }}</th>
+            <th>B · {{ fecha(c.b.created_at) }}</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr class="sub">
+            <td>Periodo</td>
+            <td>{{ fecha(c.a.from_ms) }} → {{ fecha(c.a.to_ms) }} · {{ c.a.interval }}</td>
+            <td>{{ fecha(c.b.from_ms) }} → {{ fecha(c.b.to_ms) }} · {{ c.b.interval }}</td>
+          </tr>
+          @for (f of c.filas; track f.label) {
+            <tr>
+              <td>{{ f.label }}</td>
+              <td class="num">{{ f.a }}</td>
+              <td class="num" [class]="'num ' + f.tono">{{ f.b }}</td>
+            </tr>
+          }
+        </tbody>
+      </table>
+      <p class="meta">En verde, donde B sale mejor que A; en rojo, donde sale peor.</p>
+    </section>
+  }
+
   <!-- ── Historial ───────────────────────────────────────────────── -->
   <section class="historial">
     <h3>Ejecuciones anteriores</h3>
     @if (historial().length === 0) {
       <ui-empty-state title="Todavia no has lanzado ninguna" icon="play-outline">
-        Guardarlas es lo que permite comparar dos ajustes sobre el mismo periodo.
+        Guardarlas es lo que permite reabrirlas y comparar dos ajustes sobre el mismo periodo.
       </ui-empty-state>
     } @else {
+      <p class="ayuda">Toca una para reabrirla; marca dos para compararlas.</p>
       @for (h of historial(); track h.id) {
-        <div class="fila">
-          <div class="izq">
+        <div class="fila" [class.sel]="seleccion().includes(h.id)">
+          <button type="button" class="izq" (click)="abrir(h)" [disabled]="abriendo() !== null">
             <strong>{{ h.symbol }}</strong>
             <ui-badge>{{ h.interval }}</ui-badge>
             <span class="fecha">{{ fecha(h.from_ms) }} → {{ fecha(h.to_ms) }}</span>
-          </div>
+            @if (abriendo() === h.id) {
+              <ion-spinner name="dots" />
+            }
+          </button>
           <div class="der">
             <span [class.ok]="+h.metrics.netPnl >= 0" [class.mal]="+h.metrics.netPnl < 0">
               {{ signed(h.metrics.netPnlPct) }} %
             </span>
-            <ion-button fill="clear" size="small" (click)="borrar(h.id)">
+            <ion-button
+              fill="clear"
+              size="small"
+              [color]="seleccion().includes(h.id) ? 'primary' : 'medium'"
+              (click)="alternarComparar(h.id)"
+              [attr.aria-label]="
+                seleccion().includes(h.id) ? 'Quitar de la comparacion' : 'Comparar'
+              "
+            >
+              <ion-icon name="git-compare-outline" slot="icon-only" />
+            </ion-button>
+            <ion-button fill="clear" size="small" (click)="borrar(h.id)" aria-label="Borrar">
               <ion-icon name="trash-outline" slot="icon-only" />
             </ion-button>
           </div>

@@ -25,6 +25,7 @@ import { ExchangeAccountsModule } from './modules/exchange-accounts';
 import { MarketsModule } from './modules/markets';
 import { MarketDataModule } from './modules/market-data';
 import { LeaderboardModule } from './modules/leaderboard';
+import { PortfolioModule } from './modules/portfolio';
 import { RiskModule } from './modules/risk';
 import { UsersModule } from './modules/users';
 import { TelegramModule } from './modules/telegram';
@@ -73,6 +74,9 @@ import { TelegramModule } from './modules/telegram';
     BacktestsModule,
     TelegramModule,
     LeaderboardModule,
+    // La cartera como agregado (spec 003): solo lectura de la tabla que
+    // escribe el worker, sin depender de `BotsModule`.
+    PortfolioModule,
     UsersModule,
     ActivityModule,
   ],

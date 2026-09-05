@@ -1,6 +1,7 @@
 import { Component, OnInit, computed, inject, signal } from '@angular/core';
 import { takeUntilDestroyed } from '@angular/core/rxjs-interop';
 import { RouterLink } from '@angular/router';
+import { D, sumaExacta } from '@crypton/shared';
 import {
   IonButton,
   IonButtons,
@@ -51,10 +52,14 @@ import {
   UiBadgeComponent,
   UiCardComponent,
   UiEmptyStateComponent,
+  UiLiqMeterComponent,
   UiNoticeComponent,
+  UiSparkComponent,
   UiStatComponent,
   UiStatusPillComponent,
 } from '../../shared/ui';
+import { puntosDeSpark } from '../../shared/chart/bot-series';
+import { LIQ_DANGER_PCT, liqNum } from '../../core/utils/risk';
 
 /**
  * Las tres primeras son de estado y solo miran bots REALES; `SIM` es de modo.
@@ -64,6 +69,13 @@ import {
  * —«simulados parados»— que nadie pide, y dos controles donde hoy hay uno.
  */
 type Filter = 'ALL' | 'LIVE' | 'STOPPED' | 'SIM';
+
+/**
+ * Orden de la lista. Con veinte bots, cuatro filtros no ayudan a encontrar el
+ * que hay que mirar hoy; el de riesgo es el que se busca con urgencia y por eso
+ * es el de partida.
+ */
+type Orden = 'RIESGO' | 'RESULTADO' | 'ROI';
 
 /** Estados en los que un bot está bajo el control del motor. */
 const VIVOS = ['STARTING', 'RUNNING', 'PAUSED'];
@@ -89,6 +101,8 @@ const VIVOS = ['STARTING', 'RUNNING', 'PAUSED'];
     IonFabButton,
     UiBadgeComponent,
     UiCardComponent,
+    UiLiqMeterComponent,
+    UiSparkComponent,
     UiStatComponent,
     UiStatusPillComponent,
     UiNoticeComponent,
@@ -125,6 +139,27 @@ const VIVOS = ['STARTING', 'RUNNING', 'PAUSED'];
       <ion-refresher slot="fixed" (ionRefresh)="reload($event)">
         <ion-refresher-content />
       </ion-refresher>
+
+      @if (visible().length > 1) {
+        <div class="sort">
+          <span>Ordenar</span>
+          <div class="chips">
+            <button type="button" [class.on]="sort() === 'RIESGO'" (click)="sort.set('RIESGO')">
+              Riesgo
+            </button>
+            <button
+              type="button"
+              [class.on]="sort() === 'RESULTADO'"
+              (click)="sort.set('RESULTADO')"
+            >
+              Resultado
+            </button>
+            <button type="button" [class.on]="sort() === 'ROI'" (click)="sort.set('ROI')">
+              ROI
+            </button>
+          </div>
+        </div>
+      }
 
       @if (bots.loading() && bots.bots().length === 0) {
         <div class="center"><ion-spinner name="crescent" /></div>
@@ -233,6 +268,20 @@ const VIVOS = ['STARTING', 'RUNNING', 'PAUSED'];
                 <ui-status-pill [status]="bot.status" />
               </div>
 
+              <!-- Ultimas 24 h, un punto por hora, con el cero visible. Viaja
+                   CON la lista: una peticion por tarjeta serian veinte. Con
+                   menos de dos puntos no hay linea que pintar. -->
+              @let puntos = puntosDeSpark(bot.spark);
+              @if (puntos.length > 1) {
+                <ui-spark
+                  mode="line"
+                  [points]="puntos"
+                  [baseline]="0"
+                  [height]="30"
+                  [label]="'Resultado de las últimas 24 h de ' + bot.name"
+                />
+              }
+
               <div class="grid">
                 <ui-stat
                   label="PnL total"
@@ -247,14 +296,15 @@ const VIVOS = ['STARTING', 'RUNNING', 'PAUSED'];
               <!-- La distancia a liquidación es LA métrica de riesgo: se muestra
                    en la tarjeta, no escondida en el detalle. -->
               @if (liqDistance(bot); as dist) {
-                <ui-notice
-                  [tone]="dist < 10 ? 'danger' : dist < 25 ? 'warn' : 'info'"
-                  [icon]="dist < 25 ? 'warning-outline' : 'shield-outline'"
-                >
-                  <span class="num">
-                    Liquidación a {{ money(dist, 1) }} % · {{ price(bot.liquidationPrice) }}
-                  </span>
-                </ui-notice>
+                <ui-liq-meter [pct]="bot.liquidationDistancePct" />
+                @if (dist < liqPeligro) {
+                  <ui-notice tone="danger" icon="warning-outline">
+                    <span class="num">
+                      A un {{ money(dist, 1) }} % de la liquidación, en
+                      {{ price(bot.liquidationPrice) }}.
+                    </span>
+                  </ui-notice>
+                }
               }
 
               @if (bot.lastError) {
@@ -287,6 +337,7 @@ export class BotsListPage implements OnInit {
   readonly testnet = this.network.testnet;
 
   readonly filter = signal<Filter>('ALL');
+  readonly sort = signal<Orden>('RIESGO');
 
   readonly money = money;
   readonly price = price;
@@ -296,6 +347,8 @@ export class BotsListPage implements OnInit {
   readonly uptime = uptime;
   readonly strategyLabel = strategyLabel;
   readonly venueLabel = venueLabel;
+  readonly puntosDeSpark = puntosDeSpark;
+  readonly liqPeligro = LIQ_DANGER_PCT;
 
   /**
    * Los que operan de verdad, y los que no.
@@ -310,7 +363,7 @@ export class BotsListPage implements OnInit {
   private readonly reales = computed(() => this.bots.bots().filter((b) => !b.dryRun));
   readonly simulados = computed(() => this.bots.bots().filter((b) => b.dryRun));
 
-  readonly visible = computed(() => {
+  private readonly filtrados = computed(() => {
     if (this.filter() === 'SIM') return this.simulados();
 
     // Las tres de estado ya no miran los simulados: el recuento de «Activos» es
@@ -327,6 +380,21 @@ export class BotsListPage implements OnInit {
         return reales;
     }
   });
+
+  readonly visible = computed(() => this.ordena(this.filtrados()));
+
+  /** Copia ordenada; `sort` muta y las señales de arriba se comparten. */
+  private ordena(bots: BotSummary[]): BotSummary[] {
+    const riesgo = (b: BotSummary) => this.liqDistance(b) ?? Number.POSITIVE_INFINITY;
+    switch (this.sort()) {
+      case 'RESULTADO':
+        return [...bots].sort((a, b) => D(this.total(b)).comparedTo(D(this.total(a))));
+      case 'ROI':
+        return [...bots].sort((a, b) => D(b.roiPct).comparedTo(D(a.roiPct)));
+      default:
+        return [...bots].sort((a, b) => riesgo(a) - riesgo(b));
+    }
+  }
 
   /**
    * Si ya se sabe que no hay ninguna conexión utilizable.
@@ -432,17 +500,22 @@ export class BotsListPage implements OnInit {
     void (event.target as HTMLIonRefresherElement).complete();
   }
 
+  /** Resultado total de la tarjeta. Con `Decimal`, no con `Number`: invariante 1. */
   total(bot: BotSummary): string {
-    return String(Number(bot.realizedPnl) + Number(bot.unrealizedPnl));
+    return sumaExacta([bot.realizedPnl, bot.unrealizedPnl]);
   }
 
-  /** Distancia porcentual del precio actual a la liquidación; null si no aplica. */
+  /**
+   * Distancia porcentual del precio de MERCADO a la liquidación; null si no aplica.
+   *
+   * La calcula el servidor y llega en `liquidationDistancePct`. Antes se
+   * calculaba aquí contra `averageEntry` —una propiedad estática de la posición
+   * que no se mueve con el mercado— y el aviso no saltaba justo cuando el
+   * precio se pegaba a la liquidación (spec 002, F-02). Se convierte a `number`
+   * solo para el umbral del semáforo.
+   */
   liqDistance(bot: BotSummary): number | null {
-    if (!bot.liquidationPrice || !bot.averageEntry) return null;
-    const liq = Number(bot.liquidationPrice);
-    const ref = Number(bot.averageEntry);
-    if (!Number.isFinite(liq) || !Number.isFinite(ref) || ref <= 0) return null;
-    return Math.abs(((liq - ref) / ref) * 100);
+    return liqNum(bot.liquidationDistancePct);
   }
 
   async killSwitch(): Promise<void> {

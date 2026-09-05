@@ -1,7 +1,7 @@
 import { Body, Controller, Get, HttpCode, Post, Query, UseGuards } from '@nestjs/common';
 import { ApiBearerAuth, ApiOperation, ApiTags } from '@nestjs/swagger';
 import { GetUserInfo, JwtAuthGuard, type SessionUser } from '../auth';
-import { CandlesQueryDto, TickersQueryDto, WatchDto } from './dtos';
+import { CandlesQueryDto, FeaturesQueryDto, TickersQueryDto, WatchDto } from './dtos';
 import { MarketDataService } from './market-data.service';
 import { MarketStreamService } from './market-stream.service';
 
@@ -63,6 +63,20 @@ export class MarketDataController {
   })
   tickers(@Query() q: TickersQueryDto) {
     return this.marketData.tickers(q.venue, q.testnet === true);
+  }
+
+  @Get('features')
+  @ApiOperation({
+    summary: 'Rasgos de un par: volatilidad, rango, tendencia y eficiencia',
+    description:
+      'La franja de veredicto del gráfico: ¿este par es terreno de rejilla o me ' +
+      'va a arrastrar? Los calcula la misma función pura que alimenta al advisor ' +
+      '(`buildFeatures`), sobre 300 velas de 1 h y 150 de 1 d, y se cachean cinco ' +
+      'minutos. `null` cuando no hay velas suficientes: mejor nada que un número ' +
+      'inventado con aspecto de calculado.',
+  })
+  features(@Query() q: FeaturesQueryDto) {
+    return this.marketData.features(q.venue, q.symbol, q.testnet === true);
   }
 
   @Post('watch')

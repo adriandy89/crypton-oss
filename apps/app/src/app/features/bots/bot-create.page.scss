@@ -199,10 +199,16 @@
     font-size: 11px;
     color: var(--text-3);
   }
+  .cum,
   .viol {
     grid-column: 1 / -1;
-    margin: 5px 0 0;
+    margin: 4px 0 0;
     font-size: 11px;
+  }
+  .cum {
+    color: var(--text-3);
+  }
+  .viol {
     color: var(--pnl-down);
   }
 }

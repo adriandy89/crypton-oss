@@ -3,6 +3,7 @@ import type { Candle, MarketSpec } from '@crypton/shared';
 import { ConfigService } from '@nestjs/config';
 import type { CacheService } from 'src/libs';
 import { AdvisorService } from './advisor.service';
+import { buildFeatures } from './market-features';
 import type { MarketDataService } from '../market-data';
 import type { MarketsService } from '../markets';
 import type { RiskService } from '../risk';
@@ -102,9 +103,11 @@ function montar(opts: {
     getSpec: async () => MERCADO,
   } as unknown as MarketsService;
 
+  // El asistente ya no monta los rasgos: los pide hechos a `MarketDataService`
+  // (la misma tuberia que pinta la franja del grafico). Aqui se sirven con las
+  // mismas velas sinteticas de antes para que el resto del test no cambie.
   const marketData = {
-    candles: async () => velas(300),
-    tickers: async () => [{ symbol: 'BTC', last: '64000' }],
+    features: async () => buildFeatures(velas(300), velas(150), MERCADO, '64000'),
   } as unknown as MarketDataService;
 
   const risk = {

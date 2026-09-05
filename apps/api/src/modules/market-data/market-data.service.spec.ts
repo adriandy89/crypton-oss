@@ -319,3 +319,51 @@ describe('MarketDataService — precios de 24 h', () => {
     expect(rows[0].venue).toBe(Venue.HYPERLIQUID);
   });
 });
+
+describe('MarketDataService — rasgos de mercado', () => {
+  /** `n` velas horarias planas alrededor de 100, con algo de recorrido. */
+  const velas = (n: number): Candle[] =>
+    Array.from({ length: n }, (_, i) => ({
+      t: 1_700_000_000_000 + i * 3_600_000,
+      o: '100',
+      h: String(100 + (i % 3)),
+      l: String(99 - (i % 2)),
+      c: String(100 + (i % 5) / 10),
+      v: null,
+    }));
+
+  it('con series suficientes devuelve rasgos y los cachea cinco minutos', async () => {
+    const { service, cache } = svc();
+    jest
+      .spyOn(service, 'candles')
+      .mockImplementation(async (_v, _s, interval) =>
+        interval === '1h' ? velas(300) : velas(150),
+      );
+    const rasgos = await service.features(Venue.HYPERLIQUID, 'BTC');
+    expect(rasgos).not.toBeNull();
+    expect(rasgos?.trend).toMatch(/ALCISTA|BAJISTA|LATERAL/);
+    expect(cache.ttlOf('md:features:HYPERLIQUID:BTC:m')).toBe(300);
+  });
+
+  it('sin velas suficientes devuelve null, y cachea la ausencia para no volver al venue', async () => {
+    // Un prompt con la volatilidad a cero produce numeros inventados con
+    // aspecto de calculados; la franja del grafico, igual. Mejor nada. Y la
+    // ausencia se recuerda: un par recien listado gana una vela por hora, asi
+    // que cada apertura de su grafico no tiene por que pagar dos series.
+    const { service, cache } = svc();
+    const candles = jest.spyOn(service, 'candles').mockResolvedValue(velas(10));
+    expect(await service.features(Venue.HYPERLIQUID, 'BTC')).toBeNull();
+    expect(await service.features(Venue.HYPERLIQUID, 'BTC')).toBeNull();
+    expect(cache.ttlOf('md:features:HYPERLIQUID:BTC:m')).toBe(300);
+    expect(candles).toHaveBeenCalledTimes(2); // las dos series de la PRIMERA llamada
+  });
+
+  it('un par que no esta en el catalogo responde 404 antes de salir al venue', async () => {
+    const { service } = svc();
+    const candles = jest.spyOn(service, 'candles');
+    await expect(service.features(Venue.HYPERLIQUID, 'NOPE')).rejects.toBeInstanceOf(
+      NotFoundException,
+    );
+    expect(candles).not.toHaveBeenCalled();
+  });
+});

@@ -6,6 +6,8 @@ import { NetworkService } from './network.service';
 import { StreamService } from './stream.service';
 import type {
   BotCommand,
+  BotConfigRevision,
+  BotCycle,
   BotDetail,
   BotEvent,
   BotFill,
@@ -268,9 +270,22 @@ export class BotsService {
     );
   }
 
+  /**
+   * Ciclos cerrados, del mas reciente al mas antiguo. Es la «lista de
+   * operaciones» del bot: acierto, duracion y resultado por ciclo salen de aqui.
+   * Estuvo meses escrito y sin tipo (`unknown[]`) porque ninguna pantalla lo
+   * llamaba (spec 002, F-10).
+   */
   cycles(id: string, limit = 50) {
     return firstValueFrom(
-      this.http.get<unknown[]>(`${this.base}/${id}/cycles`, { params: { limit } }),
+      this.http.get<BotCycle[]>(`${this.base}/${id}/cycles`, { params: { limit } }),
+    );
+  }
+
+  /** El historial de configuración, de la más nueva a la más vieja (spec 006). */
+  revisions(id: string, limit = 50) {
+    return firstValueFrom(
+      this.http.get<BotConfigRevision[]>(`${this.base}/${id}/revisions`, { params: { limit } }),
     );
   }
 
@@ -280,9 +295,31 @@ export class BotsService {
     );
   }
 
-  snapshots(id: string, limit = 300) {
+  /**
+   * La serie temporal del bot, de mas nueva a mas vieja.
+   *
+   * 500 es el tope del servidor y tambien todo lo que hay: la ruta no acepta
+   * rango ni pagina hacia atras, y a una fila por minuto son 8 h 20 min. Pedir
+   * menos no ahorra nada y recorta la ventana; quien la pinta la rotula por lo
+   * que cubre de verdad (`ventanaDe` en `bot-series.ts`).
+   */
+  snapshots(id: string, limit = 500) {
     return firstValueFrom(
       this.http.get<BotSnapshot[]>(`${this.base}/${id}/snapshots`, { params: { limit } }),
+    );
+  }
+
+  /**
+   * La misma serie, pero un RANGO agregado en el servidor: hasta cuatro filas
+   * por cubo —primera, minima, maxima y ultima— para que el peor momento
+   * sobreviva al dibujo. Es lo que hace posibles las ventanas de 24 h, 7 d y
+   * 30 d; sin rango, el endpoint solo llega a 8 h 20 min (spec 002).
+   */
+  snapshotsEnRango(id: string, fromMs: number, toMs: number, points = 480) {
+    return firstValueFrom(
+      this.http.get<BotSnapshot[]>(`${this.base}/${id}/snapshots`, {
+        params: { fromMs, toMs, points },
+      }),
     );
   }
 

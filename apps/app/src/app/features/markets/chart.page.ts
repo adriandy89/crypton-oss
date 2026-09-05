@@ -10,8 +10,9 @@ import {
   viewChild,
 } from '@angular/core';
 import { takeUntilDestroyed } from '@angular/core/rxjs-interop';
-import { filter, throttleTime } from 'rxjs';
-import { ActivatedRoute, Router, RouterLink } from '@angular/router';
+import { D, SNAPSHOT_CADENCE_MS, liquidationDistancePct } from '@crypton/shared';
+import { liqNum } from '../../core/utils/risk';
+import { ActivatedRoute, Router } from '@angular/router';
 import {
   IonBackButton,
   IonButton,
@@ -53,12 +54,15 @@ import {
 } from '@crypton/shared';
 import type {
   BotDetail,
+  BotEvent,
   BotFill,
   BotLevel,
+  BotSnapshot,
   BotSummary,
   Candle,
   CandleInterval,
   Market,
+  MarketFeatures,
   Venue,
 } from '../../core/models';
 import {
@@ -76,13 +80,20 @@ import {
 import {
   PriceChartComponent,
   buildBotOverlay,
+  buildEventMarkers,
   buildFillMarkers,
+  type ChartLinePoint,
   type ChartSeriesKind,
+  type OverlayEventMarker,
   type OverlayLine,
   type OverlayMarker,
 } from '../../shared/chart';
+import { muestrasPorVela } from '../../shared/chart/bot-series';
+import { BotCommandsService } from '../../shared/bot/bot-commands.service';
 import {
   UiBadgeComponent,
+  UiLiqMeterComponent,
+  UiMarginSheetComponent,
   UiNoticeComponent,
   UiStatComponent,
   UiStatusPillComponent,
@@ -138,23 +149,6 @@ const HISTORY_FALLBACK = { maxHistoryPages: 3, minPageGapMs: 1500 };
 const RECONCILE_MS = 30_000;
 
 /**
- * Ventana de agrupación de los eventos del bot.
- *
- * El evento `FILL` del servidor no trae el precio ni la cantidad como campos
- * —solo dentro de su mensaje de texto—, así que la única forma correcta de
- * pintar una ejecución nueva es volver a pedir el detalle y el ledger. Y un
- * market maker ejecuta a ráfagas: sin esta ventana, cada fill de una ráfaga
- * dispararía su propia tanda de peticiones.
- *
- * Se agrupa con `throttleTime` y NO con `debounceTime`: con rebote, una ráfaga
- * continua reinicia la espera en cada evento y el gráfico no se refrescaría
- * nunca. Con `leading` hay refresco inmediato en el primer evento —que es el
- * que el usuario está mirando— y con `trailing` queda garantizado otro al
- * cerrar la ventana, que recoge todo lo que pasó dentro.
- */
-const BOT_COALESCE_MS = 1_500;
-
-/**
  * Cuántas ejecuciones se leen para pintar los marcadores.
  *
  * El ledger llega de la MÁS RECIENTE a la más antigua, así que estas son las
@@ -162,6 +156,13 @@ const BOT_COALESCE_MS = 1_500;
  * contrario. El tope de la API es 500.
  */
 const FILL_LIMIT = 200;
+
+/**
+ * Cuántos sucesos se piden para los marcadores. Cien es la última jornada de un
+ * bot ruidoso; lo que importa es lo reciente, y la agrupación por vela deja como
+ * mucho dos marcadores por barra sea cual sea la cifra.
+ */
+const EVENT_LIMIT = 100;
 
 /**
  * Cuántas velas de una hora se leen para el máximo y el mínimo del día.
@@ -177,7 +178,6 @@ const RANGE_BARS = 50;
   selector: 'app-market-chart',
   standalone: true,
   imports: [
-    RouterLink,
     IonHeader,
     IonToolbar,
     IonTitle,
@@ -192,6 +192,8 @@ const RANGE_BARS = 50;
     IonSpinner,
     PriceChartComponent,
     UiBadgeComponent,
+    UiLiqMeterComponent,
+    UiMarginSheetComponent,
     UiNoticeComponent,
     UiStatComponent,
     UiStatusPillComponent,
@@ -207,6 +209,7 @@ export class MarketChartPage implements OnInit {
   private readonly toast = inject(ToastService);
   private readonly destroyRef = inject(DestroyRef);
   private readonly streamSvc = inject(StreamService);
+  private readonly commands = inject(BotCommandsService);
   readonly data = inject(MarketDataService);
   readonly favourites = inject(FavouriteMarketsService);
   readonly network = inject(NetworkService);
@@ -219,13 +222,73 @@ export class MarketChartPage implements OnInit {
 
   readonly candles = signal<Candle[]>([]);
   readonly market = signal<Market | null>(null);
+  /** Rasgos del par, del servidor. null mientras no llegan o si no hay velas suficientes. */
+  readonly features = signal<MarketFeatures | null>(null);
   readonly loading = signal(true);
   readonly chartError = signal<string | null>(null);
   readonly tab = signal<'info' | 'bots' | 'venues'>('info');
 
   /** El bot desde el que se ha entrado, si se ha entrado desde uno. */
   readonly bot = signal<BotDetail | null>(null);
-  readonly layers = signal({ ladder: true, planned: true, fills: true, liquidation: true });
+  readonly layers = signal({
+    ladder: true,
+    planned: true,
+    fills: true,
+    liquidation: true,
+    events: true,
+  });
+  /**
+   * El panel de resultado bajo el precio (spec 005, R-5). APAGADO por defecto y
+   * a propósito: es lo único de este spec que crea un panel más en el motor
+   * gráfico, y sin él el gráfico ejecuta exactamente el código de antes.
+   */
+  readonly showResult = signal(false);
+  /** La hoja de margen, compartida con el detalle del bot. */
+  readonly marginOpen = signal(false);
+
+  /**
+   * La franja de veredicto: tres cifras y una frase.
+   *
+   * La eficiencia de Kaufman es la que decide. Cerca de cero el precio va y
+   * viene —terreno de rejilla y de market maker—; cerca de uno se mueve en
+   * línea recta, que es donde una rejilla se queda comprando todo el camino de
+   * bajada. Los umbrales (0,3 y 0,6) son los del propio `market-features.ts`
+   * del advisor. Es una lectura del recorrido, no un consejo, y la frase lo
+   * dice como hecho: «se mueve en línea recta», no «no operes».
+   */
+  readonly veredictoMercado = computed(() => {
+    const r = this.features();
+    if (!r) return null;
+    const alza = r.trend === 'ALCISTA';
+    if (r.efficiency < 0.3) {
+      const cola =
+        r.trend === 'LATERAL'
+          ? ''
+          : ' La tendencia ' + (alza ? 'alcista' : 'bajista') + ' es débil.';
+      return {
+        rasgos: r,
+        tono: 'ok' as const,
+        texto: 'Se mueve mucho pero no va a ninguna parte: terreno de rejilla.' + cola,
+      };
+    }
+    if (r.efficiency > 0.6) {
+      return {
+        rasgos: r,
+        tono: 'warn' as const,
+        texto:
+          'Se mueve en línea recta ' +
+          (alza ? 'al alza' : 'a la baja') +
+          ': una rejilla se quedaría ' +
+          (alza ? 'vendiendo todo el camino de subida.' : 'comprando todo el camino de bajada.'),
+      };
+    }
+    return {
+      rasgos: r,
+      tono: 'info' as const,
+      texto:
+        'Ni lateral del todo ni tendencia limpia: una rejilla trabaja, pero pide un rango ancho.',
+    };
+  });
 
   /** La escalera DESEADA del ciclo vivo, cruda. Ver `overlay`. */
   readonly overlayLevels = signal<BotLevel[]>([]);
@@ -285,6 +348,53 @@ export class MarketChartPage implements OnInit {
       barsMs: this.candles().map((c) => c.t),
     }),
   );
+
+  /** La bitácora reciente del bot, cruda; los marcadores se derivan como los fills. */
+  readonly overlayEvents = signal<BotEvent[]>([]);
+  readonly eventMarkers = computed<OverlayEventMarker[]>(() =>
+    buildEventMarkers(this.overlayEvents(), {
+      bucketMs: candleSpanMs(this.interval()),
+      barsMs: this.candles().map((c) => c.t),
+    }),
+  );
+
+  /**
+   * La serie del bot en la ventana de velas cargadas, cruda (spec 005, R-3 y
+   * R-5). De aquí salen el precio medio como serie y el panel de resultado; se
+   * casa a las velas en `muestrasPorVela`, porque el motor comparte una sola
+   * escala de tiempo entre todas las series.
+   */
+  readonly botSnapshots = signal<BotSnapshot[]>([]);
+  private readonly muestras = computed(() =>
+    muestrasPorVela(
+      this.botSnapshots(),
+      candleSpanMs(this.interval()),
+      this.candles().map((c) => c.t),
+    ),
+  );
+  /** Con la escalera apagada se apaga también: es parte de la misma lectura. */
+  readonly averageSeries = computed<ChartLinePoint[]>(() =>
+    this.layers().ladder
+      ? this.muestras().map((m) => ({ t: m.t, v: positivo(m.s.average_entry) }))
+      : [],
+  );
+  readonly resultSeries = computed<ChartLinePoint[]>(() =>
+    this.showResult() ? this.muestras().map((m) => ({ t: m.t, v: numero(m.s.equity) })) : [],
+  );
+  /** Clave y hora de la última carga de la serie, para no pedirla con cada evento. */
+  private serieClave = '';
+  private serieCargadaEn = 0;
+
+  /**
+   * ¿Se puede ajustar el margen de este bot AHORA? Las mismas tres condiciones
+   * que en el detalle: posición aislada, posición abierta y bot vivo.
+   */
+  readonly canAdjustMargin = computed(() => {
+    const b = this.bot();
+    if (!b || b.margin_mode !== 'ISOLATED') return false;
+    if (!Number.isFinite(Number(b.positionQty)) || Number(b.positionQty) === 0) return false;
+    return ['STARTING', 'RUNNING', 'PAUSED'].includes(b.status);
+  });
 
   /**
    * Por qué no hay escalera pintada.
@@ -482,13 +592,22 @@ export class MarketChartPage implements OnInit {
     return this.data.sameBase(m.base, { venue: this.venue(), symbol: this.symbol() });
   });
 
-  /** Distancia del precio a la liquidación del bot. LA métrica de riesgo. */
+  /**
+   * Distancia del precio a la liquidación del bot. LA métrica de riesgo.
+   *
+   * Es la única pantalla con precio VIVO, y lo usa: la MISMA fórmula compartida
+   * que el servidor, el worker y el preview (`liquidationDistancePct` de
+   * `@crypton/shared`) sobre el último tick. Sin tick, el número del servidor. Una
+   * fórmula y no tres, que era el fallo (spec 002, F-02); y viva, porque un bot
+   * parado con posición no emite eventos y el dato del servidor se congelaría
+   * con la pantalla abierta mientras el mercado se mueve.
+   */
   readonly liqDistance = computed(() => {
     const b = this.bot();
-    const last = Number(this.ticker()?.last ?? this.candles().at(-1)?.c ?? 0);
-    const liq = Number(b?.liquidationPrice ?? 0);
-    if (!b || !Number.isFinite(liq) || liq <= 0 || !Number.isFinite(last) || last <= 0) return null;
-    return Math.abs(((last - liq) / last) * 100);
+    if (!b?.liquidationPrice) return null;
+    const last = this.ticker()?.last ?? this.candles().at(-1)?.c;
+    if (last && D(last).gt(0)) return liquidationDistancePct(last, b.liquidationPrice).toNumber();
+    return liqNum(b.liquidationDistancePct);
   });
 
   /** Capa efectiva: lo que dicen los interruptores, no lo que trae el bot. */
@@ -499,6 +618,9 @@ export class MarketChartPage implements OnInit {
     // interruptor para una sola linea.
     return this.overlayLines().filter((line) => {
       if (line.kind === 'liquidation') return l.liquidation;
+      // Con el precio medio como SERIE, la línea horizontal sobra: nunca las dos
+      // (spec 005, R-3). Sin serie —bot recién arrancado— se queda la línea.
+      if (line.kind === 'average' && this.averageSeries().length > 0) return false;
       // Los planificados van ANIDADOS bajo la escalera: enseñar donde caeria la
       // siguiente orden con las ordenes reales apagadas no significa nada.
       if (line.ghost) return l.ladder && l.planned;
@@ -507,6 +629,7 @@ export class MarketChartPage implements OnInit {
   });
 
   readonly visibleMarkers = computed(() => (this.layers().fills ? this.overlayMarkers() : []));
+  readonly visibleEvents = computed(() => (this.layers().events ? this.eventMarkers() : []));
 
   constructor() {
     addIcons({
@@ -631,17 +754,31 @@ export class MarketChartPage implements OnInit {
     // eran las líneas sino `liqDistance()`, que cruza el precio EN VIVO con la
     // liquidación congelada y devuelve un número que no es ninguno de los dos.
     //
-    // Mismo patrón que `bot-detail.page.ts`, con la ventana de agrupación que
-    // explica `BOT_COALESCE_MS`.
-    this.streamSvc.stream
-      .pipe(
-        filter((ev) => this.botId !== null && ev.botId === this.botId),
-        throttleTime(BOT_COALESCE_MS, undefined, { leading: true, trailing: true }),
-        takeUntilDestroyed(this.destroyRef),
-      )
+    // La ventana de agrupación vive en `StreamService.ofBot`, compartida con el
+    // detalle del bot.
+    this.streamSvc
+      .ofBot(() => this.botId)
+      .pipe(takeUntilDestroyed(this.destroyRef))
       .subscribe(() => {
         if (this.botId) void this.loadBot(this.botId, { silent: true });
       });
+
+    // La serie del bot para el precio medio y el panel de resultado. Se pide
+    // cuando cambia lo que la define —bot, intervalo, primera vela cargada— y,
+    // si no, como mucho una vez por cadencia: el bot se recarga con cada
+    // evento agrupado y la tabla solo cambia una vez por minuto.
+    effect(() => {
+      const id = this.bot()?.id;
+      const primera = this.candles()[0]?.t;
+      const iv = this.interval();
+      if (!id || primera === undefined) return;
+      const clave = `${id}|${iv}|${primera}`;
+      const refresco = Date.now() - this.serieCargadaEn >= SNAPSHOT_CADENCE_MS;
+      if (clave === this.serieClave && !refresco) return;
+      this.serieClave = clave;
+      this.serieCargadaEn = Date.now();
+      untracked(() => void this.loadBotSeries(id, primera));
+    });
 
     // Cambio de lente: la serie que hay pintada es de la OTRA red.
     //
@@ -963,6 +1100,19 @@ export class MarketChartPage implements OnInit {
     } catch {
       // El gráfico funciona sin la spec; solo se pintan menos decimales.
     }
+    // Sin esperar: la franja es analítica y el gráfico no depende de ella.
+    void this.loadFeatures();
+  }
+
+  /** Los rasgos del par. Si fallan, la franja no se pinta y ya está. */
+  private async loadFeatures(): Promise<void> {
+    this.features.set(null);
+    const venue = this.venue();
+    const symbol = this.symbol();
+    if (!symbol) return;
+    const rasgos = await this.data.features(venue, symbol).catch((): MarketFeatures | null => null);
+    // Si mientras tanto se cambió de par, lo que ha llegado es de otro.
+    if (this.venue() === venue && this.symbol() === symbol) this.features.set(rasgos);
   }
 
   async loadCandles(opts: { preserveHistory?: boolean } = {}): Promise<void> {
@@ -1111,10 +1261,11 @@ export class MarketChartPage implements OnInit {
       //
       // Los niveles y el ledger caen a lista vacía si fallan. El detalle no: sin
       // él no hay bot que pintar, y ese sí tiene que llegar al `catch`.
-      const [detail, fills, levels] = await Promise.all([
+      const [detail, fills, levels, events] = await Promise.all([
         this.botsSvc.detail(id),
         this.botsSvc.fills(id, FILL_LIMIT).catch(() => []),
         this.botsSvc.levels(id).catch(() => []),
+        this.botsSvc.events(id, EVENT_LIMIT).catch((): BotEvent[] => []),
       ]);
       // Llegó tarde: hay otra carga más nueva, o se ha cambiado de bot.
       if (seq !== this.botSeq || id !== this.botId) return;
@@ -1122,6 +1273,7 @@ export class MarketChartPage implements OnInit {
       this.overlayLevels.set(levels);
       this.overlayFills.set(fills);
       this.fillsTruncated.set(fills.length >= FILL_LIMIT);
+      this.overlayEvents.set(events);
       this.botError.set(null);
     } catch (e) {
       if (seq !== this.botSeq || id !== this.botId) return;
@@ -1133,6 +1285,21 @@ export class MarketChartPage implements OnInit {
   /** Reintento del aviso de la leyenda. */
   retryBot(): void {
     if (this.botId) void this.loadBot(this.botId);
+  }
+
+  /**
+   * La serie del bot desde la primera vela cargada hasta ahora, agregada por el
+   * servidor a 480 puntos con los extremos de cada cubo (el rango del 002). Un
+   * fallo deja la serie anterior: es una capa, no el gráfico.
+   */
+  private async loadBotSeries(id: string, desdeMs: number): Promise<void> {
+    try {
+      const serie = await this.botsSvc.snapshotsEnRango(id, desdeMs, Date.now());
+      if (id !== this.botId) return;
+      this.botSnapshots.set(serie);
+    } catch {
+      /* la capa se queda como estaba */
+    }
   }
 
   // ═══════════════════════════════════════════════════════════════
@@ -1163,12 +1330,30 @@ export class MarketChartPage implements OnInit {
     void this.router.navigateByUrl(b ? `/bots/${b.id}` : '/tabs/markets');
   }
 
-  toggleLayer(layer: 'ladder' | 'planned' | 'fills' | 'liquidation'): void {
+  toggleLayer(layer: 'ladder' | 'planned' | 'fills' | 'liquidation' | 'events'): void {
     this.layers.update((l) => ({ ...l, [layer]: !l[layer] }));
   }
 
   goToBot(bot: BotSummary | BotDetail): void {
     void this.router.navigate(['/bots', bot.id]);
+  }
+
+  toggleResult(): void {
+    this.showResult.update((v) => !v);
+  }
+
+  /**
+   * Las acciones del bot sin salir del gráfico (spec 005, R-4): la MISMA hoja y
+   * las mismas confirmaciones que en el detalle, porque es el mismo servicio.
+   * Tras el comando el bot se recarga por el camino agrupado de siempre —el
+   * evento del flujo—, y además aquí, por si el flujo tarda.
+   */
+  openCommands(bot: BotDetail): void {
+    void this.commands.open(bot.id, { onSent: () => this.loadBot(bot.id, { silent: true }) });
+  }
+
+  openMargin(): void {
+    this.marginOpen.set(true);
   }
 
   createBot(): void {
@@ -1295,3 +1480,16 @@ const ALL_INTERVALS: CandleInterval[] = [
   '1w',
   '1M',
 ];
+
+/** Un número, o hueco si no se puede leer. */
+function numero(value: string | null | undefined): number | null {
+  if (value === null || value === undefined) return null;
+  const n = Number(value);
+  return Number.isFinite(n) ? n : null;
+}
+
+/** Un precio: número mayor que cero, o hueco. Sin posición no hay precio medio. */
+function positivo(value: string | null | undefined): number | null {
+  const n = numero(value);
+  return n !== null && n > 0 ? n : null;
+}

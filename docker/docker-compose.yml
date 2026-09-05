@@ -21,15 +21,10 @@ name: crypton
 
 services:
   # Contenedor efímero: espera a que Postgres acepte conexiones, aplica las
-  # migraciones, siembra el catálogo de planes y termina. La API y el worker no
-  # arrancan hasta que sale con código 0, así que nunca corren contra un esquema
-  # desactualizado.
-  #
-  # La semilla va aquí y no aparte porque antes no la ejecutaba nadie en un
-  # despliegue con contenedores: solo el flujo de la máquina anfitriona
-  # (`make bootstrap`). El stack levantaba con la tabla `plans` vacía, así que
-  # `GET /plans` devolvía [] y la pantalla de planes salía sin catálogo. Es
-  # idempotente —todo upserts por `code`— y no toca usuarios ni bots.
+  # migraciones (`prisma migrate deploy`, solo las pendientes) y termina. La API y
+  # el worker no arrancan hasta que sale con código 0, así que nunca corren
+  # contra un esquema desactualizado. No siembra nada: esta edición no tiene
+  # catálogo de planes ni ninguna otra tabla que haya que rellenar a mano.
   migrate:
     container_name: crypton-migrate
     build:
@@ -68,6 +63,9 @@ services:
       SWAGGER_ENABLE: ${SWAGGER_ENABLE:-false}
       # Bitácora de actividad. Apagada por defecto.
       AUDIT_LOG_ENABLE: ${AUDIT_LOG_ENABLE:-false}
+      # Retención de la curva de la cartera. La aplica el worker; la API solo la
+      # declara en la respuesta. El mismo valor en los dos.
+      RETENTION_PORTFOLIO_DAYS: ${RETENTION_PORTFOLIO_DAYS:-365}
 
       DATABASE_URL: postgresql://${POSTGRES_USER:-postgres}:${POSTGRES_PASSWORD:-postgres}@crypton-db:5432/${POSTGRES_DB:-crypton}?schema=public&connection_limit=10
       REDIS_URL: redis://crypton-redis:6379
@@ -258,6 +256,10 @@ services:
       RETENTION_CRITICAL_EVENT_DAYS: ${RETENTION_CRITICAL_EVENT_DAYS:-365}
       AUDIT_LOG_ENABLE: ${AUDIT_LOG_ENABLE:-false}
       RETENTION_AUDIT_DAYS: ${RETENTION_AUDIT_DAYS:-180}
+      # La curva de la cartera (spec 003): el cron que la escribe cada cinco
+      # minutos y cuánto se conserva. El mismo valor de retención que la API.
+      PORTFOLIO_SNAPSHOTS_ENABLE: ${PORTFOLIO_SNAPSHOTS_ENABLE:-true}
+      RETENTION_PORTFOLIO_DAYS: ${RETENTION_PORTFOLIO_DAYS:-365}
 
       BUILDER_ADDRESS: ${BUILDER_ADDRESS:-}
       BUILDER_FEE_TENTH_BPS: ${BUILDER_FEE_TENTH_BPS:-0}

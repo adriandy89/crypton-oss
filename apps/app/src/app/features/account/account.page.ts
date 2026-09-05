@@ -22,6 +22,7 @@ import {
   flaskOutline,
   logOutOutline,
   paperPlaneOutline,
+  pulseOutline,
   shieldOutline,
   trophyOutline,
 } from 'ionicons/icons';
@@ -240,13 +241,25 @@ import {
           Administracion. Solo se pinta con rol ADMIN, y es comodidad: la
           autoridad es el guard del servidor, que responde 403 igualmente.
         -->
+        <!-- El backtest es de todos (spec 004): reproduce la configuracion de un
+             bot simulado sobre velas historicas. -->
+        <ui-card flush>
+          <ui-setting-row
+            routerLink="/backtest"
+            icon="flask-outline"
+            title="Backtest"
+            subtitle="Como habria ido un bot simulado sobre velas historicas"
+          />
+        </ui-card>
+
         @if (auth.user()?.role === 'ADMIN') {
           <ui-card flush>
+            <!-- La bitacora de actividad (spec 007): que ha pasado y que ha fallado. -->
             <ui-setting-row
-              routerLink="/admin/backtest"
-              icon="flask-outline"
-              title="Backtest"
-              subtitle="Reproduce un bot simulado sobre velas historicas"
+              routerLink="/admin/activity"
+              icon="pulse-outline"
+              title="Actividad"
+              subtitle="Que ha pasado en la plataforma y que ha fallado"
             >
               <ui-badge size="sm" tone="neutral">admin</ui-badge>
             </ui-setting-row>
@@ -310,6 +323,7 @@ export class AccountPage implements OnInit {
       logOutOutline,
       shieldOutline,
       paperPlaneOutline,
+      pulseOutline,
       trophyOutline,
       chevronForwardOutline,
     });

@@ -85,9 +85,11 @@ export class BacktestsService {
     }));
   }
 
-  async run(dto: CreateBacktestDto, adminId: string): Promise<BacktestResult> {
-    const bot = await this.db.bot.findUnique({
-      where: { id: dto.botId },
+  async run(dto: CreateBacktestDto, userId: string): Promise<BacktestResult> {
+    // Solo los bots del usuario: el de otro es un 404, no un 403 que confirmaría
+    // que existe (spec 004).
+    const bot = await this.db.bot.findFirst({
+      where: { id: dto.botId, user_id: userId },
       select: {
         id: true,
         name: true,
@@ -251,7 +253,7 @@ export class BacktestsService {
         ],
       };
 
-      await this.persist(result, adminId, revision.config, out.fillsTotal, out.ticks);
+      await this.persist(result, userId, revision.config, out.fillsTotal, out.ticks);
       this.logger.log(
         `Backtest de ${bot.symbol} (${dto.interval}, ${historia.candles.length} velas) en ${result.meta.durationMs} ms`,
       );
@@ -320,7 +322,7 @@ export class BacktestsService {
 
   private async persist(
     r: BacktestResult,
-    adminId: string,
+    userId: string,
     config: unknown,
     fillsTotal: number,
     ticks: number,
@@ -328,7 +330,7 @@ export class BacktestsService {
     const run = await this.db.backtestRun.create({
       data: {
         bot_id: r.meta.botId,
-        requested_by: adminId,
+        requested_by: userId,
         venue: r.meta.venue,
         symbol: r.meta.symbol,
         strategy: r.meta.strategy,
@@ -378,9 +380,10 @@ export class BacktestsService {
     });
   }
 
-  async list(opts: { botId?: string; limit?: number }) {
+  /** Las ejecuciones del usuario, y solo las suyas (spec 004). */
+  async list(userId: string, opts: { botId?: string; limit?: number }) {
     return this.db.backtestRun.findMany({
-      where: opts.botId ? { bot_id: opts.botId } : {},
+      where: { requested_by: userId, ...(opts.botId ? { bot_id: opts.botId } : {}) },
       orderBy: { created_at: 'desc' },
       take: Math.min(opts.limit ?? 25, 100),
       select: {
@@ -400,13 +403,20 @@ export class BacktestsService {
     });
   }
 
-  async detail(id: string) {
-    const run = await this.db.backtestRun.findUnique({ where: { id } });
+  async detail(userId: string, id: string) {
+    const run = await this.db.backtestRun.findFirst({ where: { id, requested_by: userId } });
     if (!run) throw new NotFoundException('Ese backtest no existe.');
     return run;
   }
 
-  async fills(id: string, limit = 500) {
+  async fills(userId: string, id: string, limit = 500) {
+    // La propiedad se comprueba ANTES de leer la tabla de ejecuciones: `run_id`
+    // no sabe de usuarios.
+    const propio = await this.db.backtestRun.findFirst({
+      where: { id, requested_by: userId },
+      select: { id: true },
+    });
+    if (!propio) throw new NotFoundException('Ese backtest no existe.');
     return this.db.backtestFill.findMany({
       where: { run_id: id },
       orderBy: { ts: 'asc' },
@@ -414,8 +424,10 @@ export class BacktestsService {
     });
   }
 
-  async remove(id: string): Promise<void> {
-    await this.db.backtestRun.delete({ where: { id } }).catch(() => undefined);
+  async remove(userId: string, id: string): Promise<void> {
+    // `deleteMany` con el usuario en el filtro: la de otro no se borra y no
+    // falla, igual que antes cuando no existía.
+    await this.db.backtestRun.deleteMany({ where: { id, requested_by: userId } });
   }
 }
 

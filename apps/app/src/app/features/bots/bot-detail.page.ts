@@ -1,9 +1,7 @@
 import { Component, OnInit, computed, inject, signal } from '@angular/core';
-import { FormsModule } from '@angular/forms';
 import { takeUntilDestroyed } from '@angular/core/rxjs-interop';
 import { ActivatedRoute, Router, RouterLink } from '@angular/router';
 import {
-  ActionSheetController,
   AlertController,
   IonBackButton,
   IonButton,
@@ -15,12 +13,10 @@ import {
   IonLabel,
   IonList,
   IonNote,
-  IonModal,
   IonSegment,
   IonSegmentButton,
   IonSpinner,
   IonTitle,
-  IonToggle,
   IonToolbar,
 } from '@ionic/angular/standalone';
 import { addIcons } from 'ionicons';
@@ -29,35 +25,51 @@ import {
   closeOutline,
   ellipsisVertical,
   flaskOutline,
+  informationCircleOutline,
   shieldOutline,
   statsChartOutline,
+  trendingUpOutline,
   trophyOutline,
   warningOutline,
 } from 'ionicons/icons';
-import type { FieldMeta } from '@crypton/shared';
-import { AuthService } from '../../core/auth';
 import {
-  BotsService,
-  LeaderboardService,
-  StreamService,
-  ToastService,
-  WalletService,
-} from '../../core/services';
+  D,
+  SERIES_POINTS,
+  SNAPSHOT_CADENCE_MS,
+  alMinuto,
+  bucketMsFor,
+  costeDeComisionesPct,
+  enMercadoPct,
+  indiceDePeorCaida,
+  repartoDeEjecucion,
+  resumenDeCiclos,
+  aCsv,
+  cronologiaPorCiclo,
+  sumaExacta,
+  type FieldMeta,
+} from '@crypton/shared';
+import { Clipboard } from '@capacitor/clipboard';
+import { BotsService, LeaderboardService, StreamService, ToastService } from '../../core/services';
 import type {
-  BotCommand,
+  BotConfigRevision,
+  BotCycle,
   BotDetail,
   BotEvent,
+  BotFill,
   BotOrder,
-  MarginAction,
+  BotSnapshot,
+  ConfigChange,
   MarketMakerStats,
 } from '../../core/models';
-import { DESTRUCTIVE_COMMANDS } from '../../core/models';
 import {
   errorText,
+  eventLabel,
   fieldLabel,
   isMarketMaker,
+  labelDeClave,
   money,
   optionLabel,
+  orderStatusLabel,
   parseHttpError,
   pct,
   pnlColor,
@@ -76,37 +88,55 @@ import {
   UiCardComponent,
   UiCollapsibleComponent,
   UiFieldComponent,
+  UiLiqMeterComponent,
+  UiMarginSheetComponent,
+  UiMeterComponent,
   UiMutabilityBadgeComponent,
   UiNoticeComponent,
+  UiSparkComponent,
   UiStatComponent,
   UiStatusPillComponent,
   UiStrategyHelpComponent,
 } from '../../shared/ui';
+// Directo de `bot-overlay` y no del indice de `shared/chart`: el indice arrastra
+// el componente del grafico grande, y esta pantalla no lo pinta.
+import { levelTitle } from '../../shared/chart/bot-overlay';
+import { serieDeResultado, ventanaDe } from '../../shared/chart/bot-series';
+import { BotCommandsService } from '../../shared/bot/bot-commands.service';
+import {
+  entradasDe,
+  filasDeCiclos,
+  filasDeOrdenes,
+  rotuloDeCiclo,
+  ventanasDe,
+} from './bot-timeline';
+import { liqNum } from '../../core/utils/risk';
 
 type Tab = 'resumen' | 'escalera' | 'ordenes' | 'ajustes' | 'eventos';
 
-/** Etiquetas de los comandos, en el orden en que se ofrecen. */
-const COMMAND_LABELS: { command: BotCommand; label: string; role?: 'destructive' }[] = [
-  // Reparar va primero y sin rol destructivo a propósito: es lo que se busca
-  // cuando algo «se ve raro», y no toca ni el libro ni la posición.
-  { command: 'REPAIR', label: 'Reparar (resincronizar con el exchange)' },
-  { command: 'PAUSE', label: 'Pausar (mantiene la posición)' },
-  { command: 'RESUME', label: 'Reanudar' },
-  { command: 'CANCEL_ALL_ORDERS', label: 'Cancelar todas las órdenes' },
-  { command: 'ADD_SAFETY_NOW', label: 'Adelantar orden de seguridad' },
-  { command: 'REANCHOR_GRID', label: 'Recentrar la retícula' },
-  { command: 'TAKE_PROFIT_NOW', label: 'Tomar beneficio ya', role: 'destructive' },
-  { command: 'CLOSE_NOW', label: 'Cerrar posición ya', role: 'destructive' },
-  { command: 'STOP_KEEP_POSITION', label: 'Parar conservando la posición' },
-  { command: 'STOP_AND_CLOSE', label: 'Parar y cerrar', role: 'destructive' },
-  { command: 'PANIC', label: 'PÁNICO: cancelar y cerrar todo', role: 'destructive' },
-];
+/**
+ * Ventanas de la curva. La primera es el endpoint de siempre —las ultimas 500
+ * filas, 8 h 20 min—; las otras tres piden un rango agregado en el servidor.
+ * 30 d es la ultima porque es la retencion de la tabla: no hay mas pasado.
+ */
+type Rango = '8h' | '24h' | '7d' | '30d';
+const RANGO_MS: Record<Exclude<Rango, '8h'>, number> = {
+  '24h': 24 * 3_600_000,
+  '7d': 7 * 24 * 3_600_000,
+  '30d': 30 * 24 * 3_600_000,
+};
+export const RANGOS: readonly Rango[] = ['8h', '24h', '7d', '30d'];
+
+/** Una fila de la escalera: un nivel, el precio de ahora o la liquidación. */
+type LadderRow =
+  | { kind: 'level'; o: BotOrder; price: string; dist: string | null }
+  | { kind: 'now'; price: string }
+  | { kind: 'liq'; price: string };
 
 @Component({
   selector: 'app-bot-detail',
   standalone: true,
   imports: [
-    FormsModule,
     RouterLink,
     IonHeader,
     IonToolbar,
@@ -116,7 +146,6 @@ const COMMAND_LABELS: { command: BotCommand; label: string; role?: 'destructive'
     IonButton,
     IonIcon,
     IonContent,
-    IonModal,
     IonSegment,
     IonSegmentButton,
     IonList,
@@ -124,13 +153,16 @@ const COMMAND_LABELS: { command: BotCommand; label: string; role?: 'destructive'
     IonLabel,
     IonNote,
     IonSpinner,
-    IonToggle,
     UiBadgeComponent,
     UiCardComponent,
     UiCollapsibleComponent,
     UiFieldComponent,
+    UiLiqMeterComponent,
+    UiMarginSheetComponent,
+    UiMeterComponent,
     UiMutabilityBadgeComponent,
     UiNoticeComponent,
+    UiSparkComponent,
     UiStatComponent,
     UiStatusPillComponent,
     UiStrategyHelpComponent,
@@ -144,11 +176,9 @@ export class BotDetailPage implements OnInit {
   private readonly bots = inject(BotsService);
   private readonly stream = inject(StreamService);
   private readonly toast = inject(ToastService);
-  private readonly sheets = inject(ActionSheetController);
+  private readonly commands = inject(BotCommandsService);
   private readonly alerts = inject(AlertController);
   private readonly leaderboard = inject(LeaderboardService);
-  private readonly auth = inject(AuthService);
-  private readonly wallet = inject(WalletService);
 
   readonly bot = signal<BotDetail | null>(null);
   readonly orders = signal<BotOrder[]>([]);
@@ -159,22 +189,51 @@ export class BotDetailPage implements OnInit {
   readonly loading = signal(true);
   /** Ficha de market making. null mientras no se ha pedido o no aplica. */
   readonly mmStats = signal<MarketMakerStats | null>(null);
+  /**
+   * La serie temporal y los ciclos cerrados. Los dos endpoints existían desde el
+   * principio con su método cliente escrito y ninguna pantalla los llamaba
+   * (spec 002, F-10): son lo que convierte esta pantalla de una foto del último
+   * snapshot en algo que contesta «¿está ganando o solo está abierto?».
+   */
+  readonly snapshots = signal<BotSnapshot[]>([]);
+  readonly cycles = signal<BotCycle[]>([]);
+  /** El historial de configuración (spec 006). Se pide con el detalle; vacío si falla. */
+  readonly revisions = signal<BotConfigRevision[]>([]);
+  /**
+   * Las ejecuciones, SOLO para la vista por ciclo (spec 006, R-5): son una
+   * petición más por refresco y la bitácora plana no las necesita. `null`
+   * mientras nadie ha abierto esa vista.
+   */
+  readonly fills = signal<BotFill[] | null>(null);
+  readonly vistaEventos = signal<'bitacora' | 'ciclos'>('bitacora');
+  /**
+   * Órdenes, ejecuciones y sucesos en una lista por ciclo. La agrupación es
+   * `cronologiaPorCiclo` de `shared`, con sus tests; aquí solo se adaptan las
+   * columnas (`bot-timeline.ts`). Los sucesos van por la hora, y se dice.
+   */
+  readonly cronologia = computed(() =>
+    cronologiaPorCiclo(
+      entradasDe(this.orders(), this.fills() ?? [], this.events()),
+      ventanasDe(this.cycles(), this.bot()?.cycle ?? null),
+    ),
+  );
+  readonly rotuloDeCiclo = rotuloDeCiclo;
+  /** `shortDate` para un instante en ms: las entradas de la cronología llevan `at` numérico. */
+  readonly fecha = (ms: number): string => shortDate(new Date(ms));
+  readonly rango = signal<Rango>('8h');
+  readonly rangos = RANGOS;
+  /** El cubo con el que llegó la serie: de él sale el umbral de hueco. */
+  readonly serieBucket = signal<number>(SNAPSHOT_CADENCE_MS);
+  /** Cuándo se pidió la serie por última vez: se vuelve a pedir como mucho una vez por cadencia. */
+  private serieCargadaEn = 0;
 
   /** Copia editable de la configuración. No se toca `bot().config` hasta guardar. */
   readonly draft = signal<Record<string, unknown>>({});
 
   // ── Ajuste de margen de la posición aislada ───────────────────
+  // El formulario entero vive en `ui-margin-sheet`, compartido con el gráfico
+  // (spec 005). Aquí solo se decide si está abierto.
   readonly marginOpen = signal(false);
-  readonly marginAction = signal<MarginAction>('ADD');
-  readonly marginAmount = signal('');
-  /**
-   * Interruptor de contabilidad. Arranca APAGADO siempre, y a propósito: el
-   * efecto que la gente busca —alejar la liquidación— lo da la transferencia
-   * sola, y encenderlo retiende la escalera. Que el efecto extra haya que
-   * pedirlo es la diferencia entre una casilla y una sorpresa.
-   */
-  readonly marginCountAsCapital = signal(false);
-  readonly marginBusy = signal(false);
 
   /**
    * ¿Se puede ajustar el margen de este bot AHORA?
@@ -192,13 +251,6 @@ export class BotDetailPage implements OnInit {
     return this.isLive();
   });
 
-  /** Margen libre de la conexión del bot. `null` = no se pudo leer. */
-  readonly freeMargin = computed(() => {
-    const b = this.bot();
-    if (!b) return null;
-    return this.wallet.of(b.exchange_account_id, b.id)?.available ?? null;
-  });
-
   readonly money = money;
   readonly signed = signed;
   readonly pct = pct;
@@ -211,6 +263,9 @@ export class BotDetailPage implements OnInit {
   readonly strategyLabel = strategyLabel;
   readonly strategyBlurb = strategyBlurb;
   readonly venueLabel = venueLabel;
+  readonly levelTitle = levelTitle;
+  readonly eventLabel = eventLabel;
+  readonly orderStatusLabel = orderStatusLabel;
 
   private id = '';
 
@@ -250,17 +305,97 @@ export class BotDetailPage implements OnInit {
   });
 
   /**
-   * Reparto de las ejecuciones entre maker y taker, en %.
+   * Reparto de las ejecuciones entre maker y taker.
    *
    * Es la cifra que dice si el bot está haciendo su trabajo: un market maker
    * que cruza el libro paga comisión de taker y se queda sin el diferencial que
    * justifica la estrategia. El dato estaba en la base desde siempre —cada fill
-   * guarda `is_taker`— y no se agregaba en ninguna parte.
+   * guarda `is_taker`— y no se agregaba en ninguna parte. Se pinta como barra de
+   * dos segmentos y no como donut: dos barras contiguas se comparan, dos donuts no.
    */
-  readonly makerPct = computed(() => {
+  readonly reparto = computed(() => {
     const st = this.mmStats();
-    if (!st || st.fills === 0) return null;
-    return ((st.makerFills / st.fills) * 100).toFixed(1) + ' %';
+    return st && st.fills > 0 ? repartoDeEjecucion(st) : null;
+  });
+
+  // ── Analítica del resumen ──────────────────────────────────────
+  //
+  // La serie se llama «resultado acumulado» y no «equity» a propósito:
+  // `bot_snapshots.equity` es `realized_pnl_acc + unrealized_pnl`, es decir PnL,
+  // no patrimonio, y rotularlo «equity» heredaría el vocabulario del sector con
+  // otro significado (spec 002, R-7).
+  readonly vista = computed(() => serieDeResultado(this.snapshots(), this.serieBucket()));
+  readonly peorIdx = computed(() => {
+    const v = this.vista();
+    return v ? indiceDePeorCaida(v) : null;
+  });
+  /** Lo que la serie cubre DE VERDAD. Con 500 filas a una por minuto, 8 h 20 min. */
+  readonly ventana = computed(() => {
+    const ms = ventanaDe(this.vista());
+    return ms > 0 ? uptime(Math.round(ms / 1000)) : null;
+  });
+  /** Fracción de los snapshots con posición abierta, en %. */
+  readonly enMercado = computed(() => enMercadoPct(this.snapshots().map((x) => x.position_qty)));
+  readonly ciclos = computed(() => resumenDeCiclos(this.cycles()));
+  /** Resultado total de la cabecera, con `Decimal` (invariante 1). */
+  readonly total = computed(() => {
+    const b = this.bot();
+    return b ? sumaExacta([b.realizedPnl, b.unrealizedPnl]) : '0';
+  });
+  /**
+   * Distancia a liquidación, del SERVIDOR (medida contra el precio de la caché de
+   * tickers). Antes esta pantalla la pintaba siempre en rojo estuviera al 3 % o
+   * al 60 %, y era la única de las cuatro sin semáforo (spec 002, F-02). El
+   * semáforo lo pinta `ui-liq-meter`; aquí solo se decide si hay tarjeta.
+   */
+  readonly liqDist = computed(() => liqNum(this.bot()?.liquidationDistancePct));
+  /** Qué parte de lo capturado se llevan las comisiones, en %. */
+  readonly costePct = computed(() => {
+    const c = this.ciclos();
+    return costeDeComisionesPct(c.neto, c.comisiones);
+  });
+  /**
+   * Una frase que contesta «¿está ganando o solo está abierto?».
+   *
+   * Solo hechos, y solo con recorrido: con menos de tres ciclos cerrados no hay
+   * nada que resumir y se calla. El tono se decide por la tasa de acierto Y por
+   * el signo del total, nunca por uno solo de los dos.
+   */
+  readonly veredicto = computed(() => {
+    const c = this.ciclos();
+    if (c.cerrados < 3) return null;
+    const v = this.vista();
+    const partes = [`${c.enVerde} de ${c.cerrados} ciclos cerrados en verde`];
+    if (v && D(v.peorCaida).gt(0)) {
+      const cuando = this.ventana() ? ` en las últimas ${this.ventana()}` : '';
+      partes.push(`peor caída ${signed(D(v.peorCaida).neg().toFixed())}${cuando}`);
+    }
+    const bien = D(c.enVerde).div(c.cerrados).gte(0.6) && D(this.total()).gt(0);
+    return { texto: partes.join(' · '), tone: bien ? ('ok' as const) : ('info' as const) };
+  });
+  /**
+   * La escalera como escalera: ordenada por precio, con el precio de ahora
+   * insertado en su sitio y la liquidación cerrándola. Antes era una lista de
+   * filas sin relación espacial con el precio, y sin la única referencia que da
+   * sentido al conjunto.
+   */
+  readonly escalera = computed((): LadderRow[] => {
+    const b = this.bot();
+    if (!b) return [];
+    // La distancia de cada nivel al precio de ahora se calcula UNA vez aquí, no
+    // en la plantilla en cada vuelta de la detección de cambios.
+    const mark = b.snapshot?.mark_price;
+    const dist = (price: string): string | null =>
+      mark && D(mark).gt(0) ? D(price).minus(mark).div(mark).mul(100).toFixed(2) : null;
+    const filas: LadderRow[] = b.openOrdersList.map((o) => ({
+      kind: 'level',
+      o,
+      price: o.price,
+      dist: dist(o.price),
+    }));
+    if (b.snapshot?.mark_price) filas.push({ kind: 'now', price: b.snapshot.mark_price });
+    if (b.liquidationPrice) filas.push({ kind: 'liq', price: b.liquidationPrice });
+    return filas.sort((x, y) => D(y.price).comparedTo(D(x.price)));
   });
 
   /**
@@ -269,7 +404,6 @@ export class BotDetailPage implements OnInit {
    * La app esconde lo que no va a funcionar, pero quien decide de verdad es el
    * servidor.
    */
-  readonly esAdmin = computed(() => this.auth.user()?.role === 'ADMIN');
   readonly publicado = computed(() => this.bot()?.share?.public === true);
   /** El ranking exige 6 h de recorrido: se publica igual, pero no aparece aún. */
   readonly demasiadoJoven = computed(() => (this.bot()?.uptimeSeconds ?? 0) < 6 * 3600);
@@ -293,6 +427,8 @@ export class BotDetailPage implements OnInit {
       flaskOutline,
       chevronForwardOutline,
       closeOutline,
+      trendingUpOutline,
+      informationCircleOutline,
     });
     // Cualquier evento de ESTE bot refresca la pantalla.
     //
@@ -301,9 +437,12 @@ export class BotDetailPage implements OnInit {
     // del `Subject` del servicio, que dura toda la sesion. Visitar diez veces el
     // mismo bot dejaba diez suscripciones con el mismo `id`, y un solo evento de
     // ese bot disparaba DIEZ peticiones identicas a la API. Crecia con el uso.
-    this.stream.stream.pipe(takeUntilDestroyed()).subscribe((ev) => {
-      if (ev.botId === this.id) void this.load(false);
-    });
+    // La ventana de agrupación vive en `StreamService.ofBot`, compartida con el
+    // gráfico: dos copias de esa política ya se desalinearon una vez.
+    this.stream
+      .ofBot(() => this.id)
+      .pipe(takeUntilDestroyed())
+      .subscribe(() => void this.load(false));
   }
 
   async ngOnInit(): Promise<void> {
@@ -320,12 +459,22 @@ export class BotDetailPage implements OnInit {
       // guardar: refrescar por un evento no debe borrarle lo que estaba
       // escribiendo.
       if (!this.dirty()) this.draft.set({ ...detail.config });
-      const [orders, events] = await Promise.all([
+      // La serie y los ciclos van con `catch`: son analítica, y si fallan la
+      // pantalla se pinta igual con lo que sí llegó.
+      const [orders, events, snapshots, cycles, revisions] = await Promise.all([
         this.bots.orders(this.id, 60),
         this.bots.events(this.id, 60),
+        this.cargarSerie().catch((): BotSnapshot[] => []),
+        this.bots.cycles(this.id, 60).catch((): BotCycle[] => []),
+        this.bots.revisions(this.id).catch((): BotConfigRevision[] => []),
       ]);
       this.orders.set(orders);
       this.events.set(events);
+      this.snapshots.set(snapshots);
+      this.cycles.set(cycles);
+      this.revisions.set(revisions);
+      // Las ejecuciones se refrescan solo si alguien ya abrió la vista por ciclo.
+      if (this.fills() !== null) await this.cargarFills();
 
       // La ficha de market making solo se pide para los bots que la tienen: en
       // el resto sería una llamada más por refresco para leer ceros. Y si falla,
@@ -339,6 +488,46 @@ export class BotDetailPage implements OnInit {
       await this.toast.error(errorText(e));
     } finally {
       this.loading.set(false);
+    }
+  }
+
+  // ── Historial, cronología y CSV (spec 006) ─────────────────────
+
+  /** «Apalancamiento: 2 → 3», con el nombre legible del campo y los valores como en los COLD. */
+  cambioTexto(c: ConfigChange): string {
+    const de = c.from === undefined ? '—' : textoDeConfig(c.from);
+    const a = c.to === undefined ? '—' : textoDeConfig(c.to);
+    return `${labelDeClave(c.labelKey, c.key)}: ${de} → ${a}`;
+  }
+
+  async verEventos(vista: 'bitacora' | 'ciclos'): Promise<void> {
+    this.vistaEventos.set(vista);
+    if (vista === 'ciclos' && this.fills() === null) await this.cargarFills();
+  }
+
+  private async cargarFills(): Promise<void> {
+    this.fills.set(await this.bots.fills(this.id, 100).catch((): BotFill[] => []));
+  }
+
+  copiarCiclos(): Promise<void> {
+    return this.copiar(aCsv(filasDeCiclos(this.cycles())), 'ciclos');
+  }
+
+  copiarOrdenes(): Promise<void> {
+    return this.copiar(aCsv(filasDeOrdenes(this.orders())), 'órdenes');
+  }
+
+  /**
+   * Al portapapeles y no a un fichero: no exige plugins nuevos y cubre el caso
+   * («llevármelo a una hoja»). El aviso dice lo de los decimales porque es lo
+   * que va a sorprender a quien pegue en una hoja en castellano.
+   */
+  private async copiar(texto: string, que: string): Promise<void> {
+    try {
+      await Clipboard.write({ string: texto });
+      await this.toast.success(`CSV de ${que} copiado. Los importes van con punto decimal.`);
+    } catch (e) {
+      await this.toast.error(errorText(e));
     }
   }
 
@@ -428,149 +617,31 @@ export class BotDetailPage implements OnInit {
     }
   }
 
-  /** Menú de comandos de ejecución. */
+  /**
+   * Menú de comandos de ejecución. Es el MISMO servicio que usa el gráfico
+   * (spec 005, R-4): una lista de comandos y unas confirmaciones, no dos.
+   */
   async openCommands(): Promise<void> {
-    const sheet = await this.sheets.create({
-      header: 'Acciones del bot',
-      buttons: [
-        ...COMMAND_LABELS.map((c) => ({
-          text: c.label,
-          role: c.role,
-          handler: () => void this.runCommand(c.command),
-        })),
-        { text: 'Cerrar', role: 'cancel' },
-      ],
-    });
-    await sheet.present();
+    await this.commands.open(this.id, { onSent: () => this.load(false) });
   }
 
   async start(): Promise<void> {
-    await this.runCommand('START');
+    await this.commands.run(this.id, 'START', { onSent: () => this.load(false) });
   }
 
   // ═══════════════════════════════════════════════════════════════
   // Ajuste de margen
   // ═══════════════════════════════════════════════════════════════
 
-  // Sincrono a proposito: abre la hoja y dispara la lectura del saldo sin
-  // esperarla —eso lo explica el comentario de abajo—. Solo lo llama la
-  // plantilla, que no encadena nada con el resultado.
+  // Sincrono a proposito: solo lo llama la plantilla. El saldo lo pide la hoja
+  // al abrirse, no esta pantalla.
   openMarginSheet(): void {
-    this.marginAction.set('ADD');
-    this.marginAmount.set('');
-    this.marginCountAsCapital.set(false);
     this.marginOpen.set(true);
-
-    // El saldo se pide al abrir y no al cargar la pantalla: es una lectura
-    // contra el venue y la inmensa mayoría de las visitas al detalle no van a
-    // ajustar margen. No se espera ni se bloquea nada por ella — si no llega,
-    // la hoja funciona igual y sin los atajos de porcentaje.
-    const b = this.bot();
-    // Con el bot: si su conexion es de simulacion, el saldo que cuenta es el de
-    // SU sandbox, no el capital de partida de la conexion.
-    if (b) {
-      void this.wallet.load(b.exchange_account_id, b.symbol, { force: true, botId: b.id });
-    }
   }
 
-  closeMarginSheet(): void {
-    this.marginOpen.set(false);
-  }
-
-  /** Rellena el importe con una fracción del margen libre. */
-  fillMargin(fraction: number): void {
-    const free = this.freeMargin();
-    if (!free) return;
-    this.marginAmount.set(String(Math.floor(Number(free) * fraction * 100) / 100));
-  }
-
-  async submitMargin(): Promise<void> {
-    const amount = this.marginAmount().trim();
-    if (!amount || !(Number(amount) > 0)) {
-      await this.toast.error('Escribe un importe mayor que cero.');
-      return;
-    }
-
-    // Retirar ACERCA la liquidación: es la operación inversa a la que se viene
-    // buscando, así que se pregunta aquí además de en la API.
-    if (this.marginAction() === 'REMOVE') {
-      const alert = await this.alerts.create({
-        header: '¿Retirar margen?',
-        message:
-          'Sacar colateral de esta posición ACERCA su precio de liquidación. ' +
-          'Si el mercado se mueve en contra, se liquidará antes.',
-        buttons: [
-          { text: 'Cancelar', role: 'cancel' },
-          {
-            text: 'Retirar',
-            role: 'destructive',
-            handler: () => void this.sendMargin(amount),
-          },
-        ],
-      });
-      await alert.present();
-      return;
-    }
-    await this.sendMargin(amount);
-  }
-
-  private async sendMargin(amount: string): Promise<void> {
-    this.marginBusy.set(true);
-    try {
-      const action = this.marginAction();
-      await this.bots.adjustMargin(this.id, {
-        amount,
-        action,
-        countAsBotCapital: this.marginCountAsCapital(),
-      });
-      this.marginOpen.set(false);
-      // «Enviado» y no «aplicado»: quien habla con el venue es el worker, y el
-      // resultado real —con la liquidación de antes y de después— aparece en la
-      // bitácora del bot cuando el comando se ejecuta.
-      await this.toast.success(
-        action === 'ADD'
-          ? 'Aporte de margen enviado. Verás el nuevo precio de liquidación en los eventos.'
-          : 'Retirada de margen enviada.',
-      );
-      await this.load(false);
-    } catch (e) {
-      await this.toast.error(errorText(e));
-    } finally {
-      this.marginBusy.set(false);
-    }
-  }
-
-  private async runCommand(command: BotCommand): Promise<void> {
-    // Los comandos que cierran a mercado realizan el resultado al instante y no
-    // se pueden deshacer: se pregunta SIEMPRE, aunque la API también lo exija.
-    if (DESTRUCTIVE_COMMANDS.includes(command)) {
-      const alert = await this.alerts.create({
-        header: '¿Seguro?',
-        message:
-          'Esta acción cierra la posición a mercado y realiza el resultado al instante. No se puede deshacer.',
-        buttons: [
-          { text: 'Cancelar', role: 'cancel' },
-          {
-            text: 'Confirmar',
-            role: 'destructive',
-            handler: () => void this.send(command, true),
-          },
-        ],
-      });
-      await alert.present();
-      return;
-    }
-    await this.send(command, false);
-  }
-
-  private async send(command: BotCommand, confirm: boolean): Promise<void> {
-    try {
-      await this.bots.command(this.id, command, confirm);
-      await this.toast.success(`Comando ${command} enviado.`);
-      await this.load(false);
-    } catch (e) {
-      await this.toast.error(errorText(e));
-    }
+  /** Tras un comando o un ajuste enviado desde una hoja compartida. */
+  refreshAfterAction(): void {
+    void this.load(false);
   }
 
   async remove(): Promise<void> {
@@ -632,5 +703,46 @@ export class BotDetailPage implements OnInit {
   isLive(): boolean {
     const status = this.bot()?.status;
     return status === 'RUNNING' || status === 'STARTING' || status === 'PAUSED';
+  }
+
+  /**
+   * La serie según la ventana elegida. Sin rango es el endpoint de siempre; con
+   * él, el servidor agrega y conserva los extremos de cada cubo, y aquí se
+   * recuerda ese cubo para romper la línea solo donde de verdad hay hueco.
+   *
+   * Se vuelve a pedir como mucho una vez por cadencia: la tabla escribe una
+   * fila por minuto y un market maker dispara un refresco cada segundo y medio,
+   * así que 39 de cada 40 descargas eran idénticas. Y si mientras se pedía el
+   * usuario cambió de ventana, lo que llega es de otra y se descarta.
+   */
+  private async cargarSerie(forzar = false): Promise<BotSnapshot[]> {
+    const r = this.rango();
+    if (!forzar && Date.now() - this.serieCargadaEn < SNAPSHOT_CADENCE_MS) return this.snapshots();
+    const hasta = Date.now();
+    const serie =
+      r === '8h'
+        ? await this.bots.snapshots(this.id)
+        : await this.bots.snapshotsEnRango(this.id, hasta - RANGO_MS[r], hasta);
+    if (this.rango() !== r) return this.snapshots();
+    this.serieBucket.set(
+      r === '8h'
+        ? SNAPSHOT_CADENCE_MS
+        : bucketMsFor(alMinuto(hasta - RANGO_MS[r]), alMinuto(hasta), SERIES_POINTS / 4),
+    );
+    this.serieCargadaEn = Date.now();
+    return serie;
+  }
+
+  /** Cambia la ventana y vuelve a pedir solo la serie: el resto no cambia. */
+  async setRango(r: Rango): Promise<void> {
+    if (r === this.rango()) return;
+    this.rango.set(r);
+    const serie = await this.cargarSerie(true).catch((): BotSnapshot[] | null => null);
+    if (serie !== null && this.rango() === r) this.snapshots.set(serie);
+  }
+
+  /** Duración legible a partir de milisegundos. */
+  dur(ms: number | null): string {
+    return ms === null ? '—' : uptime(Math.round(ms / 1000));
   }
 }

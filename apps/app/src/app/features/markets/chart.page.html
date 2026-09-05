@@ -170,6 +170,9 @@
         [showVolume]="showVolume()"
         [lines]="visibleLines()"
         [markers]="visibleMarkers()"
+        [events]="visibleEvents()"
+        [average]="averageSeries()"
+        [result]="resultSeries()"
         [fitSpan]="bot() ? overlaySpan() : null"
         [scaleKey]="scaleKey()"
         (needHistory)="loadMoreHistory()"
@@ -185,7 +188,9 @@
           <ion-spinner name="dots" />
         </div>
       } @else if (noMoreHistory()) {
-        <div class="histnota">{{ venueLabel(venue()) }} no sirve más histórico de {{ intervalLabel(interval()) }}</div>
+        <div class="histnota">
+          {{ venueLabel(venue()) }} no sirve más histórico de {{ intervalLabel(interval()) }}
+        </div>
       } @else if (historyCapped()) {
         <div class="histnota">Máximo en pantalla. Usa un intervalo mayor para ver más atrás</div>
       }
@@ -239,6 +244,12 @@
       <button type="button" [class.off]="!layers().fills" (click)="toggleLayer('fills')">
         <i class="tri"></i>Ejecuciones
       </button>
+      <!-- Los sucesos del bot sobre el eje de tiempo: cuándo recentró, cuándo
+           saltó una guarda, cuándo se aportó margen. Son los instantes que
+           explican por qué la escalera de hoy no se parece a la de ayer. -->
+      <button type="button" [class.off]="!layers().events" (click)="toggleLayer('events')">
+        <i class="dot"></i>Sucesos
+      </button>
       <button
         type="button"
         [class.off]="!layers().liquidation"
@@ -271,12 +282,48 @@
           últimas {{ overlayFills().length }}
         </span>
       }
+    </div>
 
-      @if (liqDistance(); as d) {
-        <span class="liqdist num" [class.warn]="d < 25" [class.danger]="d < 10">
-          a {{ money(d, 1) }} %
-        </span>
-      }
+    <!-- La distancia a liquidacion como barra ademas de numero, con el mismo
+         semaforo (10 / 25) que la cartera, la lista y el detalle. El numero es
+         el del SERVIDOR: antes esta pantalla lo calculaba contra la vela viva y
+         las otras tres contra el precio de entrada, y el mismo bot daba tres
+         cifras distintas. -->
+    @if (liqDistance(); as d) {
+      <div class="liqrow">
+        <ui-liq-meter [pct]="d" />
+        <!-- La acción que aleja la liquidación, al lado de la cifra que dice
+             cuánto falta: es la misma hoja que en el detalle. -->
+        @if (canAdjustMargin()) {
+          <button type="button" class="marg" (click)="openMargin()">Ajustar margen</button>
+        }
+      </div>
+    }
+  }
+
+  <!-- ═══ Veredicto de mercado ═══
+       La decision que se toma delante de este grafico es «¿este par es terreno
+       de rejilla o me va a arrastrar?», y eso lo contesta la eficiencia de
+       Kaufman y el ATR, no la vela. No es un panel de indicadores: son tres
+       cifras y la respuesta. Las calcula el servidor con la misma funcion que
+       alimenta al advisor, y no es consejo: es una lectura del recorrido. -->
+  @if (veredictoMercado(); as v) {
+    <div class="chart-verdict">
+      <div class="row">
+        <div class="cell">
+          <span class="k">ATR diario</span
+          ><span class="v num">{{ money(v.rasgos.atrPct1d, 1) }} %</span>
+        </div>
+        <div class="cell">
+          <span class="k">Rango 30 d</span
+          ><span class="v num">{{ money(v.rasgos.rangePct30, 0) }} %</span>
+        </div>
+        <div class="cell">
+          <span class="k">Eficiencia</span
+          ><span class="v num">{{ money(v.rasgos.efficiency, 2) }}</span>
+        </div>
+      </div>
+      <p class="say" [class]="'say ' + v.tono">{{ v.texto }}</p>
     </div>
   }
 
@@ -487,17 +534,44 @@
         </button>
       </section>
 
+      <!-- ── Resultado del bot ──
+           Solo con bot: un panel más bajo el precio, con el cero como base.
+           Apagado por defecto porque es lo único de esta pantalla que añade un
+           panel al motor gráfico. -->
+      @if (bot()) {
+        <section>
+          <button
+            type="button"
+            class="switch"
+            (click)="toggleResult()"
+            [attr.aria-pressed]="showResult()"
+          >
+            <span class="who">
+              <b>Resultado bajo el precio</b>
+              <em>El resultado acumulado del bot, en su propio panel y con el cero visible.</em>
+            </span>
+            <i class="track" [class.on]="showResult()"><i class="knob"></i></i>
+          </button>
+        </section>
+      }
+
       <ion-button expand="block" fill="outline" (click)="closeOptions()">Cerrar</ion-button>
     </ion-content>
   </ng-template>
 </ion-modal>
+
+<!-- La hoja de margen, la misma que en el detalle (spec 005, R-4). -->
+<ui-margin-sheet [bot]="bot()" [(open)]="marginOpen" (sent)="retryBot()" />
 
 <!-- ═══ Acciones ═══ -->
 <ion-toolbar class="cta">
   @if (bot(); as b) {
     <div class="cta-row">
       <ion-button expand="block" fill="outline" (click)="goToBot(b)">Ver el bot</ion-button>
-      <ion-button expand="block" [routerLink]="['/bots', b.id]">Acciones</ion-button>
+      <!-- Antes navegaba al detalle. Ahora abre la MISMA hoja de comandos aquí:
+           el momento en que el precio se acerca a la liquidación es justo cuando
+           se quiere actuar sin cambiar de pantalla. -->
+      <ion-button expand="block" (click)="openCommands(b)">Acciones</ion-button>
     </div>
   } @else {
     <div class="cta-row">

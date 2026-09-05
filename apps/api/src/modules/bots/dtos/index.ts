@@ -216,6 +216,37 @@ export class HistoryQueryDto {
 }
 
 /**
+ * La serie temporal de un bot, con rango.
+ *
+ * Sin `fromMs` es el endpoint de siempre: las ultimas `limit` filas. Con el, un
+ * rango agregado en el servidor a `points` puntos conservando los extremos de
+ * cada cubo. Existe porque la ruta solo servia 500 filas a una por minuto
+ * —8 h 20 min— y ningun rango de 24 h, 7 d o 30 d era posible desde el
+ * cliente: paginar hacia atras serian 43 peticiones para 30 dias (spec 002).
+ */
+export class SnapshotsQueryDto extends HistoryQueryDto {
+  @IsOptional()
+  @Type(() => Number)
+  @IsInt()
+  @Min(0)
+  fromMs?: number;
+
+  /** Ausente = ahora. */
+  @IsOptional()
+  @Type(() => Number)
+  @IsInt()
+  @Min(0)
+  toMs?: number;
+
+  @IsOptional()
+  @Type(() => Number)
+  @IsInt()
+  @Min(4)
+  @Max(500)
+  points?: number;
+}
+
+/**
  * Lo que hace falta para responder «cuanto capital cabe en este bot».
  *
  * El simbolo es opcional: en el paso «Cuenta» del asistente todavia no hay par

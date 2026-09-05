@@ -16,8 +16,8 @@ const MAX_BATCHES = 40;
 /**
  * Purga de las tablas de serie temporal.
  *
- * `bot_snapshots`, `bot_events` y `activity_log` crecen sin parar y nadie los
- * limpiaba. Con mil
+ * `bot_snapshots`, `bot_events`, `activity_log` y —desde el spec 003—
+ * `portfolio_snapshots` crecen sin parar y nadie los limpiaba. Con mil
  * bots latiendo, y aun escribiendo solo una fila por minuto, son un millón y
  * medio de snapshots al día; a los cien mil bots que persigue esta plataforma,
  * la tabla deja de caber en memoria y las consultas de la app —que leen los
@@ -52,10 +52,11 @@ export class RetentionService {
     const eventDays = Number(this.config.get('RETENTION_EVENT_DAYS', 90));
     const criticalDays = Number(this.config.get('RETENTION_CRITICAL_EVENT_DAYS', 365));
     const auditDays = Number(this.config.get('RETENTION_AUDIT_DAYS', 180));
-    // `auditDays` entra en la guarda: sin él, un despliegue con las otras dos
-    // purgas desactivadas se saltaría también la de la bitácora EN SILENCIO, y
-    // esa tabla crecería sin techo sin que nada lo dijera.
-    if (snapshotDays <= 0 && eventDays <= 0 && auditDays <= 0) return;
+    const portfolioDays = Number(this.config.get('RETENTION_PORTFOLIO_DAYS', 365));
+    // Todas entran en la guarda: sin eso, un despliegue con las demás purgas
+    // desactivadas se saltaría también la que quedara EN SILENCIO, y esa tabla
+    // crecería sin techo sin que nada lo dijera.
+    if (snapshotDays <= 0 && eventDays <= 0 && auditDays <= 0 && portfolioDays <= 0) return;
 
     if (!(await this.leases.tryLock('retention', LOCK_MS))) return;
 
@@ -65,9 +66,10 @@ export class RetentionService {
       // Se purga aunque AUDIT_LOG_ENABLE esté apagado: si se desactivó la
       // función, las filas viejas siguen teniendo que desaparecer.
       const audit = await this.purgeActivityLog(auditDays, criticalDays);
-      if (snapshots + events + audit > 0) {
+      const portfolio = await this.purgePortfolio(portfolioDays);
+      if (snapshots + events + audit + portfolio > 0) {
         this.logger.log(
-          `Purga: ${snapshots} snapshot(s), ${events} evento(s) y ${audit} registro(s) de actividad.`,
+          `Purga: ${snapshots} snapshot(s), ${events} evento(s), ${audit} registro(s) de actividad y ${portfolio} fila(s) de cartera.`,
         );
       }
     } catch (e) {
@@ -108,6 +110,24 @@ export class RetentionService {
         DELETE FROM bot_snapshots
         WHERE id IN (
           SELECT id FROM bot_snapshots WHERE taken_at < ${cutoff} LIMIT ${BATCH}
+        )`,
+    );
+  }
+
+  /**
+   * Purga de la curva de la cartera (spec 003). Un año por defecto: es la
+   * ventana más larga que ofrece el selector, y a 105 filas al día por usuario
+   * y red cabe de sobra. Es la misma tabla para todas las gravedades: aquí no
+   * hay nada «grave» que conservar más, solo una curva.
+   */
+  private async purgePortfolio(days: number): Promise<number> {
+    if (days <= 0) return 0;
+    const cutoff = new Date(Date.now() - days * 86_400_000);
+    return this.deleteInBatches(
+      () => this.db.$executeRaw`
+        DELETE FROM portfolio_snapshots
+        WHERE id IN (
+          SELECT id FROM portfolio_snapshots WHERE taken_at < ${cutoff} LIMIT ${BATCH}
         )`,
     );
   }

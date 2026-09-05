@@ -734,6 +734,11 @@ ion-toast {
 .c-danger {
   color: var(--pnl-down);
 }
+/* El ambar del semaforo (10 / 25 % a liquidacion): la distancia a liquidacion
+   se pinta con los tres tonos en cartera, lista y detalle, y faltaba este. */
+.c-warning {
+  color: var(--signal-warn);
+}
 
 .c-medium {
   color: var(--pnl-flat);
@@ -912,7 +917,8 @@ ion-toast {
       color: #4d4873;
 
       .sw,
-      .tri {
+      .tri,
+      .dot {
         opacity: 0.35;
       }
     }
@@ -959,6 +965,16 @@ ion-toast {
     font-weight: 700;
     line-height: 1.5;
     white-space: nowrap;
+  }
+
+  /* El marcador de suceso: cuadrado ambar en el grafico, aqui un punto del
+     mismo ambar. */
+  .dot {
+    width: 7px;
+    height: 7px;
+    flex-shrink: 0;
+    border-radius: 1px;
+    background: var(--signal-warn);
   }
 
   .tri {
@@ -1013,6 +1029,512 @@ ion-toast {
   font-size: 11.5px;
   line-height: 1.5;
   color: var(--text-3);
+}
+
+/* ---------------------------------------------------------------------- *
+ * Analitica del detalle del bot (`bd-*`, de `bot-detail.page.html`)
+ *
+ * Vive aqui y no en `bot-detail.page.scss` por el presupuesto
+ * `anyComponentStyle` de 6 kB: esa hoja ya lo rozaba antes del spec 002. Es
+ * el mismo reparto que `.mm-tiles` y `.legend`. Todo va con prefijo `bd-`,
+ * asi que no toca ninguna otra pantalla.
+ * ---------------------------------------------------------------------- */
+.bd-lbl {
+  display: block;
+  font-size: 10.5px;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--text-3);
+}
+
+.bd-card,
+.bd-res,
+.bd-risk {
+  padding: var(--space-4);
+  background: var(--surface-1);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-md);
+}
+
+.bd-res-top {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: var(--space-3);
+}
+
+.bd-big {
+  margin-top: 2px;
+  font-size: 30px;
+  font-weight: 700;
+  line-height: 1.05;
+  letter-spacing: -0.03em;
+}
+
+.bd-split {
+  margin-top: 5px;
+  font-size: 11.5px;
+  color: var(--text-2);
+
+  b {
+    font-weight: 600;
+    color: var(--text-1);
+  }
+}
+
+/* La ventana real de la serie, como pastilla y no como pie: es lo primero que
+   hay que leer para no tomar 8 h por un dia. */
+.bd-win {
+  flex-shrink: 0;
+  padding: 5px 8px;
+  border-radius: var(--radius-xs);
+  background: var(--surface-2);
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--text-3);
+}
+
+.bd-plot {
+  margin: var(--space-3) -2px 0;
+}
+
+/* Las cuatro ventanas de la curva, como pastillas pequenas: son un ajuste de
+   la tarjeta, no una seccion. 32 px porque estan en una fila que ya lleva la
+   cifra grande; 44 aqui desplazaria la curva media pantalla abajo. */
+.bd-range {
+  display: flex;
+  gap: 6px;
+  margin-top: var(--space-3);
+
+  button {
+    min-height: 32px;
+    padding: 0 10px;
+    border: 1px solid var(--border-subtle);
+    border-radius: var(--radius-xs);
+    background: var(--surface-2);
+    color: var(--text-2);
+    font-family: var(--font-num);
+    font-size: 11px;
+    font-weight: 600;
+
+    &.on {
+      border-color: transparent;
+      background: var(--surface-3);
+      color: var(--brand-2);
+      font-weight: 700;
+    }
+  }
+}
+
+/* ── Historial, cronología y CSV del detalle (spec 006) ──
+   Aquí por el presupuesto de 6 kB de `bot-detail.page.scss`, como `bd-*`. */
+.bd-row {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+}
+
+.bd-tools {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-2);
+  margin-bottom: var(--space-2);
+}
+
+.bd-copy {
+  margin-inline-start: auto;
+  min-height: 28px;
+  padding: 0 10px;
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-xs);
+  background: var(--surface-2);
+  color: var(--brand-2);
+  font-family: var(--font-ui);
+  font-size: 11px;
+  font-weight: 700;
+}
+
+.bd-hist {
+  .rev {
+    padding: var(--space-3) var(--space-4);
+    border-bottom: 1px solid var(--border-subtle);
+
+    &:last-child {
+      border-bottom: 0;
+    }
+  }
+
+  .line {
+    display: flex;
+    align-items: center;
+    gap: var(--space-2);
+  }
+
+  .v {
+    font-weight: 700;
+    color: var(--text-1);
+  }
+
+  .when {
+    margin-inline-start: auto;
+    font-size: 11px;
+    color: var(--text-3);
+  }
+
+  .what {
+    margin: 6px 0 0;
+    padding-inline-start: 18px;
+    font-size: 12.5px;
+    line-height: 1.45;
+    color: var(--text-2);
+  }
+
+  p.what {
+    padding-inline-start: 0;
+  }
+}
+
+.bd-tl {
+  h4 {
+    margin: var(--space-4) 0 var(--space-2);
+    font-size: 11px;
+    font-weight: 700;
+    letter-spacing: 0.06em;
+    text-transform: uppercase;
+    color: var(--text-3);
+  }
+
+  .it {
+    display: flex;
+    gap: var(--space-3);
+    padding: 7px 0 7px var(--space-3);
+    border-inline-start: 2px solid var(--border-subtle);
+
+    &.t-up {
+      border-color: var(--pnl-up);
+    }
+
+    &.t-down {
+      border-color: var(--pnl-down);
+    }
+
+    &.t-warn {
+      border-color: var(--signal-warn);
+    }
+
+    /* Un suceso se lee distinto de una orden: sin negrita y algo más apagado. */
+    &.k-suceso .title {
+      font-weight: 500;
+      color: var(--text-2);
+    }
+  }
+
+  .when {
+    flex-shrink: 0;
+    width: 88px;
+    font-size: 11px;
+    color: var(--text-3);
+  }
+
+  .body {
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+    min-width: 0;
+  }
+
+  .title {
+    font-size: 12.5px;
+    font-weight: 600;
+    color: var(--text-1);
+  }
+
+  .det {
+    font-size: 11.5px;
+    color: var(--text-2);
+    overflow-wrap: anywhere;
+  }
+}
+
+/* ── Cartera: la curva del héroe (spec 003) ──
+   Aquí y no en `portfolio.page.scss` por el presupuesto de 6 kB por
+   componente, como `bd-*`. Reutiliza `.bd-range` para el selector: es el
+   mismo control que en el detalle del bot. */
+.pf-curve {
+  width: 100%;
+  margin-top: var(--space-3);
+  text-align: left;
+
+  .bd-range {
+    margin-top: 0;
+  }
+
+  ui-spark {
+    display: block;
+    width: 100%;
+    margin-top: var(--space-2);
+  }
+
+  ui-notice {
+    display: block;
+    margin-top: var(--space-2);
+  }
+}
+
+.pf-foot {
+  display: block;
+  margin-top: 6px;
+  font-size: 11px;
+  color: var(--text-3);
+
+  b {
+    font-weight: 700;
+  }
+}
+
+.bd-foot3 {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: var(--space-3);
+  margin-top: 14px;
+  padding-top: var(--space-3);
+  border-top: 1px solid var(--border-subtle);
+}
+
+.bd-bars + .bd-foot3 {
+  margin-top: var(--space-3);
+}
+
+.bd-empty {
+  margin: var(--space-3) 0 0;
+  font-size: 12px;
+  line-height: 1.5;
+  color: var(--text-3);
+}
+
+.bd-risk-row {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: var(--space-2);
+  margin-bottom: var(--space-2);
+
+  span {
+    font-size: 12px;
+    color: var(--text-2);
+  }
+
+  b {
+    font-size: 15px;
+    font-weight: 700;
+    letter-spacing: -0.015em;
+  }
+}
+
+.bd-risk-foot {
+  margin: var(--space-2) 0 0;
+  font-size: 11px;
+  color: var(--text-3);
+
+  b {
+    font-weight: 600;
+    color: var(--text-2);
+  }
+}
+
+.bd-why {
+  margin-left: auto;
+  font-family: var(--font-ui);
+  font-size: 10.5px;
+  font-weight: 600;
+  letter-spacing: 0;
+  color: var(--text-3);
+}
+
+.bd-bars {
+  height: 44px;
+}
+
+.bd-cost {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.bd-sum {
+  margin: 0;
+  font-size: 12px;
+  line-height: 1.6;
+  color: var(--text-2);
+
+  b {
+    font-weight: 600;
+    color: var(--text-1);
+  }
+}
+
+.bd-legend {
+  display: flex;
+  gap: 14px;
+  font-size: 10.5px;
+  color: var(--text-3);
+
+  span {
+    display: flex;
+    align-items: center;
+    gap: 5px;
+  }
+
+  i {
+    width: 8px;
+    height: 8px;
+    border-radius: 2px;
+  }
+
+  i.brand {
+    background: var(--brand-2);
+  }
+
+  i.neutral {
+    background: #4a4479;
+  }
+}
+
+/* Las dos filas que convierten la lista de ordenes en una escalera: el precio
+   de ahora, en su sitio, y la liquidacion cerrandola. */
+.bd-now,
+.bd-liqrow {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-height: 36px;
+  margin: 4px 0;
+
+  span {
+    flex-shrink: 0;
+    padding: 6px 11px;
+    border-radius: var(--radius-xs);
+    font-size: 10px;
+    font-weight: 700;
+    letter-spacing: 0.06em;
+    text-transform: uppercase;
+  }
+
+  span b {
+    font-size: 13px;
+    letter-spacing: -0.015em;
+    text-transform: none;
+  }
+
+  i {
+    flex-grow: 1;
+    height: 0;
+    opacity: 0.7;
+  }
+}
+
+.bd-now span {
+  color: var(--brand-2);
+  background: rgba(var(--brand-2-rgb), 0.16);
+}
+
+.bd-now i {
+  border-top: 1px dashed var(--brand-2);
+}
+
+.bd-liqrow span {
+  color: var(--pnl-down);
+  background: rgba(var(--pnl-down-rgb), 0.14);
+}
+
+.bd-liqrow i {
+  border-top: 1px solid var(--pnl-down);
+}
+
+/* La barra de liquidacion bajo la leyenda del grafico (`chart.page.html`). Solo
+   el envoltorio: la fila la pinta `ui-liq-meter`, igual que en las otras tres
+   pantallas. */
+.liqrow {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  padding: 10px var(--space-4) 0;
+
+  ui-liq-meter {
+    flex-grow: 1;
+    min-width: 0;
+  }
+
+  /* La accion que aleja la liquidacion, al lado de la cifra (spec 005). */
+  .marg {
+    flex-shrink: 0;
+    min-height: 32px;
+    padding: 0 10px;
+    border: 1px solid var(--border-subtle);
+    border-radius: var(--radius-xs);
+    background: var(--surface-2);
+    color: var(--brand-2);
+    font-family: var(--font-ui);
+    font-size: 11px;
+    font-weight: 700;
+  }
+}
+
+/* La franja de veredicto de mercado del grafico (`chart.page.html`). Tres
+   cifras y una frase; no un panel de indicadores. */
+.chart-verdict {
+  margin: 12px var(--space-4) 0;
+  padding: 12px 14px;
+  border-radius: var(--radius-sm);
+  background: var(--surface-1);
+  border: 1px solid var(--border-subtle);
+
+  .row {
+    display: flex;
+    gap: var(--space-4);
+  }
+
+  .cell {
+    flex: 1;
+    min-width: 0;
+  }
+
+  .k {
+    display: block;
+    font-size: 10px;
+    letter-spacing: 0.04em;
+    text-transform: uppercase;
+    color: var(--text-3);
+  }
+
+  .v {
+    display: block;
+    margin-top: 2px;
+    font-size: 14px;
+    font-weight: 700;
+    letter-spacing: -0.015em;
+  }
+
+  .say {
+    margin: 10px 0 0;
+    padding-top: 10px;
+    border-top: 1px solid var(--border-subtle);
+    font-size: 12px;
+    line-height: 1.5;
+    color: var(--text-2);
+
+    &.ok {
+      color: var(--pnl-up);
+    }
+
+    &.warn {
+      color: var(--signal-warn);
+    }
+  }
 }
 
 /* ---------------------------------------------------------------------- *

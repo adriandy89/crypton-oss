@@ -16,3 +16,7 @@ export * from './ui-setting-row.component';
 export * from './ui-stat.component';
 export * from './ui-status-pill.component';
 export * from './ui-strategy-help.component';
+export * from './ui-spark.component';
+export * from './ui-liq-meter.component';
+export * from './ui-margin-sheet.component';
+export * from './ui-meter.component';

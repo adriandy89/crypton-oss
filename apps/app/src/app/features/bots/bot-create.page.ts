@@ -55,6 +55,9 @@ import {
   isMarketMaker,
   money,
   parseHttpError,
+  pct,
+  price,
+  qty,
   strategyBlurb,
   strategyLabel,
   toMarketSpec,
@@ -305,6 +308,13 @@ export class BotCreatePage implements OnInit, OnDestroy {
     return `${cuenta.venue}|${cuenta.testnet}|${par}|${kind}|${capital}`;
   });
   readonly money = money;
+  // Los tres formateadores de la escalera. La revision pintaba precio,
+  // cantidad y distancia CRUDOS de la API —punto decimal ingles y hasta
+  // dieciocho decimales— diez pixeles por encima de cifras que si pasaban por
+  // `money()`, justo en la pantalla donde se decide poner dinero (spec 002, F-06).
+  readonly price = price;
+  readonly qty = qty;
+  readonly pct = pct;
 
   readonly account = computed(() => this.accounts().find((a) => a.id === this.accountId()));
 
@@ -464,6 +474,13 @@ export class BotCreatePage implements OnInit, OnDestroy {
 
   /** El mercado elegido, resuelto del catalogo ya cargado. */
   readonly market = computed(() => this.markets().find((m) => m.symbol === this.symbol()));
+  /**
+   * Decimales del mercado para la escalera de la revisión. Sin ellos `price()`
+   * redondea por magnitud y dos niveles contiguos de un par de precio muy bajo
+   * salen idénticos en la pantalla donde se decide poner dinero.
+   */
+  readonly decimales = computed(() => this.market()?.price_decimals ?? null);
+  readonly decimalesQty = computed(() => this.market()?.qty_decimals ?? null);
 
   /** Por que no se puede pasar del paso 1. Cadena vacia = se puede. */
   readonly venueBlockedReason = computed<string>(() => {

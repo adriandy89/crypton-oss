@@ -67,6 +67,49 @@
   }
 }
 
+/* Ordenar. Pastillas pequenas y no un segmento: es un ajuste secundario de la
+   lista, no una seccion, y un tercer segmento debajo de dos toolbars pesaria
+   mas que la propia lista. */
+.sort {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  padding: 4px var(--space-4) 0;
+
+  span {
+    font-size: 10.5px;
+    font-weight: 700;
+    letter-spacing: 0.06em;
+    text-transform: uppercase;
+    color: var(--text-3);
+  }
+
+  .chips {
+    display: flex;
+    gap: 6px;
+    margin-left: auto;
+  }
+
+  button {
+    min-height: 32px;
+    padding: 0 10px;
+    border: 1px solid var(--border-subtle);
+    border-radius: var(--radius-xs);
+    background: var(--surface-2);
+    color: var(--text-2);
+    font-family: var(--font-ui);
+    font-size: 11px;
+    font-weight: 600;
+
+    &.on {
+      border-color: transparent;
+      background: var(--surface-3);
+      color: var(--brand-2);
+      font-weight: 700;
+    }
+  }
+}
+
 /* El kill-switch es la accion mas destructiva de la app y vive en la cabecera,
    donde se pulsa sin querer. El recuadro lo separa del resto del toolbar. */
 .kill {

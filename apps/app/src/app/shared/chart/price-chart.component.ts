@@ -17,6 +17,8 @@ import type {
   ISeriesApi,
   ISeriesMarkersPluginApi,
   LogicalRange,
+  SeriesMarker,
+  SeriesMarkerBar,
   SeriesMarkerPrice,
   SeriesType,
   Time,
@@ -24,9 +26,18 @@ import type {
 } from 'lightweight-charts';
 import type { Candle } from '../../core/models';
 import { chartPalette, fade, overlayPalette } from './chart-theme';
-import type { OverlayLine, OverlayMarker, OverlayStyle } from './bot-overlay';
+import type { OverlayEventMarker, OverlayLine, OverlayMarker, OverlayStyle } from './bot-overlay';
 
 export type ChartSeriesKind = 'candles' | 'bars' | 'line' | 'area';
+
+/**
+ * Un punto de una serie auxiliar, ya casado al instante de SU vela. `v: null`
+ * es un hueco: la línea se rompe ahí en vez de cruzar el tramo sin dato.
+ */
+export interface ChartLinePoint {
+  t: number;
+  v: number | null;
+}
 
 /**
  * Cuantas barras de margen quedan a la izquierda antes de pedir mas pasado.
@@ -171,6 +182,22 @@ export class PriceChartComponent {
   readonly lines = input<OverlayLine[]>([]);
   readonly markers = input<OverlayMarker[]>([]);
   /**
+   * Sucesos del bot sobre sus velas (spec 005). Vacío = nada: es el valor por
+   * defecto y el de los cuatro consumidores que existían antes.
+   */
+  readonly events = input<OverlayEventMarker[]>([]);
+  /**
+   * El precio medio de entrada como SERIE en el panel del precio, punteada y con
+   * huecos donde el bot no escribió. Vacía = no se crea la serie.
+   */
+  readonly average = input<ChartLinePoint[]>([]);
+  /**
+   * El resultado acumulado en un panel propio bajo el precio (y bajo el volumen,
+   * si lo hay), con el cero como base. Vacía = no hay panel: sin este input el
+   * gráfico ejecuta exactamente el código de antes.
+   */
+  readonly result = input<ChartLinePoint[]>([]);
+  /**
    * Rango que hay que poder ver. Al entrar desde un bot, el grafico se ABRE a
    * la escalera entera: uno ajustado solo a las velas deja fuera justo la orden
    * de seguridad que se venia a mirar.
@@ -240,6 +267,12 @@ export class PriceChartComponent {
   private chart: IChartApi | null = null;
   private main: ISeriesApi<SeriesType> | null = null;
   private volume: ISeriesApi<'Histogram'> | null = null;
+  private avgSeries: ISeriesApi<'Line'> | null = null;
+  private resultSeries: ISeriesApi<'Baseline'> | null = null;
+  /** El motor, una vez cargado: las series auxiliares se crean tarde y lo necesitan. */
+  private lw: typeof import('lightweight-charts') | null = null;
+  /** Con volumen el panel de resultado es el tercero; sin él, el segundo. */
+  private hasVolume = false;
   private markersApi: ISeriesMarkersPluginApi<Time> | null = null;
   private priceLines: IPriceLine[] = [];
   /**
@@ -362,8 +395,17 @@ export class PriceChartComponent {
     effect(() => {
       const lines = this.lines();
       const markers = this.markers();
+      const events = this.events();
       const span = this.fitSpan();
-      this.applyOverlay(lines, markers, span);
+      this.applyOverlay(lines, markers, events, span);
+    });
+
+    // Las dos series auxiliares, cada una con su efecto: vacías no crean nada.
+    effect(() => {
+      this.applyAverage(this.average());
+    });
+    effect(() => {
+      this.applyResult(this.result());
     });
 
     // Cambia lo que se esta mirando -> se suelta el ajuste manual.
@@ -531,6 +573,8 @@ export class PriceChartComponent {
       // marcador se ancla al PRECIO de la ejecucion, cae dentro del cuerpo de
       // su propia vela, y con el orden normal la vela lo tapaba entero.
       this.markersApi = lw.createSeriesMarkers(main, [], { zOrder: 'aboveSeries' });
+      this.lw = lw;
+      this.hasVolume = withVolume;
 
       // El ancho no se fija una vez: girar el movil, abrir el teclado o entrar
       // en apaisado cambian la caja, y sin esto el grafico se queda con el
@@ -551,7 +595,9 @@ export class PriceChartComponent {
 
     // Los datos que ya hubiera cuando el motor todavia estaba cargando.
     this.applyCandles(this.candles(), kind, this.fitSpan());
-    this.applyOverlay(this.lines(), this.markers(), this.fitSpan());
+    this.applyOverlay(this.lines(), this.markers(), this.events(), this.fitSpan());
+    this.applyAverage(this.average());
+    this.applyResult(this.result());
     this.ready.set(true);
   }
 
@@ -619,6 +665,9 @@ export class PriceChartComponent {
     this.priceLines = [];
     this.markersApi = null;
     this.volume = null;
+    this.avgSeries = null;
+    this.resultSeries = null;
+    this.lw = null;
     this.main = null;
     try {
       this.chart?.remove();
@@ -1004,6 +1053,7 @@ export class PriceChartComponent {
   private applyOverlay(
     lines: OverlayLine[],
     markers: OverlayMarker[],
+    events: OverlayEventMarker[],
     span: { min: number; max: number } | null,
   ): void {
     const series = this.main;
@@ -1044,15 +1094,14 @@ export class PriceChartComponent {
           // a continua: una linea de mas se ve, una linea que no se dibuja no.
           lineStyle: estilo ? estilo[l.style] : 0,
           lineVisible: true,
-          // Los niveles PREVISTOS no ponen etiqueta en el eje.
-          //
-          // Son la mitad de una escalera tipica y su precio exacto importa
-          // mucho menos que el de las ordenes ya puestas: lo que se lee de un
-          // nivel planificado es hasta donde llega, y para eso basta la linea
-          // punteada, que sigue ahi. Ademas el ancho del eje lo decide la
-          // etiqueta mas larga, asi que quitarlas devuelve ancho al grafico y
-          // encoge la franja que deja de desplazar la pagina.
-          axisLabelVisible: !l.ghost,
+          // Quien lleva etiqueta en el eje lo decide `bot-overlay.ts`
+          // (`conRotulos`): los previstos nunca, y de la escalera solo los
+          // extremos cuando hay mas de cuatro ordenes. Su precio exacto importa
+          // menos que el de las lineas que dicen donde se acaba la partida, y el
+          // ancho del eje lo decide la etiqueta mas larga: quitar rotulos
+          // devuelve ancho al grafico. Sin decision (`axisLabel` ausente) vale la
+          // regla de antes, `!ghost`.
+          axisLabelVisible: l.axisLabel ?? !l.ghost,
           // El rotulo del nivel va en el eje, junto al precio: es donde lo pone
           // cualquier terminal y donde no tapa las velas.
           title: l.title,
@@ -1071,21 +1120,140 @@ export class PriceChartComponent {
       // `atPriceMiddle` y no `atPriceTop`/`Bottom`: el centro del marcador cae
       // EN el precio; las otras dos lo desplazan media altura y vuelven a
       // mentir, solo que menos.
-      this.markersApi?.setMarkers(
-        markers.map((m): SeriesMarkerPrice<Time> => ({
-          time: toTime(m.timeMs),
-          position: 'atPriceMiddle',
-          price: m.price,
-          // Un circulo cuando el marcador AGRUPA varias ejecuciones: una
-          // flecha sugiere una operacion concreta, y ahi hay un promedio.
-          shape: m.count > 1 ? 'circle' : m.side === 'BUY' ? 'arrowUp' : 'arrowDown',
-          color: m.side === 'BUY' ? o.buy : o.sell,
-          text: m.text,
-          size: m.count >= 3 ? 2 : 1,
-        })),
+      const ejecuciones = markers.map((m): SeriesMarkerPrice<Time> => ({
+        time: toTime(m.timeMs),
+        position: 'atPriceMiddle',
+        price: m.price,
+        // Un circulo cuando el marcador AGRUPA varias ejecuciones: una
+        // flecha sugiere una operacion concreta, y ahi hay un promedio.
+        shape: m.count > 1 ? 'circle' : m.side === 'BUY' ? 'arrowUp' : 'arrowDown',
+        color: m.side === 'BUY' ? o.buy : o.sell,
+        text: m.text,
+        size: m.count >= 3 ? 2 : 1,
+      }));
+      // Los sucesos van SOBRE la vela, no en un precio: ocurren en un instante.
+      // Cuadrado ambar para lo grave —el mismo ambar que el stop—, circulo del
+      // color de la cruceta para lo que solo explica (spec 005, R-2).
+      const sucesos = events.map((e): SeriesMarkerBar<Time> => ({
+        time: toTime(e.timeMs),
+        position: 'aboveBar',
+        shape: e.tone === 'warn' ? 'square' : 'circle',
+        color: e.tone === 'warn' ? o.stopLoss : o.average,
+        text: e.text,
+        size: e.count >= 3 ? 2 : 1,
+      }));
+      // El motor exige los marcadores en orden de tiempo, y las dos listas
+      // vienen ordenadas por separado.
+      const todos: SeriesMarker<Time>[] = [...ejecuciones, ...sucesos].sort(
+        (a, b) => (a.time as number) - (b.time as number),
       );
+      this.markersApi?.setMarkers(todos);
 
       this.applyScale(span);
+    });
+  }
+
+  /**
+   * El precio medio como serie en el panel del precio (spec 005, R-3).
+   *
+   * Se crea la primera vez que llegan puntos y se destruye cuando dejan de
+   * llegar: sin bot, sin serie, sin coste. Los huecos (`v: null`) van como datos
+   * en blanco del motor, que es como se rompe una linea sin inventar el tramo.
+   * Lleva rotulo en el eje —el mismo «MEDIO» que la linea horizontal que
+   * sustituye— y va sobre la misma escala que el precio.
+   */
+  private applyAverage(points: ChartLinePoint[]): void {
+    const chart = this.chart;
+    const lw = this.lw;
+    if (!chart || !lw) return;
+    this.zone.runOutsideAngular(() => {
+      if (points.length === 0) {
+        if (this.avgSeries) chart.removeSeries(this.avgSeries);
+        this.avgSeries = null;
+        return;
+      }
+      if (!this.avgSeries) {
+        const o = overlayPalette();
+        const decimals = untracked(() => this.priceDecimals());
+        this.avgSeries = chart.addSeries(
+          lw.LineSeries,
+          {
+            color: o.average,
+            lineWidth: 1,
+            lineStyle: lw.LineStyle.Dashed,
+            priceLineVisible: false,
+            lastValueVisible: true,
+            crosshairMarkerVisible: false,
+            title: 'MEDIO',
+            priceFormat: { type: 'price', precision: decimals, minMove: Math.pow(10, -decimals) },
+          },
+          0,
+        );
+      }
+      this.avgSeries.setData(
+        points.map((pt) =>
+          pt.v === null ? { time: toTime(pt.t) } : { time: toTime(pt.t), value: pt.v },
+        ),
+      );
+    });
+  }
+
+  /**
+   * El resultado acumulado en un panel propio (spec 005, R-5).
+   *
+   * Serie de linea base con el CERO como base: verde por encima, rojo por
+   * debajo, que es la unica lectura que importa de un resultado. Comparte el eje
+   * de tiempo con el precio —eso lo da el motor con los paneles— y no tiene eje
+   * de precio propio que arrastrar. Sin puntos no hay panel: el grafico es el de
+   * siempre, con la misma altura.
+   */
+  private applyResult(points: ChartLinePoint[]): void {
+    const chart = this.chart;
+    const lw = this.lw;
+    if (!chart || !lw) return;
+    this.zone.runOutsideAngular(() => {
+      if (points.length === 0) {
+        if (this.resultSeries) {
+          const idx = this.resultSeries.getPane().paneIndex();
+          chart.removeSeries(this.resultSeries);
+          // El panel no se va solo con su ultima serie: quedaria una franja en
+          // blanco bajo el precio con el ajuste apagado. Se quita si esta vacio.
+          const pane = chart.panes()[idx];
+          if (pane && pane.getSeries().length === 0) chart.removePane(idx);
+        }
+        this.resultSeries = null;
+        return;
+      }
+      if (!this.resultSeries) {
+        const p = chartPalette();
+        const pane = this.hasVolume ? 2 : 1;
+        this.resultSeries = chart.addSeries(
+          lw.BaselineSeries,
+          {
+            baseValue: { type: 'price', price: 0 },
+            topLineColor: p.up,
+            topFillColor1: fade(p.up, 0.28),
+            topFillColor2: fade(p.up, 0.04),
+            bottomLineColor: p.down,
+            bottomFillColor1: fade(p.down, 0.04),
+            bottomFillColor2: fade(p.down, 0.28),
+            lineWidth: 1,
+            priceLineVisible: false,
+            lastValueVisible: true,
+            crosshairMarkerVisible: false,
+            title: 'RESULTADO',
+            priceFormat: { type: 'price', precision: 2, minMove: 0.01 },
+          },
+          pane,
+        );
+        const container = this.host().nativeElement;
+        chart.panes()[pane]?.setHeight(Math.round(container.clientHeight * 0.2));
+      }
+      this.resultSeries.setData(
+        points.map((pt) =>
+          pt.v === null ? { time: toTime(pt.t) } : { time: toTime(pt.t), value: pt.v },
+        ),
+      );
     });
   }
 

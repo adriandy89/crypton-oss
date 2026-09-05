@@ -109,15 +109,24 @@ export const routes: Routes = [
     loadComponent: () => import('./features/account/security.page').then((m) => m.SecurityPage),
   },
 
+  // El backtest, para cualquier usuario sobre sus bots simulados (spec 004). Fuera
+  // del shell de pestañas: se llega desde Cuenta o desde el detalle de un bot,
+  // no ocupa sitio en la barra.
+  {
+    path: 'backtest',
+    canActivate: [authGuard],
+    loadComponent: () => import('./features/backtest/backtest.page').then((m) => m.BacktestPage),
+  },
+
   // Administracion. Fuera del shell de pestañas: es una herramienta, no una
   // seccion de la app, y no debe ocupar sitio en la barra de nadie.
   //
   // `adminGuard` es comodidad, no seguridad: el rol sale del token que guarda
   // este mismo navegador. Quien manda es el `RolesGuard` del servidor.
   {
-    path: 'admin/backtest',
+    path: 'admin/activity',
     canActivate: [authGuard, adminGuard],
-    loadComponent: () => import('./features/admin/backtest.page').then((m) => m.AdminBacktestPage),
+    loadComponent: () => import('./features/admin/activity.page').then((m) => m.AdminActivityPage),
   },
 
   { path: '', redirectTo: 'tabs/bots', pathMatch: 'full' },
