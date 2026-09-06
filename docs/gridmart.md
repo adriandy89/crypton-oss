@@ -217,9 +217,9 @@ estimada **57,44** (−58,5 %). Ventas del peor caso desde 115,45 (2,461 SOL cad
 - [ ] ¿Descuento de recompra **<** separación inicial de venta?
 - [ ] ¿`% del núcleo × ventas = 100`?
 - [ ] ¿Cada venta de rejilla ≥ 20 USDC? (núcleo × % ≥ mínimo del par)
-- [ ] ¿Sé que `Take profit (%)` y `Modo de take profit` de la escalera **no gobiernan ninguna orden** aquí? (la vista previa ya pinta el TP del satélite)
+- [ ] ¿Sé que la salida de GridMart es el **TP satélite** más la rejilla, y no un take profit sobre el total?
 - [ ] ¿He decidido si quiero **modo clásico** (una martingala con TP satélite, sin rejilla de ventas)?
-- [ ] ¿`Espera entre ciclos` (no «Espera tras ciclo completo», que está muerta) fijada al crear?
+- [ ] ¿`Espera entre ciclos` revisada? (viene en 1 min)
 
 ### Señales de alarma cuando ya está funcionando
 
@@ -237,10 +237,8 @@ estimada **57,44** (−58,5 %). Ventas del peor caso desde 115,45 (2,461 SOL cad
 
 | Campo | Realidad |
 |---|---|
-| **Take profit (%)** (`takeProfitPct`, heredado de la escalera) | ⚠️ **No gobierna ninguna orden.** La salida cotidiana es el TP satélite y la rejilla. El campo sigue en la validación; la vista previa pinta el TP del satélite, el único que existe (F-12). |
-| **Modo de take profit** (`tpMode`) | ⚠️ **Muerto**: las salidas de GridMart son siempre LIMIT. |
-| **Espera tras ciclo completo** (`fullCycleCooldownMinutes`) | ⚠️ **Muerto**: ningún código lo lee. La espera que se aplica es **Espera entre ciclos** (`cooldownMinutes`). |
-| **Espera entre ciclos** (`cooldownMinutes`) | ✅ Sí, y en caliente: el valor vigente se aplica al cerrar el siguiente ciclo. Ojo: los valores de fábrica de GridMart lo dejan en **0** mientras el campo muerto enseña 1 (cambiar un valor de fábrica es decisión del usuario; F-94). |
+| **Take profit** y **Modo de take profit** de la escalera | Ya no aparecen en el formulario: en GridMart no gobiernan ninguna orden (el satélite sale por su TP y el núcleo por la rejilla). |
+| **Espera entre ciclos** (`cooldownMinutes`) | ✅ Sí, y en caliente: el valor vigente se aplica al cerrar el siguiente ciclo. Viene en **1 min**. |
 | **Tope de exposición** (`maxNotionalCap`) | ✅ Sí: corta la escalera en el escalón en que el notional proyectado alcanza el tope; no toca la rejilla ni las recompras anotadas. |
 | **Capital asignado** | ✅ Techo real de la escalera. |
 
@@ -251,11 +249,8 @@ cuenta.
 
 ## 5. Limitaciones conocidas (hallazgos abiertos)
 
-Confirmadas en `specs/001-revision-integral/findings.md`, abiertas a 2026-09-06. Además de las de la
-[martingala](./martingale.md#5-limitaciones-conocidas-hallazgos-abiertos):
-
-> ⚠️ **Limitación conocida (F-12 / F-94, decide el usuario).** `takeProfitPct`, `tpMode` y
-> `fullCycleCooldownMinutes` no gobiernan nada (§4); los valores de fábrica dejan `cooldownMinutes` a 0.
+Ningún hallazgo abierto propio a 2026-09-06 (`specs/001-revision-integral/findings.md`). Las de la escalera
+están en la [martingala](./martingale.md#5-limitaciones-conocidas-hallazgos-abiertos).
 
 ---
 
@@ -313,22 +308,12 @@ Cuánto se aleja cada seguridad respecto de la anterior; decide la cobertura. Ig
 Cuánto crece cada seguridad. Aquí además decide **cuánto satélite** entra en cada escalón frente al núcleo
 fijo. Igual que en la martingala.
 
-#### Take profit (%) · `takeProfitPct` · 🔥 en caliente · 0,05–50 · por defecto **1**
-
-Objetivo heredado de la escalera. ⚠️ **En GridMart no gobierna ninguna orden**: el satélite sale por el TP
-satélite y el núcleo por la rejilla. Sigue formando parte de la validación de la escalera; la vista previa
-pinta el TP del satélite (F-12).
-
 #### Tipo de orden base · `baseOrderType` · 🔥 en caliente · por defecto **A mercado**
 
 Cómo entra la base. «Límite» se coloca post-only al precio del momento y **espera quieta**: no persigue al
 precio y, si en cinco minutos no se ha ejecutado, se vuelve a colocar al precio de entonces.
 **Consejo**: **A mercado** para arrancar seguro; **Límite** si prefieres ahorrar la comisión de taker y no
 te importa esperar.
-
-#### Modo de take profit · `tpMode` · 🔥 en caliente · por defecto **Límite**
-
-⚠️ **Muerto en GridMart**: sus salidas son siempre LIMIT. Déjalo.
 
 ### 6.3 La rejilla de ventas y las recompras
 
@@ -404,10 +389,6 @@ Solo avisar / Pausar el bot / Cerrar todo. **Consejo**: «Cerrar todo» a 2× o 
 La espera que **sí** se aplica entre el cierre de un ciclo y la siguiente base. Se puede cambiar en
 caliente: el valor vigente se usa al cerrar el ciclo. **Consejo**: 1-5 minutos.
 
-#### Espera tras ciclo completo (min) · `fullCycleCooldownMinutes` · 🔥 en caliente · 0–10080 · por defecto **1**
-
-> ⚠️ **Muerto**: ningún código lo lee. Usa «Espera entre ciclos».
-
 ### 6.6 Exchange
 
 #### Apalancamiento · `leverage` · 🌤️ en tibio · 1–50 · por defecto **2** · ⚠️ campo de riesgo
@@ -427,7 +408,6 @@ liquidación. **Consejo**: a 2× cabe hasta un 50 % de caída; a 5×, solo un 20
 |---|---|---|
 | Modo clásico | No | 🟡 Sí, si quieres simplicidad |
 | Escalera (seguridades · sep. · dist. · vol.) | 6 · 1 % · 1,2 · 1,6 | Como en la martingala: cobertura 9,9 %, corta |
-| Take profit (%) / Modo de take profit | 1 % / Límite | Sin efecto aquí (F-12) |
 | Take profit satélite | 0,6 % | ✅ Déjalo, o 0,8 % |
 | Ventas de rejilla | 4 | ✅ Déjalo |
 | Separación inicial de venta | 1 % | ✅ Déjalo |
@@ -435,8 +415,7 @@ liquidación. **Consejo**: a 2× cabe hasta un 50 % de caída; a 5×, solo un 20
 | % del núcleo vendido en el nivel 1 | 25 % | ✅ Déjalo (4 × 25 = 100) |
 | Multiplicador de cantidad de venta | 1 | ✅ Déjalo |
 | Descuento de recompra | 0,5 % | ✅ Déjalo (< 1 %) |
-| Espera entre ciclos | **0** | 🔴 Ponle 1-5 min al crear |
-| Espera tras ciclo completo | 1 | Sin efecto (muerto) |
+| Espera entre ciclos | 1 | ✅ Déjalo, o 1-5 min |
 | Apalancamiento / Modo de margen | 2× / Aislado | ✅ Déjalo |
 
 ---
@@ -449,7 +428,7 @@ liquidación. **Consejo**: a 2× cabe hasta un 50 % de caída; a 5×, solo un 20
 | Salida | Satélite por TP corto + núcleo por rejilla con recompras | Una, sobre el total | Una por línea comprada |
 | Mecanismos simultáneos | 4 | 2 | 1 |
 | Riesgo | Alto | Alto | Bajo |
-| Hallazgos abiertos propios | F-12 / F-94 (campos sin efecto, decide el usuario) | — | F-12 (campos sin efecto) |
+| Hallazgos abiertos propios | — | — | — |
 
 **Elige GridMart si**: ya entiendes la martingala, esperas una caída seguida de un lateral, y quieres que
 la posición trabaje mientras espera. **Elige la martingala si**: quieres lo mismo sin la rejilla (o usa el

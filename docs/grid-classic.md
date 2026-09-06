@@ -77,7 +77,7 @@ del rango vende un escalón proyectado por encima del superior, para que lo comp
 quede sin contrapartida.
 
 Las líneas por encima del precio y sin inventario **no tienen orden**: el bot no vende lo que no ha
-comprado (ver `preloadInventory` en §4).
+comprado.
 
 ### Paso 3 — Reconciliar, no ejecutar pasos
 
@@ -247,7 +247,6 @@ entero y a 3× el margen de maniobra hasta la liquidación es de poco más de un
 | Campo | Realidad |
 |---|---|
 | **Espera entre ciclos** (`cooldownMinutes`) | **Sí.** El ciclo se cierra al vender todo el inventario; durante la espera no se tienden compras nuevas y las ventas siguen. |
-| **Precargar inventario** (`preloadInventory`) | ⚠️ **Muerto.** Solo produce un aviso en la revisión. El bot arranca siempre en líquido y solo vende lo que compró en alguna línea. |
 | **Tope de exposición** (`maxNotionalCap`) | **Sí.** Acota lo que se tiende: posición abierta más compras vivas, de la línea más cercana al precio hacia fuera. |
 | **Capital asignado** (`totalInvestment`) | **Sí** dimensiona: `capital × apalancamiento / niveles` es el tamaño de cada línea. |
 
@@ -258,11 +257,9 @@ precio medio), **Pérdida diaria máxima**, **Al acercarse la liquidación** y l
 
 ## 5. Limitaciones conocidas (hallazgos abiertos)
 
-Todo lo de esta sección está confirmado en `specs/001-revision-integral/findings.md` y abierto a
-2026-09-06. Cuando un hallazgo se cierre, su bloque desaparece de aquí.
+Ningún hallazgo abierto a 2026-09-06 (`specs/001-revision-integral/findings.md`). Lo que conviene saber:
 
-> ⚠️ **Limitación conocida (F-12, decide el usuario).** `preloadInventory` no hace nada (§4). El
-> **funding** de mantener inventario en un perpetuo no se cuenta en ninguna pantalla (riesgo §9).
+> ℹ️ El **funding** de mantener inventario en un perpetuo no se cuenta en ninguna pantalla (riesgo §9).
 
 ---
 
@@ -358,14 +355,6 @@ precio esté fuera de la zona que decidiste.
 **Consejo**: déjalo activado. Es lo que impide que la rejilla persiga al precio fuera de donde tu tesis
 tenía sentido.
 
-#### Precargar inventario · `preloadInventory` · ❄️ en frío · por defecto **No** · ⚠️ campo de riesgo
-
-Pensado para comprar de golpe, al arrancar, el inventario necesario para poder vender también en las
-líneas de arriba (como hacen los grids de los exchanges).
-
-> ⚠️ **Hoy no cambia nada**: el motor no lo lee. Si lo activas, la app avisa en la revisión y el
-> comportamiento es el mismo. Déjalo apagado.
-
 ### 6.3 Riesgo
 
 #### Tope de exposición · `maxNotionalCap` · 🔥 en caliente · opcional
@@ -434,7 +423,6 @@ una posición perdedora arrastra el saldo de los otros bots de la cuenta.
 | Espaciado | Aritmético | ✅ Déjalo |
 | Reparto del tamaño | Valor nocional | ✅ Déjalo |
 | Niveles | 20 | Según capital y rango (≥ 20 USDC por línea; ≤ 30 en Lighter) |
-| Precargar inventario | No | ✅ Déjalo (muerto) |
 | Parar al salir del rango | Sí | ✅ Déjalo |
 | Al acercarse la liquidación | Solo avisar | 🟡 «Cerrar todo» si operas a 2× o más |
 | Espera entre ciclos | 0 | ✅ Déjalo (muerto) |

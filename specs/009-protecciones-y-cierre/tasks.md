@@ -51,4 +51,4 @@ cierre con la salida de cada test antes y después; lo que rechace se revierte c
 - [x] `docs/`: bloques de F-33, F-02, F-35, F-36, F-37 y F-91 borrados; §7 de `riesgo-y-liquidacion.md` y la tabla de comandos describen la conducta nueva; F-13 solo queda para los campos sin acotar
 - [x] Fichas del 001: `Decisión` de F-02, F-13 (parcial), F-33, F-35 (mitigado), F-36, F-37, F-91 (mitigado)
 - [x] Índice de `specs/README.md`: 009 `hecho`
-- [ ] Memoria de usuario actualizada (al cerrar la tanda 008-010)
+- [x] Memoria de usuario actualizada (al cerrar la tanda 008-010)

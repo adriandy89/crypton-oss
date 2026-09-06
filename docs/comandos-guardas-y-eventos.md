@@ -14,7 +14,7 @@ decide lo que hace el motor al recargar la configuración.
 |---|---|---|---|
 | 🔥 | **En caliente** (HOT) | Se aplica en la siguiente revisión (≤ 15 s). Reajusta órdenes; **la posición no se toca**. | `takeProfitPct`, distancias en bps, topes, `stopLossPct`, `cooldownMinutes` |
 | 🌤️ | **En tibio** (WARM) | **Cancela y vuelve a tender la escalera**. La posición sigue abierta. La app pide confirmación. | niveles, rango, escalas de la escalera, `totalInvestment`, apalancamiento |
-| ❄️ | **En frío** (COLD) | **Se rechaza**: sería otro bot. Hay que parar y crear uno nuevo. | par, cuenta de exchange, dirección, modo de margen, modo de posición, `preloadInventory`, `classicMode` |
+| ❄️ | **En frío** (COLD) | **Se rechaza**: sería otro bot. Hay que parar y crear uno nuevo. | par, cuenta de exchange, dirección, modo de margen, modo de posición, `classicMode` |
 
 Dos avisos que las guías repiten porque importan:
 
@@ -81,7 +81,7 @@ solo la de liquidación puede cerrar, y solo si tú se lo pediste en «Al acerca
 | Apalancamiento por encima de tu límite | siempre, haya posición o no |
 | Notional del bot / total de tus bots por encima del límite | con posición |
 | Liquidación a menos del % de aviso (10 por defecto) | con posición; aviso CRITICAL con enfriamiento; acción según `liquidationAction` |
-| Caída del bot ≥ kill-switch (%) | pérdida acumulada sobre el capital asignado |
+| Pérdida acumulada del bot ≥ kill-switch (%) | sobre el capital asignado; es un tope de pérdida, no un drawdown desde máximo |
 | Pérdida diaria de la cuenta o del bot | PnL realizado de hoy |
 | 20 colocaciones fallidas seguidas · 5 revisiones fallidas seguidas | fallos técnicos persistentes |
 | Precio externo desfasado (> 15 s) | la estrategia deja de cotizar; el bot **no** se pausa |

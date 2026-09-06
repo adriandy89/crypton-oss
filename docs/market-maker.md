@@ -520,7 +520,7 @@ Fija tick, paso y mínimo. Con el perfil Conservador el tamaño baja al 70 % y l
 
 #### Capital asignado · `totalInvestment` · 🌤️ en tibio · mínimo 10 · ⚠️ campo de riesgo
 
-**No dimensiona órdenes** (lo hacen Tamaño por compra/venta y Capas). Es el denominador de la Pérdida diaria máxima y del kill-switch por caída, y lo que la API compara con tus límites al crear el bot.
+**No dimensiona órdenes** (lo hacen Tamaño por compra/venta y Capas). Es el denominador de la Pérdida diaria máxima y del kill-switch por pérdida acumulada, y lo que la API compara con tus límites al crear el bot.
 
 #### Tope de exposición · `maxNotionalCap` · 🔥 en caliente · opcional
 

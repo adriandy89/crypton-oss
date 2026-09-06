@@ -244,10 +244,10 @@ liquidación**, guardas de la cuenta.
 
 ## 5. Limitaciones conocidas (hallazgos abiertos)
 
-Confirmadas en `specs/001-revision-integral/findings.md`, abiertas a 2026-09-06.
+Ningún hallazgo abierto a 2026-09-06 (`specs/001-revision-integral/findings.md`). Lo que conviene saber:
 
-> ⚠️ **Limitación conocida (F-94, decide el usuario).** El mínimo de `takeProfitPct` (0,05 %) está por
-> debajo de una ida y vuelta maker+taker; el **funding** de una escalera agotada esperando días no aparece
+> ℹ️ La app **avisa** si el take profit baja del 0,3 %: con una entrada taker y una salida maker, por debajo
+> un ciclo cerrado puede acabar en pérdida. El **funding** de una escalera agotada esperando días no aparece
 > en ninguna pantalla (riesgo §9).
 
 ---
@@ -319,7 +319,7 @@ gasta más dinero: mueve el que hay hacia el final de la escalera.
 
 Beneficio sobre el precio medio al que se cierra la posición entera. Se recalcula con cada seguridad
 ejecutada. **Consejo**: con una entrada taker y una salida maker, por debajo del 0,3 % un ciclo cerrado
-puede acabar en pérdida.
+puede acabar en pérdida; la app lo avisa.
 
 #### Tipo de orden base · `baseOrderType` · 🔥 en caliente · por defecto **A mercado**
 

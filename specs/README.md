@@ -138,3 +138,4 @@ ante un 429 se paran sin reintentar. A `findings.md` va solo la evidencia resumi
 | 023 | [Limpieza: docs desfasadas, tests que faltaban y menores por venue y estrategia](023-limpieza-docs-y-tests/spec.md) | cambio | hecho | `spec/023-limpieza-docs-y-tests` |
 | 024 | [Mercados: los campos del venue llegan a la fila de `markets`](024-mercados-campos-del-venue/spec.md) | cambio | hecho | `spec/024-mercados-campos-del-venue` |
 | 025 | [Capital en las vistas de bots: cuánto dinero hay ahora, cuánto se puso y qué hay en juego](025-capital-en-las-vistas-de-bots/spec.md) | cambio | hecho | `spec/025-capital-en-las-vistas-de-bots` |
+| 026 | [Campos muertos fuera del formulario, valores de fábrica y semánticas fijadas](026-campos-muertos-y-decisiones/spec.md) | cambio | hecho | `spec/026-campos-muertos-y-decisiones` |

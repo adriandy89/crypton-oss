@@ -93,12 +93,7 @@ vuelve a desearse cuando el precio se aleja de ella medio escalón. Nota habitua
 Cada vez que la posición pasa exactamente por cero se cierra un ciclo (`CYCLE_CLOSED`) y empieza otro:
 cambian **todos** los identificadores y la retícula entera se cancela y recoloca (hasta 200 órdenes).
 
-### Paso 6 — Aviso de desvío
-
-Con **Recentrar si se aleja** activado, si `|precio − ancla| / ancla ≥ umbral`, la nota añade `Desvío del
-ancla 11,2 %: procede recentrar.` **Solo avisa**: el bot no mueve el ancla por su cuenta.
-
-### Paso 7 — Guardas
+### Paso 6 — Guardas
 
 Stop-loss inyectado por el motor sobre la media (la dirección sale del **signo de la posición real**, que
 aquí cambia), y las [guardas de riesgo](./riesgo-y-liquidacion.md#6-las-guardas-del-motor-revisión-a-revisión).
@@ -218,7 +213,7 @@ estimada del lado largo **63,19** (−54,4 %); la del lado corto, **232,01** (+6
 - [ ] ¿La banda muerta (`paso medio / 2`) es menor que los saltos que el par da en 15 s?
 - [ ] ¿Apalancamiento 1× o 2×? ¿Sé que viene en **cruzado**?
 - [ ] ¿En Lighter, 30 líneas o menos?
-- [ ] ¿Sé que **Dirección** y **Tope de exposición** no cambian nada aquí? (§4)
+- [ ] ¿Sé que **Dirección** no cambia nada aquí, y que **Tope de exposición** es un segundo freno junto a Exposición máxima? (§4)
 - [ ] ¿He decidido cómo recentrar si hace falta? (editar el ancla, no el comando)
 
 ### Señales de alarma cuando ya está funcionando
@@ -226,7 +221,6 @@ estimada del lado largo **63,19** (−54,4 %); la del lado corto, **232,01** (+6
 | Lo que ves | Qué significa | Qué hacer |
 |---|---|---|
 | `Tope de exposición alcanzado: solo órdenes que reducen posición.` | Ruptura hacia un lado; el freno ha actuado | Decide: esperar el retorno, recentrar (editando el ancla), o cerrar |
-| `Desvío del ancla 11,2 %: procede recentrar.` | El precio se ha ido del centro | Edita **Precio ancla** (en tibio): es la forma de recentrar; el menú ya no ofrece «Recentrar» aquí |
 | `CYCLE_CLOSED` frecuentes con recolocación de toda la retícula | La posición cruza el cero a menudo | Normal; en Lighter cuenta el cupo de peticiones |
 | `ORDER_UNVIABLE` en las líneas del centro | Con multiplicador > 1 el centro pesa poco | Baja el multiplicador o sube capital |
 
@@ -239,7 +233,6 @@ estimada del lado largo **63,19** (−54,4 %); la del lado corto, **232,01** (+6
 | **Dirección** (`direction`) | ⚠️ **No se lee.** Largo, corto o neutral, la retícula es la misma: compras bajo el ancla y ventas encima, y la vista previa enseña las dos liquidaciones. La guía in-app promete un sesgo que no existe. |
 | **Tope de exposición** (`maxNotionalCap`) | **Sí**, como segundo tope junto a **Exposición máxima**: manda el menor de los dos. |
 | **Espera entre ciclos** (`cooldownMinutes`) | **Sí.** Al cruzar el cero se cierra el ciclo y, si hay espera, la retícula no vuelve a tenderse hasta que pase. |
-| **Recentrar si se aleja** / **Umbral para recentrar** | Solo añaden el aviso a la nota. No mueven el ancla. |
 | **Capital asignado** | ✅ Sí: es la suma de los márgenes de todas las líneas. |
 
 Sí funcionan, aplicados por el motor: **Stop loss** (sobre la media y con la dirección de la posición real),
@@ -250,9 +243,6 @@ Sí funcionan, aplicados por el motor: **Stop loss** (sobre la media y con la di
 ## 5. Limitaciones conocidas (hallazgos abiertos)
 
 Confirmadas en `specs/001-revision-integral/findings.md`, abiertas a 2026-09-06.
-
-> ⚠️ **Limitación conocida (F-12, decide el usuario).** `reanchorOnDrift` solo avisa en la nota (§4):
-> recentrar sigue siendo editar el ancla. `direction` no sesga la retícula, y la app lo avisa si lo cambias.
 
 > ⚠️ **Límite conocido (F-94, aceptado).** Al cruzar el cero se cierra el ciclo y la retícula entera se
 > recoloca con ids nuevos (es el diseño: el ciclo de la neutral es una posición); con 200 niveles en un
@@ -339,16 +329,6 @@ estrategia**: alcanzado, el bot deja vivas únicamente las órdenes que reducen 
 **Consejo**: ponlo siempre. Sin él la app avisa por una razón concreta: en una ruptura la posición neta
 crece hasta agotar el margen.
 
-#### Recentrar si se aleja · `reanchorOnDrift` · 🔥 en caliente · por defecto **No**
-
-Vigila cuánto se ha alejado el precio del ancla. **Hoy solo informa**: cuando pasa del umbral lo anota en
-la nota del bot, pero **no mueve el ancla**. El recentrado real es editar el Precio ancla.
-
-#### Umbral para recentrar (%) · `reanchorThresholdPct` · 🔥 en caliente · 0,5–50 · por defecto **10**
-
-A qué porcentaje de distancia del ancla aparece el aviso anterior. No cambia ninguna orden por sí mismo.
-**Consejo**: un valor cercano a la mitad de tu rango avisa cuando el precio se acerca a un extremo.
-
 #### Tope de exposición · `maxNotionalCap` · 🔥 en caliente · opcional
 
 Segundo tope junto a **Exposición máxima**: manda el menor de los dos. Déjalo vacío si el propio te basta.
@@ -398,9 +378,8 @@ esta rejilla no toque a los demás. No se puede cambiar después.
 | Espaciado | Geométrico | ✅ Déjalo |
 | Multiplicador de tamaño | 1 | 🟡 1,2-1,5 si quieres cargar extremos; vigila el centro |
 | Exposición máxima | vacío | 🔴 **Ponlo** |
-| Recentrar si se aleja / Umbral | No / 10 % | Solo como aviso |
 | Al acercarse la liquidación | Solo avisar | 🟡 «Cerrar todo» a 2× o más |
-| Espera entre ciclos | 0 | ✅ Déjalo (muerto) |
+| Espera entre ciclos | 0 | ✅ Déjalo, o unos minutos |
 
 ---
 
@@ -413,7 +392,7 @@ esta rejilla no toque a los demás. No se puede cambiar después.
 | Puede acabar corto sin querer | **Sí** | No (en largo) | Sí, acotado por el tope |
 | Freno | `maxExposure` | Rango + `stopOnRangeExit` | Modos defensivo/alto riesgo |
 | Reacciona a movimientos lentos | Bien (la línea vive hasta que se cruza) | Bien | Bien (recotiza cada 30 s) |
-| Hallazgos abiertos propios | F-12 (campos sin efecto) | F-12 (campos sin efecto) | F-54 (Lighter) |
+| Hallazgos abiertos propios | `direction` no se lee (§4) | — | F-54 (Lighter, aceptado) |
 
 **Elige la neutral si**: no quieres sesgo y el par da saltos claros alrededor de un precio reconocible.
 **Elige la clásica si**: quieres acumular o es tu primer bot. **Elige un market maker si**: el par oscila

@@ -191,7 +191,7 @@ Idénticas a la V1: piso/techo de precio (cortan **solo el lado que abre**) y **
 
 > ## ⚠️ Pon la **Estimación de comisión** con tu comisión real de maker.
 >
-> **Viene en 0 por defecto**, y con 0 la V2 pierde su principal ventaja: calcula como si operar fuese gratis, y el suelo de beneficio no protege de nada.
+> Los bots nuevos nacen con **2 bps** (los creados antes conservan su valor): si tu comisión de maker es otra, ajústala. Con 0 la V2 pierde su principal ventaja: calcula como si operar fuese gratis, y el suelo de beneficio no protege de nada.
 >
 > Búscala en la web de tu exchange ("maker fee"). Si es 0,02 %, escribe **2**. Si es 0,015 %, escribe **1,5**.
 
@@ -409,15 +409,15 @@ Suelo duro absoluto. **Compite con el suelo calculado** (`comisión × 2 + marge
 
 > ℹ️ A diferencia de la V1, aquí no es un error que supere tus distancias de compra y venta: la app **avisa** de que las elevará hasta ahí, y de que la causa es esta distancia mínima (no la comisión ni el margen).
 
-#### Estimación de comisión · `feeEstimateBps` · 🔥 en caliente · 0–100 bps · por defecto **0**
+#### Estimación de comisión · `feeEstimateBps` · 🔥 en caliente · 0–100 bps · por defecto **2**
 
-> ### 🔴 El campo más importante de esta estrategia, y viene en 0.
+> ### 🔴 El campo más importante de esta estrategia.
 
 Lo que te cobra el exchange **por lado**. Se cuenta **dos veces**, porque una vuelta completa son dos operaciones.
 
 Entra dos veces en la fórmula: **eleva el suelo** por debajo del cual el bot no cotiza, **y** se suma a la distancia final para que el coste ya esté cubierto.
 
-**Consejo**: ponla igual a tu **comisión real de maker** en ese exchange. Dejarla en 0 hace que el bot cotice como si operar fuese gratis y desactiva de hecho la garantía de beneficio: la app lo **avisa** al validar (el valor de fábrica sigue siendo 0).
+**Consejo**: ponla igual a tu **comisión real de maker** en ese exchange. Dejarla en 0 hace que el bot cotice como si operar fuese gratis y desactiva de hecho la garantía de beneficio: la app lo **avisa** al validar. Los bots nuevos nacen con 2 bps; los creados antes conservan el suyo.
 
 #### Buffer de seguridad · `safetyBufferBps` · 🔥 en caliente · 0–200 bps · por defecto **0**
 
@@ -648,7 +648,7 @@ Fija tick, paso y mínimo. Con el preset Conservador el tamaño baja al 70 % y l
 
 #### Capital asignado · `totalInvestment` · 🌤️ en tibio · mínimo 10 · ⚠️ campo de riesgo
 
-**No dimensiona órdenes** (lo hacen Tamaño por compra/venta y Niveles). Es el denominador de la Pérdida diaria máxima y del kill-switch por caída.
+**No dimensiona órdenes** (lo hacen Tamaño por compra/venta y Niveles). Es el denominador de la Pérdida diaria máxima y del kill-switch por pérdida acumulada.
 
 #### Tope de exposición · `maxNotionalCap` · 🔥 en caliente · opcional
 
@@ -683,7 +683,7 @@ Solo avisar / Pausar el bot / Cerrar todo cuando la distancia a la liquidación 
 | Apalancamiento | 1x | ✅ Déjalo |
 | Distancia compra / venta | 40 / 40 bps | Según el par |
 | Distancia mínima permitida | 8 bps | ✅ Déjalo |
-| **Estimación de comisión** | **0 bps** | 🔴 **CÁMBIALO** por tu comisión real |
+| **Estimación de comisión** | 2 bps | 🟡 Ajústala a tu comisión real de maker |
 | Buffer de seguridad | 0 bps | 1–3 bps |
 | Margen mínimo de beneficio | 8 bps | ✅ Déjalo o súbelo |
 | Solo post-only | Sí | ✅ Déjalo |

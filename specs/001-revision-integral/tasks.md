@@ -73,6 +73,6 @@
 
 - [x] CA-1…CA-5 repasados uno a uno — CA-3: las seis Críticas corregidas con test; CA-5: `pnpm test` desde la raíz recorre TODOS los paquetes en verde (ya no se detiene en strategy-core) y `pnpm lint` limpio
 - [x] `pnpm test` y `pnpm lint` en verde
-- [ ] Índice de `specs/README.md` actualizado
-- [ ] `CLAUDE.md` actualizado si cambió algo que deba saber toda sesión
-- [ ] Memoria de usuario actualizada
+- [x] Índice de `specs/README.md` actualizado
+- [x] `CLAUDE.md` actualizado si cambió algo que deba saber toda sesión
+- [x] Memoria de usuario actualizada

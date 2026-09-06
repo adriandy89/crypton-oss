@@ -114,7 +114,7 @@ significa que la plataforma se apaga, y por eso está prohibido).
 | Notional máximo total | La suma de todos tus bots | Creación y cada minuto en la revisión |
 | Bots abiertos máximos | Cuántos pueden estar arrancados a la vez | Al arrancar |
 | Pérdida diaria máxima (USDC) | PnL realizado **de todos tus bots** en el día | Al arrancar y en cada revisión |
-| Kill-switch por caída (%) | Pérdida acumulada del bot sobre su capital asignado | Cada revisión |
+| Kill-switch por pérdida acumulada (%) | Pérdida acumulada del bot sobre su capital asignado | Cada revisión |
 | Aviso de liquidación (%) · por defecto **10** | A qué distancia salta `LIQUIDATION_NEAR` | Cada revisión |
 
 Y el **kill-switch global** (`POST /risk/kill-switch`, el botón rojo de la pantalla): marca **todos** tus
@@ -136,7 +136,7 @@ el sangrado y te deja la decisión.
 | Notional por bot | `|posición| × marca` supera tu límite por bot | Pausa |
 | Notional total | La suma de tus bots supera tu límite total | Pausa |
 | **Liquidación cerca** | Distancia al precio de liquidación **del venue** < «Aviso de liquidación» (10 %) | Evento CRITICAL (con enfriamiento de unos minutos) y, según **Al acercarse la liquidación**: **Solo avisar** (defecto) no toca nada · **Pausar el bot** pausa · **Cerrar todo** cierra a mercado |
-| Kill-switch por caída | `pérdida acumulada del bot / capital asignado ≥ %` | Pausa |
+| Kill-switch por pérdida acumulada | `pérdida acumulada del bot / capital asignado ≥ %` | Pausa |
 | Pérdida diaria de la cuenta | PnL realizado de hoy de todos tus bots < −límite | Pausa |
 | Pérdida diaria del bot (%) | `stopLoss diario` del propio bot sobre su capital | Pausa |
 | Colocaciones fallidas | 20 fallos pasajeros seguidos al colocar órdenes | Pausa |
@@ -154,11 +154,10 @@ estas tres coletillas:
 
 Un bot pausado sigue latiendo: mira su posición y avisa de la liquidación, pero no toca el libro.
 
-> ⚠️ **Una semántica que conviene saber (F-11, abierta a 2026-09-06: decide el usuario).** El
-> «kill-switch por caída» mide la **pérdida acumulada sobre el capital asignado**, no la caída desde el
-> máximo del bot. La pérdida diaria de la cuenta y la del bot cortan el día a la misma medianoche, la de
-> tu zona horaria. **Hasta que se decida:** trátalo como tope de pérdida absoluta, no como *drawdown*
-> clásico. Estado: `specs/001-revision-integral/findings.md` § F-11.
+> ℹ️ **Semántica fijada (F-11, 2026-09-06).** El kill-switch del bot mide la **pérdida acumulada sobre el
+> capital asignado**, no la caída desde el máximo: es un tope de pérdida absoluta, y así se rotula en la
+> app («Pérdida acumulada que pausa el bot»). La pérdida diaria de la cuenta y la del bot cortan el día a
+> la misma medianoche, la de tu zona horaria.
 
 ---
 
