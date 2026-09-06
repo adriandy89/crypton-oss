@@ -1,7 +1,7 @@
 import { Injectable, inject } from '@angular/core';
 import { ActionSheetController, AlertController } from '@ionic/angular/standalone';
 import { BotsService, ToastService } from '../../core/services';
-import { DESTRUCTIVE_COMMANDS, type BotCommand } from '../../core/models';
+import { DESTRUCTIVE_COMMANDS, type BotCommand, type StrategyKind } from '../../core/models';
 import { errorText } from '../../core/utils';
 
 /**
@@ -29,6 +29,25 @@ export const COMMAND_LABELS: readonly {
 ];
 
 /**
+ * Comandos que solo existen en las escaleras: Martingala y GridMart cuelgan sus
+ * seguridades de un ancla y pueden adelantarlas a mercado. Ofrecerlos en las
+ * demás estrategias era ofrecer algo que el motor rechaza o, peor, que hacía
+ * daño (001/F-84): en la rejilla clásica «Recentrar» duplicaba compras.
+ */
+const LADDER_ONLY: readonly BotCommand[] = ['ADD_SAFETY_NOW', 'REANCHOR_GRID'];
+const LADDERS: readonly StrategyKind[] = ['MARTINGALE', 'GRIDMART'];
+
+const CONFIRMA_CIERRE =
+  'Esta acción cierra la posición a mercado y realiza el resultado al instante. No se puede deshacer.';
+/**
+ * Recentrar no cierra nada, pero vuelve a tender la escalera entera bajo el
+ * precio actual con la posición anterior aún abierta: margen que la vista
+ * previa nunca enseñó. La API exige confirmarlo igual que un cierre.
+ */
+const CONFIRMA_RECENTRAR =
+  'Recentrar vuelve a tender toda la escalera bajo el precio actual y compromete más margen sobre la posición que ya está abierta.';
+
+/**
  * La hoja de acciones de un bot y sus confirmaciones, en UN solo sitio.
  *
  * Vivía dentro del detalle del bot. Al abrirla también desde el gráfico —el
@@ -50,14 +69,21 @@ export class BotCommandsService {
   private readonly alerts = inject(AlertController);
 
   /**
-   * Abre la hoja con todos los comandos. `onSent` corre tras enviar uno con
-   * éxito: la pantalla que la abrió decide cómo recargarse.
+   * Abre la hoja con los comandos que aplican a la estrategia. `onSent` corre
+   * tras enviar uno con éxito: la pantalla que la abrió decide cómo recargarse.
+   * Sin `strategy` se ofrecen todos: el motor rechaza los que no aplican.
    */
-  async open(botId: string, opts: { onSent?: () => void | Promise<void> } = {}): Promise<void> {
+  async open(
+    botId: string,
+    opts: { onSent?: () => void | Promise<void>; strategy?: StrategyKind } = {},
+  ): Promise<void> {
+    const visibles = COMMAND_LABELS.filter(
+      (c) => !LADDER_ONLY.includes(c.command) || !opts.strategy || LADDERS.includes(opts.strategy),
+    );
     const sheet = await this.sheets.create({
       header: 'Acciones del bot',
       buttons: [
-        ...COMMAND_LABELS.map((c) => ({
+        ...visibles.map((c) => ({
           text: c.label,
           role: c.role,
           handler: () => void this.run(botId, c.command, opts),
@@ -69,7 +95,7 @@ export class BotCommandsService {
   }
 
   /**
-   * Envía un comando, con confirmación si cierra a mercado.
+   * Envía un comando, con confirmación si cierra a mercado o compromete margen.
    *
    * Los comandos que cierran a mercado realizan el resultado al instante y no
    * se pueden deshacer: se pregunta SIEMPRE, aunque la API también lo exija.
@@ -79,11 +105,15 @@ export class BotCommandsService {
     command: BotCommand,
     opts: { onSent?: () => void | Promise<void> } = {},
   ): Promise<void> {
-    if (DESTRUCTIVE_COMMANDS.includes(command)) {
+    const aviso = DESTRUCTIVE_COMMANDS.includes(command)
+      ? CONFIRMA_CIERRE
+      : command === 'REANCHOR_GRID'
+        ? CONFIRMA_RECENTRAR
+        : null;
+    if (aviso) {
       const alert = await this.alerts.create({
         header: '¿Seguro?',
-        message:
-          'Esta acción cierra la posición a mercado y realiza el resultado al instante. No se puede deshacer.',
+        message: aviso,
         buttons: [
           { text: 'Cancelar', role: 'cancel' },
           {

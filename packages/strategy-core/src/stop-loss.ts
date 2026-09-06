@@ -44,8 +44,11 @@ export function withStopLoss(
   if (qty.isZero()) return desired;
 
   // Si la estrategia ya emitió el suyo, manda el suyo: sabe cosas del ciclo que
-  // desde aquí no se ven.
-  if (desired.orders.some((o) => o.levelKind === 'STOP_LOSS')) return desired;
+  // desde aquí no se ven. Se mira también `immediate`: un stop emitido por esa
+  // vía es un stop igualmente, y añadir otro con el mismo id era lo que dejaba
+  // la inmediata vetada por la fila viva del nuestro (001/F-02).
+  const propio = [...desired.orders, ...desired.immediate];
+  if (propio.some((o) => o.levelKind === 'STOP_LOSS')) return desired;
 
   const direction: Direction = qty.gt(0) ? 'LONG' : 'SHORT';
   const side = exitSide(direction);

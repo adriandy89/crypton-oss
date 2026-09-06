@@ -1172,12 +1172,17 @@ export const marketMakerV2: Strategy<MarketMakerV2Config> = {
     }
 
     // ── 7. Cierre forzado por «acción al alcanzar el límite» ──
+    //
+    // Mismo id que el cierre manual (`TAKE_PROFIT#999`) y no `STOP_LOSS#0`, que
+    // es el del stop que inyecta el motor: con `stopLossPct` la fila viva del
+    // stop vetaba esta inmediata y el aplanado no salía nunca (001/F-02). Ver la
+    // misma nota en la V1.
     const immediate: DesiredOrder[] = [];
     if (breach.flatten && inv.qty.abs().gt(0)) {
       immediate.push({
-        clientOrderId: makeCoid(ctx.botId, seq, LevelKind.STOP_LOSS, 0),
-        levelKind: LevelKind.STOP_LOSS,
-        levelIndex: 0,
+        clientOrderId: makeCoid(ctx.botId, seq, LevelKind.TAKE_PROFIT, 999),
+        levelKind: LevelKind.TAKE_PROFIT,
+        levelIndex: 999,
         side: inv.qty.gt(0) ? 'SELL' : 'BUY',
         type: 'MARKET',
         price: px(ctx.market, mid, inv.qty.gt(0) ? 'SELL' : 'BUY'),

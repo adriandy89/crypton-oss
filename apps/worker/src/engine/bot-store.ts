@@ -591,7 +591,7 @@ export class BotStore {
     botId: string,
     cycle: CycleState,
     fill: Fill,
-    opts: { recycleLevelOnExit?: boolean; trackMmStats?: boolean } = {},
+    opts: { recycleLevelOnExit?: boolean; trackMmStats?: boolean; cooldownMinutes?: number } = {},
   ): Promise<CycleState> {
     const outcome = await this.db.$transaction(async (tx) => {
       // `FOR UPDATE` sobre el ciclo abierto: cualquier otra transacción que
@@ -626,7 +626,7 @@ export class BotStore {
           lastEntryAt: dbCycle.last_entry_at ? dbCycle.last_entry_at.getTime() : null,
         },
         fill,
-        { recycleLevelOnExit: opts.recycleLevelOnExit },
+        { recycleLevelOnExit: opts.recycleLevelOnExit, cooldownMinutes: opts.cooldownMinutes },
         Date.now(),
       );
 
@@ -659,7 +659,9 @@ export class BotStore {
       // La secuencia del ciclo siguiente sale de la BASE, no del scratch: la
       // fila es la autoridad y el scratch solo su reflejo.
       const nextSeq = dbCycle.seq + 1;
-      const cooldownMinutes = Number(r.cycle.scratch.cooldownMinutes ?? 0);
+      // El scratch solo es el reflejo de lo que valía al abrir; manda la
+      // configuración vigente que trae el runner (001/F-86).
+      const cooldownMinutes = opts.cooldownMinutes ?? Number(r.cycle.scratch.cooldownMinutes ?? 0);
       const cooldownUntil = r.cycle.cooldownUntil ? new Date(r.cycle.cooldownUntil) : null;
 
       await tx.botCycle.update({

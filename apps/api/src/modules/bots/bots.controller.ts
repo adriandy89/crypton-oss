@@ -172,7 +172,7 @@ export class BotsController {
   @ApiOperation({
     summary: 'Ejecuta un comando de runtime',
     description:
-      'START, PAUSE, RESUME, STOP_KEEP_POSITION, STOP_AND_CLOSE, CLOSE_NOW, TAKE_PROFIT_NOW, ADD_SAFETY_NOW, REANCHOR_GRID, CANCEL_ALL_ORDERS, PANIC y REPAIR. Los que cierran a mercado exigen confirm:true; REPAIR no toca el libro y no la pide.',
+      'START, PAUSE, RESUME, STOP_KEEP_POSITION, STOP_AND_CLOSE, CLOSE_NOW, TAKE_PROFIT_NOW, ADD_SAFETY_NOW, REANCHOR_GRID, CANCEL_ALL_ORDERS, PANIC y REPAIR. Los que cierran a mercado y REANCHOR_GRID (compromete margen nuevo) exigen confirm:true; REANCHOR_GRID y ADD_SAFETY_NOW solo aplican a Martingala y GridMart; REPAIR no toca el libro y no pide confirmación.',
   })
   command(
     @GetUserInfo() user: SessionUser,

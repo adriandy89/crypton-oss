@@ -55,6 +55,13 @@ const LIVE_STATUSES: BotStatus[] = [
 /** Comandos que cierran posición a mercado: irreversibles, exigen confirmar. */
 const DESTRUCTIVE_COMMANDS = new Set(['STOP_AND_CLOSE', 'CLOSE_NOW', 'PANIC']);
 
+/**
+ * Las únicas estrategias con ancla: «Recentrar la retícula» solo existe aquí.
+ * En las demás el worker lo rechaza igual (001/F-84), pero medio minuto después
+ * y en la bitácora; la API lo dice al instante y con el motivo.
+ */
+const LADDER_STRATEGIES = new Set<string>(['MARTINGALE', 'GRIDMART']);
+
 /** La parte de `CapitalSnapshot` que viene del venue. */
 type WalletRead = Omit<CapitalSnapshot, 'committed' | 'limits'>;
 
@@ -1019,6 +1026,26 @@ export class BotsService {
           'Este comando cierra la posición a mercado y realiza el resultado al instante. Confirma para continuar.',
         requiresConfirmation: true,
       });
+    }
+
+    if (dto.command === 'REANCHOR_GRID') {
+      if (!LADDER_STRATEGIES.has(bot.strategy)) {
+        throw new ConflictException(
+          '«Recentrar la retícula» solo aplica a Martingala y GridMart. En la rejilla neutral ' +
+            'edita «Precio ancla»; la clásica se mueve editando su rango; la TDCA y los market ' +
+            'makers no tienen ancla.',
+        );
+      }
+      // No cierra nada, pero vuelve a tender la escalera ENTERA bajo el precio
+      // actual con la posición anterior aún abierta: margen que ninguna vista
+      // previa enseñó. Se confirma como un cierre a mercado.
+      if (dto.confirm !== true) {
+        throw new ConflictException({
+          message:
+            'Recentrar vuelve a tender toda la escalera bajo el precio actual y compromete más margen sobre la posición abierta. Confirma para continuar.',
+          requiresConfirmation: true,
+        });
+      }
     }
 
     const margin =

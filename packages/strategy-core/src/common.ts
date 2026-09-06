@@ -230,6 +230,27 @@ export function validateCommon(config: CommonBotConfig, market: MarketSpec): Val
     }
   }
 
+  // `meta.fields` acota `stopLossPct` (0,1-90) y `maxDailyLossPct` (0,1-100),
+  // pero solo el formulario lo aplicaba: la API aceptaba `stopLossPct: 150`, el
+  // disparo salia a precio negativo y la posicion se quedaba sin stop con un
+  // WARN; y una perdida diaria de cero pausaba el bot al arrancar (001/F-13).
+  // Se rechaza lo que nunca pudo venir de la app. Vacio o nulo sigue siendo
+  // «sin stop» / «sin limite», como siempre.
+  const stopPct = config.stopLossPct;
+  if (stopPct !== undefined && stopPct !== null && stopPct !== '') {
+    const pct = D(stopPct);
+    if (!pct.isFinite() || pct.lte(0) || pct.gte(100)) {
+      issues.push(err('stopLossPct', 'El stop loss debe estar entre 0 y 100 %, sin incluirlos.'));
+    }
+  }
+  const dailyPct = config.maxDailyLossPct;
+  if (dailyPct !== undefined && dailyPct !== null && dailyPct !== '') {
+    const pct = D(dailyPct);
+    if (!pct.isFinite() || pct.lte(0)) {
+      issues.push(err('maxDailyLossPct', 'La perdida diaria maxima debe ser mayor que cero.'));
+    }
+  }
+
   if (!market.active) {
     issues.push(
       err('symbol', 'El mercado ' + market.symbol + ' no esta activo en ' + market.venue),

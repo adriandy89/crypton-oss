@@ -30,7 +30,7 @@ import {
   warn,
   type RawLevel,
 } from '../common';
-import { scaledLadder, takeProfitPrice } from '../ladder';
+import { baseLimitPrice, scaledLadder, takeProfitPrice } from '../ladder';
 import type { Strategy } from '../types';
 
 export interface MartingaleConfig extends CommonBotConfig {
@@ -300,8 +300,20 @@ export const martingale: Strategy<MartingaleConfig> = {
         };
       }
 
+      // La base LIMIT se fija al precio del momento de emitirla y no persigue
+      // al mercado (001/F-92, ver `baseLimitPrice`). La escalera se dimensiona
+      // desde ese mismo precio para que la orden deseada no cambie de tamaño
+      // con cada tick y el reconciliador no tenga nada que reemplazar.
+      const fija =
+        cfg.baseOrderType === 'LIMIT'
+          ? baseLimitPrice(
+              ctx.cycle.scratch,
+              ctx.now,
+              px(ctx.market, mark, entrySide(cfg.direction)),
+            )
+          : null;
       const base = scaledLadder({
-        anchor: mark,
+        anchor: fija ? D(fija.price) : mark,
         safetyCount: Math.max(0, Math.floor(cfg.numLimitBuys ?? 0)),
         initialSeparationPct: cfg.initialSeparationPct,
         stepScale: cfg.stepScale,
@@ -316,8 +328,8 @@ export const martingale: Strategy<MartingaleConfig> = {
         levelKind: LevelKind.BASE,
         levelIndex: 0,
         side: entrySide(cfg.direction),
-        type: cfg.baseOrderType === 'LIMIT' ? 'POST_ONLY' : 'MARKET',
-        price: px(ctx.market, mark, entrySide(cfg.direction)),
+        type: fija ? 'POST_ONLY' : 'MARKET',
+        price: fija ? fija.price : px(ctx.market, mark, entrySide(cfg.direction)),
         qty: qy(ctx.market, base.qty),
         reduceOnly: false,
       };
@@ -326,7 +338,13 @@ export const martingale: Strategy<MartingaleConfig> = {
       if (entry.type === 'MARKET') immediate.push(entry);
       else orders.push(entry);
 
-      return { orders, immediate, targetLeverage: cfg.leverage, note: 'Abriendo ciclo.' };
+      return {
+        orders,
+        immediate,
+        targetLeverage: cfg.leverage,
+        note: 'Abriendo ciclo.',
+        ...(fija?.patch ? { scratchPatch: fija.patch } : {}),
+      };
     }
 
     // ── Con posición: escalera de seguridad + salida ──
@@ -377,13 +395,22 @@ export const martingale: Strategy<MartingaleConfig> = {
     // siguiente tick, que es exactamente lo que debe pasar.
     const avgEntry = ctx.position!.entryPrice;
     const tp = takeProfitPrice(avgEntry, cfg.takeProfitPct, cfg.direction);
+    const tpPrice = px(ctx.market, tp, exitSide(cfg.direction));
+    // «A mercado» es una orden CONDICIONAL: espera al objetivo y entonces cruza
+    // el libro. Sin `triggerPrice` salía como MARKET inmediata y el venue la
+    // ejecutaba al colocarla: cerraba la posición al instante, cerraba el ciclo,
+    // esperaba el cooldown y volvía a abrir — un bucle que quema comisiones
+    // (001/F-80). El adaptador traduce disparador + intención TP a la
+    // condicional nativa de cada venue, y el simulador la deja en reposo.
+    const aMercado = cfg.tpMode === 'MARKET';
     orders.push({
       clientOrderId: makeCoid(ctx.botId, seq, LevelKind.TAKE_PROFIT, 0),
       levelKind: LevelKind.TAKE_PROFIT,
       levelIndex: 0,
       side: exitSide(cfg.direction),
-      type: cfg.tpMode === 'MARKET' ? 'MARKET' : 'LIMIT',
-      price: px(ctx.market, tp, exitSide(cfg.direction)),
+      type: aMercado ? 'MARKET' : 'LIMIT',
+      price: tpPrice,
+      ...(aMercado ? { triggerPrice: tpPrice } : {}),
       qty: qy(ctx.market, pos),
       reduceOnly: true,
     });

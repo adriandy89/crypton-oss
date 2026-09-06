@@ -465,6 +465,41 @@ describe('Martingale en el simulador', () => {
   });
 });
 
+describe('Martingale con take profit a mercado, en el simulador', () => {
+  /**
+   * Spec 001, F-80. Antes la salida «a mercado» salia sin disparador: el
+   * simulador —como Aster— la ejecutaba al instante, cerraba el ciclo y la
+   * martingala volvia a abrir la base: un bucle que quema comisiones. Ahora es
+   * una condicional en reposo que espera al objetivo.
+   */
+  it('la salida espera al objetivo en vez de cerrar la posicion en el acto', async () => {
+    const h = harness('MARTINGALE', {
+      numLimitBuys: 2,
+      initialSeparationPct: '1',
+      stepScale: '2',
+      volumeScale: '2',
+      totalInvestment: '700',
+      takeProfitPct: '1',
+      baseOrderType: 'MARKET',
+      tpMode: 'MARKET',
+    });
+    trackCanonicals(h.store);
+
+    await h.runner.start();
+    await settle();
+    await tick(h.runner);
+
+    // Una sola ejecucion, la base: la posicion sigue abierta y el take profit
+    // espera en el libro como condicional.
+    expect(h.store.fills.size).toBe(1);
+    expect(D(await positionQty(h.sim)).gt(0)).toBe(true);
+    const tp = (await book(h.sim)).find((o) => o.kind === 'TAKE_PROFIT');
+    expect(tp).toBeDefined();
+
+    await h.runner.dispose();
+  });
+});
+
 describe('Grid Classic en el simulador', () => {
   it('compra abajo, vende arriba y REPITE: el nivel vendido vuelve a comprarse', async () => {
     const h = harness('GRID_CLASSIC', {

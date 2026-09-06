@@ -63,6 +63,8 @@ class FakeAdapter implements ExchangeAdapter {
   readonly venue = Venue.HYPERLIQUID;
   readonly calls: string[] = [];
   readonly placed: string[] = [];
+  /** Las peticiones enteras, para mirar CON QUE precio y tipo salio cada una. */
+  readonly requests: PlaceOrderRequest[] = [];
   readonly canceledOwn: string[][] = [];
 
   readonly fills$ = new Subject<Fill>();
@@ -104,6 +106,7 @@ class FakeAdapter implements ExchangeAdapter {
     }
     if (this.placeError) throw this.placeError;
     this.placed.push(req.clientOrderId);
+    this.requests.push(req);
     return {
       clientOrderId: req.clientOrderId,
       venueOrderId: 'v-' + req.clientOrderId,
@@ -818,6 +821,180 @@ describe('reutilización de ids por estrategia', () => {
     marginUsed: '0',
   });
 
+  describe('recentrar solo aplica a las escaleras', () => {
+    /**
+     * Spec 001, F-84. «Recentrar la reticula» corria igual en las siete
+     * estrategias. En la rejilla clasica las lineas salen del rango, asi que lo
+     * unico que hacia era borrar la memoria de los niveles comprados: el bot
+     * volvia a tender la compra de cada nivel que ya tenia y retiraba su venta.
+     * Segunda compra por nivel y sin salida, con el usuario creyendo que solo
+     * habia «recentrado».
+     */
+    it('REANCHOR_GRID en Grid Classic con inventario se rechaza y conserva la venta', async () => {
+      const venta = level(1, {
+        clientOrderId: makeCoid(BOT_ID, 1, 'GRID_SELL', 1),
+        levelKind: 'GRID_SELL',
+        side: 'SELL',
+        price: '105.0',
+        reduceOnly: true,
+      });
+      const { runner, adapter, store } = build({ orders: [venta], immediate: [] });
+      adapter.position = conPos();
+      await runner.start();
+      const cancelacionesAntes = adapter.canceledOwn.length;
+      await runner.handleCommand('REANCHOR_GRID');
+      await runner.dispose();
+
+      expect(store.saveCycleAnchor).not.toHaveBeenCalled();
+      expect(store.events).toContain('ACTION_FAILED');
+      expect(store.events).not.toContain('GRID_REANCHORED');
+      // Nada se cancela: la venta del nivel comprado sigue en el libro.
+      expect(adapter.canceledOwn.length).toBe(cancelacionesAntes);
+    });
+
+    /**
+     * En la rejilla neutral el centro real es «Precio ancla», un campo de la
+     * configuracion que el comando no tocaba: cancelaba, anunciaba «recentrada»
+     * y las lineas volvian exactamente al mismo sitio.
+     */
+    it('REANCHOR_GRID en la rejilla neutral se rechaza y remite a Precio ancla', async () => {
+      const eventos: { type: string; message: string }[] = [];
+      const { runner, store } = build(
+        { orders: [], immediate: [] },
+        {
+          event: jest.fn(async (_bot: unknown, type: string, _sev: string, message: string) => {
+            eventos.push({ type, message });
+          }) as never,
+        },
+      );
+      (runner as unknown as { strategy: { kind: string } }).strategy.kind = 'NEUTRAL_GRID';
+      await runner.start();
+      await runner.handleCommand('REANCHOR_GRID');
+      await runner.dispose();
+
+      expect(store.saveCycleAnchor).not.toHaveBeenCalled();
+      const rechazo = eventos.find((e) => e.type === 'ACTION_FAILED');
+      expect(rechazo?.message).toContain('Precio ancla');
+      expect(eventos.some((e) => e.type === 'GRID_REANCHORED')).toBe(false);
+    });
+
+    /**
+     * En una escalera si aplica: se vuelve a colgar todo del precio actual. Lo
+     * que cambia es que el aviso dice cuanto margen nuevo se compromete, porque
+     * la escalera entera se retiende con la posicion anterior aun abierta y esa
+     * cifra no la enseño ninguna vista previa.
+     */
+    it('REANCHOR_GRID en una martingala recentra y anota el margen que compromete', async () => {
+      const eventos: { type: string; message: string }[] = [];
+      const { runner, adapter, store } = build(
+        { orders: [], immediate: [] },
+        {
+          event: jest.fn(async (_bot: unknown, type: string, _sev: string, message: string) => {
+            eventos.push({ type, message });
+          }) as never,
+        },
+        { totalInvestment: '70' },
+      );
+      (runner as unknown as { strategy: { kind: string } }).strategy.kind = 'MARTINGALE';
+      adapter.position = conPos();
+      await runner.start();
+      await runner.handleCommand('REANCHOR_GRID');
+      await runner.dispose();
+
+      expect(store.saveCycleAnchor).toHaveBeenCalledWith(BOT_ID, '100', []);
+      const aviso = eventos.find((e) => e.type === 'GRID_REANCHORED');
+      expect(aviso?.message).toContain('70 USDC');
+      expect(aviso?.message).toContain('10 BTC');
+    });
+  });
+
+  describe('adelantar una seguridad dice lo que paso', () => {
+    const seguridad = level(1, {
+      clientOrderId: makeCoid(BOT_ID, 1, 'SAFETY', 1),
+      levelKind: 'SAFETY',
+      type: 'POST_ONLY',
+      price: '95.0',
+    });
+    const martingala = (storeOver: Partial<BotStore> = {}) => {
+      const h = build({ orders: [seguridad], immediate: [] }, storeOver);
+      (h.runner as unknown as { strategy: { kind: string } }).strategy.kind = 'MARTINGALE';
+      h.adapter.position = conPos();
+      return h;
+    };
+
+    /**
+     * Spec 001, F-85. La seguridad manual salia a mercado con el precio del
+     * escalon (95 con el mark en 100): en Hyperliquid una orden a mercado a mas
+     * de ~5 % del mark se rechaza, y el usuario recibia igualmente «ejecutada
+     * a mercado». Ahora se manda al precio de marca —la holgura la pone el
+     * adaptador— y se anuncia lo que dijo el acuse.
+     */
+    it('ADD_SAFETY_NOW sale a mercado al precio de marca, no al del escalon', async () => {
+      const { runner, adapter, store } = martingala();
+      await runner.start();
+      adapter.requests.length = 0;
+      await runner.handleCommand('ADD_SAFETY_NOW');
+      await runner.dispose();
+
+      const manual = adapter.requests.find((r) => r.clientOrderId === seguridad.clientOrderId);
+      expect(manual?.type).toBe('MARKET');
+      expect(manual?.price).toBe(TICKER.mark);
+      expect(store.events).toContain('SAFETY_ADDED');
+    });
+
+    it('ADD_SAFETY_NOW sin acuse no anuncia SAFETY_ADDED', async () => {
+      const { runner, adapter, store } = martingala();
+      await runner.start();
+      adapter.placeError = new ExchangeError('RULES', 'rechazada por el venue', Venue.HYPERLIQUID);
+      await runner.handleCommand('ADD_SAFETY_NOW');
+      await runner.dispose();
+
+      expect(store.events).not.toContain('SAFETY_ADDED');
+      expect(store.events).toContain('ADD_SAFETY_SKIPPED');
+    });
+  });
+
+  describe('la espera entre ciclos se lee de la configuracion vigente', () => {
+    /**
+     * Spec 001, F-86. `cooldownMinutes` se copiaba al scratch de la PRIMERA fila
+     * de ciclo y de ahi lo leia la contabilidad para siempre: un cambio HOT del
+     * campo se anunciaba como «configuracion recargada» y nunca surtia efecto.
+     * El backtest, que lo lee de la config, si lo aplicaba: paridad rota.
+     */
+    it('reloadConfig HOT de cooldownMinutes se aplica al cerrar el ciclo', async () => {
+      const { runner, adapter, store } = build({ orders: [], immediate: [] });
+      await runner.start();
+      await runner.reloadConfig({ leverage: 1, cooldownMinutes: 30 } as never, 'HOT');
+
+      adapter.fills$.next({
+        venue: Venue.HYPERLIQUID,
+        symbol: 'BTC',
+        venueFillId: 'f-cooldown',
+        venueOrderId: 'v-1',
+        clientOrderId: makeCoid(BOT_ID, 1, 'GRID_BUY', 0),
+        side: 'BUY',
+        price: '100',
+        qty: '1',
+        fee: '0',
+        feeAsset: 'USDC',
+        isTaker: false,
+        ts: Date.now(),
+      });
+      // El fill entra bajo el cerrojo y la contabilidad falsa tarda 20 ms.
+      for (let i = 0; i < 100 && store.cycleCalls.length === 0; i++) {
+        await new Promise((r) => setTimeout(r, 10));
+      }
+      await runner.dispose();
+
+      expect(store.applyFillToCycle).toHaveBeenCalledWith(
+        BOT_ID,
+        expect.anything(),
+        expect.anything(),
+        expect.objectContaining({ cooldownMinutes: 30 }),
+      );
+    });
+  });
+
   describe('el stop loss sobrevive a lo que no cierra la posicion', () => {
     /**
      * El fallo que esto cubre: `cancelOwnOrders` barria TODO lo vivo, stop loss
@@ -843,14 +1020,57 @@ describe('reutilización de ids por estrategia', () => {
       await runner.dispose();
     });
 
-    /** Aqui si se cierra la posicion, asi que el stop debe irse con ella. */
-    it('STOP_AND_CLOSE se lleva el stop por delante', async () => {
+    /**
+     * Aqui si se cierra la posicion, asi que el stop debe irse con ella — pero
+     * DESPUES del cierre, no antes (001/F-33). Mientras el cierre no este
+     * mandado, el stop es la unica red que le queda a la posicion; cancelarlo
+     * primero abria una ventana en la que un fallo del cierre dejaba la
+     * posicion desnuda con el bot diciendo «cerrada».
+     */
+    it('STOP_AND_CLOSE cancela el stop solo despues de cerrar', async () => {
       const { runner, adapter } = build({ orders: [], immediate: [] });
       adapter.position = conPos();
       await runner.start();
       await runner.handleCommand('STOP_AND_CLOSE');
 
       expect(adapter.canceledOwn.at(-1)).toContain('sl-1');
+      const cierre = adapter.calls.findIndex((c) => c.startsWith('place:') && c.includes('TP'));
+      const ultimaCancelacion = adapter.calls.lastIndexOf('cancelOwn');
+      expect(cierre).toBeGreaterThan(-1);
+      expect(ultimaCancelacion).toBeGreaterThan(cierre);
+      await runner.dispose();
+    });
+
+    /**
+     * Spec 001, F-33. Antes: cancelar TODO (stop incluido) → mandar el cierre →
+     * STOPPED → «Bot parado y posicion cerrada a mercado», sin mirar si el
+     * cierre habia salido. Con el venue rechazando el cierre, el usuario
+     * pulsaba el boton rojo y se quedaba con la posicion abierta, sin stop y
+     * con un evento que decia lo contrario.
+     */
+    it('STOP_AND_CLOSE que no consigue cerrar no dice que ha cerrado', async () => {
+      const eventos: { type: string; severity: string; message: string }[] = [];
+      const { runner, adapter, store } = build(
+        { orders: [], immediate: [] },
+        {
+          event: jest.fn(async (_bot: unknown, type: string, severity: string, message: string) => {
+            eventos.push({ type, severity, message });
+          }) as never,
+        },
+      );
+      adapter.position = conPos();
+      adapter.placeError = new ExchangeError('RULES', 'rechazada por el venue', Venue.HYPERLIQUID);
+      await runner.start();
+      await runner.handleCommand('STOP_AND_CLOSE');
+
+      // El stop sigue en el libro: ninguna cancelacion se lo ha llevado.
+      expect(adapter.canceledOwn.flat()).not.toContain('sl-1');
+      // Nadie afirma un cierre que no ocurrio, y el usuario se entera en CRITICAL.
+      expect(eventos.some((e) => e.message.includes('cerrada a mercado'))).toBe(false);
+      expect(eventos.some((e) => e.severity === 'CRITICAL')).toBe(true);
+      // Y el bot no pasa a parado: se queda pausado, vigilando la posicion.
+      expect(store.setStatus).not.toHaveBeenCalledWith(BOT_ID, 'STOPPED');
+      expect(store.setStatus).toHaveBeenCalledWith(BOT_ID, 'PAUSED', expect.anything());
       await runner.dispose();
     });
 
@@ -955,6 +1175,114 @@ describe('reutilización de ids por estrategia', () => {
       // Y el usuario se entera con la severidad que corresponde a «sin stop».
       expect(severidades.some((e) => e.severity === 'CRITICAL')).toBe(true);
       await runner.dispose();
+    });
+  });
+
+  describe('un acuse positivo del venue nunca acaba en REJECTED', () => {
+    /**
+     * Spec 001, F-36. `confirmOrder` iba dentro del mismo `try` que la llamada
+     * al venue: si la base fallaba al anotar el acuse, la excepcion caia en el
+     * `catch` de los rechazos y la fila acababa REJECTED con la orden VIVA en
+     * el libro — invisible para PAUSE, para PANIC y para la cancelacion acotada
+     * al bot, que leen las filas vivas de la base.
+     */
+    it('una orden aceptada por el venue no se marca REJECTED porque falle la base', async () => {
+      const confirmOrder = jest.fn().mockRejectedValue(new Error('base caida'));
+      const { runner, adapter, store } = build(
+        { orders: [level(0)], immediate: [] },
+        { confirmOrder: confirmOrder as never },
+      );
+      await runner.start();
+      // Se suelta ANTES de comprobar: un `expect` que falle no debe dejar el
+      // temporizador del runner vivo y colgar a jest.
+      await runner.dispose();
+
+      expect(adapter.placed).toHaveLength(1);
+      expect(store.rejectOrder).not.toHaveBeenCalled();
+      // Se insiste una vez y, si tampoco, se avisa: la fila queda PENDING con
+      // el id del venue conocido, nunca REJECTED.
+      expect(confirmOrder).toHaveBeenCalledTimes(2);
+      expect(store.events).toContain('ACTION_FAILED');
+    });
+  });
+
+  describe('una fila PENDING huerfana no veta el nivel para siempre', () => {
+    /**
+     * Spec 001, F-37. `place()` vetaba toda fila viva, PENDING incluida. Una
+     * PENDING sin id de venue es una orden que quiza nunca llego (el proceso
+     * murio entre la fila y el acuse); sin vencimiento, ese nivel —incluida una
+     * entrada base— no se volvia a colocar en todo el ciclo y sin una linea en
+     * la bitacora que lo explicara.
+     */
+    it('una PENDING sin acuse de hace mas de cinco minutos vence y el nivel se recoloca', async () => {
+      const vieja = {
+        status: 'PENDING',
+        venue_order_id: null,
+        updated_at: new Date(Date.now() - 10 * 60_000),
+      };
+      const { runner, adapter, store } = build(
+        { orders: [level(0)], immediate: [] },
+        { findOrderByCoid: jest.fn().mockResolvedValue(vieja) as never },
+      );
+      await runner.start();
+      await runner.dispose();
+
+      expect(store.rejectOrder).toHaveBeenCalledTimes(1);
+      expect(adapter.placed).toHaveLength(1);
+      expect(store.events).toContain('ORDER_RETRY');
+    });
+
+    it('una PENDING reciente sigue vetando: puede estar en vuelo', async () => {
+      const reciente = { status: 'PENDING', venue_order_id: null, updated_at: new Date() };
+      const { runner, adapter, store } = build(
+        { orders: [level(0)], immediate: [] },
+        { findOrderByCoid: jest.fn().mockResolvedValue(reciente) as never },
+      );
+      await runner.start();
+      await runner.dispose();
+
+      expect(adapter.placed).toHaveLength(0);
+      expect(store.rejectOrder).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('reponer el stop no espera al siguiente tick', () => {
+    /**
+     * Spec 001, F-35. Un fallo pasajero al colocar el stop seguia la ruta de
+     * cualquier nivel: ORDER_RETRY en INFO y «se reintenta en el siguiente
+     * tick». Para una seguridad de la escalera es razonable; para la red de la
+     * posicion es hasta un cuarto de minuto —o mucho mas si el corte dura— sin
+     * stop y sin que nadie se entere.
+     */
+    it('un corte pasajero al colocar el stop se reintenta en el mismo tick', async () => {
+      const { runner, adapter } = build({ orders: [], immediate: [] }, {}, { stopLossPct: '10' });
+      adapter.position = conPos();
+      adapter.placeErrorOnce = new ExchangeError('RETRYABLE', 'timeout', Venue.HYPERLIQUID);
+      await runner.start();
+      await runner.dispose();
+
+      const intentos = adapter.calls.filter((c) => c.startsWith('place:') && c.includes('SL'));
+      expect(intentos).toHaveLength(2);
+      expect(adapter.placed.filter((c) => c.includes('SL'))).toHaveLength(1);
+    });
+
+    it('si tampoco sale al reintentar, se avisa en CRITICAL', async () => {
+      const severidades: string[] = [];
+      const { runner, adapter } = build(
+        { orders: [], immediate: [] },
+        {
+          event: jest.fn(async (_bot: unknown, _type: string, severity: string) => {
+            severidades.push(severity);
+          }) as never,
+        },
+        { stopLossPct: '10' },
+      );
+      adapter.position = conPos();
+      adapter.placeError = new ExchangeError('RETRYABLE', 'timeout', Venue.HYPERLIQUID);
+      await runner.start();
+      await runner.dispose();
+
+      expect(severidades).toContain('CRITICAL');
     });
   });
 

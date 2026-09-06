@@ -30,7 +30,7 @@ import {
   warn,
   type RawLevel,
 } from '../common';
-import { scaledLadder, takeProfitPrice } from '../ladder';
+import { baseLimitPrice, scaledLadder, takeProfitPrice } from '../ladder';
 import {
   MARTINGALE_FIELDS,
   ladderLevels,
@@ -377,8 +377,20 @@ export const gridmart: Strategy<GridMartConfig> = {
         return { orders: [], immediate: [], note: 'En cooldown, ' + secs + ' s.' };
       }
 
+      // Misma conducta que la martingala para la base LIMIT (001/F-92): precio
+      // fijado al emitirla, sin persecución y con caducidad. Antes iba por
+      // `immediate` como la MARKET —se mandaba una vez y nadie volvía a
+      // mirarla—, así que si el precio se alejaba el ciclo no abría jamás.
+      const fija =
+        cfg.baseOrderType === 'LIMIT'
+          ? baseLimitPrice(
+              ctx.cycle.scratch,
+              ctx.now,
+              px(ctx.market, mark, entrySide(cfg.direction)),
+            )
+          : null;
       const base = scaledLadder({
-        anchor: mark,
+        anchor: fija ? D(fija.price) : mark,
         safetyCount: Math.max(0, Math.floor(cfg.numLimitBuys ?? 0)),
         initialSeparationPct: cfg.initialSeparationPct,
         stepScale: cfg.stepScale,
@@ -388,17 +400,27 @@ export const gridmart: Strategy<GridMartConfig> = {
         direction: cfg.direction,
       })[0];
 
-      immediate.push({
+      const entry: DesiredOrder = {
         clientOrderId: makeCoid(ctx.botId, seq, LevelKind.BASE, 0),
         levelKind: LevelKind.BASE,
         levelIndex: 0,
         side: entrySide(cfg.direction),
-        type: cfg.baseOrderType === 'LIMIT' ? 'POST_ONLY' : 'MARKET',
-        price: px(ctx.market, mark, entrySide(cfg.direction)),
+        type: fija ? 'POST_ONLY' : 'MARKET',
+        price: fija ? fija.price : px(ctx.market, mark, entrySide(cfg.direction)),
         qty: qy(ctx.market, base.qty),
         reduceOnly: false,
-      });
-      return { orders, immediate, targetLeverage: cfg.leverage, note: 'Abriendo ciclo.' };
+      };
+      // La MARKET se manda una vez (o se ejecuta o no existe); la LIMIT se
+      // reconcilia como cualquier otra orden del libro.
+      if (entry.type === 'MARKET') immediate.push(entry);
+      else orders.push(entry);
+      return {
+        orders,
+        immediate,
+        targetLeverage: cfg.leverage,
+        note: 'Abriendo ciclo.',
+        ...(fija?.patch ? { scratchPatch: fija.patch } : {}),
+      };
     }
 
     // ── Escalera de seguridad (idéntica a Martingale) ──

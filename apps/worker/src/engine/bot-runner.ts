@@ -14,7 +14,9 @@ import {
   type Fill,
   type MarginAdjustment,
   type MarketSpec,
+  type OrderAck,
   type Position,
+  type StrategyKind,
   type Ticker,
   type VenueOrder,
 } from '@crypton/shared';
@@ -61,6 +63,27 @@ const pauseBreach = (reason: string): GuardBreach => ({ reason, action: 'PAUSE' 
 
 /** Comandos tras los cuales el bot deja de operar y el motor debe soltarlo. */
 const TERMINAL_COMMANDS = new Set<RunnerCommand>(['STOP_KEEP_POSITION', 'STOP_AND_CLOSE', 'PANIC']);
+
+/**
+ * Por qué «Recentrar la retícula» no aplica fuera de las escaleras, estrategia a
+ * estrategia. Martingala y GridMart cuelgan sus seguridades del ancla del ciclo
+ * y recentrar es volver a colgarlas del precio actual; en las demás el comando
+ * corría igual y hacía daño o nada (001/F-84): en la rejilla clásica las
+ * líneas salen del rango, así que lo único que borraba era la memoria de los
+ * niveles comprados —segunda compra por nivel y sin su venta—; en la neutral el
+ * centro real es «Precio ancla», que aquí no se tocaba, y aun así se anunciaba
+ * «recentrada»; TDCA y los market makers no tienen ancla que mover.
+ */
+const REANCHOR_NO_APLICA: Partial<Record<StrategyKind, string>> = {
+  GRID_CLASSIC:
+    'las líneas de la rejilla clásica salen del rango fijo y recentrar solo borraría qué niveles están comprados (compras duplicadas y sin venta). Para moverla, edita Precio inferior y Precio superior.',
+  NEUTRAL_GRID:
+    'el centro de la rejilla neutral es «Precio ancla»: edítalo y las líneas se recolocan solas.',
+  TDCA: 'la TDCA entra por tiempo y precio medio, no cuelga de un ancla.',
+  MARKET_MAKER: 'el market maker cotiza alrededor de la referencia en cada tick, no tiene ancla.',
+  MARKET_MAKER_V2:
+    'el market maker cotiza alrededor de la referencia en cada tick, no tiene ancla.',
+};
 
 /**
  * Cada cuántos ticks se barren las ejecuciones por REST aunque el stream diga
@@ -115,6 +138,14 @@ const FAIR_PRICE_STALE_MS = 15_000;
 
 /** Cada cuánto se puede repetir el aviso de precio externo caducado. */
 const FAIR_PRICE_ALERT_COOLDOWN_MS = 5 * 60_000;
+
+/**
+ * Cuánto se respeta una fila PENDING sin id de venue antes de darla por no
+ * enviada. Veinte reconciliaciones: si la orden existiera en el libro, la
+ * sincronización con el venue ya le habría puesto su id y su estado. Pasado
+ * esto, seguir vetando el nivel es dejarlo muerto en silencio (001/F-37).
+ */
+const PENDING_ORPHAN_MS = 5 * 60_000;
 
 /** Forma de una nota sin sus números: para comparar si cambió de verdad. */
 const gist = (s: string | null): string | null => (s == null ? null : s.replace(/[\d.,]+/g, '#'));
@@ -827,14 +858,21 @@ export class BotRunner {
      * pulsa ese botón quiere salir ahora y merece saber por qué no puede.
      */
     salidaDefinitiva = false,
-  ): Promise<void> {
+    /**
+     * Segundo intento inmediato de un STOP_LOSS tras un fallo pasajero
+     * (001/F-35). Solo lo pone la propia función: acota la recursión a uno.
+     */
+    reintentoDeStop = false,
+  ): Promise<OrderAck | null> {
     const { adapter, bot, store } = this.deps;
     const seq = Number(this.cycle.scratch.cycleSeq ?? 0);
     const shape = this.shapeOf(order);
 
     // Ya rechazado con esta forma exacta: no se vuelve a mandar. Si la escalera
-    // cambia de precio o cantidad, la forma cambia y sí se reintenta.
-    if (this.quarantine.get(order.clientOrderId) === shape) return;
+    // cambia de precio o cantidad, la forma cambia y sí se reintenta. Un cierre
+    // pedido a mano se salta la cuarentena: quien repite «parar y cerrar» tras
+    // un rechazo quiere que se vuelva a intentar, no un silencio.
+    if (!salidaDefinitiva && this.quarantine.get(order.clientOrderId) === shape) return null;
 
     // Las reglas del venue se comprueban AQUÍ, no solo en el preview.
     // `normalizeOrder` ya existía y ya devolvía los motivos, pero solo la usaba
@@ -847,7 +885,14 @@ export class BotRunner {
     // rechazo («invalid order base or quote amount») es lo que pausaba bots
     // enteros. Pero el razonamiento original no era malo, así que la salida no
     // se veta sin más: se distingue POR QUÉ no cumple. Ver `revisarOrden`.
-    const veredicto = revisarOrden(this.market, order, this.entradasVivas && !salidaDefinitiva);
+    // El stop se mide al precio de MARCA, no al de disparo (001/F-91): ver la
+    // firma de `revisarOrden`.
+    const veredicto = revisarOrden(
+      this.market,
+      order,
+      this.entradasVivas && !salidaDefinitiva,
+      this.lastTicker?.mark,
+    );
     if (veredicto.motivo !== 'OK') {
       if (order.levelKind === 'STOP_LOSS') this.stopLossVivo = false;
       // Cuarentena por FORMA, no por id: en cuanto entre otra ejecución la
@@ -864,7 +909,7 @@ export class BotRunner {
           { clientOrderId: order.clientOrderId, qty: order.qty, price: order.price },
         );
       }
-      return;
+      return null;
     }
 
     // ¿Existe ya una fila con este id? Viva (pendiente, abierta, parcial) veta
@@ -877,7 +922,24 @@ export class BotRunner {
     const already = await store.findOrderByCoid(order.clientOrderId);
     if (already && already.status !== 'CANCELED' && already.status !== 'REJECTED') {
       if (!(allowRefill && already.status === 'FILLED')) {
-        return; // Ya existe: un reintento no debe duplicarla.
+        if (!this.pendienteVencida(already)) {
+          return null; // Ya existe: un reintento no debe duplicarla.
+        }
+        // Una PENDING sin id de venue y con más de `PENDING_ORPHAN_MS` es una
+        // orden que quizá nunca llegó: el proceso murió entre la fila y el
+        // acuse, o el acuse no se pudo anotar. Vetarla para siempre dejaba el
+        // nivel —una entrada base, incluso— muerto en silencio (001/F-37). Se
+        // da por no enviada y el nivel vuelve a intentarse; si la orden sí
+        // existiera, su id de venue sigue registrado como propio y la
+        // reconciliación la reconoce igual.
+        await store.rejectOrder(order.clientOrderId, 'PENDING sin acuse vencida');
+        await this.event(
+          'ORDER_RETRY',
+          'INFO',
+          `${order.levelKind}#${order.levelIndex} llevaba más de ${PENDING_ORPHAN_MS / 60_000} min ` +
+            `pendiente sin acuse del exchange: se vuelve a intentar.`,
+          { clientOrderId: order.clientOrderId },
+        );
       }
     }
 
@@ -888,8 +950,11 @@ export class BotRunner {
       venueClientId: this.encode(order.clientOrderId),
     });
 
+    // El acuse se devuelve para que quien coloca un cierre sepa si SALIÓ: un
+    // `STOP_AND_CLOSE` que no puede saberlo afirmaba «cerrada» sin mirar.
+    let ack: OrderAck | null = null;
     try {
-      const ack = await adapter.placeOrder({
+      ack = await adapter.placeOrder({
         symbol: bot.symbol,
         side: order.side,
         type: order.type,
@@ -905,14 +970,6 @@ export class BotRunner {
         // ejecuta al instante).
         intent: order.levelKind === 'TAKE_PROFIT' ? 'TP' : 'SL',
       });
-      await store.confirmOrder(order.clientOrderId, ack);
-      this.quarantine.delete(order.clientOrderId);
-      this.placeFailures = 0;
-      if (order.levelKind === 'STOP_LOSS') {
-        this.stopLossVivo = true;
-        // Colocado: el siguiente rechazo, si lo hay, vuelve a merecer su aviso.
-        this.stopRechazoAvisado = null;
-      }
     } catch (e) {
       const err = e as ExchangeError;
       if (order.levelKind === 'STOP_LOSS') this.stopLossVivo = false;
@@ -934,7 +991,7 @@ export class BotRunner {
             { clientOrderId: order.clientOrderId },
           );
         }
-        return;
+        return null;
       }
       if (err.kind === 'INSUFFICIENT_FUNDS') {
         this.cuarentena(order, shape);
@@ -947,7 +1004,7 @@ export class BotRunner {
               (order.levelKind === 'STOP_LOSS' ? this.protectionNote : ''),
           );
         }
-        return;
+        return null;
       }
 
       // Solo estas dos relanzan, y por motivos distintos: con la credencial
@@ -961,6 +1018,30 @@ export class BotRunner {
       // caído para siempre por un corte de red de dos segundos, porque la
       // cuarentena solo se levanta si cambia la forma de la orden.
       if (err.kind === 'RETRYABLE') {
+        // La red de la posición no espera al siguiente tick (001/F-35): un corte
+        // pasajero al reponer el stop dejaba la posición sin red hasta que el
+        // motor volviera a pasar —quince segundos, o lo que durase el corte— y
+        // lo contaba en INFO. Se reintenta ya, una vez; si tampoco sale, se dice
+        // en CRITICAL, que es lo que es: una posición apalancada sin stop.
+        if (order.levelKind === 'STOP_LOSS' && !reintentoDeStop) {
+          const otra = await this.place(
+            order,
+            `${motivo}, reintento`,
+            allowRefill,
+            salidaDefinitiva,
+            true,
+          );
+          if (!otra) {
+            await this.event(
+              'ORDER_REJECTED',
+              'CRITICAL',
+              `STOP_LOSS#${order.levelIndex} no se pudo colocar ni al reintentar ` +
+                `(${err.message}). La posición queda SIN stop hasta la siguiente revisión.`,
+              { clientOrderId: order.clientOrderId, kind: err.kind },
+            );
+          }
+          return otra;
+        }
         // INFO y no WARN: un corte de red que se cura solo no tiene por qué
         // sonar en el Telegram de nadie. Queda en la bitácora del bot.
         await this.event(
@@ -977,7 +1058,7 @@ export class BotRunner {
             `${this.placeFailures} colocaciones seguidas sin salir (última: ${err.message})`,
           ).catch(() => undefined);
         }
-        return;
+        return null;
       }
 
       // TODO LO DEMÁS SE CONTIENE. Antes se relanzaba, y por eso un rechazo de
@@ -1001,7 +1082,63 @@ export class BotRunner {
           { clientOrderId: order.clientOrderId, kind: err.kind },
         );
       }
+      return null;
     }
+    if (!ack) return null;
+
+    // Acuse positivo: la orden EXISTE en el venue, pase lo que pase con la base.
+    await this.anotarAcuse(order, ack);
+    this.quarantine.delete(order.clientOrderId);
+    this.placeFailures = 0;
+    if (order.levelKind === 'STOP_LOSS') {
+      this.stopLossVivo = true;
+      // Colocado: el siguiente rechazo, si lo hay, vuelve a merecer su aviso.
+      this.stopRechazoAvisado = null;
+    }
+    return ack;
+  }
+
+  /**
+   * Anota el acuse del venue en la fila de la orden.
+   *
+   * Fuera del `try` de la llamada al venue a propósito (001/F-36): antes un
+   * fallo de la base al anotar el acuse caía en el mismo `catch` que un rechazo
+   * del venue y la fila acababa REJECTED con la orden VIVA en el libro —
+   * invisible para PAUSE, para PANIC y para la cancelación acotada al bot, que
+   * leen las filas vivas. Se reintenta una vez y, si tampoco, la fila queda
+   * PENDING (la reconciliación la reconoce por su id de venue) y se avisa.
+   */
+  private async anotarAcuse(order: DesiredOrder, ack: OrderAck): Promise<void> {
+    const { store } = this.deps;
+    try {
+      await store.confirmOrder(order.clientOrderId, ack);
+    } catch {
+      try {
+        await store.confirmOrder(order.clientOrderId, ack);
+      } catch (e) {
+        await this.event(
+          'ACTION_FAILED',
+          'WARN',
+          `${order.levelKind}#${order.levelIndex} fue aceptada por el exchange ` +
+            `(${ack.venueOrderId}) pero no se pudo anotar en la base: ${(e as Error).message}. ` +
+            `La fila queda pendiente hasta la siguiente reconciliación.`,
+          { clientOrderId: order.clientOrderId, venueOrderId: ack.venueOrderId },
+        );
+      }
+    }
+  }
+
+  /** Una fila PENDING sin id de venue que lleva demasiado sin acuse (001/F-37). */
+  private pendienteVencida(row: {
+    status: string;
+    venue_order_id: string | null;
+    updated_at: Date;
+  }): boolean {
+    return (
+      row.status === 'PENDING' &&
+      !row.venue_order_id &&
+      Date.now() - row.updated_at.getTime() > PENDING_ORPHAN_MS
+    );
   }
 
   /** Identidad de una orden a efectos de cuarentena: si cambia, se reintenta. */
@@ -1102,6 +1239,10 @@ export class BotRunner {
       this.cycle = await this.deps.store.applyFillToCycle(this.botId, this.cycle, ours, {
         recycleLevelOnExit: this.strategy.recycleLevelOnExit === true,
         trackMmStats: this.isMarketMaker,
+        // De la configuración VIGENTE, no del scratch de la primera fila del
+        // ciclo: es un campo HOT, y una recarga que no llega aquí se anuncia
+        // como aplicada sin serlo (001/F-86). El backtest ya lo lee así.
+        cooldownMinutes: Number(this.config.cooldownMinutes ?? 0),
       });
       // Ciclo nuevo: los rechazos del anterior ya no significan nada.
       if (this.cycle.scratch.cycleSeq !== before) this.quarantine.clear();
@@ -1282,6 +1423,10 @@ export class BotRunner {
   private async runCommand(command: RunnerCommand, payload?: unknown): Promise<void> {
     const { store } = this.deps;
     this.logger.log(`Comando ${command}`);
+    // Un comando terminal suelta el bot al acabar… salvo que no haya podido
+    // hacer lo que prometía: un cierre que no sale deja el bot PAUSADO y
+    // vigilando, no suelto (001/F-33).
+    let soltar = TERMINAL_COMMANDS.has(command);
 
     switch (command) {
       case 'PAUSE':
@@ -1327,17 +1472,44 @@ export class BotRunner {
         break;
 
       case 'STOP_AND_CLOSE':
-      case 'PANIC':
+      case 'PANIC': {
         this.paused = true;
-        await this.cancelOwnOrders();
-        await this.closePositionAtMarket(command === 'PANIC' ? 'pánico' : 'parada con cierre');
-        await store.setStatus(this.botId, 'STOPPED');
-        await this.event(
-          command === 'PANIC' ? 'PANIC' : 'BOT_STOPPED',
-          'WARN',
-          'Bot parado y posición cerrada a mercado.',
-        );
+        const motivo = command === 'PANIC' ? 'pánico' : 'parada con cierre';
+        // Primero se retira la escalera CONSERVANDO el stop —libera el margen
+        // que retenía sin dejar la posición desnuda—, después se manda el
+        // cierre, y solo con el cierre fuera se cancela también el stop. Antes
+        // el orden era el contrario y el evento afirmaba «cerrada a mercado» sin
+        // mirar el acuse: si el venue rechazaba el cierre, el usuario pulsaba el
+        // botón rojo y se quedaba con la posición abierta, sin red y con el bot
+        // en STOPPED diciendo lo contrario (001/F-33).
+        await this.cancelOwnOrders(true);
+        const cerrada = await this.closePositionAtMarket(motivo);
+        if (cerrada) {
+          await this.cancelOwnOrders();
+          await store.setStatus(this.botId, 'STOPPED');
+          await this.event(
+            command === 'PANIC' ? 'PANIC' : 'BOT_STOPPED',
+            'WARN',
+            'Bot parado y posición cerrada a mercado.',
+          );
+        } else {
+          // Sin cierre no hay parada: el bot se queda PAUSADO, vigilando la
+          // liquidación, con el stop donde estaba, y se dice en CRITICAL.
+          soltar = false;
+          await store.setStatus(this.botId, 'PAUSED', {
+            error: `No se pudo cerrar la posición (${motivo})`,
+          });
+          await this.event(
+            'ACTION_FAILED',
+            'CRITICAL',
+            `No se pudo cerrar la posición a mercado (${motivo}): el exchange no aceptó el ` +
+              `cierre. El bot queda PAUSADO con la posición abierta; repite la orden o ` +
+              `ciérrala desde el exchange.` +
+              this.protectionNote,
+          );
+        }
         break;
+      }
 
       case 'CLOSE_NOW':
         await this.closePositionAtMarket('cierre manual');
@@ -1355,6 +1527,17 @@ export class BotRunner {
         break;
 
       case 'REANCHOR_GRID': {
+        // Solo en las escaleras; en el resto se dice por qué no y qué hacer en
+        // su lugar, en vez de fingir un recentrado (ver REANCHOR_NO_APLICA).
+        const noAplica = REANCHOR_NO_APLICA[this.strategy.kind];
+        if (noAplica) {
+          await this.event(
+            'ACTION_FAILED',
+            'WARN',
+            `«Recentrar la retícula» no aplica a esta estrategia: ${noAplica}`,
+          );
+          break;
+        }
         // Recentrar = olvidar el ancla y los niveles ya ejecutados. La escalera
         // se vuelve a colgar del precio actual en el siguiente tick.
         const mark = await this.markPrice();
@@ -1368,7 +1551,20 @@ export class BotRunner {
         // recentrar no es motivo para retirarlo ni un tick.
         await this.cancelOwnOrders(true);
         this.quarantine.clear();
-        await this.event('GRID_REANCHORED', 'INFO', `Retícula recentrada en ${mark}.`);
+        // Lo que se compromete va en el aviso: la escalera ENTERA se vuelve a
+        // tender bajo el precio nuevo con la posición anterior aún abierta, y
+        // ese margen no lo enseñó ninguna vista previa. La API ya exige
+        // confirmar antes de encolarlo; esto es la constancia en la bitácora.
+        const pos = await this.currentPosition();
+        const abierta = pos
+          ? ` además de la posición abierta (${pos.qty} ${this.market.base})`
+          : '';
+        await this.event(
+          'GRID_REANCHORED',
+          'INFO',
+          `Retícula recentrada en ${mark}: la escalera entera se vuelve a tender bajo este precio ` +
+            `y compromete hasta ${this.config.totalInvestment} ${this.market.quote} de margen${abierta}.`,
+        );
         this.requestTick();
         break;
       }
@@ -1413,18 +1609,40 @@ export class BotRunner {
           );
           break;
         }
-        await this.place({ ...next, type: 'MARKET' }, 'seguridad manual');
+        // Al precio de MARCA, no al del escalón (001/F-85): en una orden a
+        // mercado el precio solo sirve para la holgura que el adaptador pone al
+        // venue —Hyperliquid rechaza una MARKET a más de ~5 % del mark— y para
+        // la fila de la base; con el del escalón, una seguridad lejana no
+        // salía nunca. Y se anuncia lo que dijo el acuse, no lo que se
+        // pretendía: sin acuse la seguridad no está, y el usuario tiene que
+        // saberlo en vez de leer «ejecutada».
+        const ack = await this.place(
+          { ...next, type: 'MARKET', price: ticker.mark },
+          'seguridad manual',
+        );
+        if (!ack) {
+          await this.event(
+            'ADD_SAFETY_SKIPPED',
+            'WARN',
+            `La seguridad #${next.levelIndex} no se ha ejecutado: el exchange no la aceptó. ` +
+              'El motivo está en el evento anterior; repite la orden si procede.',
+          );
+          break;
+        }
         await this.event(
           'SAFETY_ADDED',
           'INFO',
-          `Seguridad #${next.levelIndex} ejecutada a mercado.`,
+          ack.status === 'FILLED'
+            ? `Seguridad #${next.levelIndex} ejecutada a mercado.`
+            : `Seguridad #${next.levelIndex} enviada a mercado (acuse ${ack.status}); ` +
+                'la ejecución se anotará al llegar.',
         );
         this.requestTick();
         break;
       }
     }
 
-    if (TERMINAL_COMMANDS.has(command)) {
+    if (soltar) {
       // El bot ha dejado de operar: que el motor lo suelte. Sin esto el runner
       // se quedaba con su temporizador, su WebSocket y su lease para siempre.
       this.deps.onDetach(this.botId, `comando ${command}`);
@@ -2067,11 +2285,16 @@ export class BotRunner {
     this.market = fresh;
   }
 
-  private async closePositionAtMarket(motivo: string): Promise<void> {
+  /**
+   * Devuelve si el cierre SALIÓ (acuse del venue) o no había nada que cerrar.
+   * `false` significa que la posición sigue abierta: quien lo llama decide qué
+   * hacer con esa verdad en vez de afirmar lo contrario (001/F-33).
+   */
+  private async closePositionAtMarket(motivo: string): Promise<boolean> {
     const position = await this.currentPosition();
     if (!position || D(position.qty).isZero()) {
       await this.event('CLOSE_SKIPPED', 'INFO', `Nada que cerrar (${motivo}): posición plana.`);
-      return;
+      return true;
     }
 
     // El precio se obtiene ANTES de construir la orden y falla ruidosamente si
@@ -2079,7 +2302,7 @@ export class BotRunner {
     const mark = await this.markPrice();
     const qty = D(position.qty);
     const seq = Number(this.cycle.scratch.cycleSeq ?? 0);
-    await this.place(
+    const ack = await this.place(
       {
         // Índice 999: no compite con ningún nivel de la escalera, así que un
         // cierre manual nunca choca con el id de una orden de la estrategia.
@@ -2101,6 +2324,7 @@ export class BotRunner {
       // Cierre pedido a mano: no hay «espera al siguiente tick» que valga.
       true,
     );
+    return ack !== null;
   }
 
   private async snapshot(

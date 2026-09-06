@@ -6,9 +6,11 @@ import {
   StrategyKind,
   type BotConfig,
 } from '@crypton/shared';
+import { BASE_LIMIT_TTL_MS } from './ladder';
 import { diffConfig } from './mutability';
 import { getStrategy, listStrategies } from './registry';
 import { parseCoid } from './client-order-id';
+import { withStopLoss } from './stop-loss';
 import { BASE_CONFIG, makeContext, makeMarket, makePosition, makeVenueOrder } from './testing';
 
 const cfg = (extra: Record<string, unknown>): BotConfig => ({ ...BASE_CONFIG, ...extra });
@@ -181,6 +183,68 @@ describe('martingale.plan', () => {
     expect(plan.immediate).toHaveLength(0);
     expect(plan.orders).toHaveLength(0);
     expect(plan.note).toContain('cooldown');
+  });
+
+  /**
+   * Spec 001, F-80. Con `tpMode: MARKET` la salida se emitia como MARKET sin
+   * disparador: en Aster cerraba la posicion al instante, cerraba el ciclo,
+   * esperaba y reabria — un bucle que quema comisiones. Una salida «a mercado»
+   * es una orden CONDICIONAL: espera al objetivo y entonces cruza el libro.
+   */
+  it('con tpMode MARKET la salida es condicional: lleva disparador y no se ejecuta al colocarla', () => {
+    const ctx = makeContext({
+      strategy: StrategyKind.MARTINGALE,
+      config: cfg({ ...(config as object), tpMode: 'MARKET' }),
+      price: '99.5',
+      position: makePosition('0.1', '100'),
+      cycle: { anchorPrice: '100', filledLevelIndexes: [0], entriesFilled: 1 },
+    });
+    const tp = byKind(
+      getStrategy(StrategyKind.MARTINGALE).plan(ctx).orders,
+      LevelKind.TAKE_PROFIT,
+    )[0];
+    expect(tp.type).toBe('MARKET');
+    expect(tp.triggerPrice).toBe('101.0');
+    expect(tp.price).toBe('101.0');
+  });
+
+  /**
+   * Spec 001, F-92. La base LIMIT se recalculaba al mark en cada revision: el
+   * motor la cancelaba y recolocaba con cada tick y, como siempre iba pegada al
+   * precio, nadie la cruzaba nunca. Ahora el precio se fija al emitirla y se
+   * memoriza en el scratch del ciclo; solo caduca pasado BASE_LIMIT_TTL_MS.
+   */
+  it('la base LIMIT no se recoloca al moverse el precio', () => {
+    const limit = cfg({ ...(config as object), baseOrderType: 'LIMIT' });
+    const martingale = getStrategy(StrategyKind.MARTINGALE);
+    const primera = martingale.plan(
+      makeContext({
+        strategy: StrategyKind.MARTINGALE,
+        config: limit,
+        price: '100',
+        now: 1_000_000,
+      }),
+    );
+    expect(primera.immediate).toHaveLength(0);
+    expect(primera.orders.map((o) => [o.levelKind, o.type, o.price])).toEqual([
+      [LevelKind.BASE, 'POST_ONLY', '100.0'],
+    ]);
+    expect(primera.scratchPatch).toEqual({ baseLimit: { price: '100.0', at: 1_000_000 } });
+
+    // Un minuto despues el precio ha subido un 1 %: la base sigue donde estaba,
+    // con el mismo tamaño, y no hay nada nuevo que memorizar.
+    const segunda = martingale.plan(
+      makeContext({
+        strategy: StrategyKind.MARTINGALE,
+        config: limit,
+        price: '101',
+        now: 1_000_000 + 60_000,
+        cycle: { scratch: { cycleSeq: 1, ...primera.scratchPatch } },
+      }),
+    );
+    expect(segunda.orders[0].price).toBe('100.0');
+    expect(segunda.orders[0].qty).toBe(primera.orders[0].qty);
+    expect(segunda.scratchPatch).toBeUndefined();
   });
 
   it('con posición tiende las seguridades y el take profit', () => {
@@ -493,6 +557,40 @@ describe('gridmart.plan', () => {
     gridSellQtyMultiplier: '1',
     gridRebuyDiscountPct: '0.5',
     leverage: 1,
+  });
+
+  /**
+   * Spec 001, F-92, la otra cara: GridMart mandaba la base LIMIT una sola vez
+   * (por `immediate`) y sin caducidad; si el precio se iba, el ciclo no abria
+   * jamas. Misma conducta que Martingala: reconciliada, fija y con caducidad.
+   */
+  it('la base LIMIT de GridMart caduca y se recoloca al precio actual', () => {
+    const limit = cfg({ ...(config as object), baseOrderType: 'LIMIT' });
+    const gridmart = getStrategy(StrategyKind.GRIDMART);
+    const memorizada = { price: '100.0', at: 1_000_000 };
+    const planCon = (now: number) =>
+      gridmart.plan(
+        makeContext({
+          strategy: StrategyKind.GRIDMART,
+          config: limit,
+          price: '101',
+          now,
+          cycle: { scratch: { cycleSeq: 1, baseLimit: memorizada } },
+        }),
+      );
+
+    const vigente = planCon(1_000_000 + BASE_LIMIT_TTL_MS - 1);
+    expect(vigente.immediate).toHaveLength(0);
+    expect(vigente.orders.map((o) => [o.levelKind, o.type, o.price])).toEqual([
+      [LevelKind.BASE, 'POST_ONLY', '100.0'],
+    ]);
+    expect(vigente.scratchPatch).toBeUndefined();
+
+    const caducada = planCon(1_000_000 + BASE_LIMIT_TTL_MS);
+    expect(caducada.orders[0].price).toBe('101.0');
+    expect(caducada.scratchPatch).toEqual({
+      baseLimit: { price: '101.0', at: 1_000_000 + BASE_LIMIT_TTL_MS },
+    });
   });
 
   it('tiende núcleo, satélite y rejilla de ventas a la vez', () => {
@@ -844,6 +942,45 @@ describe('registro de estrategias', () => {
     }
   });
 
+  /**
+   * Spec 001, F-13 (parte). `meta.fields` acota `stopLossPct` a 0,1-90 y
+   * `maxDailyLossPct` a 0,1-100, pero `validateCommon` no miraba ninguno de los
+   * dos: un cliente que saltara el formulario mandaba `stopLossPct: 150`, el
+   * disparo salia a precio negativo y la posicion se quedaba sin stop con un
+   * WARN. Y una perdida diaria de cero pausaba el bot al arrancar.
+   */
+  it('validateCommon rechaza un stop loss imposible y una pérdida diaria no positiva, en las siete', () => {
+    const MINIMOS: Record<string, Record<string, unknown>> = {
+      GRID_CLASSIC: { lowerPrice: '90', upperPrice: '110', gridLevels: 5 },
+      NEUTRAL_GRID: {
+        lowerPrice: '90',
+        upperPrice: '110',
+        anchorPrice: '100',
+        gridLevels: 5,
+        maxExposure: '500',
+      },
+      TDCA: { amountPerBuy: '25' },
+      MARTINGALE: {},
+      GRIDMART: {},
+      MARKET_MAKER: { orderSizePerSide: '50', maxBotPositionValue: '500' },
+      MARKET_MAKER_V2: { orderSizePerSide: '50', maxBotPositionValue: '500', feeEstimateBps: '2' },
+    };
+    const malos: [string, string][] = [
+      ['stopLossPct', '150'],
+      ['stopLossPct', '0'],
+      ['maxDailyLossPct', '-1'],
+      ['maxDailyLossPct', '0'],
+    ];
+    for (const s of listStrategies()) {
+      const base = cfg({ ...s.defaults(), ...MINIMOS[s.kind] });
+      expect(s.validate(base, makeMarket()).ok).toBe(true);
+      for (const [key, value] of malos) {
+        const r = s.validate(cfg({ ...(base as object), [key]: value }), makeMarket());
+        expect(r.issues.some((i) => i.severity === 'ERROR' && i.field === key)).toBe(true);
+      }
+    }
+  });
+
   it('plan() es pura: dos llamadas con el mismo contexto dan lo mismo', () => {
     const ctx = makeContext({
       strategy: StrategyKind.MARTINGALE,
@@ -1020,6 +1157,27 @@ describe('marketMaker.plan — guardas nuevas', () => {
       },
     );
     expect(p.immediate).toHaveLength(0);
+  });
+
+  /**
+   * Spec 001, F-02. El aplanado salia con `STOP_LOSS#0`, el MISMO id que el
+   * stop que inyecta el motor. `withStopLoss` solo miraba `orders`, asi que
+   * anadia su stop con ese id; la fila viva del stop vetaba la inmediata y
+   * «cerrar todo» no salia jamas — justo cuando mas falta hacia.
+   */
+  it('el aplanado no reutiliza el id del stop loss: los dos conviven', () => {
+    const position = makePosition('10', '100');
+    const p = plan({ limitAction: 'CLOSE_ALL', stopLossPct: '10' }, { position });
+    const conStop = withStopLoss(p, position, {
+      botId: '1a2b3c4d-0000-0000-0000-000000000000',
+      cycleSeq: 1,
+      market: makeMarket(),
+      stopLossPct: '10',
+    });
+    const stop = conStop.orders.find((o) => o.levelKind === LevelKind.STOP_LOSS);
+    expect(p.immediate).toHaveLength(1);
+    expect(stop).toBeDefined();
+    expect(p.immediate[0].clientOrderId).not.toBe(stop!.clientOrderId);
   });
 
   it('«apagar» pide además que el motor pare el bot', () => {

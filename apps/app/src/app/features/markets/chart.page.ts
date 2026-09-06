@@ -1349,7 +1349,10 @@ export class MarketChartPage implements OnInit {
    * evento del flujo—, y además aquí, por si el flujo tarda.
    */
   openCommands(bot: BotDetail): void {
-    void this.commands.open(bot.id, { onSent: () => this.loadBot(bot.id, { silent: true }) });
+    void this.commands.open(bot.id, {
+      onSent: () => this.loadBot(bot.id, { silent: true }),
+      strategy: bot.strategy,
+    });
   }
 
   openMargin(): void {

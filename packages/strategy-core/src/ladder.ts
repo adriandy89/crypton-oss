@@ -134,6 +134,47 @@ export function takeProfitPrice(
   return D(averageEntry).mul(D(1).plus(sign.mul(takeProfitPct).div(100)));
 }
 
+/**
+ * Cuánto vive una entrada base LIMIT antes de volver a fijarse al precio actual.
+ *
+ * Martingala la recalculaba al mark en cada revisión: el motor la cancelaba y
+ * recolocaba con cada tick y, siempre pegada al precio, nadie la cruzaba nunca.
+ * GridMart la mandaba una sola vez y sin caducidad: si el precio se iba, el
+ * ciclo no abría jamás (001/F-92). Una sola conducta para las dos: post-only al
+ * precio del momento de emitirla, sin persecución, y si en este plazo no se ha
+ * ejecutado se vuelve a fijar al precio de entonces.
+ */
+export const BASE_LIMIT_TTL_MS = 5 * 60_000;
+
+/** Lo que se memoriza en el scratch del ciclo bajo `baseLimit`. */
+export interface BaseLimitMemo {
+  price: string;
+  at: number;
+}
+
+/**
+ * Precio de la base LIMIT para esta revisión: el memorizado si sigue vigente;
+ * si no, `current`, junto con el parche de scratch que lo fija para las
+ * revisiones siguientes.
+ */
+export function baseLimitPrice(
+  scratch: Record<string, unknown>,
+  now: number,
+  current: string,
+): { price: string; patch?: Record<string, unknown> } {
+  const memo = scratch['baseLimit'] as Partial<BaseLimitMemo> | undefined;
+  if (
+    memo &&
+    typeof memo.price === 'string' &&
+    typeof memo.at === 'number' &&
+    now - memo.at < BASE_LIMIT_TTL_MS
+  ) {
+    return { price: memo.price };
+  }
+  const fresh: BaseLimitMemo = { price: current, at: now };
+  return { price: current, patch: { baseLimit: fresh } };
+}
+
 /** Stop loss sobre el precio medio: espejo exacto del take profit. */
 export function stopLossPrice(
   averageEntry: Numeric,

@@ -70,6 +70,37 @@ describe('la puerta de salida de órdenes', () => {
     });
   });
 
+  describe('el stop loss se mide al precio de marca, no al de disparo', () => {
+    /**
+     * Spec 001, F-91. El stop lleva `price = triggerPrice`, y la puerta medía
+     * su notional ahí: una posición de 10,5 USDC con stop al −10 % daba 9,45 al
+     * disparo, por debajo del mínimo de 10, y el motor renunciaba a la red con
+     * un WARN. El venue mide la posición que se cierra, no el precio al que se
+     * dispara.
+     */
+    it('un stop de 10,5 USDC a -10 % sale aunque al disparo valga 9,45', () => {
+      const stop = orden({
+        levelKind: 'STOP_LOSS',
+        type: 'MARKET',
+        side: 'SELL',
+        // 0,0002 BTC × 52.500 = 10,5 USDC de posición; al disparo, × 47.250 = 9,45.
+        qty: '0.0002',
+        price: '47250.0',
+      });
+      expect(revisarOrden(LIGHTER_BTC, stop, false, '52500').motivo).toBe('OK');
+    });
+
+    it('sin precio de marca se sigue midiendo al precio de la orden', () => {
+      const stop = orden({
+        levelKind: 'STOP_LOSS',
+        type: 'MARKET',
+        qty: '0.0002',
+        price: '47250.0',
+      });
+      expect(revisarOrden(LIGHTER_BTC, stop, false).motivo).toBe('RESTO_INCERRABLE');
+    });
+  });
+
   describe('lo que no vale en ningún venue', () => {
     it('una salida que se queda en cero al redondear nunca se manda', () => {
       // Por debajo de un step. Da igual si quedan entradas vivas: no existe

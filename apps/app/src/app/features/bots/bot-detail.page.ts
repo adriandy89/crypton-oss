@@ -622,7 +622,10 @@ export class BotDetailPage implements OnInit {
    * (spec 005, R-4): una lista de comandos y unas confirmaciones, no dos.
    */
   async openCommands(): Promise<void> {
-    await this.commands.open(this.id, { onSent: () => this.load(false) });
+    await this.commands.open(this.id, {
+      onSent: () => this.load(false),
+      strategy: this.bot()?.strategy,
+    });
   }
 
   async start(): Promise<void> {

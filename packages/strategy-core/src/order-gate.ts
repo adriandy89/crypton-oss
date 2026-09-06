@@ -45,8 +45,19 @@ export function revisarOrden(
   market: MarketSpec,
   order: DesiredOrder,
   entradasVivas: boolean,
+  /**
+   * Precio de marca, si se conoce. Solo lo usa el STOP_LOSS: su `price` es el
+   * precio de DISPARO, y medir ahí el mínimo del venue dejaba sin red a una
+   * posición de 10,5 USDC con un stop al −10 % (9,45 al disparo, por debajo de
+   * 10). Lo que el venue cierra es la posición que hay, al precio que hay; el
+   * disparo solo dice cuándo (001/F-91). El tick y el paso los garantiza ya el
+   * redondeo de `withStopLoss`, así que redondear el mark aquí no quita nada.
+   */
+  markPrice?: string | null,
 ): Veredicto {
-  const check = normalizeOrder(market, order.price, order.qty, order.side);
+  const esStop = order.levelKind === 'STOP_LOSS';
+  const referencia = esStop && markPrice ? markPrice : order.price;
+  const check = normalizeOrder(market, referencia, order.qty, order.side);
   if (check.violations.length === 0) return { motivo: 'OK' };
 
   const nivel = `${order.levelKind}#${order.levelIndex}`;
