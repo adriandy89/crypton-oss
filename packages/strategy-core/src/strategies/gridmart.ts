@@ -33,6 +33,8 @@ import {
 import { baseLimitPrice, scaledLadder, takeProfitPrice } from '../ladder';
 import {
   MARTINGALE_FIELDS,
+  TP_MINIMO_RENTABLE_PCT,
+  avisoDeTpCorto,
   ladderLevels,
   validateLadderConfig,
   type MartingaleConfig,
@@ -50,7 +52,6 @@ export interface GridMartConfig extends MartingaleConfig {
   gridSellQtyMultiplier: string;
   /** Descuento bajo el precio de la venta ejecutada al que se recompra. */
   gridRebuyDiscountPct: string;
-  fullCycleCooldownMinutes?: number;
   /**
    * true = variante Classic: escalera de seguridad + un único TP satélite, sin
    * rejilla de ventas ni recompras. Es un flag y no una estrategia aparte
@@ -161,24 +162,28 @@ const GRIDMART_FIELDS: readonly FieldMeta[] = [
     required: true,
     default: 0.5,
   },
-  {
-    key: 'fullCycleCooldownMinutes',
-    kind: 'integer',
-    mutability: Mutability.HOT,
-    labelKey: 'strategy.gridmart.fullCycleCooldownMinutes',
-    min: 0,
-    max: 10080,
-    step: 1,
-    required: false,
-    default: 1,
-  },
+  // `fullCycleCooldownMinutes` estuvo aquí sin semántica ni lector: la espera
+  // que existe es la común, `cooldownMinutes`. Fuera del formulario (spec 026,
+  // F-12); las configuraciones guardadas que lo traen lo conservan sin efecto.
 ] as const;
+
+/**
+ * Campos de la escalera que en GridMart no gobiernan ninguna orden: el satélite
+ * sale por `satelliteTpPct` y el núcleo por la rejilla. Fuera del formulario;
+ * `defaults()` los sigue fijando porque la validación compartida de la escalera
+ * los espera (spec 026, F-12).
+ */
+const HEREDADOS_SIN_EFECTO: ReadonlySet<string> = new Set(['takeProfitPct', 'tpMode']);
 
 const META: StrategyMeta = {
   kind: StrategyKind.GRIDMART,
   labelKey: 'strategy.gridmart.label',
   descriptionKey: 'strategy.gridmart.description',
-  fields: [...COMMON_FIELDS, ...MARTINGALE_FIELDS, ...GRIDMART_FIELDS],
+  fields: [
+    ...COMMON_FIELDS,
+    ...MARTINGALE_FIELDS.filter((f) => !HEREDADOS_SIN_EFECTO.has(f.key)),
+    ...GRIDMART_FIELDS,
+  ],
 };
 
 /**
@@ -253,7 +258,10 @@ export const gridmart: Strategy<GridMartConfig> = {
       corePctSoldAtLevel1: '25',
       gridSellQtyMultiplier: '1',
       gridRebuyDiscountPct: '0.5',
-      fullCycleCooldownMinutes: 1,
+      // Un minuto, como Martingala: con 0 la escalera reabría la base en el
+      // mismo tick de cerrar el ciclo. Es lo que prometía el campo muerto
+      // `fullCycleCooldownMinutes` (spec 026, F-94). Solo afecta a bots nuevos.
+      cooldownMinutes: 1,
       leverage: 2,
       marginMode: 'ISOLATED',
       direction: 'LONG',
@@ -266,6 +274,8 @@ export const gridmart: Strategy<GridMartConfig> = {
     const sat = D(cfg.satelliteTpPct ?? 0);
     if (!sat.isFinite() || sat.lte(0)) {
       issues.push(err('satelliteTpPct', 'El TP satélite debe ser mayor que cero.'));
+    } else if (sat.lt(TP_MINIMO_RENTABLE_PCT)) {
+      issues.push(warn('satelliteTpPct', avisoDeTpCorto('El TP satélite')));
     }
 
     if (!cfg.classicMode) {
@@ -439,7 +449,6 @@ export const gridmart: Strategy<GridMartConfig> = {
       return {
         orders,
         immediate,
-        targetLeverage: cfg.leverage,
         note: 'Abriendo ciclo.',
         ...(fija?.patch ? { scratchPatch: fija.patch } : {}),
       };
@@ -503,7 +512,6 @@ export const gridmart: Strategy<GridMartConfig> = {
       return {
         orders,
         immediate,
-        targetLeverage: cfg.leverage,
         note: 'GridMart Classic: TP satélite en ' + tp.toFixed(pd) + '.',
       };
     }
@@ -563,7 +571,6 @@ export const gridmart: Strategy<GridMartConfig> = {
     return {
       orders,
       immediate,
-      targetLeverage: cfg.leverage,
       note: 'Núcleo ' + coreQty.toFixed(qd) + ', satélite ' + satelliteQty.toFixed(qd) + '.',
     };
   },

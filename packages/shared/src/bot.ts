@@ -87,7 +87,6 @@ export interface DesiredState {
    * manual). Van aparte porque NO se reconcilian: se mandan una vez y punto.
    */
   immediate: DesiredOrder[];
-  targetLeverage?: number;
   /** Explica en una línea qué está haciendo el bot; se muestra en la app. */
   note?: string;
   /**

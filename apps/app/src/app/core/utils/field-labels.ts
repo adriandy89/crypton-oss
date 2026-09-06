@@ -44,9 +44,6 @@ export const FIELD_LABELS: Record<string, string> = {
     'Aritmético deja la misma distancia en USDC entre líneas; geométrico, el mismo porcentaje.',
   'strategy.grid.sizingMode': 'Reparto del tamaño',
   'strategy.grid.sizingModeHelp': 'Valor nocional en USDC, o cantidad fija de la moneda.',
-  'strategy.grid.preloadInventory': 'Precargar inventario',
-  'strategy.grid.preloadInventoryHelp':
-    'Hoy no cambia nada: el motor no precarga inventario. El bot arranca siempre en líquido.',
   'strategy.grid.stopOnRangeExit': 'Parar al salir del rango',
   'strategy.grid.stopOnRangeExitHelp':
     'Fuera del rango deja de abrir, pero mantiene vivas las ventas de lo que ya compró.',
@@ -66,11 +63,6 @@ export const FIELD_LABELS: Record<string, string> = {
   'strategy.neutral.maxExposure': 'Exposición máxima',
   'strategy.neutral.maxExposureHelp':
     'Tope de la posición neta. Alcanzado, solo quedan vivas las órdenes que la reducen. Sin él, crece hasta agotar el margen.',
-  'strategy.neutral.reanchorOnDrift': 'Recentrar si se aleja',
-  'strategy.neutral.reanchorOnDriftHelp':
-    'Solo avisa cuando el precio se aleja del ancla. Para recentrar, edita el precio ancla: ' +
-    'el comando «Recentrar la retícula» no existe para esta estrategia.',
-  'strategy.neutral.reanchorThresholdPct': 'Umbral para recentrar (%)',
 
   // DCA temporizado
   'strategy.tdca.label': 'DCA temporizado',
@@ -120,7 +112,6 @@ export const FIELD_LABELS: Record<string, string> = {
   'strategy.gridmart.corePctSoldAtLevel1': '% del núcleo vendido en el nivel 1',
   'strategy.gridmart.corePctSoldAtLevel1Help':
     'Qué parte del núcleo se vende en la primera línea de la rejilla. Por el número de ventas, cuánto núcleo cubre.',
-  'strategy.gridmart.fullCycleCooldownMinutes': 'Espera tras ciclo completo (min)',
   'strategy.gridmart.gridRebuyDiscountPct': 'Descuento de recompra (%)',
   'strategy.gridmart.gridRebuyDiscountPctHelp':
     'Cuánto por debajo de una venta ejecutada se anota su recompra. Mantenlo por debajo de la separación de venta.',

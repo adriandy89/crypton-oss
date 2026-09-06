@@ -924,7 +924,6 @@ export const marketMaker: Strategy<MarketMakerConfig> = {
     return {
       orders,
       immediate,
-      targetLeverage: cfg.leverage,
       note,
       scratchPatch: Object.keys(scratchPatch).length ? scratchPatch : undefined,
     };

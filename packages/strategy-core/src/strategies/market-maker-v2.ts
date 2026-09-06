@@ -231,7 +231,10 @@ const V2_FIELDS: readonly FieldMeta[] = [
     max: 100,
     step: 0.1,
     required: false,
-    default: 0,
+    // 2 bps: la comisión de maker típica de los tres venues. Con 0 de fábrica
+    // el bot nacía cotizando como si operar fuese gratis y el suelo por coste
+    // no protegía de nada (001/F-15; spec 026). El aviso con 0 se conserva.
+    default: 2,
     group: 'quoting',
     unit: 'bps',
     advanced: true,
@@ -794,7 +797,7 @@ export const marketMakerV2: Strategy<MarketMakerV2Config> = {
       buyDistanceBps: '40',
       sellDistanceBps: '40',
       minAllowedDistanceBps: '8',
-      feeEstimateBps: '0',
+      feeEstimateBps: '2',
       safetyBufferBps: '0',
       minProfitMarginBps: '8',
       postOnly: true,
@@ -1014,7 +1017,6 @@ export const marketMakerV2: Strategy<MarketMakerV2Config> = {
       return {
         orders: [],
         immediate: [],
-        targetLeverage: cfg.leverage,
         note:
           'Sin precio de referencia de ' +
           String(cfg.priceSource ?? PriceSource.EXCHANGE).toLowerCase() +
@@ -1025,7 +1027,7 @@ export const marketMakerV2: Strategy<MarketMakerV2Config> = {
     // ── 2. Condición de activación ──
     const gate = activationGate(cfg, scratch, anchorNow, ctx.now);
     if (!gate.armed) {
-      return { orders: [], immediate: [], targetLeverage: cfg.leverage, note: gate.note };
+      return { orders: [], immediate: [], note: gate.note };
     }
     if (gate.patch) Object.assign(scratchPatch, gate.patch);
 
@@ -1259,7 +1261,6 @@ export const marketMakerV2: Strategy<MarketMakerV2Config> = {
     return {
       orders,
       immediate,
-      targetLeverage: cfg.leverage,
       note,
       scratchPatch: Object.keys(scratchPatch).length ? scratchPatch : undefined,
     };

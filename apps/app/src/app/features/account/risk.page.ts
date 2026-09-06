@@ -114,7 +114,7 @@ import { errorText } from '../../core/utils';
           </ion-item>
           <ion-item>
             <ion-input
-              label="Caída que pausa el bot (%)"
+              label="Pérdida acumulada que pausa el bot (%)"
               labelPlacement="stacked"
               type="number"
               [(ngModel)]="killSwitchDrawdownPct"

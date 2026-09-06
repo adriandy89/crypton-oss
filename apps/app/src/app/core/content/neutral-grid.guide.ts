@@ -116,17 +116,6 @@ export const NEUTRAL_GRID_GUIDE: StrategyGuide<NeutralGridConfig> = {
         'Alcanzado el tope, el bot deja vivas únicamente las órdenes que REDUCEN la posición: sigue cerrando, pero no vuelve a cargar en la misma dirección.',
       tip: 'Ponlo siempre. Sin el, la app te avisa por una razón concreta: en una ruptura la posición neta crece hasta agotar el margen.',
     },
-    reanchorOnDrift: {
-      what: 'Vigila cuánto se ha alejado el precio del ancla que fijaste.',
-      affects:
-        'Solo informa: cuando se pasa del umbral, el bot lo anota en su estado para que lo veas, pero NO mueve el ancla por su cuenta. Recentrar es editar el Precio ancla (en tibio); el comando Recentrar la retícula no existe para esta estrategia y el menú del bot no lo ofrece.',
-      tip: 'Actívalo si quieres el aviso, y recentra tú editando el ancla cuando lo veas.',
-    },
-    reanchorThresholdPct: {
-      what: 'A qué porcentaje de distancia del ancla se considera que el precio se ha ido demasiado.',
-      affects: 'Solo decide cuando aparece el aviso anterior. No cambia ni una orden por si mismo.',
-      tip: 'Un valor cercano a la mitad de tu rango avisa cuando el precio se acerca a un extremo.',
-    },
     maxNotionalCap: {
       what: 'Tope genérico de notional que comparten varias estrategias.',
       affects:

@@ -42,9 +42,6 @@ export interface NeutralGridConfig extends CommonBotConfig {
   /** >1 pondera más los niveles alejados del ancla. */
   sizeMultiplier?: string;
   maxExposure?: string | null;
-  /** true = recentra la retícula si el precio se aleja demasiado del ancla. */
-  reanchorOnDrift?: boolean;
-  reanchorThresholdPct?: string;
 }
 
 const NEUTRAL_FIELDS: readonly FieldMeta[] = [
@@ -120,26 +117,11 @@ const NEUTRAL_FIELDS: readonly FieldMeta[] = [
     required: false,
     risky: true,
   },
-  {
-    key: 'reanchorOnDrift',
-    kind: 'boolean',
-    mutability: Mutability.HOT,
-    labelKey: 'strategy.neutral.reanchorOnDrift',
-    helpKey: 'strategy.neutral.reanchorOnDriftHelp',
-    required: false,
-    default: false,
-  },
-  {
-    key: 'reanchorThresholdPct',
-    kind: 'percent',
-    mutability: Mutability.HOT,
-    labelKey: 'strategy.neutral.reanchorThresholdPct',
-    min: 0.5,
-    max: 50,
-    step: 0.5,
-    required: false,
-    default: 10,
-  },
+  // `reanchorOnDrift` y `reanchorThresholdPct` estuvieron aquí y solo añadían
+  // un aviso a la nota cuando el precio se alejaba del ancla: recentrar siempre
+  // fue editar el ancla, y la distancia al ancla la enseña el gráfico. Fuera del
+  // formulario (spec 026, F-12); las configuraciones guardadas que los traen los
+  // conservan sin efecto.
 ] as const;
 
 /**
@@ -280,8 +262,6 @@ export const neutralGrid: Strategy<NeutralGridConfig> = {
       gridLevels: 20,
       gridSpacing: 'GEOMETRIC',
       sizeMultiplier: '1',
-      reanchorOnDrift: false,
-      reanchorThresholdPct: '10',
       leverage: 2,
       marginMode: 'CROSS',
       direction: 'NEUTRAL',
@@ -458,17 +438,9 @@ export const neutralGrid: Strategy<NeutralGridConfig> = {
       note = 'Espera entre ciclos: ' + Math.ceil((espera - ctx.now) / 1000) + ' s sin órdenes.';
     }
 
-    if (cfg.reanchorOnDrift && cfg.reanchorThresholdPct) {
-      const drift = mark.minus(cfg.anchorPrice).div(cfg.anchorPrice).mul(100).abs();
-      if (drift.gte(cfg.reanchorThresholdPct)) {
-        note += ' Desvío del ancla ' + drift.toFixed(1) + ' %: procede recentrar.';
-      }
-    }
-
     return {
       orders,
       immediate: [],
-      targetLeverage: cfg.leverage,
       note,
       ...(cambiado ? { scratchPatch: { lineSides: lados } } : {}),
     };

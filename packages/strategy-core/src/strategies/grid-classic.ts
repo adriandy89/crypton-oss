@@ -38,13 +38,6 @@ export interface GridClassicConfig extends CommonBotConfig {
   lowerPrice: string;
   upperPrice: string;
   gridLevels: number;
-  /**
-   * true = al arrancar compra a mercado el inventario necesario para poder
-   * vender en las lineas que quedan por encima del precio. Es como funcionan
-   * los grid de los exchanges, pero abre exposicion inmediata; por eso viene
-   * apagado y se avisa en el preview.
-   */
-  preloadInventory?: boolean;
   /** true = si el precio sale del rango, el bot deja de tender ordenes nuevas. */
   stopOnRangeExit?: boolean;
 }
@@ -104,16 +97,11 @@ const FIELDS: readonly FieldMeta[] = [
     required: true,
     default: 20,
   },
-  {
-    key: 'preloadInventory',
-    kind: 'boolean',
-    mutability: Mutability.COLD,
-    labelKey: 'strategy.grid.preloadInventory',
-    helpKey: 'strategy.grid.preloadInventoryHelp',
-    required: false,
-    default: false,
-    risky: true,
-  },
+  // `preloadInventory` (comprar inventario a mercado al arrancar) estuvo aquí
+  // sin que el motor lo leyera nunca. Se retiró del formulario en vez de
+  // implementarlo: es una compra a mercado en el arranque, un riesgo nuevo para
+  // un campo que nadie usaba (spec 026, F-12). Las configuraciones guardadas
+  // que lo traen lo conservan sin efecto.
   {
     key: 'stopOnRangeExit',
     kind: 'boolean',
@@ -188,7 +176,6 @@ export const gridClassic: Strategy<GridClassicConfig> = {
       gridSpacing: 'ARITHMETIC',
       sizingMode: 'QUOTE',
       gridLevels: 20,
-      preloadInventory: false,
       stopOnRangeExit: true,
       leverage: 2,
       marginMode: 'ISOLATED',
@@ -241,14 +228,6 @@ export const gridClassic: Strategy<GridClassicConfig> = {
       }
     }
 
-    if (cfg.preloadInventory) {
-      issues.push(
-        warn(
-          'preloadInventory',
-          'La precarga de inventario no está implementada: el bot arranca en líquido y solo vende lo que compró en alguna línea.',
-        ),
-      );
-    }
     return toResult(issues);
   },
 
@@ -406,6 +385,6 @@ export const gridClassic: Strategy<GridClassicConfig> = {
         'Tope de notional: ' + admitidas.size + ' de ' + candidatas.length + ' entradas tendidas.';
     }
 
-    return { orders, immediate, targetLeverage: cfg.leverage, note, scratchPatch };
+    return { orders, immediate, note, scratchPatch };
   },
 };

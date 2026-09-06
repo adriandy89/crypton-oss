@@ -97,12 +97,6 @@ export const GRID_CLASSIC_GUIDE: StrategyGuide<GridClassicConfig> = {
         'En aritmético, un salto de 700 USDC es un 0,9 % arriba del rango y casi un 1 % abajo. En geométrico todas las líneas rinden el mismo porcentaje, así que abajo quedan más juntas en dinero y arriba más separadas.',
       tip: 'Aritmético se lee más fácil. Geométrico compensa mejor en rangos muy amplios, donde el extremo inferior y el superior se diferencian mucho.',
     },
-    preloadInventory: {
-      what: 'Pensado para comprar de golpe, al arrancar, el inventario necesario para poder vender también en las líneas que quedan por encima del precio.',
-      affects:
-        'Hoy no cambia nada: el motor no precarga inventario. El bot arranca siempre en líquido y solo vende lo que compró antes en alguna línea. Si lo activas, la app te avisará en la revisión, pero el comportamiento es el mismo.',
-      tip: 'Déjalo apagado. Está en el formulario, pero el motor no lo lee.',
-    },
     stopOnRangeExit: {
       what: 'Qué hacer cuando el precio se sale del rango que definiste.',
       affects:

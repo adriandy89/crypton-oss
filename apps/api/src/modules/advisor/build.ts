@@ -247,7 +247,6 @@ function buildGridMart(k: Knobs, ctx: BuildContext): Record<string, unknown> {
     corePctSoldAtLevel1: Math.round(clamp(25 / FACTOR[k.sizeGrowth], 1, 100)),
     gridSellQtyMultiplier: stepped(1, 0.1, 3, 0.05, 2),
     gridRebuyDiscountPct: stepped(tp / 2, 0.05, 20, 0.05, 2),
-    fullCycleCooldownMinutes: Math.round(clamp(5 / FACTOR[k.cadence], 0, 10080)),
   };
 }
 
@@ -313,7 +312,6 @@ function buildGrid(k: Knobs, ctx: BuildContext, neutral: boolean): Record<string
     return {
       ...comun,
       sizingMode: 'QUOTE',
-      preloadInventory: false,
       // Salirse del rango con la rejilla puesta es quedarse con la posicion
       // entera en contra. Solo el perfil agresivo lo desactiva.
       stopOnRangeExit: k.profile !== 'AGRESIVA',
@@ -328,8 +326,6 @@ function buildGrid(k: Knobs, ctx: BuildContext, neutral: boolean): Record<string
     // Sin tope de exposicion la posicion neta crece hasta agotar el margen; el
     // propio validador avisa de ello.
     maxExposure: dec(ctx.totalInvestment * lev * 0.8, 2),
-    reanchorOnDrift: k.profile === 'AGRESIVA',
-    reanchorThresholdPct: stepped(clamp(medio * 0.8, 0.5, 50), 0.5, 50, 0.5, 1),
   };
 }
 

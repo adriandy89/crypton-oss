@@ -342,7 +342,6 @@ export const tdca: Strategy<TdcaConfig> = {
     return {
       orders,
       immediate,
-      targetLeverage: cfg.leverage,
       note:
         blockers.length > 0
           ? 'Sin comprar: ' + blockers.join('; ') + '.'

@@ -1431,6 +1431,81 @@ describe('registro de estrategias', () => {
     }
   });
 
+  /**
+   * Spec 026 (001/F-12). Cuatro campos vivieron en el formulario sin que el
+   * motor los leyera nunca, y GridMart heredaba de la escalera dos que no
+   * gobiernan ninguna de sus órdenes. Fuera del formulario; las configuraciones
+   * guardadas los conservan sin efecto.
+   */
+  it('los campos que no hacen nada no se ofrecen en ningún formulario', () => {
+    const retirados = [
+      'preloadInventory',
+      'fullCycleCooldownMinutes',
+      'reanchorOnDrift',
+      'reanchorThresholdPct',
+    ];
+    for (const s of listStrategies()) {
+      const keys = s.meta.fields.map((f) => f.key);
+      for (const k of retirados) expect(keys).not.toContain(k);
+      for (const k of retirados) expect(s.defaults()).not.toHaveProperty(k);
+    }
+    const gridmart = getStrategy(StrategyKind.GRIDMART).meta.fields.map((f) => f.key);
+    expect(gridmart).not.toContain('takeProfitPct');
+    expect(gridmart).not.toContain('tpMode');
+    // La validación compartida de la escalera los sigue esperando: `defaults()` los fija.
+    expect(getStrategy(StrategyKind.GRIDMART).defaults()).toMatchObject({ tpMode: 'LIMIT' });
+  });
+
+  /** Spec 026 (001/F-12): `targetLeverage` no tenía consumidor; el apalancamiento se fija al arrancar. */
+  it('ningún plan devuelve targetLeverage', () => {
+    const grid = getStrategy(StrategyKind.GRID_CLASSIC);
+    const plan = grid.plan(
+      makeContext({
+        strategy: StrategyKind.GRID_CLASSIC,
+        config: cfg({ ...grid.defaults(), lowerPrice: '90', upperPrice: '110' }),
+        price: '100',
+      }),
+    );
+    expect('targetLeverage' in plan).toBe(false);
+  });
+
+  /**
+   * Spec 026 (001/F-94 y F-15). Los dos valores de fábrica que engañaban: GridMart
+   * reabría la base en el mismo tick de cerrar el ciclo, y el Market Maker V2
+   * cotizaba como si operar fuese gratis. Solo afectan a bots nuevos.
+   */
+  it('GridMart nace con un minuto de espera y el MM V2 con 2 bps de comisión estimada', () => {
+    expect(getStrategy(StrategyKind.GRIDMART).defaults()).toMatchObject({ cooldownMinutes: 1 });
+    expect(getStrategy(StrategyKind.MARKET_MAKER_V2).defaults()).toMatchObject({
+      feeEstimateBps: '2',
+    });
+    const fee = getStrategy(StrategyKind.MARKET_MAKER_V2).meta.fields.find(
+      (f) => f.key === 'feeEstimateBps',
+    );
+    expect(fee?.default).toBe(2);
+  });
+
+  /**
+   * Spec 026 (001/F-94). El mínimo del campo (0,05 %) se conserva para no pausar
+   * bots existentes al recargar; por debajo del 0,3 % —una entrada taker y una
+   * salida maker— se avisa.
+   */
+  it('un take profit por debajo del 0,3 % avisa, en la martingala y en el satélite de GridMart', () => {
+    const mart = getStrategy(StrategyKind.MARTINGALE);
+    const corto = mart.validate(cfg({ ...mart.defaults(), takeProfitPct: '0.1' }), makeMarket());
+    expect(corto.issues.some((i) => i.field === 'takeProfitPct' && i.severity === 'WARNING')).toBe(
+      true,
+    );
+    const normal = mart.validate(cfg({ ...mart.defaults(), takeProfitPct: '1' }), makeMarket());
+    expect(normal.issues.some((i) => i.field === 'takeProfitPct')).toBe(false);
+
+    const gm = getStrategy(StrategyKind.GRIDMART);
+    const satelite = gm.validate(cfg({ ...gm.defaults(), satelliteTpPct: '0.1' }), makeMarket());
+    expect(
+      satelite.issues.some((i) => i.field === 'satelliteTpPct' && i.severity === 'WARNING'),
+    ).toBe(true);
+  });
+
   it('todo campo obligatorio sin default queda marcado como tal', () => {
     for (const s of listStrategies()) {
       for (const f of s.meta.fields) {

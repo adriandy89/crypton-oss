@@ -145,6 +145,22 @@ const META: StrategyMeta = {
  * Aquí es donde se convierte "peor caso" en un número que el usuario ve antes
  * de arrancar, en vez de descubrirlo cuando el bot ya lleva 5 niveles llenos.
  */
+/**
+ * Por debajo de este take profit, con una entrada taker y una salida maker, un
+ * ciclo cerrado puede acabar en pérdida. El mínimo del campo (0,05 %) se
+ * conserva para no pausar bots existentes al recargar; se avisa (spec 026, F-94).
+ */
+export const TP_MINIMO_RENTABLE_PCT = '0.3';
+
+export function avisoDeTpCorto(que: string): string {
+  return (
+    que +
+    ' está por debajo del ' +
+    TP_MINIMO_RENTABLE_PCT +
+    ' %: con una entrada taker y una salida maker, un ciclo cerrado puede acabar en pérdida.'
+  );
+}
+
 export function validateLadderConfig(
   cfg: MartingaleConfig,
   market: MarketSpec,
@@ -172,6 +188,8 @@ export function validateLadderConfig(
   const tp = D(cfg.takeProfitPct ?? 0);
   if (!tp.isFinite() || tp.lte(0)) {
     issues.push(err('takeProfitPct', 'El take profit debe ser mayor que cero.'));
+  } else if (tp.lt(TP_MINIMO_RENTABLE_PCT)) {
+    issues.push(warn('takeProfitPct', avisoDeTpCorto('El take profit')));
   }
 
   // Cobertura total de la escalera: hasta dónde aguanta antes de quedarse sin
@@ -352,7 +370,6 @@ export const martingale: Strategy<MartingaleConfig> = {
       return {
         orders,
         immediate,
-        targetLeverage: cfg.leverage,
         note: 'Abriendo ciclo.',
         ...(fija?.patch ? { scratchPatch: fija.patch } : {}),
       };
@@ -433,7 +450,6 @@ export const martingale: Strategy<MartingaleConfig> = {
     return {
       orders,
       immediate,
-      targetLeverage: cfg.leverage,
       note: 'Ciclo abierto: ' + Math.max(0, remaining) + ' seguridades pendientes.',
     };
   },

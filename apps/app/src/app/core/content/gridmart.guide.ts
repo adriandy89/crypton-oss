@@ -136,12 +136,6 @@ export const GRIDMART_GUIDE: StrategyGuide<GridMartConfig> = {
         'Es el beneficio de cada vuelta completa de la rejilla. Descuentos pequeños recompran enseguida y reciclan el escalón a menudo; descuentos grandes esperan caídas mayores y pueden dejar el escalón vendido mucho tiempo.',
       tip: 'Mantenlo por debajo de la separación inicial de venta. Si es mayor, cada vuelta pierde núcleo en vez de ganarlo, y la app te avisa.',
     },
-    fullCycleCooldownMinutes: {
-      what: 'Pensado como espera tras completar un ciclo entero.',
-      affects:
-        'Hoy no cambia nada: el motor no lo lee. La espera que de verdad se aplica entre ciclos es la del campo común Espera entre ciclos.',
-      tip: 'Usa Espera entre ciclos, en la sección de Tiempos. Este campo está en el formulario pero no tiene efecto.',
-    },
     maxNotionalCap: {
       what: 'Tope duro del valor de la posición. En esta estrategia el motor SI lo consulta al tender la escalera.',
       affects:
