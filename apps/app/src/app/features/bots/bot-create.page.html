@@ -113,18 +113,24 @@
                 <span>Par</span>
                 <span class="req">*</span>
               </div>
-              <ion-select
-                interface="popover"
-                placeholder="Elige un par"
-                [value]="symbol()"
-                (ionChange)="symbol.set($event.detail.value)"
-              >
-                @for (m of markets(); track m.symbol) {
-                  <ion-select-option [value]="m.symbol">
-                    {{ m.canonical }} (hasta {{ m.max_leverage }}×)
-                  </ion-select-option>
+              <!-- Un boton y no un `ion-select`: con 546 pares en Aster, el
+                   desplegable obligaba a arrastrar por una lista alfabetica que
+                   empieza en 0G/USDC y no dejaba escribir para filtrar. Abre la
+                   hoja con buscador, que vive fuera de `ion-content` para que no
+                   la desmonte el paso al recargarse. -->
+              <button type="button" class="pairbtn" (click)="pairOpen.set(true)">
+                @if (market(); as m) {
+                  <span class="v">{{ m.canonical }}</span>
+                  <span class="lev num">hasta {{ m.max_leverage }}×</span>
+                } @else if (symbol()) {
+                  <!-- Llegando por enlace o copiando del ranking, el par se fija
+                       antes de que el catalogo este cargado. -->
+                  <span class="v">{{ symbol() }}</span>
+                } @else {
+                  <span class="ph">Elige un par</span>
                 }
-              </ion-select>
+                <ion-icon name="chevron-down-outline" />
+              </button>
               <p class="fhelp">El apalancamiento máximo lo fija el mercado, no la plataforma.</p>
             </div>
           }
@@ -505,3 +511,13 @@
     </div>
   }
 </ion-content>
+
+<!-- Fuera de `ion-content` y del paso, como la hoja de margen en el detalle del
+     bot: el paso «Cuenta» entero se destruye al cambiar de conexion, y una hoja
+     dentro se iria con el. -->
+<ui-pair-sheet
+  [markets]="markets()"
+  [symbol]="symbol()"
+  [(open)]="pairOpen"
+  (picked)="symbol.set($event)"
+/>

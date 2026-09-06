@@ -337,6 +337,46 @@ ion-select {
   }
 }
 
+/* El disparador de la hoja de elegir par (spec 027). Vive aqui, pegado al
+   tematizado de los campos, porque su unico trabajo es no distinguirse de un
+   `ion-select`: las medidas y los colores son los de arriba. */
+.pairbtn {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  width: 100%;
+  min-height: 44px;
+  padding: 11px 14px;
+  border: 0;
+  border-radius: var(--radius-sm);
+  background: var(--surface-2);
+  color: var(--text-1);
+  font-family: var(--font-ui);
+  font-size: 14px;
+  text-align: left;
+
+  .v {
+    font-weight: 600;
+  }
+
+  .lev,
+  .ph {
+    color: var(--text-3);
+  }
+
+  .lev {
+    font-size: 12px;
+  }
+
+  /* La flecha, al final y sin encogerse, como la de `ion-select`. */
+  ion-icon {
+    flex-shrink: 0;
+    margin-inline-start: auto;
+    font-size: 14px;
+    color: var(--text-3);
+  }
+}
+
 ion-input.in-item,
 ion-textarea.in-item,
 ion-select.in-item {

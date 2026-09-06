@@ -67,6 +67,19 @@
   }
 }
 
+/* Los totales de lo que se esta viendo. Va antes que las tarjetas y con el
+   mismo fondo que ellas: es el resumen de la lista, no una tarjeta mas. */
+.totals {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: var(--space-3);
+  margin: var(--space-3) var(--space-4) 0;
+  padding: var(--space-3) var(--space-4);
+  background: var(--surface-1);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-md);
+}
+
 /* La linea de datos bajo las cifras: posicion y su valor, margen, tiempo
    activo. Texto pequeno y en gris, separado por huecos: es contexto, no un dato
    mas de la rejilla, y en la rejilla no cabia sin partirla en dos filas. */

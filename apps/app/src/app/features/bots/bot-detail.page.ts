@@ -41,6 +41,7 @@ import {
   costeDeComisionesPct,
   enMercadoPct,
   indiceDePeorCaida,
+  capitalActual,
   repartoDeEjecucion,
   resumenDeCiclos,
   retornoSobreMargen,
@@ -342,6 +343,16 @@ export class BotDetailPage implements OnInit {
   readonly total = computed(() => {
     const b = this.bot();
     return b ? sumaExacta([b.realizedPnl, b.unrealizedPnl]) : '0';
+  });
+  /**
+   * Capital actual, con el mismo respaldo que la tarjeta de la lista: si el
+   * servidor va una versión por detrás y no manda el campo, se compone aquí con
+   * la función del paquete compartido en vez de enseñar un guion.
+   */
+  readonly capital = computed(() => {
+    const b = this.bot();
+    if (!b) return '0';
+    return b.currentCapital ?? capitalActual(b.totalInvestment, b.realizedPnl, b.unrealizedPnl);
   });
   /**
    * El capital inicial, SOLO si difiere del asignado de hoy: si son iguales

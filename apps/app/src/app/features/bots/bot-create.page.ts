@@ -26,7 +26,13 @@ import {
   IonToolbar,
 } from '@ionic/angular/standalone';
 import { addIcons } from 'ionicons';
-import { alertCircleOutline, linkOutline, refreshOutline, warningOutline } from 'ionicons/icons';
+import {
+  alertCircleOutline,
+  chevronDownOutline,
+  linkOutline,
+  refreshOutline,
+  warningOutline,
+} from 'ionicons/icons';
 import type { BotConfig, FieldMeta, PreviewResult } from '@crypton/shared';
 import { getStrategy } from '@crypton/strategy-core';
 import {
@@ -72,6 +78,7 @@ import {
   UiEmptyStateComponent,
   UiFieldComponent,
   UiNoticeComponent,
+  UiPairSheetComponent,
   UiQuotePreviewComponent,
   UiRecommendationsComponent,
   UiRiskMeterComponent,
@@ -139,6 +146,7 @@ type Step = 'venue' | 'strategy' | 'params' | 'preview';
     UiEmptyStateComponent,
     UiFieldComponent,
     UiNoticeComponent,
+    UiPairSheetComponent,
     UiQuotePreviewComponent,
     UiRecommendationsComponent,
     UiRiskMeterComponent,
@@ -215,6 +223,8 @@ export class BotCreatePage implements OnInit, OnDestroy {
   });
 
   readonly markets = signal<Market[]>([]);
+  /** ¿Está abierta la hoja de elegir par? La hoja no guarda nada más. */
+  readonly pairOpen = signal(false);
   readonly strategies = signal<StrategyDescriptor[]>([]);
   readonly preview = signal<PreviewResult | null>(null);
   readonly busy = signal(false);
@@ -817,7 +827,13 @@ export class BotCreatePage implements OnInit, OnDestroy {
   private walletTimer: ReturnType<typeof setInterval> | null = null;
 
   constructor() {
-    addIcons({ warningOutline, linkOutline, alertCircleOutline, refreshOutline });
+    addIcons({
+      warningOutline,
+      linkOutline,
+      alertCircleOutline,
+      refreshOutline,
+      chevronDownOutline,
+    });
 
     // El par que se mira, declarado al servidor. Cambia con la cuenta y con el
     // simbolo, y se queda vacio mientras no haya los dos.

@@ -1,7 +1,7 @@
 import { Component, OnInit, computed, inject, signal } from '@angular/core';
 import { takeUntilDestroyed } from '@angular/core/rxjs-interop';
 import { RouterLink } from '@angular/router';
-import { D, sumaExacta } from '@crypton/shared';
+import { D, capitalActual, sumaExacta } from '@crypton/shared';
 import {
   IonButton,
   IonButtons,
@@ -140,6 +140,22 @@ const VIVOS = ['STARTING', 'RUNNING', 'PAUSED'];
       <ion-refresher slot="fixed" (ionRefresh)="reload($event)">
         <ion-refresher-content />
       </ion-refresher>
+
+      <!-- Los totales de LO QUE SE ESTA VIENDO, no de toda la cartera: cambian
+           al filtrar, asi que esta franja contesta «cuanto tengo en los
+           simulados» o «cuanto en los activos» sin salir de aqui. La suma es
+           exacta, con la aritmetica del paquete compartido (invariante 1). -->
+      @if (visible().length) {
+        <div class="totals">
+          <ui-stat
+            label="Capital actual"
+            [value]="money(capitalTotal())"
+            [hint]="visible().length + (visible().length === 1 ? ' bot' : ' bots')"
+          />
+          <ui-stat label="Asignado" [value]="money(asignadoTotal())" />
+          <ui-stat label="PnL" [value]="signed(pnlTotal())" [tone]="pnlColor(pnlTotal())" />
+        </div>
+      }
 
       @if (visible().length > 1) {
         <div class="sort">
@@ -290,7 +306,7 @@ const VIVOS = ['STARTING', 'RUNNING', 'PAUSED'];
               <div class="grid">
                 <ui-stat
                   label="Capital actual"
-                  [value]="money(bot.currentCapital)"
+                  [value]="money(capital(bot))"
                   [hint]="'de ' + money(bot.totalInvestment) + ' asignados'"
                 />
                 <ui-stat
@@ -538,6 +554,26 @@ export class BotsListPage implements OnInit {
   total(bot: BotSummary): string {
     return sumaExacta([bot.realizedPnl, bot.unrealizedPnl]);
   }
+
+  /**
+   * Capital actual del bot, con respaldo.
+   *
+   * Lo normal es que lo mande el servidor ya calculado. Pero la app se despliega
+   * por su cuenta —y un servidor una versión por detrás no manda el campo—, así
+   * que aquí se compone con la MISMA función del paquete compartido a partir de
+   * lo que cualquier versión sí manda. La cifra que el usuario viene a ver nunca
+   * sale como «—» por un despliegue a medias.
+   */
+  capital(bot: BotSummary): string {
+    return (
+      bot.currentCapital ?? capitalActual(bot.totalInvestment, bot.realizedPnl, bot.unrealizedPnl)
+    );
+  }
+
+  /** Los tres totales de lo que se está viendo. Se recalculan al filtrar y al ordenar. */
+  readonly capitalTotal = computed(() => sumaExacta(this.visible().map((b) => this.capital(b))));
+  readonly asignadoTotal = computed(() => sumaExacta(this.visible().map((b) => b.totalInvestment)));
+  readonly pnlTotal = computed(() => sumaExacta(this.visible().map((b) => this.total(b))));
 
   /** Hay posicion abierta, en cualquiera de los dos sentidos. */
   enPosicion(bot: BotSummary): boolean {
