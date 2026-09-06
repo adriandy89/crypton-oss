@@ -139,3 +139,4 @@ ante un 429 se paran sin reintentar. A `findings.md` va solo la evidencia resumi
 | 024 | [Mercados: los campos del venue llegan a la fila de `markets`](024-mercados-campos-del-venue/spec.md) | cambio | hecho | `spec/024-mercados-campos-del-venue` |
 | 025 | [Capital en las vistas de bots: cuánto dinero hay ahora, cuánto se puso y qué hay en juego](025-capital-en-las-vistas-de-bots/spec.md) | cambio | hecho | `spec/025-capital-en-las-vistas-de-bots` |
 | 026 | [Campos muertos fuera del formulario, valores de fábrica y semánticas fijadas](026-campos-muertos-y-decisiones/spec.md) | cambio | hecho | `spec/026-campos-muertos-y-decisiones` |
+| 027 | [Elegir el par: una hoja con buscador, y los totales de la lista de bots](027-selector-de-par/spec.md) | cambio | hecho | `spec/027-selector-de-par` |
