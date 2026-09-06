@@ -212,7 +212,7 @@ cada máquina (aquí `true`) pese a que `.editorconfig` pide LF.
 - **Impacto**: la acción de límite (aplanar o parar) del market maker no se ejecuta cuando más falta hace; queda solo el stop condicional. No hay pérdida directa, pero el usuario cree tener una protección que no actúa.
 - **Reproducción / test**: en `bot-runner.spec.ts`, market maker con `stopLossPct` y `limitAction = CLOSE_ALL`, posición por encima del tope: comprobar que se envía una MARKET reduce-only. Hoy debería fallar.
 - **Propuesta**: índice o kind distinto para el aplanado (por ejemplo `STOP_LOSS` con índice 999, que ya está reservado para cierres manuales en `reconcile.ts:82`) y que `withStopLoss` mire también `immediate`.
-- **Decisión**: pendiente.
+- **Decisión**: **corregido en el spec 009** (2026-09-06): el aplanado usa el id del cierre manual (`TAKE_PROFIT#999`) y `withStopLoss` mira también `immediate`. Test `strategies.spec.ts` «el aplanado no reutiliza el id del stop loss».
 
 ### F-03 — Grid Classic en `sizingMode=BASE` dimensiona con el mark en `plan()` y con `refPrice` en `preview()`
 
@@ -317,7 +317,7 @@ cada máquina (aquí `true`) pese a que `.editorconfig` pide LF.
 - **Evidencia**: ni la API (`PreviewBotDto.config: Record<string, unknown>`, `bots/dtos/index.ts:36,72,90`) ni `validateCommon` (`common.ts:191-240`) recorren `min/max/step/options`: solo la UI los aplica. Enumeración completa por estrategia en `informes/A-grids.md` §7 F-13 y `informes/A-market-makers.md` §1-2 A-10. Casos con efecto: `stopLossPct ≥ 100` pasa y el disparo queda ≤ 0 → `revisarOrden` `IMPOSIBLE` → **sin stop** y un WARN; `maxDailyLossPct < 0` → la guarda dispara desde el primer tick (`bot-runner.ts:1642-1653`); `liquidationAction` desconocido → PAUSE; `leverage` no entero llega a `setLeverage`; `direction: NEUTRAL` en un grid direccional → LONG en silencio; GridMart sin `gridSellDistanceMultiplier`/`gridSellQtyMultiplier` → `separation.mul(undefined)` → `DecimalError` en `preview()` y en `plan()` (`gridmart.ts:204,212`); `gridRebuyDiscountPct ≥ 100` → recompra a precio ≤ 0 → `ENTRADA_INVALIDA` cada tick; `sizeMultiplier ≤ 0` en Neutral Grid → retícula vacía en silencio; `marginBelowAveragePct < 0` en TDCA compra solo por **encima** de la media; `maxBuysPerCycle > 500` sin tope.
 - **Impacto**: cualquier cliente de la API que salte el formulario (o el asistente) manda valores fuera de rango que la API acepta; dos de ellos dejan una posición sin stop o un 500.
 - **Propuesta**: un validador genérico sobre `meta.fields` (min, max, step, options) delante de la validación específica, en la API y en `validateCommon`; y un test por estrategia de que `validate` rechaza cada límite declarado.
-- **Decisión**: pendiente.
+- **Decisión**: **parcialmente corregido en el spec 009** (2026-09-06): `validateCommon` rechaza `stopLossPct` ∉ (0, 100) y `maxDailyLossPct` ≤ 0 en las siete. El validador genérico y el resto de campos siguen abiertos (spec `019-validacion-y-parametros-muertos`).
 
 ### F-14 — Preview frente a plan
 
@@ -453,7 +453,7 @@ cada máquina (aquí `true`) pese a que `.editorconfig` pide LF.
 - **Impacto**: justo cuando el usuario pulsa el botón rojo, se le quita la red y se le dice que está cerrado. Alta, y roza la Crítica por (2); se deja en Alta porque exige un fallo del venue coincidente.
 - **Reproducción / test**: `bot-runner.spec.ts`, «STOP_AND_CLOSE que no consigue cerrar no dice que ha cerrado»: `adapter.position = conPos()`, `adapter.placeError = new ExchangeError('RULES', …)`; `await runner.handleCommand('STOP_AND_CLOSE')`; el evento final no debe afirmar el cierre y debe haber un CRITICAL. Hoy falla.
 - **Propuesta**: cerrar primero y cancelar el stop solo cuando el cierre esté confirmado; si no se consigue cerrar, dejar el stop, no pasar a `STOPPED` y avisar en CRITICAL.
-- **Decisión**: pendiente.
+- **Decisión**: **corregido en el spec 009** (2026-09-06) tal como se propuso; el cierre fallido deja el bot `PAUSED` con `ACTION_FAILED` CRITICAL. Tests `bot-runner.spec.ts` «STOP_AND_CLOSE cancela el stop solo despues de cerrar» y «…que no consigue cerrar no dice que ha cerrado».
 
 ### F-34 — `AccountHandle` no reexpone `adjustIsolatedMargin` ni `setPositionMode`
 
@@ -467,21 +467,21 @@ cada máquina (aquí `true`) pese a que `.editorconfig` pide LF.
 
 - **Evidencia**: `bot-runner.ts:751-762`: cancelar (`:754`) → marcar (`:759`) → colocar (`:760`). Si `place()` falla con `RETRYABLE`, lo maneja dentro (`:935-953`): `ORDER_RETRY` en **INFO**, `placeFailures++`, y devuelve normalmente, así que `safely()` ni se entera. El tope `MAX_PLACE_FAILURES = 20` (`:104`, `:947`) puede tardar veinte ticks (≈5 min) en pausar. Y el reemplazo ocurre con **cada cambio de posición**, porque el `qty` deseado es `|position.qty|` y `reconcile` solo tolera medio step (`reconcile.ts:251-253`). En Hyperliquid se suma F-04: un stop en la década superior se reemplaza en **cada tick**.
 - **Propuesta**: reponer antes de cancelar cuando el venue lo permita, y que un fallo al reponer el `STOP_LOSS` sea CRITICAL desde el primer intento.
-- **Decisión**: pendiente.
+- **Decisión**: **mitigado en el spec 009** (2026-09-06): un `RETRYABLE` al colocar el `STOP_LOSS` se reintenta en el mismo tick y, si tampoco sale, es CRITICAL. Reponer antes de cancelar exigiría un id por encarnación del stop; queda para un spec posterior.
 
 ### F-36 — `confirmOrder` fallido marca `REJECTED` una orden que el venue aceptó
 
 - **Evidencia**: `bot-runner.ts:875-899`: si `placeOrder` tuvo éxito y `confirmOrder` (`:892`) falla por la base, el `catch` de `:896` ejecuta `rejectOrder` en `:899`. La fila dice `REJECTED`; la orden está en el libro. `liveOrderCoids` (`bot-store.ts:223-233`) no la devuelve, así que PAUSE y PANIC **no la cancelan**. Y `rejectOrder` es best-effort (`:356-363`): si también falla, la fila queda `PENDING` para siempre (F-37). El comentario de `upsertPendingOrder` (`:300-307`) promete justo lo contrario.
 - **Reproducción / test**: `bot-runner.spec.ts`, «una orden aceptada por el venue no se marca REJECTED porque falle la base»: `store.confirmOrder` que rechaza; la fila no debe acabar en `rejectOrder`.
 - **Propuesta**: reintentar `confirmOrder` y, si no puede, dejar la fila `PENDING` con el `venue_order_id` conocido y avisar; nunca `REJECTED` tras un acuse positivo.
-- **Decisión**: pendiente.
+- **Decisión**: **corregido en el spec 009** (2026-09-06) tal como se propuso (`anotarAcuse` en `bot-runner.ts`).
 
 ### F-37 — Una fila `PENDING` huérfana veta su `clientOrderId` para siempre y en silencio
 
 - **Evidencia**: muerte del proceso entre `upsertPendingOrder` (`bot-runner.ts:868`) y `placeOrder` (`:876`), o `rejectOrder` tragado (F-36): queda una fila `PENDING` sin `venue_order_id`. Nada la vence (no hay barrido de `PENDING` en el repositorio). En el siguiente tick `reconcile` mete el nivel en `toPlace` y `place()` lo veta en `:862` con un `return` desnudo en `:864`, **sin evento**. Para las inmediatas (`:781`, `allowRefill = false`) es la entrada base a mercado la que no se abre nunca: el ciclo no arranca. Solo lo cura una ruta que llame a `markCoidsCanceled` (PAUSE, STOP_KEEP, CANCEL_ALL, REANCHOR, recarga WARM): intervención manual.
 - **Reproducción / test**: `bot-runner.spec.ts`, «una fila PENDING huérfana no deja el nivel muerto para siempre»: `findOrderByCoid` → `{status:'PENDING'}` sin `venue_order_id`; se espera al menos un evento que lo explique o un vencimiento.
 - **Propuesta**: vencer las `PENDING` sin `venue_order_id` pasado un tiempo (marcarlas `REJECTED` para que se recoloquen) y emitir un evento cuando `place()` vete por fila viva.
-- **Decisión**: pendiente.
+- **Decisión**: **corregido en el spec 009** (2026-09-06): vencen a los 5 minutos (`PENDING_ORPHAN_MS`) con un `ORDER_RETRY` INFO; una `PENDING` reciente sigue vetando.
 
 ### F-38 — Relojes: sin guarda de deriva; el nonce de Aster no es monótono ante un salto hacia atrás
 
@@ -675,7 +675,7 @@ cada máquina (aquí `true`) pese a que `.editorconfig` pide LF.
 - **Impacto**: Aster: en el primer tick con posición el bot **cierra a mercado al precio actual** (pérdida = spread + taker), el ciclo se cierra, pasa el cooldown y vuelve a abrir la base: bucle mientras dure la opción. Hyperliquid: cierra al instante si el mark está a menos de un 5 % del objetivo; si no, la IOC se cancela y se reemite cada tick (churn de cupo). Lighter: la MARKET con tope por encima del bid no cruza y la fila queda `FILLED` por decreto (F-47): el bot cree haber salido y el TP no vuelve (fila FILLED vetada).
 - **Test propuesto**: `strategies.spec.ts` «con tpMode MARKET la salida es condicional: lleva disparador y no se ejecuta al colocarla» (`tp.triggerPrice === '101.0'`; hoy `undefined`).
 - **Propuesta**: emitir `triggerPrice = tp` con `type: MARKET` (los adaptadores ya lo traducen a `TAKE_PROFIT_MARKET`, `ORDER_TYPE_TAKE_PROFIT` o trigger `tp`), o retirar la opción. Decisión de producto (pregunta abierta). Spec `009-grids-dimensionado-y-comandos`.
-- **Decisión**: pendiente.
+- **Decisión**: corregido en el spec 010 (2026-09-06, commit `f19567f`): la salida con `tpMode: MARKET` lleva `triggerPrice` al objetivo (condicional); la opción se conserva y la ayuda in-app describe la conducta nueva.
 
 ### F-81 — Neutral Grid: la banda muerta cancela la línea justo antes de que pueda ejecutarse
 
@@ -707,7 +707,7 @@ cada máquina (aquí `true`) pese a que `.editorconfig` pide LF.
 - **Impacto**: Grid Classic con inventario → **exposición duplicada por nivel** y posición sin contrapartida; Neutral Grid → promesa falsa y recolocación inútil de hasta 200 órdenes; escaleras → margen hasta `totalInvestment` + lo ya invertido (el comentario del runner lo describe, la app no avisa).
 - **Test propuesto**: `bot-runner.spec.ts` Grid Classic con `filledLevelIndexes: [1]` y posición `0.2 @ 95`; tras `REANCHOR_GRID` debe seguir existiendo `GRID_SELL#1` (o el comando rechazarse); hoy se tiende `GRID_BUY#1` y no hay venta.
 - **Propuesta**: comando por estrategia (rechazar en Grid Classic y TDCA; en Neutral Grid honrar `cycle.anchorPrice` en `plan()`; en escaleras pedir confirmación con el margen resultante). Spec `009`.
-- **Decisión**: pendiente.
+- **Decisión**: corregido en el spec 010 (2026-09-06, commit `ff5e6e0`): el worker rechaza `REANCHOR_GRID` con `ACTION_FAILED` y motivo en Grid Classic (siempre: las líneas salen del rango), Neutral Grid, TDCA y los dos market makers; en Martingala y GridMart el evento anota el margen que compromete; la API exige `confirm` y rechaza al instante fuera de las escaleras; la app oculta «Recentrar» y «Adelantar seguridad» donde no aplican. En Neutral Grid se decidió **no** leer `cycle.anchorPrice` en `plan()`: habría creado un ancla oculta que una edición posterior de «Precio ancla» (WARM) no podría pisar; recentrar es editar ese campo.
 
 ### F-85 — `ADD_SAFETY_NOW` con el precio de la escalera y evento sin mirar el acuse
 
@@ -715,7 +715,7 @@ cada máquina (aquí `true`) pese a que `.editorconfig` pide LF.
 - **Impacto**: en Hyperliquid una seguridad a más del ~4,8 % del mark (`SAFETY#3` con 3 %/1,3 ya está a −12 %) sale como IOC por debajo del mercado, no se ejecuta, y el usuario recibe «ejecutada a mercado». En Lighter peor (tope sin holgura).
 - **Test propuesto**: `bot-runner.spec.ts` acuse no ejecutado → sin `SAFETY_ADDED`.
 - **Propuesta**: mandar la seguridad a mercado con el precio del mark (con la holgura del adaptador) y anunciar según el acuse. Spec `009`.
-- **Decisión**: pendiente.
+- **Decisión**: corregido en el spec 010 (2026-09-06, commit `9efd193`): la seguridad manual sale a mercado con el precio de marca; `SAFETY_ADDED` solo se emite con acuse y dice su estado; sin acuse, `ADD_SAFETY_SKIPPED` en WARN.
 
 ### F-86 — `cooldownMinutes` congelado en la primera fila de ciclo; paridad con el backtest rota
 
@@ -723,7 +723,7 @@ cada máquina (aquí `true`) pese a que `.editorconfig` pide LF.
 - **Impacto**: una revisión HOT de `cooldownMinutes` nunca surte efecto (ni tras REPAIR ni tras reinicio); en el replay un TDCA o un grid esperan entre ciclos y en vivo no.
 - **Test propuesto**: `bot-runner.spec.ts` bot con `cooldownMinutes: 1`, `reloadConfig({ cooldownMinutes: 30 }, 'HOT')`, cerrar el ciclo → `cooldown_until` a 30 min (hoy 1).
 - **Propuesta**: pasar `opts.cooldownMinutes` desde la config vigente y que el motor honre `cooldownUntil` para todas (o que el backtest deje de hacerlo). Spec `009`.
-- **Decisión**: pendiente.
+- **Decisión**: corregido en el spec 010 (2026-09-06, commit `495a3b0`): el runner pasa `cooldownMinutes` de la configuración vigente a `applyFillToCycle` y el store lo usa para `cooldownUntil` y para el scratch del ciclo siguiente. Que el motor honre `cooldownUntil` en Grid Classic, Neutral Grid y TDCA sigue fuera (spec 019).
 
 ### F-87 — Grid Classic: `maxNotionalCap` no acota lo que se tiende
 
@@ -760,14 +760,14 @@ cada máquina (aquí `true`) pese a que `.editorconfig` pide LF.
 - **Evidencia**: `stop-loss.ts:63-67` (`price = triggerPrice`); `order-gate.ts:49,65-103` (notional al `price`; sin entradas vivas → `RESTO_INCERRABLE` WARN); `bot-runner.ts:839-841` (`stopLossVivo = false`).
 - **Impacto**: con `stopLossPct = 10` una posición de 10,5 USDC (por encima del mínimo de 10) da 9,45 al disparo → sin stop y solo un WARN. Correcto si el venue mide el mínimo al precio de disparo; si lo mide al mark, el motor renuncia a un stop que el venue aceptaría. Por confirmar por venue (C-2); relacionado con F-32.
 - **Test propuesto**: `order-gate.spec.ts` stop de 10,5 USDC a −10 %.
-- **Decisión**: pendiente.
+- **Decisión**: **mitigado en el spec 009** (2026-09-06): `revisarOrden` mide el `STOP_LOSS` al precio de marca que le pasa el runner. Sigue «por confirmar por venue»: si alguno midiera al disparo, el rechazo llega como CRITICAL (F-32).
 
 ### F-92 — `baseOrderType: LIMIT`: dos conductas para el mismo campo
 
 - **Evidencia**: Martingale manda la base LIMIT por `orders` a `px(mark, entrySide)` **de cada tick** (`martingale.ts:319-327`) y el reconciliador la cancela y recoloca cada medio tick de movimiento (`reconcile.ts:246-249`): persigue al precio como un *join-the-bid*. GridMart la manda por `immediate` (`gridmart.ts:391-401`) al precio del tick en que se emitió, sin caducidad; un cambio HOT a MARKET no surte efecto mientras viva (mismo `B0`, veto por fila viva). Ayuda: «limitada, que espera a que el precio venga a buscarla» (`ladder-options.ts:14-17`).
 - **Impacto**: ninguna de las dos hace lo que dice la ayuda; churn de cupo en Martingale.
 - **Propuesta**: una sola conducta documentada (precio fijado al emitir, con caducidad). Spec `009`.
-- **Decisión**: pendiente.
+- **Decisión**: corregido en el spec 010 (2026-09-06, commit `0caf764`): en Martingala y GridMart la base LIMIT es post-only al precio del momento de emitirla, memorizado en el scratch del ciclo (`baseLimit`), sin persecución y con caducidad de cinco minutos (`BASE_LIMIT_TTL_MS`); GridMart la reconcilia en vez de mandarla una vez.
 
 ### F-93 — MMR plano 0,5 % optimista (por confirmar con DOC)
 
@@ -833,21 +833,30 @@ Comprobado durante la exploración previa y la fase 1; se repasa en las fases 2 
 
 ## Specs de seguimiento propuestos
 
-Agrupados por tema para decidir de una pasada. La prioridad sale de la severidad más alta del grupo; los números son propuestos y se fijan al abrir cada spec (copiar `specs/_template/`). Las seis Críticas (F-01, F-15, F-31, F-32, F-46, F-68) se corrigen en este spec y solo aparecen aquí por su parte no crítica.
+Agrupados por tema para decidir de una pasada. La prioridad sale de la severidad más alta del grupo. Las seis Críticas (F-01, F-15, F-31, F-32, F-46, F-68) se corrigieron en este spec y solo aparecen aquí por su parte no crítica.
 
-| Nº propuesto | Slug | Hallazgos | Prioridad |
-|---|---|---|---|
-| 002 | `aster-nonce` | F-69, F-75, F-38 | Alta |
-| 003 | `liquidaciones-por-venue` | F-70, F-05, F-33 (parte de liquidación) | Alta |
-| 004 | `lighter-transporte-y-firma` | F-47, F-48, F-49, F-50, F-51, F-52, F-53, F-54, F-55, F-56, F-16 (Lighter) | Alta |
-| 005 | `hyperliquid-tick-y-marca` | F-04, F-04b, F-25, F-26, F-27, F-28, F-16 (Hyperliquid) | Alta |
-| 006 | `aster-modo-posicion-y-errores` | F-71, F-77, F-78, F-22, F-23 | Alta |
-| 007 | `aster-streams` | F-72, F-73, F-74 | Media |
-| 008 | `motor-fallos-y-guardas` | F-06, F-07, F-08, F-33, F-34, F-35, F-36, F-37, F-17, F-18, F-40, F-42, F-43, F-44, F-11 | Alta |
-| 009 | `grids-dimensionado-y-comandos` | F-03, F-80, F-81, F-82, F-84, F-85, F-86, F-87, F-88, F-89, F-90, F-92 | Alta |
-| 010 | `parciales-y-reconcile` | F-83, F-91 | Alta |
-| 011 | `market-makers` | F-02, F-15 (parte MM), F-57, F-58, F-59, F-60, F-61, F-62, F-63, F-64 | Alta |
-| 012 | `validacion-y-parametros-muertos` | F-12, F-13, F-14, F-93 | Media |
-| 013 | `simulador-y-backtest` | F-45, F-65 | Media |
-| 014 | `caudal-y-presupuesto` | F-10, F-24, F-76 | Media |
-| 015 | `limpieza-docs-y-tests` | F-19, F-20, F-21, F-29, F-39, F-41, F-66, F-67, F-79, F-94 | Baja |
+**Renumerados el 2026-09-06.** Los números 002-007 que proponía la primera versión de esta tabla se
+asignaron entretanto a otros specs (analítica, cartera, backtest, gráfico, historial, panel operativo) y
+008 a la guía de uso, que documenta cada hallazgo abierto en `docs/`. F-45 se corrigió en el spec 004. La
+agrupación también cambió: lo que deja una posición sin red o duplica exposición en bots en marcha va
+primero y en diffs pequeños (009, 010, 011); después los venues; después la semántica de las estrategias
+(que exige decisiones del usuario); al final validación, backtest y limpieza. La revisión que motivó el
+reparto está en `specs/008-guia-de-uso/informes/revision-estrategias.md`.
+
+| Nº | Slug | Hallazgos | Prioridad | Estado |
+|---|---|---|---|---|
+| 009 | `protecciones-y-cierre` | F-33, F-02, F-35 (mitigado), F-36, F-37, F-91 (mitigación), F-13 (solo `stopLossPct` ∈ (0,100) y `maxDailyLossPct` > 0) | Alta | hecho (2026-09-06) |
+| 010 | `comandos-y-ciclo` | F-80, F-84, F-85, F-86, F-92 | Alta | hecho (2026-09-06) |
+| 011 | `margen-y-modo-posicion` | F-34, F-08, F-71 (juntos: reexponer `AccountHandle` sin vetar `HEDGE` destaparía el cambio de modo de toda la cuenta en Aster) | Alta | borrador |
+| 012 | `aster-nonce-y-errores` | F-69, F-75, F-38, F-77, F-78 | Alta | propuesto |
+| 013 | `lighter-mercado-y-cupo` | F-47, F-48, F-49, F-50, F-51, F-52, F-53, F-55, F-56, F-16 (Lighter); F-54 como fase aparte | Alta | propuesto |
+| 014 | `hyperliquid-tick-y-marca` | F-04, F-04b, F-25, F-26, F-27, F-28, F-16 (Hyperliquid) | Alta | propuesto |
+| 015 | `liquidaciones-y-streams-por-venue` | F-05, F-70, F-72, F-73, F-74 | Alta | propuesto |
+| 016 | `parciales-y-reconcile` | F-83, F-17 | Alta | propuesto |
+| 017 | `grids-dimensionado-y-preview` | F-81, F-82, F-89, F-03, F-87, F-88, F-90, F-14 | Alta | propuesto |
+| 018 | `market-makers` | F-57, F-58, F-59, F-60, F-61, F-62, F-63, F-15 (parte MM), F-64, F-67 | Alta | propuesto |
+| 019 | `validacion-y-parametros-muertos` | F-12, resto de F-13, F-93, F-42, F-44, F-11, F-43 | Media | propuesto |
+| 020 | `caudal-y-presupuesto` | F-10, F-24, F-76 | Media | propuesto |
+| 021 | `motor-errores-y-salud` | F-06, F-07, F-18, F-40, F-41, F-39 | Media | propuesto |
+| 022 | `simulador-y-backtest` | F-65 (y backtest a cadencia real para medir F-81) | Media | propuesto |
+| 023 | `limpieza-docs-y-tests` | F-19, F-20, F-21, F-22, F-23, F-29, F-66, F-79, F-94 | Baja | propuesto |

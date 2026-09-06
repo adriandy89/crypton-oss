@@ -60,6 +60,8 @@ packages/
   exchange-core/   Adaptadores de DEX tras una interfaz única + simulador
 docker/            Dos composes SEPARADOS: infraestructura (datos) y aplicación
 scripts/           Utilidades: generar .env y auditar la configuración
+docs/              Guía de uso: una por estrategia, riesgo, venues, simulación y comandos
+specs/             Metodología SDD: la constitución y un directorio por spec
 ```
 
 ### Por qué la API y el worker están separados
@@ -255,7 +257,7 @@ resto los adopta en el siguiente barrido.
 
 ## Estrategias
 
-Las seis viven en `packages/strategy-core` como funciones puras. La API las usa
+Las siete viven en `packages/strategy-core` como funciones puras. La API las usa
 para validar y pintar el preview; el worker, para ejecutar. **Una sola
 implementación**, así que lo que ves antes de crear el bot es literalmente lo que
 se mandará al exchange.
@@ -269,6 +271,10 @@ se mandará al exchange.
 | **GridMart** | Martingala + rejilla de ventas + recompras. | **Alto** |
 | **Market Maker** | Cotiza a los dos lados por bps, con sesgo por inventario. | Medio |
 | **Market Maker V2** | Igual, pero el diferencial se calcula (volatilidad, libro, coste) y puede anclarse a un precio externo. | Medio |
+
+Cada estrategia tiene su **guía de uso** en [`docs/README.md`](docs/README.md), con
+configuraciones de ejemplo verificadas contra el código, lo que cada bot no mira
+y sus limitaciones conocidas. Empieza por [`docs/buenas-practicas.md`](docs/buenas-practicas.md).
 
 Añadir una estrategia es añadir una entrada al registro de `strategy-core`. La
 app genera su formulario sola a partir de `meta.fields`: no hay código de UI por
@@ -287,10 +293,13 @@ decorativa: determina lo que hace el motor.
 | **WARM** | Cancela y vuelve a tender la escalera. **La posición sigue abierta.** Exige confirmación. | niveles, rango, escalas, `totalInvestment`, apalancamiento |
 | **COLD** | Se rechaza: sería otro bot. | par, exchange, dirección, estrategia |
 
-Más once controles de ejecución: `START`, `PAUSE` (cancela órdenes, mantiene
+Más trece controles de ejecución: `START`, `PAUSE` (cancela órdenes, mantiene
 posición), `RESUME`, `STOP_KEEP_POSITION`, `STOP_AND_CLOSE`, `CLOSE_NOW`,
-`TAKE_PROFIT_NOW`, `ADD_SAFETY_NOW`, `REANCHOR_GRID`, `CANCEL_ALL_ORDERS` y
-`PANIC`.
+`TAKE_PROFIT_NOW`, `ADD_SAFETY_NOW`, `REANCHOR_GRID`, `CANCEL_ALL_ORDERS`,
+`PANIC`, `REPAIR` (resincroniza con el exchange sin cancelar nada) y
+`ADJUST_MARGIN` (aporta o retira colateral de una posición aislada). Qué hace
+cada uno, y cuáles conservan el stop-loss, en
+[`docs/comandos-guardas-y-eventos.md`](docs/comandos-guardas-y-eventos.md).
 
 Todos **cancelan solo las órdenes del bot**, nunca las de sus hermanos ni las
 que hayas puesto a mano en la web del DEX. Solo el kill-switch global de
@@ -548,6 +557,9 @@ proporción al número de bots, algo ha dejado de compartirse.
 
 Simulación → testnet del exchange → mainnet con 20 USDC y apalancamiento 1× →
 verificar que las órdenes aparecen en la web del DEX → subir capital despacio.
+
+El detalle de cada paso, los mínimos por venue y la checklist antes de arrancar
+están en [`docs/buenas-practicas.md`](docs/buenas-practicas.md).
 
 ---
 

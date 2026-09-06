@@ -41,7 +41,7 @@ export const MARTINGALE_GUIDE: StrategyGuide<MartingaleConfig> = {
         { label: 'Take profit', value: '1,2 %' },
       ],
       outcome:
-        'Los escalones caen en 2.428, 2.330, 2.203, 2.038, 1.824 y 1.545: la escalera cubre un 38 % de caída y a 2x la liquidación llega sobre el 50 %, así que se agota antes de que el exchange cierre. La entrada base mueve unos 19 USDC y el último escalón unos 311. Si ETH cae a 1.900 y rebota un 1,2 % sobre la media, el ciclo cierra completo.',
+        'Los escalones caen en 2.428, 2.330, 2.203, 2.038, 1.824 y 1.545: la escalera cubre un 38 % de caída y a 2x la liquidación llega sobre el 50 %, así que se agota antes de que el exchange cierre. La entrada base mueve unos 19 USDC de posición (9 de margen) y el último escalón unos 311 (156 de margen): el peor caso son 800 USDC de posición con los 400 de capital comprometidos. Si ETH cae a 1.900 y rebota un 1,2 % sobre la media, el ciclo cierra completo.',
     },
     {
       title: 'BTC conservador, escalera corta',

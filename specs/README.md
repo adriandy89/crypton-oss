@@ -120,3 +120,7 @@ ante un 429 se paran sin reintentar. A `findings.md` va solo la evidencia resumi
 | 005 | [Gráfico avanzado](005-grafico-avanzado/spec.md) | cambio | en curso | `spec/005-grafico-avanzado` |
 | 006 | [Historial de configuración y cronología por ciclo](006-historial-y-cronologia/spec.md) | cambio | en curso | `spec/006-historial-y-cronologia` |
 | 007 | [Panel operativo](007-panel-operativo/spec.md) | cambio | en curso | `spec/007-panel-operativo` |
+| 008 | [Guía de uso: una guía por estrategia, riesgo, venues, simulación y comandos](008-guia-de-uso/spec.md) | cambio | en curso | `spec/008-guia-de-uso` |
+| 009 | [Protecciones y cierre](009-protecciones-y-cierre/spec.md) | cambio | hecho | `spec/009-protecciones-y-cierre` |
+| 010 | [Comandos y ciclo](010-comandos-y-ciclo/spec.md) | cambio | hecho | `spec/010-comandos-y-ciclo` |
+| 011 | [Margen y modo de posición](011-margen-y-modo-posicion/spec.md) | cambio | borrador | `spec/011-margen-y-modo-posicion` |

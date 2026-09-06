@@ -207,8 +207,8 @@ export const MARKET_MAKER_GUIDE: StrategyGuide<MarketMakerConfig> = {
     referencePrice: {
       what: 'Ancla manual. Con esto puesto, el bot cotiza alrededor de este precio y no del mercado.',
       affects:
-        'Congela el centro de la cotización donde tu digas. Si el mercado se aleja del ancla, el bot deja de tener órdenes cerca del precio real y puede quedarse sin operar.',
-      tip: 'Déjalo vacio salvo que quieras cotizar alrededor de un nivel concreto. Revísalo si el precio se mueve mucho.',
+        'Congela el centro de la cotización donde tu digas. Si el mercado se aleja del ancla, el bot deja de tener órdenes cerca del precio real y puede quedarse sin operar; nadie te avisa de esa deriva. Con el ancla puesta, la Espera tras un fill deja de actuar.',
+      tip: 'Déjalo vacio salvo que quieras cotizar alrededor de un nivel concreto. Si lo pones, vigílalo tú: no hay aviso automático.',
     },
     direction: {
       what: 'Hacia qué lado se inclina la cotización. Aquí no describe una posición, sino una intención.',

@@ -11,10 +11,10 @@ import type { OptionDoc } from './types';
  */
 export const LADDER_OPTION_DOCS = {
   baseOrderType: {
-    what: 'Cómo entra la primera orden del ciclo: a mercado, que se ejecuta al instante al precio que haya, o limitada, que espera a que el precio venga a buscarla.',
+    what: 'Cómo entra la primera orden del ciclo: a mercado, que se ejecuta al instante al precio que haya, o limitada al precio actual.',
     affects:
-      'A mercado el bot arranca siempre, pero pagas comisión de taker y entras al precio del momento. Limitada ahorra comisión y entra mejor, pero el ciclo puede no empezar nunca si el precio se va.',
-    tip: 'A mercado si quieres que el bot opere si o si; limitada si te importa más el precio de entrada que la puntualidad.',
+      'A mercado el bot arranca siempre, pero pagas comisión de taker y entras al precio del momento. Limitada se coloca post-only al precio del momento y espera quieta: no persigue al precio y, si en cinco minutos no se ha ejecutado, se vuelve a colocar al precio de entonces. Igual en Martingala y en GridMart.',
+    tip: 'A mercado si quieres arrancar seguro; limitada si prefieres ahorrar la comisión de taker y no te importa esperar a que el precio venga a buscarla.',
   },
   numLimitBuys: {
     what: 'Cuántas órdenes de seguridad se cuelgan por debajo de la entrada base, esperando a que el precio caiga.',
@@ -47,9 +47,9 @@ export const LADDER_OPTION_DOCS = {
     tip: 'Con comisiones de ida y vuelta, por debajo del 0,3 % un ciclo cerrado puede acabar en pérdida.',
   },
   tpMode: {
-    what: 'Cómo se cierra el ciclo al alcanzar el objetivo: con una orden limitada que espera colocada, o a mercado en cuanto se toca el precio.',
+    what: 'Cómo se cierra el ciclo al alcanzar el objetivo: con una orden limitada que espera colocada, o a mercado.',
     affects:
-      'Limitada cobra comisión de maker y es más barata, pero si el precio la roza y se va, el ciclo sigue abierto. A mercado garantiza el cierre y paga comisión de taker.',
-    tip: 'Limitada por defecto. A mercado solo si te ha pasado ver el objetivo tocado y el ciclo sin cerrar.',
+      'Limitada cobra comisión de maker y es más barata, pero si el precio la roza y se va, el ciclo sigue abierto. A mercado es una orden condicional: espera al objetivo y, al tocarlo, cruza el libro; cierra seguro, pero paga taker y algo de deslizamiento.',
+    tip: 'Limitada en pares líquidos; a mercado si prefieres garantizar el cierre aunque cueste algo más.',
   },
 } satisfies Record<string, OptionDoc>;

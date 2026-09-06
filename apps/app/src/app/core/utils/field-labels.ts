@@ -22,7 +22,9 @@ export const FIELD_LABELS: Record<string, string> = {
   'strategy.common.totalInvestmentHelp': 'Margen que este bot puede usar. No sale de tu cuenta.',
   'strategy.common.maxNotionalCap': 'Tope de exposición',
   'strategy.common.maxNotionalCapHelp':
-    'Tope duro: el motor no coloca nada que lo supere, pase lo que pase con el resto de ajustes.',
+    'Tope del valor de la posición. Solo Martingala y GridMart lo aplican al tender la escalera; ' +
+    'la rejilla clásica lo mira después de superarlo, y la rejilla neutral, el DCA y los market makers ' +
+    'no lo leen: usa el freno propio de cada estrategia.',
   'strategy.common.stopLossPct': 'Stop loss (%)',
   'strategy.common.maxDailyLossPct': 'Pérdida diaria máxima (%)',
   'strategy.common.cooldownMinutes': 'Espera entre ciclos (min)',
@@ -66,7 +68,8 @@ export const FIELD_LABELS: Record<string, string> = {
     'Tope de la posición neta. Alcanzado, solo quedan vivas las órdenes que la reducen. Sin él, crece hasta agotar el margen.',
   'strategy.neutral.reanchorOnDrift': 'Recentrar si se aleja',
   'strategy.neutral.reanchorOnDriftHelp':
-    'Solo avisa cuando el precio se aleja del ancla. El recentrado se lanza a mano, con «Recentrar la retícula».',
+    'Solo avisa cuando el precio se aleja del ancla. Para recentrar, edita el precio ancla: ' +
+    'el comando «Recentrar la retícula» no existe para esta estrategia.',
   'strategy.neutral.reanchorThresholdPct': 'Umbral para recentrar (%)',
 
   // DCA temporizado
@@ -186,10 +189,12 @@ export const FIELD_LABELS: Record<string, string> = {
     'La distancia sigue la anchura real del libro en vez de ser un número fijo.',
   'strategy.mm.referencePrice': 'Precio de referencia',
   'strategy.mm.referencePriceHelp':
-    'Ancla manual. Con esto puesto el bot cotiza alrededor de este precio y no del mercado.',
+    'Ancla manual. Con esto puesto el bot cotiza alrededor de este precio y no del mercado, la espera ' +
+    'tras un fill deja de actuar y nadie te avisa si el mercado se aleja del ancla: vigílalo tú.',
   'strategy.mm.positionMode': 'Modo de posición',
   'strategy.mm.positionModeHelp':
-    'Automático deja el de la cuenta. En cobertura una venta abre un corto en paralelo al largo en vez de reducirlo.',
+    'Automático deja el de la cuenta. En cobertura una venta abre un corto en paralelo al largo en vez ' +
+    'de reducirlo. Hoy el motor no llega a aplicar este ajuste en ningún venue: manda el modo de la cuenta.',
   'strategy.mm.direction': 'Dirección',
   'strategy.mm.priceFloor': 'No operar por debajo de',
   'strategy.mm.priceFloorHelp': 'Por debajo de este precio el bot solo reduce, no abre.',
@@ -259,7 +264,9 @@ export const FIELD_LABELS: Record<string, string> = {
   'strategy.mmv2.volatilityMultiplier': 'Multiplicador de volatilidad',
   'strategy.mmv2.volatilityMultiplierHelp': 'Cuánto de la volatilidad medida pasa al diferencial.',
   'strategy.mmv2.maxDynamicSpreadBps': 'Spread dinámico máximo',
-  'strategy.mmv2.maxDynamicSpreadBpsHelp': 'Techo duro: el bot no cotiza nunca más ancho que esto.',
+  'strategy.mmv2.maxDynamicSpreadBpsHelp':
+    'Techo del diferencial compuesto. Se aplica antes de los multiplicadores de nivel y de comportamiento, ' +
+    'así que solo es un techo duro con un nivel y comportamiento Equilibrado. Con 0 se desactiva.',
   'strategy.mmv2.useFullSizeUntilMax': 'Usar tamaño normal hasta el máximo',
   'strategy.mmv2.useFullSizeUntilMaxHelp':
     'Activado, la última capa se coloca entera o no se coloca; desactivado, se recorta al hueco.',
@@ -269,7 +276,8 @@ export const FIELD_LABELS: Record<string, string> = {
   'strategy.mmv2.layerSizeMultiplier': 'Multiplicador de tamaño por nivel',
   'strategy.mmv2.positionMode': 'Modo de posición',
   'strategy.mmv2.positionModeHelp':
-    'Automático deja el de la cuenta. En cobertura una venta abre un corto en paralelo al largo en vez de reducirlo.',
+    'Automático deja el de la cuenta. En cobertura una venta abre un corto en paralelo al largo en vez ' +
+    'de reducirlo. Hoy el motor no llega a aplicar este ajuste en ningún venue: manda el modo de la cuenta.',
   'strategy.mmv2.direction': 'Dirección',
   'strategy.mmv2.priceSource': 'Fuente de precio',
   'strategy.mmv2.priceSourceHelp':
@@ -289,7 +297,8 @@ export const FIELD_LABELS: Record<string, string> = {
   'strategy.mmv2.priceCeilingHelp': 'Por encima de este precio el bot solo reduce, no abre.',
   'strategy.mmv2.activationMode': 'Condición de activación',
   'strategy.mmv2.activationModeHelp':
-    'El bot no cotiza hasta que el precio cruce el disparador. Una vez armado, se queda armado.',
+    'El bot no cotiza hasta que el precio cruce el disparador. Una vez armado sigue cotizando mientras ' +
+    'dure el ciclo; hoy el armado se pierde al cerrarse un ciclo y puede volver a esperar.',
   'strategy.mmv2.activationPrice': 'Precio de disparo',
   'strategy.mmv2.activationPriceHelp': 'Precio que tiene que cruzarse para que el bot empiece.',
 };

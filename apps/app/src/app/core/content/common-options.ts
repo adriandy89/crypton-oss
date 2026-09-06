@@ -43,7 +43,7 @@ export const COMMON_OPTION_DOCS: Record<keyof CommonBotConfig, OptionDoc> = {
   positionMode: {
     what: 'Cómo cuenta el exchange una venta cuando ya tienes un largo abierto. En unidireccional la resta del largo; en cobertura abre un corto en paralelo.',
     affects:
-      'En cobertura el bot puede acabar pagando margen por dos posiciones opuestas a la vez, en vez de cerrar una con otra.',
+      'En cobertura el bot puede acabar pagando margen por dos posiciones opuestas a la vez, en vez de cerrar una con otra. Hoy el motor no llega a aplicar este ajuste en ningún venue: la cuenta se queda con el modo que ya tuviera.',
     tip: 'Deja Automático salvo que sepas exactamente por que quieres cobertura. No se puede cambiar después.',
   },
   totalInvestment: {
@@ -53,10 +53,10 @@ export const COMMON_OPTION_DOCS: Record<keyof CommonBotConfig, OptionDoc> = {
     tip: 'El mínimo es 10 USDC, pero el mínimo útil es más alto: cada orden suelta tiene que superar el mínimo del par, que también ronda los 10 USDC.',
   },
   maxNotionalCap: {
-    what: 'Tope duro del valor de la posición. El motor no coloca nada que lo supere, pase lo que pase con el resto de ajustes.',
+    what: 'Tope del valor de la posición. Solo Martingala y GridMart lo aplican al tender la escalera, cortándola en el escalón que lo superaría.',
     affects:
-      'Es la red que sobrevive a un error de calculo en cualquier otro parámetro. Alcanzado el tope, el bot deja de abrir y solo mantiene las salidas.',
-    tip: 'Ponlo por debajo de capital por apalancamiento si quieres un freno de verdad; por encima de esa cifra no llega a actuar nunca.',
+      'En la rejilla clásica actúa después de superarse (deja de abrir entradas nuevas, pero no recorta las compras ya colgadas). La rejilla neutral, el DCA temporizado y los market makers no lo leen: cada una tiene su propio freno.',
+    tip: 'En escaleras, ponlo por debajo de capital por apalancamiento si quieres recortar los últimos escalones. En el resto, usa el freno propio de la estrategia y deja este vacío.',
   },
   stopLossPct: {
     what: 'Pérdida máxima tolerada sobre el precio medio de entrada. Al tocarla, el bot cierra la posición.',
@@ -71,9 +71,9 @@ export const COMMON_OPTION_DOCS: Record<keyof CommonBotConfig, OptionDoc> = {
     tip: 'Útil sobre todo en las estrategias que promedian a la baja, donde un mal día encadena varias entradas.',
   },
   cooldownMinutes: {
-    what: 'Espera entre el final de un ciclo y el comienzo del siguiente.',
+    what: 'Espera entre el final de un ciclo y el comienzo del siguiente. Hoy solo la respetan Martingala y GridMart; la rejilla clásica, la neutral, el DCA y los market makers no lo leen.',
     affects:
-      'Con 0, el bot vuelve a abrir en cuanto cierra. Subiéndolo evitas que reentre en medio del mismo movimiento que acaba de cerrarle el ciclo.',
+      'Con 0, el bot vuelve a abrir en cuanto cierra. Subiéndolo evitas que reentre en medio del mismo movimiento que acaba de cerrarle el ciclo. Se puede cambiar en caliente: el valor vigente se aplica al cerrar el siguiente ciclo.',
     tip: 'Unos pocos minutos bastan para no reentrar en el mismo impulso.',
   },
   sizingMode: {

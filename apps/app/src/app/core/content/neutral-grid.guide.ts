@@ -66,13 +66,14 @@ export const NEUTRAL_GRID_GUIDE: StrategyGuide<NeutralGridConfig> = {
       setup: [
         { label: 'Precio ancla', value: '138' },
         { label: 'Rango', value: '115 - 165' },
-        { label: 'Niveles', value: '20' },
-        { label: 'Multiplicador de tamaño', value: '1,8' },
+        { label: 'Niveles', value: '12' },
+        { label: 'Multiplicador de tamaño', value: '1,5' },
         { label: 'Capital', value: '600 USDC' },
         { label: 'Espaciado', value: 'Geométrico' },
+        { label: 'Exposición máxima', value: '600 USDC' },
       ],
       outcome:
-        'Con multiplicador 1,8 las líneas pegadas al ancla mueven poco dinero y las de los extremos mucho: el bot apenas se mueve mientras SOL ronde los 138, y carga de verdad si se va a 115 o a 165. Es útil cuando esperas ruido en el centro y quieres reservar la munición para los extremos.',
+        'Con multiplicador 1,5 las líneas pegadas al ancla mueven poco dinero (23 USDC en 140) y las de los extremos mucho (263 USDC en 115, 175 en 165): el bot apenas se mueve mientras SOL ronde los 138, y carga de verdad si se va a 115 o a 165. Es útil cuando esperas ruido en el centro y quieres reservar la munición para los extremos. Con más niveles o más multiplicador las líneas del centro caen por debajo del mínimo del par y la app rechaza el bot.',
     },
   ],
   options: {
@@ -118,8 +119,8 @@ export const NEUTRAL_GRID_GUIDE: StrategyGuide<NeutralGridConfig> = {
     reanchorOnDrift: {
       what: 'Vigila cuánto se ha alejado el precio del ancla que fijaste.',
       affects:
-        'Hoy solo informa: cuando se pasa del umbral, el bot lo anota en su estado para que lo veas, pero NO mueve el ancla por su cuenta. El recentrado real se lanza a mano, con el comando Recentrar la retícula, en el menú del bot.',
-      tip: 'Actívalo si quieres el aviso, y recentra tú cuando lo veas. No esperes que lo haga solo.',
+        'Solo informa: cuando se pasa del umbral, el bot lo anota en su estado para que lo veas, pero NO mueve el ancla por su cuenta. Recentrar es editar el Precio ancla (en tibio); el comando Recentrar la retícula no existe para esta estrategia y el menú del bot no lo ofrece.',
+      tip: 'Actívalo si quieres el aviso, y recentra tú editando el ancla cuando lo veas.',
     },
     reanchorThresholdPct: {
       what: 'A qué porcentaje de distancia del ancla se considera que el precio se ha ido demasiado.',
@@ -133,10 +134,10 @@ export const NEUTRAL_GRID_GUIDE: StrategyGuide<NeutralGridConfig> = {
       tip: 'Configura Exposición máxima; deja este vacio salvo que quieras un segundo techo aún más bajo.',
     },
     direction: {
-      what: 'Hacia donde se inclina la retícula. En neutral cotiza igual a los dos lados del ancla.',
+      what: 'Hacia donde se inclina la retícula. Hoy el motor no lo lee al planificar: en neutral, largo o corto la retícula es la misma, compras bajo el ancla y ventas encima.',
       affects:
-        'En largo o corto la retícula sigue teniendo dos lados, pero el bot entiende que tu intención es acabar cargado en esa dirección. Neutral es lo que le da sentido a esta estrategia.',
-      tip: 'Neutral salvo que sepas por que quieres sesgarla. No se puede cambiar después.',
+        'Solo cambia la dirección con la que la vista previa estima la liquidación. No sesga ninguna orden. Neutral es lo que le da sentido a esta estrategia.',
+      tip: 'Déjalo en Neutral. No se puede cambiar después.',
     },
   },
 };

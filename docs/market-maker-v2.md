@@ -89,7 +89,12 @@ Si has puesto una **Condición de activación**, el bot **no coloca ni una orden
 
 > `Esperando a que el precio baje a 0.004.`
 
-**Una vez armado, se queda armado para siempre.** No vuelve a dormirse si el precio deshace el movimiento — sería apagar un bot que ya tiene inventario.
+**Una vez armado, se queda armado mientras dure el ciclo.** No vuelve a dormirse si el precio deshace el movimiento — sería apagar un bot que ya tiene inventario.
+
+> ⚠️ **Limitación conocida (F-62, abierta a 2026-09-06).** El armado se guarda en el ciclo, y **cada par
+> casado cierra un ciclo** (F-58): tras la primera vuelta completa, si el precio ha vuelto al otro lado
+> del disparador, el bot **se duerme otra vez**. **Hasta que se corrija:** usa la condición de activación
+> solo como arranque y quítala (en caliente) cuando el bot ya cotice. Ver §8.
 
 ### Paso 3 — ¿Toca recotizar?
 
@@ -301,7 +306,7 @@ Un bot preparado para arrancar solo cuando el precio llegue a donde tú quieres:
 | **Condición de activación** | **Cuando baje a** |
 | **Precio de disparo** | 2.600 (con ETH hoy a 3.000) |
 
-Hasta que ETH no toque 2.600, el bot no coloca ni una orden. En cuanto lo cruza, queda armado **para siempre** y empieza a cotizar.
+Hasta que ETH no toque 2.600, el bot no coloca ni una orden. En cuanto lo cruza, queda armado y empieza a cotizar (hoy, **hasta que cierre el primer ciclo**: F-62, §8).
 
 ### Checklist antes de arrancar
 
@@ -611,7 +616,7 @@ Por encima de este precio el bot **solo reduce, no abre**: desactiva el lado que
 
 **Sin condición** · **Cuando suba a** · **Cuando baje a**.
 
-Con una condición puesta, el bot **no coloca ni una orden** hasta que el precio cruce el disparador. **Una vez armado se queda armado**: no vuelve a dormirse si el precio deshace el movimiento — sería apagar un bot que ya tiene inventario.
+Con una condición puesta, el bot **no coloca ni una orden** hasta que el precio cruce el disparador. Una vez armado se queda armado **mientras dure el ciclo**: hoy el armado se pierde al cerrarse un ciclo, y como cada par casado cierra uno, el bot puede volver a dormirse tras su primera vuelta si el precio ha retrocedido (F-62, §8).
 
 #### Precio de disparo · `activationPrice` · 🔥 en caliente · obligatorio si hay condición
 
@@ -635,7 +640,41 @@ Es **en tibio** porque el venue puede rechazar el cambio con posición abierta y
 
 #### Modo de margen · `marginMode` · ❄️ en frío
 
-**Aislado**: el peor caso es el margen asignado a este bot, y la liquidación llega antes. **Cruzado**: liquidación más lejos, pero una posición perdedora puede arrastrar el saldo del resto de bots de esa cuenta.
+**Aislado**: el peor caso es el margen asignado a este bot, y la liquidación llega antes. **Cruzado**: liquidación más lejos, pero una posición perdedora puede arrastrar el saldo del resto de bots de esa cuenta. **La V2 viene en cruzado** de fábrica.
+
+### 5.10 Comunes que aplica el motor (o que no aplica nadie)
+
+#### Conexión de exchange · `exchangeAccountId` · ❄️ en frío
+
+La cuenta con la que opera (real, pruebas o simulación). El simulador es algo optimista para un market maker ([simulación y backtest](./simulacion-y-backtest.md#qué-hace-el-simulador-exactamente)); el backtest no reproduce refresco, espera ni volatilidad (F-65).
+
+#### Par · `symbol` · ❄️ en frío
+
+Fija tick, paso y mínimo. Con el preset Conservador el tamaño baja al 70 %: vigila el mínimo (F-57).
+
+#### Capital asignado · `totalInvestment` · 🌤️ en tibio · mínimo 10 · ⚠️ campo de riesgo
+
+**No dimensiona órdenes** (lo hacen Tamaño por compra/venta y Niveles). Es el denominador de la Pérdida diaria máxima y del kill-switch por caída.
+
+#### Tope de exposición · `maxNotionalCap` · 🔥 en caliente · opcional
+
+> ⚠️ **Esta estrategia lo ignora** (§4). El tope real es **Inversión / posición máxima**.
+
+#### Stop loss (%) · `stopLossPct` · 🔥 en caliente · 0,1–90 · ⚠️ campo de riesgo
+
+Orden condicional nativa sobre el precio medio, con la dirección del signo de la posición real ([riesgo §7](./riesgo-y-liquidacion.md#7-el-stop-loss)). Convive con la **Acción al alcanzar el límite**: el aplanado usa su propio id, así que «Cerrar todo» y «Apagar» salen aunque haya stop.
+
+#### Pérdida diaria máxima (%) · `maxDailyLossPct` · 🔥 en caliente · 0,1–100
+
+Pérdida realizada hoy por este bot, en % del capital asignado, a partir de la cual se pausa conservando el stop.
+
+#### Al acercarse la liquidación · `liquidationAction` · 🔥 en caliente · por defecto **Solo avisar** · ⚠️ campo de riesgo
+
+Solo avisar / Pausar el bot / Cerrar todo cuando la distancia a la liquidación baja del umbral de aviso.
+
+#### Espera entre ciclos (min) · `cooldownMinutes` · 🔥 en caliente · 0–10080 · por defecto **0**
+
+> ⚠️ **Sin efecto en esta estrategia** (§4). Usa **Espera tras un fill**.
 
 ---
 
@@ -681,3 +720,41 @@ En una línea:
 
 - **V1** → control directo y predecible del diferencial, menos mandos, tiene sesgo por inventario.
 - **V2** → el bot se adapta solo al ritmo del mercado y **garantiza que cada vuelta completa deja beneficio limpio después de comisiones** — siempre que le digas cuál es tu comisión.
+
+---
+
+## 8. Limitaciones conocidas (hallazgos abiertos)
+
+Confirmadas en `specs/001-revision-integral/findings.md`, abiertas a 2026-09-06. Además de las que la V2
+comparte con la V1 ([F-57, F-58, F-34, F-55/F-47](./market-maker.md#7-limitaciones-conocidas-hallazgos-abiertos)):
+
+> ⚠️ **Limitación conocida (F-60).** El **Spread dinámico máximo** se aplica al diferencial compuesto
+> **antes** de los multiplicadores de capa, de preset y de modo de riesgo (§2, paso 5): con techo 100 bps,
+> el preset Conservador cotiza a 150, el modo defensivo ×1,5, ambos 225, y tres niveles con multiplicador
+> 1,5 llegan a 337,5. Y `0` desactiva el techo en silencio. **Hasta que se corrija:** el techo solo es una
+> garantía dura con **1 nivel y preset Equilibrado**; no lo pongas a 0.
+
+> ⚠️ **Limitación conocida (F-15).** **Estimación de comisión** viene a **0** de fábrica: un bot creado a
+> mano cotiza «como si operar fuese gratis» y toda la garantía de beneficio queda en el Margen mínimo. El
+> asistente de creación sí pone 2 bps, así que un bot manual y uno del asistente no se comportan igual.
+> **Hasta que se corrija:** ponla siempre a tu comisión real.
+
+> ⚠️ **Limitación conocida (F-62).** El armado de la **Condición de activación** se pierde al cerrarse un
+> ciclo (cada par casado cierra uno): el bot puede dormirse tras su primera vuelta si el precio retrocedió.
+> **Hasta que se corrija:** quita la condición (en caliente) cuando el bot ya cotice.
+
+> ⚠️ **Limitación conocida (F-61).** La volatilidad se recalcula en cada revisión sobre la ventana podada
+> y **mueve los precios sin recotizar**: en las revisiones intermedias se cancelan y reponen todas las
+> capas; en tendencia, hasta el doble de churn del previsto.
+
+> ⚠️ **Limitación conocida (F-63).** Con **Usar tamaño normal hasta el máximo** desactivado (fábrica), el
+> recorte de la última capa al hueco disponible puede dejar restos por debajo del mínimo del par: un
+> `ORDER_UNVIABLE` cada 30 s y una capa que nunca sale. **Hasta que se corrija:** actívalo en pares con
+> mínimos altos.
+
+> ⚠️ **Limitación conocida (F-13).** «Distancia para reajustar precio» a 0 pasa la validación y recotiza
+> en cada revisión. **Hasta que se corrija:** no lo pongas a 0.
+
+> ⚠️ **Limitación conocida (F-64 / P-01).** Al copiar un bot del ranking a **otro par**, el «Símbolo de
+> origen alternativo» y los once campos de precio absoluto (piso, techo, disparo…) viajan intactos.
+> **Hasta que se corrija:** revísalos al copiar.

@@ -464,7 +464,7 @@ Si los dejas vacíos, ambos lados usan el **Valor máximo de la posición**.
 
 **Ancla manual.** Con esto puesto, el bot cotiza alrededor de **este precio** y no del mercado.
 
-⚠️ Congela el centro donde tú digas. Si el mercado se aleja del ancla, el bot se queda cotizando al aire, sin órdenes cerca del precio real. La app avisa pero no lo impide: puede ser deliberado (esperar a que el precio vuelva).
+⚠️ Congela el centro donde tú digas. Si el mercado se aleja del ancla, el bot se queda cotizando al aire, sin órdenes cerca del precio real. **La app no te avisa** de esa deriva (no existe ese aviso; ver F-67 en §7): puede ser deliberado (esperar a que el precio vuelva), pero tienes que vigilarlo tú. Además, con el ancla puesta la **Espera tras un fill no actúa** (F-15).
 
 **Consejo**: déjalo vacío salvo que sepas exactamente por qué lo quieres, y revísalo si el precio se mueve.
 
@@ -505,6 +505,40 @@ Es **en tibio** y no en caliente porque el venue puede rechazar el cambio con po
 
 **Consejo**: **Aislado** si quieres que el peor caso de este bot no toque a los demás.
 
+### 5.8 Comunes que aplica el motor (o que no aplica nadie)
+
+#### Conexión de exchange · `exchangeAccountId` · ❄️ en frío
+
+La cuenta con la que opera (real, pruebas o simulación). El simulador es algo optimista para un market maker: todo se ejecuta entero y sin cola ([simulación y backtest](./simulacion-y-backtest.md#qué-hace-el-simulador-exactamente)).
+
+#### Par · `symbol` · ❄️ en frío
+
+Fija tick, paso y mínimo. Con el perfil Conservador el tamaño baja al 70 %: vigila el mínimo.
+
+#### Capital asignado · `totalInvestment` · 🌤️ en tibio · mínimo 10 · ⚠️ campo de riesgo
+
+**No dimensiona órdenes** (lo hacen Tamaño por compra/venta y Capas). Es el denominador de la Pérdida diaria máxima y del kill-switch por caída, y lo que la API compara con tus límites al crear el bot.
+
+#### Tope de exposición · `maxNotionalCap` · 🔥 en caliente · opcional
+
+> ⚠️ **Esta estrategia lo ignora** (§4). El tope real es **Valor máximo de la posición**.
+
+#### Stop loss (%) · `stopLossPct` · 🔥 en caliente · 0,1–90 · ⚠️ campo de riesgo
+
+Orden condicional nativa sobre el precio medio, con la dirección del **signo de la posición real** ([riesgo §7](./riesgo-y-liquidacion.md#7-el-stop-loss)). Convive con la **Acción al alcanzar el límite**: el aplanado usa su propio id, así que «Cerrar todo» y «Apagar» salen aunque haya stop.
+
+#### Pérdida diaria máxima (%) · `maxDailyLossPct` · 🔥 en caliente · 0,1–100
+
+Pérdida realizada hoy por este bot, en % del capital asignado, a partir de la cual se pausa conservando el stop.
+
+#### Al acercarse la liquidación · `liquidationAction` · 🔥 en caliente · por defecto **Solo avisar** · ⚠️ campo de riesgo
+
+Solo avisar / Pausar el bot / Cerrar todo cuando la distancia a la liquidación baja del umbral de aviso.
+
+#### Espera entre ciclos (min) · `cooldownMinutes` · 🔥 en caliente · 0–10080 · por defecto **0**
+
+> ⚠️ **Sin efecto en esta estrategia** (§4). Usa **Espera tras un fill**.
+
 ---
 
 ## 6. ¿V1 o V2?
@@ -526,3 +560,37 @@ Es **en tibio** y no en caliente porque el venue puede rechazar el cambio con po
 **Elige la V1 si**: quieres control directo y predecible del diferencial, y prefieres menos mandos.
 
 **Elige la V2 si**: quieres que el bot se adapte solo al ritmo del mercado, y sobre todo si te importa **asegurar que cada vuelta completa deja beneficio limpio después de comisiones**.
+
+---
+
+## 7. Limitaciones conocidas (hallazgos abiertos)
+
+Confirmadas en `specs/001-revision-integral/findings.md`, abiertas a 2026-09-06. Cuando un hallazgo se
+cierre, su bloque desaparece de aquí.
+
+> ⚠️ **Limitación conocida (F-57).** La vista previa **no aplica el ×0,7 del perfil Conservador** al tamaño:
+> con un tamaño entre el mínimo del par y `mínimo / 0,7` (10 a 14,3 USDC), la vista previa dice «12 USDC» y
+> el bot manda 8,40: las dos caras se vetan y el bot no cotiza. **Hasta que se corrija:** tamaño por
+> compra/venta ≥ 15 USDC si el perfil es Conservador.
+
+> ⚠️ **Limitación conocida (F-58).** **Cada par casado cierra un ciclo**: al ejecutarse compra y venta, el
+> bot cambia todos los identificadores, cancela y recoloca **todas** las capas (pierde prioridad en el
+> libro y gasta cupo), y olvida la cotización, la espera tras ejecución y las muestras. **Hasta que se
+> corrija:** cuenta con más churn del que sugiere el intervalo de actualización, sobre todo en Lighter.
+
+> ⚠️ **Limitación conocida (F-59).** Los **Límites de inventario largo / corto** frenan **sin avisar**: con
+> el tope de un lado alcanzado no hay órdenes de ese lado, pero ni acción al límite, ni modo defensivo, ni
+> nota. **Hasta que se corrija:** si un lado desaparece del libro, mira estos dos campos.
+
+> ⚠️ **Limitación conocida (F-15).** Con **Precio de referencia** puesto, la **Espera tras un fill** nunca
+> se aplica. **Hasta que se corrija:** sin ancla manual si quieres la espera.
+
+> ⚠️ **Limitación conocida (F-67).** «La app avisa» si el mercado se aleja del Precio de referencia: **no
+> hay tal aviso**. Vigílalo tú.
+
+> ⚠️ **Limitación conocida (F-55 / F-47, Lighter).** En Lighter, **Mantener órdenes de salida durante** no
+> funciona (la caducidad por edad nunca dispara) y las órdenes a mercado del cierre pueden no cruzar.
+> **Hasta que se corrija:** no operes market makers en Lighter.
+
+> ⚠️ **Limitación conocida (F-34).** **Modo de posición** no llega a aplicarse en ningún venue (el motor
+> lo intenta y el adaptador no lo expone). Déjalo en Automático.

@@ -101,6 +101,7 @@ Todo cambio nace de un spec en `specs/NNN-slug/`. Lee `specs/README.md`: es la c
 - Un spec de revisión produce `findings.md`. Solo los hallazgos **Críticos confirmados** se corrigen dentro de él, con un test que falla primero y aprobación del usuario viendo el diff. El resto son specs nuevos.
 - Ningún cambio en `strategy-core`, `shared`, `exchange-core` o el motor sin test. Tras tocar `strategy-core` o `shared`, pasan también los tests de `worker` y `backtest` y el typecheck de la app.
 - Un commit por corrección, en la rama del spec. Sin `push` salvo que el usuario lo pida.
+- Las guías de `docs/` citan los hallazgos abiertos en bloques «Limitación conocida (F-NN)». El spec que cierre un `F-NN` hace `grep -rn "F-NN" docs/` y borra o reescribe sus bloques: una guía que sigue avisando de algo corregido es tan mala como una que no avisa.
 
 ## Reglas de seguridad para el agente
 
@@ -114,7 +115,7 @@ Todo cambio nace de un spec en `specs/NNN-slug/`. Lee `specs/README.md`: es la c
 ## Dónde leer más
 
 - `README.md`: puesta en marcha, estrategias, ajustes en caliente, comandos de ejecución y las pruebas recomendadas antes de poner dinero.
-- `docs/market-maker.md` y `docs/market-maker-v2.md`: las dos estrategias más complejas, paso a paso.
-- `apps/app/src/app/core/content/*.guide.ts`: las guías de cada estrategia tal como las ve el usuario.
+- `docs/README.md`: la guía de uso. Una guía por estrategia (las siete) con ejemplos verificados por `preview()` y sus limitaciones conocidas, más riesgo y liquidación, venues y mínimos, simulación y backtest, comandos y eventos, y las buenas prácticas de la casa.
+- `apps/app/src/app/core/content/*.guide.ts`: las guías de cada estrategia tal como las ve el usuario dentro de la app.
 - `docker/README.md`: por qué hay dos composes y qué no se puede hacer con ellos.
-- `specs/README.md` y su índice de specs: la revisión integral (001) con sus hallazgos, y los specs 002-007 con lo que se decidió en cada pantalla.
+- `specs/README.md` y su índice de specs: la revisión integral (001) con sus hallazgos, los specs 002-007 con lo que se decidió en cada pantalla, el 008 (la guía de uso) y los 009-011 (protecciones, comandos y margen).

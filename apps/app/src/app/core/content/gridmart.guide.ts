@@ -83,10 +83,10 @@ export const GRIDMART_GUIDE: StrategyGuide<GridMartConfig> = {
   options: {
     ...LADDER_OPTION_DOCS,
     takeProfitPct: {
-      what: 'Objetivo de beneficio heredado de la martingala, sobre el precio medio de la posición.',
+      what: 'Objetivo de beneficio heredado de la martingala, sobre el precio medio de la posición. En GridMart NO gobierna ninguna orden.',
       affects:
-        'En GridMart la salida cotidiana no es esta: el satélite sale por su propio objetivo y el núcleo se deshace por la rejilla de ventas. Este campo sigue formando parte de la configuración de la escalera y de las comprobaciones que la app hace antes de crear el bot.',
-      tip: 'El número que de verdad marca el ritmo de cierres es el Take profit satélite.',
+        'El satélite sale por su propio objetivo y el núcleo se deshace por la rejilla de ventas: el bot no coloca ningún take profit con este porcentaje. Sigue formando parte de las comprobaciones de la escalera antes de crear el bot, y la vista previa pinta con él una orden que el bot no llegará a colocar.',
+      tip: 'El número que de verdad marca el ritmo de cierres es el Take profit satélite. El Modo de take profit tampoco tiene efecto aquí: las salidas son siempre limitadas.',
     },
     classicMode: {
       what: 'Apaga la rejilla de ventas y las recompras. El bot se comporta como una martingala normal.',
