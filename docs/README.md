@@ -35,7 +35,7 @@ poco riesgo (configuraciones A/B/C con sus números, checklist, señales de alar
 |---|---|
 | [Buenas prácticas](./buenas-practicas.md) | El camino obligatorio, mínimos, apalancamiento, stop, funding, comisiones, cuándo no usar cada bot, bitácora, Lighter, checklist |
 | [Riesgo y liquidación](./riesgo-y-liquidacion.md) | Fórmula de liquidación, aislado/cruzado, semáforo 25/10 % y regla del 5 %, límites de la cuenta, guardas del motor, el stop-loss, peor caso por estrategia, funding |
-| [Venues y mínimos](./venues-y-minimos.md) | Cupos de peticiones, mínimos y retículas por venue, testnet frente a mainnet, límites de Lighter, qué hace el motor con una orden que no cumple |
+| [Venues y mínimos](./venues-y-minimos.md) | Cupos de peticiones, mínimos y retículas por venue, la credencial de cada venue y qué pasa cuando caduca, testnet frente a mainnet, límites de Lighter, qué hace el motor con una orden que no cumple |
 | [Simulación y backtest](./simulacion-y-backtest.md) | La cuenta «Simulación», qué simula y qué no, el backtest y sus nueve avisos |
 | [Comandos, guardas y eventos](./comandos-guardas-y-eventos.md) | Los trece comandos y qué conservan el stop, en caliente/tibio/frío, las guardas, los 36 eventos con qué hacer, la nota del bot |
 | [Market Maker V1](./market-maker.md) · [V2](./market-maker-v2.md) | Las dos guías de market making, con su comparativa |

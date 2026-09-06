@@ -32,9 +32,10 @@ const VENUE_HELP: Record<Venue, { title: string; steps: string[] }> = {
     title: 'API wallet de Hyperliquid',
     steps: [
       'Entra en app.hyperliquid.xyz con tu wallet (o en app.hyperliquid-testnet.xyz para testnet).',
-      'Ve a Mas → API y crea una API wallet (agent).',
-      'Copia la dirección de tu cuenta principal y la clave privada del agente.',
-      'La clave privada solo se muestra UNA vez: guardala antes de cerrar.',
+      'Ve a Mas → API, pon un nombre, pulsa Generate y luego Authorize API Wallet.',
+      'La clave privada solo se muestra UNA vez, al generarla: copiala antes de cerrar.',
+      'La direccion que se pide abajo es la de TU CUENTA (arriba a la derecha en Hyperliquid), NO la de la API wallet.',
+      'La API wallet caduca a los 90 dias, o 180 como maximo. Al vencer, los bots dejan de poder operar; tus fondos no se mueven.',
     ],
   },
   LIGHTER: {
@@ -121,6 +122,12 @@ export class ConnectExchangePage implements OnInit {
   readonly venue = signal<Venue>('HYPERLIQUID');
   readonly busy = signal(false);
   readonly seedWarning = signal(false);
+
+  /**
+   * Por que el venue no acepto la credencial. `null` = todavia no se ha
+   * intentado, o el ultimo intento fue bueno.
+   */
+  readonly rechazo = signal<string | null>(null);
 
   /** Mientras sea true, el formulario ni se muestra: primero, quién eres. */
   readonly necesitaReauth = signal(true);
@@ -276,7 +283,9 @@ export class ConnectExchangePage implements OnInit {
         this.necesitaReauth.set(true);
         return;
       }
-      await this.toast.error(errorText(e));
+      const motivo = errorText(e);
+      this.rechazo.set(motivo);
+      await this.toast.error(motivo);
     } finally {
       this.busy.set(false);
     }

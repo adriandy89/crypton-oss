@@ -352,16 +352,111 @@ export class HyperliquidAdapter implements ExchangeAdapter {
     });
   }
 
-  async verify(): Promise<{ ok: boolean; publicRef: string; detail?: string }> {
+  /**
+   * ¿Es esta credencial la que dice ser?
+   *
+   * Antes era UNA llamada a `clearinghouseState`, que es información PÚBLICA:
+   * acepta cualquier cosa con forma de dirección y devuelve un estado vacío sin
+   * error. Así que daba por buena —y la app sellaba en verde— la dirección de la
+   * propia API wallet, que no tiene saldo ni posiciones porque solo es un
+   * firmante delegado. El usuario veía «Verificada · 0,00 USDC disponibles» con
+   * 112 USDC dentro del exchange y ninguna pista de qué había hecho mal
+   * (spec 028).
+   *
+   * Lo que no se veía es lo que venía después: TODAS las lecturas salen de
+   * `addr()` —la dirección guardada— mientras las órdenes las resuelve el venue
+   * a partir de la FIRMA. Leer y escribir habrían apuntado a cuentas distintas,
+   * y un reconciliador que no ve sus propias órdenes no está protegido por la
+   * idempotencia del `clientOrderId` ni por la regla de no tocar lo `foreign`.
+   *
+   * Ahora se le preguntan al venue las dos cosas que sabe contestar y que hasta
+   * ahora no se le pedían: qué ES esa dirección (`userRole`) y qué agentes tiene
+   * autorizados (`extraAgents`). Las dos son lecturas públicas del endpoint de
+   * info; aquí no se firma nada, y la clave privada solo se usa en memoria para
+   * derivar su dirección y no aparece en ningún mensaje.
+   */
+  async verify(): Promise<{
+    ok: boolean;
+    publicRef: string;
+    detail?: string;
+    agentValidUntil?: number | null;
+  }> {
+    const cuenta = this.creds.accountAddress;
+    const no = (detail: string) => ({ ok: false, publicRef: cuenta, detail });
+
+    if (!this.creds.agentPrivateKey) {
+      return no('Falta la clave privada de la API wallet.');
+    }
+    let agente: string;
     try {
+      agente = new Wallet(this.creds.agentPrivateKey).address.toLowerCase();
+    } catch {
+      return no('La clave privada de la API wallet no es válida.');
+    }
+
+    try {
+      const rol = await this.call(
+        () => this.info.userRole({ user: this.addr() }),
+        hyperliquidWeight('userRole'),
+      );
+
+      // El caso del incidente. El venue nos dice a QUÉ cuenta pertenece el
+      // agente, así que el mensaje puede darle al usuario la dirección que
+      // debería haber pegado en vez de un «no se ha podido verificar».
+      if (rol.role === 'agent') {
+        return no(
+          'Esa es la dirección de una API wallet, no de una cuenta: una API wallet solo firma, ' +
+            `no tiene saldo. La dirección de tu cuenta es ${rol.data.user}.`,
+        );
+      }
+      // Operar una subcuenta o un vault exige mandar `vaultAddress` en cada
+      // orden, y el adaptador no lo hace: aceptar esto sería operar en la cuenta
+      // equivocada. Mejor negarse con el motivo que enterarse con dinero puesto.
+      if (rol.role === 'subAccount') {
+        return no(
+          'Esa es la dirección de una subcuenta de Hyperliquid y todavía no están soportadas: ' +
+            `usa la dirección de la cuenta principal (${rol.data.master}).`,
+        );
+      }
+      if (rol.role === 'vault') {
+        return no('Esa dirección es un vault de Hyperliquid, no una cuenta de usuario.');
+      }
+      if (rol.role === 'missing') {
+        return no(
+          `Hyperliquid no conoce esa dirección en ${this.isTestnet ? 'testnet' : 'la red real'}. ` +
+            'Comprueba que es la dirección de tu cuenta y que el depósito ya ha llegado.',
+        );
+      }
+
+      const autorizados = await this.call(
+        () => this.info.extraAgents({ user: this.addr() }),
+        hyperliquidWeight('extraAgents'),
+      );
+      // En minúsculas las dos: `extraAgents` las devuelve en checksum EIP-55 y
+      // una cuenta guardada hace tiempo puede traerla plana. Comparar tal cual
+      // rechazaría una credencial perfectamente válida.
+      const mio = autorizados.find((a) => a.address.toLowerCase() === agente);
+      if (!mio) {
+        return no(
+          `La API wallet de esa clave no está autorizada en ${cuenta}. Autorízala en Hyperliquid ` +
+            '(Más → API) o pega la clave de una que ya lo esté.',
+        );
+      }
+      // Una caducada no puede firmar: guardarla sería dejar al usuario con un
+      // bot que no coloca nada y un sello verde diciendo que todo va bien.
+      if (mio.validUntil !== null && mio.validUntil <= Date.now()) {
+        return no(
+          `Esa API wallet caducó el ${new Date(mio.validUntil).toISOString().slice(0, 10)}. ` +
+            'Autoriza una nueva en Hyperliquid (Más → API) y pega su clave.',
+        );
+      }
+
+      // Se mantiene: es la comprobación de que la cuenta responde de verdad y de
+      // que la red configurada es la que tiene los datos.
       await this.call(() => this.info.clearinghouseState({ user: this.addr() }));
-      return { ok: true, publicRef: this.creds.accountAddress };
+      return { ok: true, publicRef: cuenta, agentValidUntil: mio.validUntil };
     } catch (e) {
-      return {
-        ok: false,
-        publicRef: this.creds.accountAddress,
-        detail: toExchangeError(e, this.venue).message,
-      };
+      return { ok: false, publicRef: cuenta, detail: toExchangeError(e, this.venue).message };
     }
   }
 
@@ -390,14 +485,41 @@ export class HyperliquidAdapter implements ExchangeAdapter {
     const state = await this.clearinghouse();
     const total = D(state.marginSummary.accountValue);
     const used = D(state.marginSummary.totalMarginUsed);
-    return [
-      {
-        asset: 'USDC',
-        total: total.toFixed(),
-        available: D(state.withdrawable).toFixed(),
-        used: used.toFixed(),
-      },
-    ];
+    const balance: Balance = {
+      asset: 'USDC',
+      total: total.toFixed(),
+      available: D(state.withdrawable).toFixed(),
+      used: used.toFixed(),
+    };
+
+    // La cuenta de perpetuos a cero es el momento —y el unico— de mirar el otro
+    // bolsillo. Hyperliquid separa spot de perps y solo el segundo respalda una
+    // posicion, asi que quien tenga el deposito en spot ve un cero que no sabe
+    // explicar. Con equity, esta pregunta no se hace: seria una peticion de mas
+    // en cada lectura de saldo de cada bot vivo (spec 028).
+    if (total.isZero()) {
+      const spot = await this.spotUsdc();
+      if (spot && !D(spot).isZero()) balance.spot = D(spot).toFixed();
+    }
+    return [balance];
+  }
+
+  /**
+   * USDC en la cuenta de spot. `null` si no hay o si no se pudo leer.
+   *
+   * Se traga el error a proposito: esto es una pista para explicar un cero, y
+   * ninguna pista puede tumbar la lectura del saldo, que es el dato de verdad.
+   */
+  private async spotUsdc(): Promise<string | null> {
+    try {
+      const state = await this.call(
+        () => this.info.spotClearinghouseState({ user: this.addr() }),
+        hyperliquidWeight('spotClearinghouseState'),
+      );
+      return state.balances.find((b) => b.coin === 'USDC')?.total ?? null;
+    } catch {
+      return null;
+    }
   }
 
   async getPositions(symbol?: string): Promise<Position[]> {

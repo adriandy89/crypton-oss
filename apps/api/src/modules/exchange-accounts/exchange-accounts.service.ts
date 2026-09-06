@@ -33,6 +33,20 @@ export const PAPER_DEFAULT_BALANCE = '10000';
 const LIVE_BOT_STATUSES = ['STARTING', 'RUNNING', 'PAUSED', 'STOPPING'] as const;
 
 /**
+ * Epoch ms del venue → columna.
+ *
+ * `undefined` cuando el adaptador no dice nada —Aster y Lighter no tienen
+ * credencial que caduque— y `null` cuando dice explicitamente que esa firma no
+ * vence. La diferencia importa: `undefined` deja la columna como estaba y
+ * `null` la borra, y en un `update` de reverificacion eso es la diferencia entre
+ * conservar la fecha y perderla (spec 028).
+ */
+function fechaAgente(validUntil: number | null | undefined): Date | null | undefined {
+  if (validUntil === undefined) return undefined;
+  return validUntil === null ? null : new Date(validUntil);
+}
+
+/**
  * Alta, verificación y borrado de credenciales de exchange.
  *
  * Regla que atraviesa todo el servicio: el secreto entra por el DTO, se cifra
@@ -149,7 +163,7 @@ export class ExchangeAccountsService {
     // una red y guardar la otra daría por buena una credencial que no existe
     // donde va a operar.
     const adapter = this.adapterFor(credentials, false, false, testnet);
-    let verification: { ok: boolean; publicRef: string; detail?: string };
+    let verification: Awaited<ReturnType<ExchangeAdapter['verify']>>;
     try {
       verification = await adapter.verify();
     } finally {
@@ -170,6 +184,7 @@ export class ExchangeAccountsService {
         label: dto.label,
         status: AccountStatus.VERIFIED,
         public_ref: verification.publicRef,
+        agent_valid_until: fechaAgente(verification.agentValidUntil),
         enc_payload: sealed.encPayload,
         enc_dek: sealed.encDek,
         enc_iv: sealed.encIv,
@@ -348,6 +363,12 @@ export class ExchangeAccountsService {
           status: result.ok ? AccountStatus.VERIFIED : AccountStatus.ERROR,
           last_verified_at: result.ok ? new Date() : account.last_verified_at,
           last_error: result.ok ? null : (result.detail ?? 'Error desconocido'),
+          // Este boton es la via por la que la fecha se pone al dia: si el
+          // usuario reautoriza la API wallet en el exchange, el venue no nos
+          // avisa, asi que la unica manera de enterarse es volver a preguntar.
+          // Un fallo no la borra: la que habia sigue siendo la mejor que
+          // tenemos (spec 028).
+          agent_valid_until: result.ok ? fechaAgente(result.agentValidUntil) : undefined,
         },
       });
       return this.toPublic(updated);
@@ -532,6 +553,7 @@ export class ExchangeAccountsService {
     paper_balance: { toFixed: () => string } | null;
     last_verified_at: Date | null;
     last_error: string | null;
+    agent_valid_until: Date | null;
     created_at: Date;
   }) {
     return {
@@ -549,6 +571,9 @@ export class ExchangeAccountsService {
       paperBalance: account.paper_balance?.toFixed() ?? null,
       lastVerifiedAt: account.last_verified_at,
       lastError: account.last_error,
+      // Cuando caduca la firma delegada, si caduca. `null` en Aster, Lighter y
+      // simulacion: la app no pinta nada y no queda un hueco vacio (spec 028).
+      agentValidUntil: account.agent_valid_until,
       createdAt: account.created_at,
     };
   }

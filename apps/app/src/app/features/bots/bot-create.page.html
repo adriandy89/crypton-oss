@@ -246,6 +246,14 @@
         </ion-button>
       }
 
+      <!-- El capital de este paso se mide contra el saldo OPERABLE. Si es cero
+           porque el dinero esta en el otro bolsillo del venue, decirlo aqui
+           —donde el campo se queda en cero— y no solo en la pantalla de
+           conexiones. -->
+      @if (spotAviso(); as aviso) {
+        <ui-notice tone="warn">{{ aviso }}</ui-notice>
+      }
+
       @for (g of basicGroups(); track g.key) {
         @if (basicGroups().length > 1) {
           <h3 class="section">{{ g.title }}</h3>

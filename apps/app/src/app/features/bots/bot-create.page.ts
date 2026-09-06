@@ -354,6 +354,23 @@ export class BotCreatePage implements OnInit, OnDestroy {
   readonly available = computed(() => this.capital()?.available ?? null);
 
   /**
+   * El dinero que esta en el otro bolsillo del venue. '' = nada que decir.
+   *
+   * Hyperliquid separa spot de perpetuos y solo el segundo respalda posiciones,
+   * asi que se puede llegar a este paso con el deposito hecho y un saldo
+   * operable de cero. El campo de capital se queda entonces topado en cero sin
+   * ninguna causa visible (spec 028).
+   */
+  readonly spotAviso = computed(() => {
+    const spot = this.capital()?.spot;
+    if (!spot || spot === '0') return '';
+    return (
+      `Tienes ${money(spot)} ${this.capital()?.asset ?? 'USDC'} en la cuenta de spot del ` +
+      'exchange, que no respalda posiciones. Transfierelos a perpetuos para poder usarlos aqui.'
+    );
+  });
+
+  /**
    * Ultimo precio del par, como STRING.
    *
    * Es el ultimo negociado que trae el ticker: la app no recibe la marca en

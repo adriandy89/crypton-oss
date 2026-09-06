@@ -121,7 +121,63 @@ tus bots en Aster) y el bot no podría operar; usa Automático o Unidireccional.
 
 ---
 
-## 5. Testnet frente a mainnet
+## 5. La credencial: qué se pide, qué puede y qué caduca
+
+CRYPTON es **no custodial**: no pide una frase semilla ni una clave con permiso de retirada. Lo que
+se entrega es una **firma delegada**, y cada venue la llama de otra manera:
+
+| Venue | Qué se pide | ¿Puede retirar? | ¿Caduca? |
+|---|---|---|---|
+| Hyperliquid | **La dirección de tu cuenta** y la clave privada de una **API wallet** (*agent*) | No | **Sí**: 90 días por defecto, 180 como máximo |
+| Lighter | Índice de cuenta, índice de clave y la clave privada de la API | No | No |
+| Aster | Tu dirección, la del firmante y su clave privada | No | No |
+
+La credencial se verifica **contra la red que se va a guardar** antes de almacenarla: si no
+funciona, no se guarda. Y se comprueba de verdad —que la dirección es una cuenta y que la clave
+está autorizada en ella—, no solo que el venue conteste.
+
+### Hyperliquid: la dirección que se pide NO es la de la API wallet
+
+Es el error más fácil de cometer, porque las dos cosas son direcciones `0x…` y salen de la **misma**
+pantalla del exchange (*More → API*):
+
+- **Dirección de tu cuenta**: la que tiene el dinero. Es la que aparece arriba a la derecha en la
+  web de Hyperliquid y con la que depositaste.
+- **Clave privada de la API wallet**: la que Hyperliquid muestra **una sola vez**, al pulsar
+  *Generate*, antes de autorizarla firmando con tu wallet principal. La dirección de esa API wallet
+  no se pega en ningún sitio: CRYPTON la deriva de la clave.
+
+Si se pega la dirección de la API wallet, CRYPTON **rechaza la conexión y dice cuál es la dirección
+correcta** —el propio venue la devuelve—. Antes la aceptaba: la conexión quedaba guardada como
+verificada, con un saldo de cero, mientras el dinero estaba en el exchange. Ese fue el spec 028.
+
+Tampoco se aceptan la dirección de una **subcuenta** ni de un **vault**: sus órdenes necesitan un
+campo que el motor todavía no manda, así que acabarían en la cuenta principal.
+
+### Qué pasa cuando la API wallet caduca
+
+**No se pierde dinero.** Una API wallet no puede retirar ni transferir; los fondos siguen en tu
+cuenta del exchange, gobernados por tu wallet principal. Lo que se pierde es la capacidad de operar:
+
+- El venue deja de aceptar esa firma: los bots **no pueden colocar ni cancelar**.
+- Las posiciones abiertas y las órdenes ya puestas **siguen ahí** —incluido el stop-loss, que se
+  coloca como orden condicional nativa del venue justamente para sobrevivir a todo esto—, pero
+  **nadie las gestiona**. Ese es el riesgo real de una caducidad, y no el dinero.
+- Se arregla autorizando una API wallet nueva en el exchange y actualizando la credencial aquí.
+
+La ficha de la conexión enseña hasta cuándo vale y avisa cuando faltan **menos de 14 días**. Después
+de reautorizar en el exchange, *Reverificar* pone la fecha al día.
+
+### El dinero tiene que estar donde se opera
+
+Hyperliquid separa **spot** de **perpetuos**, y solo el segundo respalda una posición. Un depósito
+que se queda en spot se ve en el exchange pero no cuenta como capital aquí, porque lo que se enseña
+es el saldo **operable**. Cuando ese saldo es cero y hay USDC en spot, la ficha de la conexión y el
+asistente lo dicen: hay que transferirlo a perpetuos dentro del exchange.
+
+---
+
+## 6. Testnet frente a mainnet
 
 - La ficha del mercado es **otra** (mínimos, pasos, pares disponibles). Lighter testnet exige el doble de
   cantidad mínima en BTC.
@@ -133,7 +189,7 @@ tus bots en Aster) y el bot no podría operar; usa Automático o Unidireccional.
 
 ---
 
-## 6. Resumen por venue
+## 7. Resumen por venue
 
 | | Hyperliquid | Lighter | Aster |
 |---|---|---|---|

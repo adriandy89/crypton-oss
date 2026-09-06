@@ -340,6 +340,7 @@ export class BotsService implements OnModuleInit {
           at: null,
           stale: false,
           unavailable,
+          spot: null,
           position: null,
         };
       })
@@ -398,6 +399,8 @@ export class BotsService implements OnModuleInit {
         at: Date.now(),
         stale: false,
         unavailable: null,
+        // El simulador no tiene dos bolsillos: todo su capital es operable.
+        spot: null,
         position: null,
       };
     }
@@ -468,6 +471,7 @@ export class BotsService implements OnModuleInit {
       at: Date.now(),
       stale: false,
       unavailable: null,
+      spot: null,
       position,
     };
   }
@@ -566,6 +570,9 @@ export class BotsService implements OnModuleInit {
         at: Date.now(),
         stale: false,
         unavailable: null,
+        // Solo viene cuando el venue separa spot de perps Y el saldo operable
+        // es cero: es la explicacion de ese cero, no capital (spec 028).
+        spot: balance?.spot ?? null,
         position: positions.status === 'fulfilled' ? (positions.value[0] ?? null) : null,
       };
     } finally {

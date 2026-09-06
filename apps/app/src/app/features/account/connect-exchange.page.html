@@ -164,6 +164,20 @@
         }
       </ion-list>
 
+      <!--
+        El motivo del rechazo se queda EN LA PANTALLA, no solo en un toast de
+        seis segundos. Desde el spec 028 ese texto puede ser una instruccion
+        —«la direccion de tu cuenta es 0x…»— y una instruccion que se desvanece
+        mientras la lees no sirve de nada. El toast sigue saliendo: avisa; esto
+        se queda para poder actuar.
+      -->
+      @if (rechazo(); as motivo) {
+        <div class="danger">
+          <ion-icon name="alert-circle-outline" />
+          <div>{{ motivo }}</div>
+        </div>
+      }
+
       @if (seedWarning()) {
         <div class="danger">
           <ion-icon name="warning-outline" />

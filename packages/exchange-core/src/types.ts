@@ -130,8 +130,24 @@ export interface ExchangeAdapter {
    */
   readonly capabilities: VenueCapabilities;
 
-  /** Comprueba credenciales con una llamada de SOLO LECTURA. */
-  verify(): Promise<{ ok: boolean; publicRef: string; detail?: string }>;
+  /**
+   * Comprueba credenciales con llamadas de SOLO LECTURA.
+   *
+   * `detail` es el motivo del rechazo y llega TAL CUAL al usuario, asi que se
+   * escribe para el: que hizo mal y que tiene que hacer (spec 028).
+   *
+   * `agentValidUntil` es epoch ms de cuando caduca la firma delegada, `null` si
+   * no caduca y ausente en los venues cuyas credenciales no caducan (Aster y
+   * Lighter). Solo Hyperliquid lo rellena: sus API wallets duran 90 dias por
+   * defecto y 180 como maximo, y al vencer los bots dejan de poder colocar y
+   * cancelar con las posiciones todavia abiertas.
+   */
+  verify(): Promise<{
+    ok: boolean;
+    publicRef: string;
+    detail?: string;
+    agentValidUntil?: number | null;
+  }>;
 
   // ── Metadatos y estado ────────────────────────────────────────
   getMarkets(): Promise<MarketSpec[]>;

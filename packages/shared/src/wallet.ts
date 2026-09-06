@@ -45,6 +45,17 @@ export interface CapitalSnapshot {
    */
   unavailable: { reason: 'VENUE' | 'CREDENTIAL'; message: string } | null;
 
+  /**
+   * Del mismo activo, lo que hay en la cuenta de SPOT del venue. `null` cuando
+   * no hay nada ahi, no se sabe, o el venue no separa los dos bolsillos.
+   *
+   * NO es capital: no entra en `available` ni en ningun tope. Existe para poder
+   * explicar un cero. Un usuario conecto Hyperliquid con 112 USDC dentro, vio
+   * «0,00 USDC disponibles» y no tenia forma de saber si el problema era la
+   * credencial, el venue o donde estaba su dinero (spec 028).
+   */
+  spot: string | null;
+
   /** Posicion abierta en el simbolo pedido. `null` si no se pidio o esta plana. */
   position: Position | null;
 

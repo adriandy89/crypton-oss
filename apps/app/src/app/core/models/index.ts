@@ -88,6 +88,16 @@ export interface ExchangeAccount {
   paperBalance: string | null;
   lastVerifiedAt: string | null;
   lastError: string | null;
+  /**
+   * Cuando caduca la firma delegada. `null` = no caduca o no se sabe.
+   *
+   * Las API wallets de Hyperliquid duran 90 dias por defecto y 180 como maximo.
+   * Al vencer no se pierde nada de dinero —una API wallet no puede retirar ni
+   * transferir— pero los bots dejan de poder colocar y cancelar, y las
+   * posiciones abiertas se quedan sin nadie que las vigile. De ahi que la
+   * pantalla avise antes (spec 028).
+   */
+  agentValidUntil: string | null;
   createdAt: string;
 }
 

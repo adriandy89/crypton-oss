@@ -35,7 +35,7 @@ import {
   WalletService,
 } from '../../core/services';
 import type { ExchangeAccount } from '../../core/models';
-import { errorText, money, shortDate, venueLabel } from '../../core/utils';
+import { dayDate, errorText, money, shortDate, venueLabel } from '../../core/utils';
 import {
   UiBadgeComponent,
   UiCardComponent,
@@ -43,6 +43,15 @@ import {
   UiSectionComponent,
   UiSettingRowComponent,
 } from '../../shared/ui';
+
+/**
+ * Dias de antelacion con los que se avisa de que la firma delegada caduca.
+ *
+ * Dos semanas: bastante para que quepa un fin de semana, un viaje y el rato de
+ * entrar en el exchange a autorizar otra API wallet, y poco para que el aviso
+ * no se vuelva parte del mobiliario y se deje de leer.
+ */
+const AVISO_CADUCIDAD_DIAS = 14;
 
 @Component({
   selector: 'app-account',
@@ -120,10 +129,22 @@ import {
                 @if (balanceOf(a); as saldo) {
                   <p class="bal num">{{ saldo }}</p>
                 }
+                <!-- Un cero con explicacion. El venue tiene dos bolsillos y solo
+                     uno respalda posiciones: sin esto, «0,00 USDC disponibles»
+                     con el dinero dentro del exchange no se puede entender. -->
+                @if (spotAviso(a); as aviso) {
+                  <p class="avisa">{{ aviso }}</p>
+                }
                 @if (a.lastError) {
                   <p class="err">{{ a.lastError }}</p>
                 } @else if (a.lastVerifiedAt) {
                   <p>Verificada {{ shortDate(a.lastVerifiedAt) }}</p>
+                }
+                <!-- La firma delegada caduca, y hasta ahora eso no se decia en
+                     ninguna parte: el usuario se enteraba cuando su bot ya no
+                     colocaba nada. -->
+                @if (firma(a); as f) {
+                  <p [class.err]="f.grave" [class.avisa]="f.avisa">{{ f.texto }}</p>
                 }
               </div>
               @if (a.testnet) {
@@ -290,6 +311,7 @@ export class AccountPage implements OnInit {
   private readonly alerts = inject(AlertController);
 
   readonly shortDate = shortDate;
+  readonly dayDate = dayDate;
   readonly venueLabel = venueLabel;
 
   /** Iniciales para el avatar: dos letras como mucho, siempre algo que pintar. */
@@ -442,8 +464,67 @@ export class AccountPage implements OnInit {
     return `${money(snapshot.available)} ${snapshot.asset} disponibles`;
   }
 
+  /**
+   * El dinero que hay en el otro bolsillo del venue, si explica un cero.
+   *
+   * Solo sale cuando el saldo operable es cero y el venue ha dicho que hay algo
+   * en spot: es la respuesta a «he depositado y la app me dice que no tengo
+   * nada» (spec 028).
+   */
+  spotAviso(a: ExchangeAccount): string {
+    const snapshot = this.wallet.of(a.id);
+    if (!snapshot?.spot || snapshot.spot === '0') return '';
+    return (
+      `Tienes ${money(snapshot.spot)} ${snapshot.asset} en la cuenta de spot, que no respalda ` +
+      'posiciones: transfierelos a perpetuos en el exchange para que los bots puedan operar.'
+    );
+  }
+
   ok(a: ExchangeAccount): boolean {
     return a.status === 'VERIFIED' || a.status === 'ACTIVE';
+  }
+
+  /**
+   * Que decir de la firma delegada de esta conexion.
+   *
+   * `null` cuando no caduca —Aster y Lighter, y la simulacion— para no dejar un
+   * hueco vacio en su ficha. Cuando caduca se dice siempre la fecha, y cuando
+   * queda poco se explica QUE pasa: es la pregunta que hizo el usuario que
+   * motivo el spec 028 («la api expira en 180 dias, que pasa luego, pierdo el
+   * dinero?»). No se pierde: lo que se pierde es la capacidad de operar.
+   */
+  firma(a: ExchangeAccount): { texto: string; avisa: boolean; grave: boolean } | null {
+    if (!a.agentValidUntil) return null;
+    const vence = new Date(a.agentValidUntil).getTime();
+    if (!Number.isFinite(vence)) return null;
+
+    const dias = Math.floor((vence - Date.now()) / 86_400_000);
+    if (dias < 0) {
+      return {
+        texto:
+          `La API wallet caduco el ${dayDate(a.agentValidUntil)}: el exchange ya no acepta su ` +
+          'firma, asi que los bots no pueden colocar ni cancelar. Tus fondos siguen en tu cuenta. ' +
+          'Autoriza una API wallet nueva en el exchange y actualiza la credencial.',
+        avisa: false,
+        grave: true,
+      };
+    }
+    if (dias <= AVISO_CADUCIDAD_DIAS) {
+      return {
+        texto:
+          `La API wallet caduca el ${dayDate(a.agentValidUntil)} (en ${dias} d). Cuando venza, los ` +
+          'bots dejaran de poder colocar y cancelar y las posiciones abiertas se quedaran sin ' +
+          'vigilancia; el dinero no se mueve. Autoriza una nueva en el exchange y actualiza la ' +
+          'credencial.',
+        avisa: true,
+        grave: false,
+      };
+    }
+    return {
+      texto: `API wallet valida hasta el ${dayDate(a.agentValidUntil)}`,
+      avisa: false,
+      grave: false,
+    };
   }
 
   /** La referencia pública es larga: se muestra recortada por el centro. */

@@ -55,6 +55,19 @@ export function uptime(seconds: number): string {
   return `${m} min`;
 }
 
+/**
+ * Un dia con su ano: «5 mar 2027».
+ *
+ * `shortDate` omite el ano a proposito porque casi todo lo que pinta esta app
+ * paso hoy o ayer. La caducidad de una API wallet vence dentro de MESES, y
+ * «05/03, 01:00» ahi no dice nada: ni se sabe de que ano es ni la hora importa.
+ */
+export function dayDate(value: string | Date | null | undefined): string {
+  if (!value) return '—';
+  const d = typeof value === 'string' ? new Date(value) : value;
+  return d.toLocaleDateString('es-ES', { day: 'numeric', month: 'short', year: 'numeric' });
+}
+
 export function shortDate(value: string | Date | null | undefined): string {
   if (!value) return '—';
   const d = typeof value === 'string' ? new Date(value) : value;

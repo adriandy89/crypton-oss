@@ -126,6 +126,13 @@
     color: var(--pnl-down);
   }
 
+  /* La caducidad que ya aprieta. Ambar y no rojo a proposito: todavia no ha
+     pasado nada, y el rojo de esta ficha esta reservado a la credencial que ya
+     no sirve. */
+  .avisa {
+    color: var(--signal-warn);
+  }
+
   // El saldo se resalta sobre el resto de la ficha: es la unica cifra de esta
   // fila que cambia sola, y la razon por la que se entra a mirarla.
   .bal {

@@ -79,6 +79,16 @@ export interface Balance {
   available: string;
   /** Margen inmovilizado por posiciones y órdenes abiertas. */
   used: string;
+  /**
+   * Del MISMO activo, lo que está en la cuenta de SPOT y por tanto no respalda
+   * ninguna posición de perpetuos. Ausente si no se sabe o si es cero.
+   *
+   * No se suma nunca a `total` ni a `available`: es una PISTA para explicar un
+   * saldo operable de cero, no capital. Un usuario deposita, ve «0,00 USDC
+   * disponibles» y no tiene forma de saber que su dinero está en el otro
+   * bolsillo del mismo exchange (spec 028).
+   */
+  spot?: string;
 }
 
 export interface Position {

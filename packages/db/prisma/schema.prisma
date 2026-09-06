@@ -153,6 +153,18 @@ model ExchangeAccount {
   last_verified_at DateTime? @db.Timestamptz(6)
   last_error       String?   @db.Text
 
+  /// Cuando caduca la firma delegada, si caduca.
+  ///
+  /// Las API wallets de Hyperliquid duran 90 dias por defecto y 180 como
+  /// maximo. Al vencer, el venue deja de aceptar la firma: los bots no pueden
+  /// colocar ni cancelar y las posiciones abiertas se quedan sin vigilancia. No
+  /// se pierde dinero —un agente no puede retirar— pero hay que avisar ANTES, y
+  /// para eso la fecha tiene que estar aqui.
+  ///
+  /// La escribe el verify() del adaptador desde extraAgents. NULL = no se sabe, o la
+  /// credencial de ese venue no caduca (Aster y Lighter).
+  agent_valid_until DateTime? @db.Timestamptz(6)
+
   created_at DateTime  @default(now()) @db.Timestamptz(6)
   updated_at DateTime? @updatedAt @db.Timestamptz(6)
 
