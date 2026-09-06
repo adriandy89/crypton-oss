@@ -479,7 +479,18 @@ export class BotRunner {
     // que el adaptador sabe recibir.
     const positionMode = this.config.positionMode;
     if (positionMode && positionMode !== 'AUTO') {
-      if (adapter.setPositionMode) {
+      if (positionMode === 'HEDGE' && bot.venue === 'ASTER') {
+        // Vetado también aquí, no solo en validate(): un bot que ya tuviera
+        // cobertura guardada cambiaría al arrancar el modo de TODA la cuenta de
+        // Aster (afecta a todos sus bots) y cada orden recibiría -4061
+        // (001/F-71). Se avisa y se respeta el modo de la cuenta.
+        await this.event(
+          'POSITION_MODE_SKIPPED',
+          'WARN',
+          'El modo cobertura no se puede usar en Aster: cambiaría el modo de toda la cuenta y el bot ' +
+            'no podría operar. Se respeta el modo de la cuenta; pon el ajuste en Automático o Unidireccional.',
+        );
+      } else if (adapter.setPositionMode) {
         try {
           await adapter.setPositionMode(positionMode);
         } catch (e) {
@@ -1238,6 +1249,8 @@ export class BotRunner {
       const before = this.cycle.scratch.cycleSeq;
       this.cycle = await this.deps.store.applyFillToCycle(this.botId, this.cycle, ours, {
         recycleLevelOnExit: this.strategy.recycleLevelOnExit === true,
+        rebuysOffLevelIndexes: this.strategy.rebuysOffLevelIndexes === true,
+        keepCycleOnFlat: this.strategy.keepCycleOnFlat === true,
         trackMmStats: this.isMarketMaker,
         // De la configuración VIGENTE, no del scratch de la primera fila del
         // ciclo: es un campo HOT, y una recarga que no llega aquí se anuncia
@@ -1255,7 +1268,11 @@ export class BotRunner {
       if (this.strategy.onFill) {
         const ticker = this.lastTicker ?? (await this.currentTicker().catch(() => null));
         if (ticker) {
-          const ctx = this.buildContext(ticker, null, [], '0');
+          // Con la posición real: el contexto llegaba sin posición, sin órdenes
+          // y con saldo cero (001/F-17), y una memoria de estrategia que la
+          // mirase decidía sobre un bot plano que no lo era.
+          const posicion = await this.currentPosition().catch(() => null);
+          const ctx = this.buildContext(ticker, posicion, [], '0');
           this.cycle = this.strategy.onFill(ctx, ours, this.cycle);
           await this.deps.store.saveCycleScratch(this.botId, this.cycle.scratch);
         }
@@ -1754,6 +1771,7 @@ export class BotRunner {
         .abs()
         .toFixed(),
       this.strategy.recycleLevelOnExit === true,
+      this.strategy.rebuysOffLevelIndexes === true,
     );
     if (!repair) return;
 
@@ -2012,12 +2030,14 @@ export class BotRunner {
     // silencio sería igual de malo —quien eligió una fuente externa lo hizo
     // porque no se fía del mid local—, de ahí el aviso.
     if (!Object.values(PriceSource).includes(source)) {
+      // Con `catch`: `store.event` escribe en la base, y una promesa suelta que
+      // rechace tumba el worker entero con todos sus bots (001/F-07).
       void this.event(
         'FAIR_PRICE_UNAVAILABLE',
         'WARN',
         `La fuente de precio «${String(source)}» ya no existe: reconfigura el bot ` +
           'para elegir una de las disponibles.',
-      );
+      ).catch(() => undefined);
       return null;
     }
 
@@ -2026,7 +2046,7 @@ export class BotRunner {
         'FAIR_PRICE_UNAVAILABLE',
         'WARN',
         'Este worker no tiene feeds de precio externos activos: el bot no cotizará.',
-      );
+      ).catch(() => undefined);
       return null;
     }
     const req = this.fairFeedRequest();
@@ -2174,7 +2194,10 @@ export class BotRunner {
    */
   private async adjustMargin(payload: unknown): Promise<void> {
     const { adapter, bot } = this.deps;
-    const arg = payload as MarginAdjustment | undefined;
+    // `commandId` lo añade la bandeja al reclamar: viaja en el acuse para que la
+    // API sepa a qué petición corresponde y suba el capital asignado solo si el
+    // usuario lo pidió y el margen HA llegado (spec 011).
+    const arg = payload as (MarginAdjustment & { commandId?: string }) | undefined;
 
     if (!arg?.amount || !arg.action) {
       throw new Error('El ajuste de margen llegó sin importe o sin sentido.');
@@ -2215,6 +2238,7 @@ export class BotRunner {
       {
         amount: arg.amount,
         action: arg.action,
+        commandId: arg.commandId ?? null,
         liquidationBefore: before.liquidationPrice,
         liquidationAfter: after?.liquidationPrice ?? null,
         marginBefore: before.marginUsed,
@@ -2302,29 +2326,46 @@ export class BotRunner {
     const mark = await this.markPrice();
     const qty = D(position.qty);
     const seq = Number(this.cycle.scratch.cycleSeq ?? 0);
-    const ack = await this.place(
-      {
-        // Índice 999: no compite con ningún nivel de la escalera, así que un
-        // cierre manual nunca choca con el id de una orden de la estrategia.
-        //
-        // Con `makeCoid` y no a mano: aquí había una cuarta copia del prefijo
-        // del bot con su `slice(0, 8)`, que al ampliarse el prefijo habría
-        // generado ids de un formato distinto al del resto de órdenes.
-        clientOrderId: makeCoid(this.botId, seq, 'TAKE_PROFIT', 999),
-        levelKind: 'TAKE_PROFIT',
-        levelIndex: 999,
-        side: qty.gt(0) ? 'SELL' : 'BUY',
-        type: 'MARKET',
-        price: mark,
-        qty: qty.abs().toFixed(this.market.qtyDecimals),
-        reduceOnly: true,
-      },
-      motivo,
-      false,
-      // Cierre pedido a mano: no hay «espera al siguiente tick» que valga.
-      true,
-    );
-    return ack !== null;
+
+    // Aster acota las órdenes A MERCADO con `MARKET_LOT_SIZE`, siempre más
+    // estrecho que el tope de las límite (120 BTC frente a 1000): una posición
+    // mayor no se puede cerrar de una vez y el venue rechazaba la orden ENTERA,
+    // que el motor trataba como un fallo cualquiera (001/F-22). Se trocea en
+    // órdenes de como mucho ese tamaño; solo se llega aquí con posiciones de
+    // millones de dólares.
+    const tope = D(this.market.maxMarketQty ?? this.market.maxQty ?? 0);
+    let restante = qty.abs();
+    let todo = true;
+    for (let i = 0; restante.gt(0); i++) {
+      const parte = tope.gt(0) && restante.gt(tope) ? tope : restante;
+      const ack = await this.place(
+        {
+          // Índice 999 y hacia abajo, uno por trozo: no compiten con ningún
+          // nivel de la escalera, así que un cierre manual nunca choca con el id
+          // de una orden de la estrategia.
+          //
+          // Con `makeCoid` y no a mano: aquí había una cuarta copia del prefijo
+          // del bot con su `slice(0, 8)`, que al ampliarse el prefijo habría
+          // generado ids de un formato distinto al del resto de órdenes.
+          clientOrderId: makeCoid(this.botId, seq, 'TAKE_PROFIT', 999 - i),
+          levelKind: 'TAKE_PROFIT',
+          levelIndex: 999 - i,
+          side: qty.gt(0) ? 'SELL' : 'BUY',
+          type: 'MARKET',
+          price: mark,
+          qty: parte.toFixed(this.market.qtyDecimals),
+          reduceOnly: true,
+        },
+        motivo,
+        false,
+        // Cierre pedido a mano: no hay «espera al siguiente tick» que valga.
+        true,
+      );
+      if (ack === null) todo = false;
+      restante = restante.minus(parte);
+    }
+    // `false` si algún trozo no salió: la posición, o parte de ella, sigue abierta.
+    return todo;
   }
 
   private async snapshot(
@@ -2370,9 +2411,25 @@ export class BotRunner {
       await fn();
     } catch (e) {
       const err = e as ExchangeError;
+      // Estas dos NO se tragan: una credencial revocada o un castigo del venue
+      // en pleno reemplazo deben llegar a `onTickError` como llegan desde el
+      // camino de colocación. Convertidas en un WARN el bot seguía «vivo» con
+      // el lease renovándose, y un market maker que solo reemplaza no pasaba
+      // nunca por `toPlace` (001/F-06).
+      if (err.kind === 'AUTH' || err.kind === 'THROTTLED') throw e;
       // Cancelar algo que ya no existe es un no-op, no un error: pasa cada vez
-      // que una orden se ejecuta justo entre la lectura y la cancelación.
-      if (/not found|unknown order|does not exist/i.test(err.message)) return;
+      // que una orden se ejecuta justo entre la lectura y la cancelación. Cada
+      // venue lo dice a su manera; Lighter, con «given order is not an active
+      // order», «order is inactive», «order is empty» y «account is not owner
+      // of the order» (21600, 21715, 21709, 21708, 21707), que no casaban y
+      // producían un WARN por carrera y un tick sin reemplazo (001/F-51).
+      if (
+        /not found|unknown order|does not exist|not an active|is inactive|order is empty|not owner of the order/i.test(
+          err.message,
+        )
+      ) {
+        return;
+      }
       await this.event('ACTION_FAILED', 'WARN', `No se pudo ${accion} ${ref}: ${err.message}`);
     }
   }

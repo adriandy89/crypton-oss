@@ -142,6 +142,16 @@ export class LeaseService implements OnModuleInit, OnApplicationShutdown {
   }
 
   /**
+   * Quién tiene hoy el lease de un bot, o null si nadie. Lo usa la bandeja de
+   * comandos para no devolver a la cola un comando que otro worker VIVO sigue
+   * ejecutando (001/F-08). Si Redis no contesta, se propaga: mejor no recuperar
+   * nada en este barrido que recuperar de más.
+   */
+  async holder(botId: string): Promise<string | null> {
+    return this.client.get(leaseKey(botId));
+  }
+
+  /**
    * Cerrojo con caducidad para tareas que solo debe hacer UN worker.
    *
    * Vive aquí porque este servicio ya es el dueño de los cerrojos distribuidos
@@ -169,6 +179,15 @@ export class LeaseService implements OnModuleInit, OnApplicationShutdown {
 
   heldBots(): string[] {
     return [...this.held];
+  }
+
+  /**
+   * ¿Responde Redis ahora mismo? Sin él este proceso no puede sostener ni un
+   * lease: al cabo de un TTL suelta todos sus bots (`renewAll`). El healthcheck
+   * tiene que decirlo, aunque el worker tenga cero runners (001/F-18).
+   */
+  redisReady(): boolean {
+    return Boolean((this.client as { isReady?: boolean } | undefined)?.isReady);
   }
 
   get count(): number {

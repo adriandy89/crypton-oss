@@ -56,6 +56,7 @@ const FIELDS: readonly FieldMeta[] = [
     kind: 'enum',
     mutability: Mutability.WARM,
     labelKey: 'strategy.grid.spacing',
+    reshapes: true,
     helpKey: 'strategy.grid.spacingHelp',
     options: ['ARITHMETIC', 'GEOMETRIC'],
     required: true,
@@ -66,6 +67,7 @@ const FIELDS: readonly FieldMeta[] = [
     kind: 'enum',
     mutability: Mutability.WARM,
     labelKey: 'strategy.grid.sizingMode',
+    reshapes: true,
     helpKey: 'strategy.grid.sizingModeHelp',
     options: ['QUOTE', 'BASE'],
     required: true,
@@ -76,6 +78,7 @@ const FIELDS: readonly FieldMeta[] = [
     kind: 'price',
     mutability: Mutability.WARM,
     labelKey: 'strategy.grid.lowerPrice',
+    reshapes: true,
     required: true,
     risky: true,
   },
@@ -84,6 +87,7 @@ const FIELDS: readonly FieldMeta[] = [
     kind: 'price',
     mutability: Mutability.WARM,
     labelKey: 'strategy.grid.upperPrice',
+    reshapes: true,
     required: true,
     risky: true,
   },
@@ -92,6 +96,7 @@ const FIELDS: readonly FieldMeta[] = [
     kind: 'integer',
     mutability: Mutability.WARM,
     labelKey: 'strategy.grid.levels',
+    reshapes: true,
     helpKey: 'strategy.grid.levelsHelp',
     min: 3,
     max: 200,
@@ -238,7 +243,10 @@ export const gridClassic: Strategy<GridClassicConfig> = {
 
     if (cfg.preloadInventory) {
       issues.push(
-        warn('preloadInventory', 'Con precarga, el bot abre posición a mercado nada más arrancar.'),
+        warn(
+          'preloadInventory',
+          'La precarga de inventario no está implementada: el bot arranca en líquido y solo vende lo que compró en alguna línea.',
+        ),
       );
     }
     return toResult(issues);
@@ -267,8 +275,11 @@ export const gridClassic: Strategy<GridClassicConfig> = {
         price: p,
         qty,
         margin: perLevelMargin,
-        // Solo las líneas de entrada consumen margen y forman el precio medio.
-        isEntry: isEntryLine,
+        // TODAS las líneas cuentan para el peor caso: basta con que el precio
+        // suba por encima del rango y lo recorra entero hacia abajo para que
+        // cada una se compre. Contar solo las que hoy quedan del lado de la
+        // entrada enseñaba la mitad del margen comprometido (001/F-88).
+        isEntry: true,
       });
     });
 
@@ -278,6 +289,7 @@ export const gridClassic: Strategy<GridClassicConfig> = {
       refPrice,
       direction: cfg.direction,
       leverage: cfg.leverage,
+      marginMode: cfg.marginMode,
       issues: validation.issues,
     });
   },
@@ -308,19 +320,50 @@ export const gridClassic: Strategy<GridClassicConfig> = {
     // Fuera de rango con la guarda activada: se dejan de tender entradas nuevas,
     // pero las salidas del inventario que ya se compró SIGUEN vivas — cancelarlas
     // dejaría la posición sin contrapartida, que es justo lo que arruina un grid.
-    const acceptEntries = !(outOfRange && cfg.stopOnRangeExit !== false);
+    // Espera entre ciclos (001/F-12): tras cerrar un ciclo, sin entradas nuevas
+    // hasta `cooldownUntil`; las salidas del inventario siguen vivas.
+    const espera = ctx.cycle.cooldownUntil ?? 0;
+    const enEspera = espera > ctx.now;
+    const acceptEntries = !(outOfRange && cfg.stopOnRangeExit !== false) && !enEspera;
 
+    // En «Cantidad de moneda» el denominador es un precio de referencia FIJO
+    // por ciclo, memorizado en el primer plan. Con el mark de cada tick la
+    // cantidad de todas las líneas cambiaba con el precio y la retícula entera
+    // se cancelaba y recolocaba con cada movimiento apreciable (001/F-03). En
+    // «Importe» el denominador es el precio de la línea y esto no interviene.
+    const sizingRefRaw = ctx.cycle.scratch['sizingRef'];
+    const sizingRef = typeof sizingRefRaw === 'string' ? D(sizingRefRaw) : ref;
+    const scratchPatch =
+      cfg.sizingMode === 'BASE' && typeof sizingRefRaw !== 'string'
+        ? { sizingRef: ref.toFixed() }
+        : undefined;
+
+    // El tope acota lo que se TIENDE: notional ya abierto más el de las
+    // entradas que se dejan vivas, de la más cercana al precio hacia fuera, y
+    // en cuanto una no cabe se corta ahí (sin huecos en la retícula). Antes era
+    // una puerta binaria sobre la posición ya abierta: con posición cero se
+    // tendía la retícula entera y el tope actuaba después de superarse (001/F-87).
     const cap = cfg.maxNotionalCap ? D(cfg.maxNotionalCap) : null;
     const currentNotional = ctx.position ? D(ctx.position.qty).abs().mul(ref) : D(0);
-    const capReached = cap != null && cap.gt(0) && currentNotional.gte(cap);
+    const candidatas = prices
+      .map((p, i) => ({ p, i }))
+      .filter(({ p, i }) => !holding.has(i) && (isLong ? p.lt(ref) : p.gt(ref)))
+      .sort((a, b) => a.p.minus(ref).abs().cmp(b.p.minus(ref).abs()));
+    const admitidas = new Set<number>();
+    let proyectado = currentNotional;
+    for (const { p, i } of candidatas) {
+      const notional = p.mul(D(qy(ctx.market, levelQty(cfg, p, sizingRef))));
+      if (cap != null && cap.gt(0) && proyectado.plus(notional).gt(cap)) break;
+      proyectado = proyectado.plus(notional);
+      admitidas.add(i);
+    }
+    const capReached = candidatas.length > 0 && admitidas.size < candidatas.length;
 
     prices.forEach((p, i) => {
-      const qty = levelQty(cfg, p, ref);
+      const qty = levelQty(cfg, p, sizingRef);
       if (qty.lte(0)) return;
 
-      const isEntryLine = isLong ? p.lt(ref) : p.gt(ref);
-
-      if (!holding.has(i) && isEntryLine && acceptEntries && !capReached) {
+      if (!holding.has(i) && admitidas.has(i) && acceptEntries) {
         orders.push({
           clientOrderId: makeCoid(ctx.botId, seq, LevelKind.GRID_BUY, i),
           levelKind: LevelKind.GRID_BUY,
@@ -349,12 +392,20 @@ export const gridClassic: Strategy<GridClassicConfig> = {
     });
 
     let note: string | undefined;
-    if (outOfRange && !acceptEntries) {
+    if (enEspera) {
+      note =
+        'Espera entre ciclos: ' +
+        Math.ceil((espera - ctx.now) / 1000) +
+        ' s sin entradas nuevas, salidas activas.';
+    } else if (outOfRange && !acceptEntries) {
       note = 'Precio fuera del rango: sin entradas nuevas, salidas activas.';
-    } else if (capReached) {
+    } else if (capReached && admitidas.size === 0) {
       note = 'Tope de notional alcanzado: sin entradas nuevas.';
+    } else if (capReached) {
+      note =
+        'Tope de notional: ' + admitidas.size + ' de ' + candidatas.length + ' entradas tendidas.';
     }
 
-    return { orders, immediate, targetLeverage: cfg.leverage, note };
+    return { orders, immediate, targetLeverage: cfg.leverage, note, scratchPatch };
   },
 };

@@ -16,10 +16,25 @@ export const roundToTick = (price: Numeric, tick: Numeric): Decimal =>
 /**
  * Redondea el precio en la dirección CONSERVADORA para el lado dado: una compra
  * baja (paga menos y no cruza el libro sin querer), una venta sube.
+ *
+ * Con `maxSignificantDigits` (Hyperliquid: 5) se aplica además la regla de
+ * cifras significativas del venue, en la misma dirección. Los enteros se
+ * respetan siempre: «Integer prices are always allowed, regardless of the
+ * number of significant figures». Antes esta regla vivía solo en el adaptador
+ * (y redondeaba HALF_UP): la estrategia planificaba 1,00001 para un tick de
+ * 0,00001, el adaptador enviaba 1, y el reconciliador cancelaba y recolocaba
+ * la orden en cada tick (001/F-04).
  */
-export const roundPriceForSide = (price: Numeric, tick: Numeric, side: 'BUY' | 'SELL'): Decimal => {
+export const roundPriceForSide = (
+  price: Numeric,
+  tick: Numeric,
+  side: 'BUY' | 'SELL',
+  maxSignificantDigits?: number | null,
+): Decimal => {
   const mode = side === 'BUY' ? Decimal.ROUND_DOWN : Decimal.ROUND_UP;
-  return D(price).div(tick).toDecimalPlaces(0, mode).mul(tick);
+  const enReticula = D(price).div(tick).toDecimalPlaces(0, mode).mul(tick);
+  if (!maxSignificantDigits || enReticula.isInteger()) return enReticula;
+  return enReticula.toSignificantDigits(maxSignificantDigits, mode);
 };
 
 /**
@@ -48,7 +63,7 @@ export function normalizeOrder(
   side: 'BUY' | 'SELL',
 ): PrecisionResult {
   const violations: string[] = [];
-  const price = roundPriceForSide(rawPrice, market.tickSize, side);
+  const price = roundPriceForSide(rawPrice, market.tickSize, side, market.maxSignificantDigits);
   const qty = floorToStep(rawQty, market.stepSize);
 
   if (price.lte(0)) violations.push('El precio redondeado es cero o negativo.');

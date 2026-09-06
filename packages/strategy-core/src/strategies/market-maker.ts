@@ -459,6 +459,11 @@ export const marketMaker: Strategy<MarketMakerConfig> = {
   // Cada capa reutiliza su id en cada recotización; el propio plan decide
   // cuándo cotizar. Sin esto, una capa moría tras su primera ejecución.
   reusesOrderSlots: true,
+  // Quedar plano NO cierra el ciclo: para un market maker eso es el final de
+  // cada par casado, y cerrarlo cambiaba los ids (cancelar y reponer todas las
+  // capas), borraba la cotización vigente y anulaba la espera tras el fill que
+  // cierra el par (001/F-58). El ciclo es la vida del bot hasta que se para.
+  keepCycleOnFlat: true,
 
   defaults() {
     return {
@@ -570,6 +575,31 @@ export const marketMaker: Strategy<MarketMakerConfig> = {
         );
       }
     }
+
+    // Un tope por lado que no deja sitio ni a la cotización más pequeña mata
+    // ese lado en silencio: así llegaban los '0.40' del copy-trading
+    // (001/F-64). Cero o vacío significa «sin tope propio» y no se mira.
+    if (size.gt(0) && layers >= 1 && cfg.sizingMode !== SizingMode.BASE) {
+      const pesos = geometricWeights(layers, cfg.layerSizeMultiplier ?? 1);
+      const menor = size.mul(profileOf(cfg.riskProfile).size).mul(Decimal.min(...pesos));
+      for (const key of ['maxLongPosition', 'maxShortPosition'] as const) {
+        const tope = cfg[key] ? D(cfg[key]) : D(0);
+        if (tope.gt(0) && tope.lt(menor)) {
+          issues.push(
+            err(
+              key,
+              'El tope ' +
+                (key === 'maxLongPosition' ? 'largo' : 'corto') +
+                ' (' +
+                tope.toFixed(2) +
+                ') no deja sitio ni a la cotización más pequeña (' +
+                menor.toFixed(2) +
+                ').',
+            ),
+          );
+        }
+      }
+    }
     return toResult(issues);
   },
 
@@ -584,7 +614,10 @@ export const marketMaker: Strategy<MarketMakerConfig> = {
     const layers = Math.max(1, Math.floor(cfg.layers ?? 1));
     const sizeWeights = geometricWeights(layers, cfg.layerSizeMultiplier ?? 1);
     const distWeights = geometricWeights(layers, cfg.layerDistanceMultiplier ?? 1);
-    const size = D(cfg.orderSizePerSide ?? 0);
+    // El tamaño que se manda lleva el perfil (×0,7 en Conservador): sin él la
+    // vista previa enseñaba 12 USDC por capa donde el bot mandaba 8,40, por
+    // debajo del mínimo del par, y el bot no cotizaba nada (001/F-57).
+    const size = D(cfg.orderSizePerSide ?? 0).mul(profile.size);
     const lev = D(cfg.leverage);
 
     const levels: RawLevel[] = [];
@@ -630,6 +663,7 @@ export const marketMaker: Strategy<MarketMakerConfig> = {
       refPrice,
       direction: cfg.direction === 'SHORT' ? 'SHORT' : 'LONG',
       leverage: cfg.leverage,
+      marginMode: cfg.marginMode,
       issues: validation.issues,
     });
   },
@@ -648,7 +682,9 @@ export const marketMaker: Strategy<MarketMakerConfig> = {
     // prioridad en el libro y quema rate limit. Solo se mueve si toca por
     // tiempo o si el precio se ha ido más allá de la distancia mínima, que es
     // cuando la cotización vieja pasa a ser carne de arbitraje.
-    const refreshMs = Math.max(5, Math.floor(cfg.refreshSeconds ?? 30)) * 1000;
+    // Mismo suelo que `validate` (15 s, el ritmo del motor); el 5 de antes era
+    // una promesa que nadie ejecutaba (001/F-15).
+    const refreshMs = Math.max(15, Math.floor(cfg.refreshSeconds ?? 30)) * 1000;
     const quotedMidRaw = scratch['quotedMid'] as string | undefined;
     const quotedAt = Number(scratch['quotedAt'] ?? 0);
     const quotedMid = quotedMidRaw ? D(quotedMidRaw) : null;
@@ -664,7 +700,10 @@ export const marketMaker: Strategy<MarketMakerConfig> = {
     // vigente; si aún no hay ninguna, no hay nada que congelar.
     const cooldownMs = Math.max(0, Math.floor(cfg.fillCooldownSeconds ?? 0)) * 1000;
     const lastFillAt = ctx.cycle.lastEntryAt ?? 0;
-    const cooling = cooldownMs > 0 && quotedMid != null && ctx.now - lastFillAt < cooldownMs;
+    // Sin exigir `quotedMid`: con precio de referencia nunca se escribe y la
+    // espera no regía jamás (001/F-15). Con el ancla no hay cotización que
+    // congelar, pero sí caducidades que no renovar y una nota que lo diga.
+    const cooling = cooldownMs > 0 && lastFillAt > 0 && ctx.now - lastFillAt < cooldownMs;
 
     // Caducidad de las órdenes de salida. Va ANTES de decidir el refresco y con
     // el mismo conjunto que luego se deja de desear: si solo forzara recotizar,
@@ -700,15 +739,30 @@ export const marketMaker: Strategy<MarketMakerConfig> = {
     // ── Inventario, régimen de riesgo y topes ──
     const maxPos = D(cfg.maxBotPositionValue ?? 0);
     const inv = inventoryOf(ctx, mid, maxPos);
-    const longCap = cfg.maxLongPosition ? D(cfg.maxLongPosition) : maxPos;
-    const shortCap = cfg.maxShortPosition ? D(cfg.maxShortPosition) : maxPos;
+    // Un tope por lado a cero (o vacío) es «sin tope propio»: manda el general.
+    // Al copiar un bot a otro capital llegaba '0.00' y el lado moría (001/F-64).
+    const topeLado = (raw: string | null | undefined): Decimal => {
+      const v = raw ? D(raw) : D(0);
+      return v.gt(0) ? v : maxPos;
+    };
+    const longCap = topeLado(cfg.maxLongPosition);
+    const shortCap = topeLado(cfg.maxShortPosition);
 
     const regime = riskRegime(inv.loadPct, cfg.defensiveThresholdPct, cfg.highRiskThresholdPct);
     const regimeMul = REGIME_DISTANCE[regime];
     const band = priceBand(cfg, mid);
 
-    const atCap = maxPos.gt(0) && inv.exposure.abs().gte(maxPos);
+    // Los topes por lado cuentan como tope: antes solo dejaban de caber las
+    // capas, sin acción al límite, ni régimen, ni nota (001/F-59).
+    const atCapLong = inv.exposure.gt(0) && longCap.gt(0) && inv.exposure.gte(longCap);
+    const atCapShort = inv.exposure.lt(0) && shortCap.gt(0) && inv.exposure.abs().gte(shortCap);
+    const atCap = (maxPos.gt(0) && inv.exposure.abs().gte(maxPos)) || atCapLong || atCapShort;
     const breach = limitBreach(cfg, atCap, scratch);
+    const ladoTope = atCapLong
+      ? 'Tope largo alcanzado. '
+      : atCapShort
+        ? 'Tope corto alcanzado. '
+        : '';
 
     const profile = profileOf(cfg.riskProfile);
     const skewFactor =
@@ -848,7 +902,24 @@ export const marketMaker: Strategy<MarketMakerConfig> = {
       if (breach.shutdown) scratchPatch['requestStop'] = 'STOP_KEEP_POSITION';
     }
 
-    const note = buildNote(inv.exposure, inv.ratio, orders.length, regime, breach.note, cooling);
+    let note =
+      ladoTope + buildNote(inv.exposure, inv.ratio, orders.length, regime, breach.note, cooling);
+    // «La app avisa» si el mercado se aleja del ancla: no había tal aviso
+    // (001/F-67). Se avisa en la nota cuando la deriva supera el doble de la
+    // capa más lejana, que es cuando las cotizaciones quedan lejos del libro.
+    if (anchor) {
+      const lejana = Decimal.max(buyBase, sellBase)
+        .mul(distWeights[layers - 1])
+        .mul(profile.distance);
+      const deriva = liveMid.minus(anchor).div(anchor).mul(BPS).abs();
+      if (deriva.gt(lejana.mul(2))) {
+        note =
+          'Mercado a ' +
+          deriva.toFixed(0) +
+          ' bps del ancla: las cotizaciones quedan lejos del libro. ' +
+          note;
+      }
+    }
 
     return {
       orders,

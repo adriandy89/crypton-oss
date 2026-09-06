@@ -33,6 +33,13 @@ const MAX_BATCHES = 40;
  *   le importa a nadie, pero un RISK_GUARD_TRIPPED o un AUTH_ERROR son
  *   justamente lo que se va a mirar cuando algo salga mal.
  *
+ * · Los comandos EJECUTADOS se purgan (`RETENTION_COMMAND_DAYS`): cada comando
+ *   de usuario dejaba una fila para siempre (001/F-39). Los pendientes o
+ *   reclamados no se tocan.
+ *
+ * · `bot_config_revisions` NO se purga, a propósito: es el historial de cambios
+ *   de configuración y `bot.config_version` apunta a una de sus filas.
+ *
  * Corre detrás de un cerrojo porque `@Cron` dispara en TODAS las réplicas, y
  * varias purgando a la vez competirían por las mismas filas.
  */
@@ -53,10 +60,19 @@ export class RetentionService {
     const criticalDays = Number(this.config.get('RETENTION_CRITICAL_EVENT_DAYS', 365));
     const auditDays = Number(this.config.get('RETENTION_AUDIT_DAYS', 180));
     const portfolioDays = Number(this.config.get('RETENTION_PORTFOLIO_DAYS', 365));
+    const commandDays = Number(this.config.get('RETENTION_COMMAND_DAYS', 90));
     // Todas entran en la guarda: sin eso, un despliegue con las demás purgas
     // desactivadas se saltaría también la que quedara EN SILENCIO, y esa tabla
     // crecería sin techo sin que nada lo dijera.
-    if (snapshotDays <= 0 && eventDays <= 0 && auditDays <= 0 && portfolioDays <= 0) return;
+    if (
+      snapshotDays <= 0 &&
+      eventDays <= 0 &&
+      auditDays <= 0 &&
+      portfolioDays <= 0 &&
+      commandDays <= 0
+    ) {
+      return;
+    }
 
     if (!(await this.leases.tryLock('retention', LOCK_MS))) return;
 
@@ -67,9 +83,10 @@ export class RetentionService {
       // función, las filas viejas siguen teniendo que desaparecer.
       const audit = await this.purgeActivityLog(auditDays, criticalDays);
       const portfolio = await this.purgePortfolio(portfolioDays);
-      if (snapshots + events + audit + portfolio > 0) {
+      const commands = await this.purgeCommands(commandDays);
+      if (snapshots + events + audit + portfolio + commands > 0) {
         this.logger.log(
-          `Purga: ${snapshots} snapshot(s), ${events} evento(s), ${audit} registro(s) de actividad y ${portfolio} fila(s) de cartera.`,
+          `Purga: ${snapshots} snapshot(s), ${events} evento(s), ${audit} registro(s) de actividad, ${portfolio} fila(s) de cartera y ${commands} comando(s).`,
         );
       }
     } catch (e) {
@@ -128,6 +145,24 @@ export class RetentionService {
         DELETE FROM portfolio_snapshots
         WHERE id IN (
           SELECT id FROM portfolio_snapshots WHERE taken_at < ${cutoff} LIMIT ${BATCH}
+        )`,
+    );
+  }
+
+  /**
+   * Comandos EJECUTADOS antiguos. Los pendientes o reclamados no se tocan: son
+   * trabajo por hacer, no historial.
+   */
+  private async purgeCommands(days: number): Promise<number> {
+    if (days <= 0) return 0;
+    const cutoff = new Date(Date.now() - days * 86_400_000);
+    return this.deleteInBatches(
+      () => this.db.$executeRaw`
+        DELETE FROM bot_commands
+        WHERE id IN (
+          SELECT id FROM bot_commands
+          WHERE executed_at IS NOT NULL AND executed_at < ${cutoff}
+          LIMIT ${BATCH}
         )`,
     );
   }

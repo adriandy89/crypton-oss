@@ -84,10 +84,26 @@ export function sanitizeForShare(
  */
 export function expandFromShare(
   shared: SharedConfig,
-  input: { exchangeAccountId: string; symbol: string; totalInvestment: string },
+  input: {
+    exchangeAccountId: string;
+    symbol: string;
+    totalInvestment: string;
+    /** Par del autor: si difiere del destino, los precios absolutos no viajan. */
+    sourceSymbol?: string;
+  },
+  fields: readonly FieldMeta[] = [],
 ): BotConfig {
   const total = D(input.totalInvestment);
-  const config: Record<string, unknown> = { ...shared.params };
+  // Los precios absolutos (piso, techo, disparo, ancla, rango) y el símbolo de
+  // origen alternativo son del PAR del autor: copiados a otro par anclaban al
+  // copiador al símbolo ajeno y le ponían un piso de BTC a ETH (001/F-64).
+  const otroPar = input.sourceSymbol != null && input.sourceSymbol !== input.symbol;
+  const kindOf = new Map(fields.map((f) => [f.key, f.kind]));
+  const config: Record<string, unknown> = {};
+  for (const [key, value] of Object.entries(shared.params)) {
+    if (otroPar && (kindOf.get(key) === 'price' || key === 'sourceSymbolOverride')) continue;
+    config[key] = value;
+  }
 
   for (const [key, ratio] of Object.entries(shared.ratios)) {
     const amount = total.mul(ratio);

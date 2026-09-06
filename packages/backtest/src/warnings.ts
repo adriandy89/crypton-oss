@@ -1,4 +1,9 @@
-import type { BacktestSource, CandleInterval } from '@crypton/shared';
+import {
+  StrategyKind,
+  candleSpanMs,
+  type BacktestSource,
+  type CandleInterval,
+} from '@crypton/shared';
 
 /**
  * Los límites del backtest, redactados para que los lea el administrador.
@@ -12,6 +17,9 @@ export function fidelityWarnings(opts: {
   sourceSymbol: string;
   interval: CandleInterval;
   venue: string;
+  /** Con la estrategia y su configuración, los avisos propios de cada una. */
+  strategy?: StrategyKind;
+  config?: Record<string, unknown>;
 }): string[] {
   const avisos = [
     // 1. La hipótesis más gorda, y la que más engaña en velas largas.
@@ -44,9 +52,13 @@ export function fidelityWarnings(opts: {
     'La ficha del mercado (tick, paso y mínimo notional) es la de HOY, no la que ' +
       'regía durante el periodo reproducido.',
 
-    // 7. Las guardas que no se pueden reconstruir sin las otras posiciones.
-    'Guardas de cuenta no simuladas: la pérdida diaria global y el notional total ' +
-      'del usuario dependen de sus OTROS bots, que aquí no existen.',
+    // 7. Las guardas de riesgo. Decía «guardas de cuenta» y sugería que las del
+    //    bot sí estaban: no lo están (001/F-65). Solo el stop-loss (orden
+    //    condicional) y la liquidación del simulador existen aquí.
+    'Guardas de riesgo no simuladas: ni las de cuenta (pérdida diaria global y notional ' +
+      'total, que dependen de tus OTROS bots) ni las del bot (pérdida diaria máxima, ' +
+      'kill-switch, acción al acercarse la liquidación). En el replay solo existen el ' +
+      'stop-loss y la liquidación.',
 
     // 8. Hueco que comparte con el modo simulación actual; se declara, no se oculta.
     'El margen retenido por las órdenes en reposo no se descuenta del saldo ' +
@@ -56,6 +68,26 @@ export function fidelityWarnings(opts: {
     'Compara siempre contra comprar y mantener: un +8 % en un mercado que subió un ' +
       '40 % no es un buen resultado.',
   ];
+
+  // Los market makers son los que más pierden con «un plan() por vela»: todo lo
+  // que los define ocurre entre velas, y aquí no ocurre (001/F-65).
+  const esMarketMaker =
+    opts.strategy === StrategyKind.MARKET_MAKER || opts.strategy === StrategyKind.MARKET_MAKER_V2;
+  if (esMarketMaker) {
+    avisos.push(
+      'Market maker: se recotiza UNA vez por vela, no cada quince segundos. El intervalo de ' +
+        'actualización, la espera tras ejecución y la ventana de volatilidad no se reproducen, ' +
+        'y el precio de referencia externo es la propia serie de velas.',
+    );
+    const maxAge = Number(opts.config?.['orderMaxAgeSeconds'] ?? 0);
+    const velaSeg = candleSpanMs(opts.interval) / 1000;
+    if (maxAge > 0 && maxAge < velaSeg) {
+      avisos.push(
+        `«Actualizar órdenes después de» (${maxAge} s) es menor que la vela (${velaSeg} s): las ` +
+          'cotizaciones caducan en cada vela y el bot cotiza en vela alterna.',
+      );
+    }
+  }
 
   return avisos;
 }

@@ -2,6 +2,7 @@ import { Observable, Subject } from 'rxjs';
 import { Wallet } from 'ethers';
 import {
   D,
+  Decimal,
   ExchangeError,
   firstNum,
   OrderStatus,
@@ -34,7 +35,7 @@ import { endpointsFor } from '../endpoints';
 import { isRetryable, messageOf, toExchangeError } from '../errors';
 import { MarketSpecCache, canonicalSymbol, decimalsOf } from '../market-cache';
 import { RateLimiter, withRetry, withWriteRetry } from '../rate-limit';
-import { NO_BUDGET, type VenueBudget } from '../venue-budget';
+import { NO_BUDGET, type BudgetPriority, type VenueBudget } from '../venue-budget';
 import { asterWeight } from '../venue-weights';
 import { VenueCooldown } from '../cooldown';
 import { ReconnectingSocket, sharedStream } from '../ws';
@@ -47,6 +48,42 @@ import type {
 } from '../types';
 
 type AsterCreds = Extract<VenueCredentials, { venue: 'ASTER' }>;
+
+/**
+ * Nonce en microsegundos, estrictamente creciente y COMPARTIDO por todos los
+ * adaptadores de Aster del proceso.
+ *
+ * Aster guarda los últimos nonces por dirección de agente y rechaza repetidos y
+ * los que se salen de una ventana de diez segundos. Tres cosas fallaban
+ * (001/F-38, F-69, F-75): el contador vivía por instancia y a cero en cada
+ * segundo nuevo, así que la API —que crea un adaptador por petición— y el
+ * worker generaban el mismo nonce en el mismo segundo; un salto del reloj hacia
+ * atrás volvía a un segundo ya usado; y el nonce se calculaba al firmar, antes
+ * de la cola, con lo que ochenta peticiones encoladas salían con nonces de hace
+ * más de diez segundos. Ahora: milisegundos reales × 1000 más un desplazamiento
+ * aleatorio por proceso dentro del milisegundo, nunca menor que el anterior más
+ * uno, y se genera al enviar (ver `signedRequest`). Entre procesos la colisión
+ * pasa a ser improbable (mismo milisegundo y mismo desplazamiento); eliminarla
+ * del todo exigiría compartir el nonce por `signer`, y queda anotado en F-69.
+ */
+/**
+ * Desvío máximo tolerado entre el reloj local y el de Aster al verificar una
+ * credencial. La ventana de firma del venue es de ±60 s; a partir de veinte se
+ * avisa, porque con esa deriva un salto de NTP o una hora de carga bastan para
+ * empezar a perder peticiones.
+ */
+const CLOCK_DRIFT_MAX_MS = 20_000;
+
+/** Ventana máxima de `userTrades` (siete días menos un minuto de margen). */
+const USER_TRADES_MAX_WINDOW_MS = 7 * 24 * 60 * 60_000 - 60_000;
+
+const NONCE_OFFSET = Math.floor(Math.random() * 1000);
+let lastNonce = 0;
+export function nextAsterNonce(): string {
+  const candidate = Date.now() * 1000 + NONCE_OFFSET;
+  lastNonce = Math.max(lastNonce + 1, candidate);
+  return String(lastNonce);
+}
 
 /**
  * Las URLs de las dos redes viven en `VENUE_ENDPOINTS` (`../endpoints`).
@@ -162,10 +199,6 @@ export class AsterAdapter implements ExchangeAdapter {
    */
   private readonly closed$ = new Subject<void>();
 
-  /** Contador monótono: dos órdenes en el mismo microsegundo romperían el nonce. */
-  private lastNonceSecond = 0;
-  private nonceCounter = 0;
-
   constructor(
     private readonly creds: AsterCreds,
     opts: AdapterOptions = {},
@@ -201,25 +234,6 @@ export class AsterAdapter implements ExchangeAdapter {
   // ═══════════════════════════════════════════════════════════════
 
   /**
-   * Nonce en microsegundos, estrictamente creciente.
-   *
-   * Aster mantiene los últimos 100 nonces POR DIRECCIÓN DE AGENTE y rechaza
-   * repetidos. Como el motor puede mandar varias órdenes en el mismo
-   * milisegundo, no basta con `Date.now() * 1000`: se lleva un contador dentro
-   * del segundo, igual que hace el ejemplo oficial.
-   */
-  private nextNonce(): string {
-    const second = Math.floor(Date.now() / 1000);
-    if (second === this.lastNonceSecond) {
-      this.nonceCounter += 1;
-    } else {
-      this.lastNonceSecond = second;
-      this.nonceCounter = 0;
-    }
-    return String(second * 1_000_000 + this.nonceCounter);
-  }
-
-  /**
    * Firma EIP-712 sobre la cadena URL-encoded de los parámetros.
    *
    * El ORDEN importa y no es alfabético: se firma exactamente la misma cadena
@@ -234,7 +248,7 @@ export class AsterAdapter implements ExchangeAdapter {
       if (v === undefined || v === null || v === '') continue;
       ordered.append(k, String(v));
     }
-    ordered.append('nonce', this.nextNonce());
+    ordered.append('nonce', nextAsterNonce());
     ordered.append('user', this.creds.userAddress);
     ordered.append('signer', this.creds.signerAddress);
 
@@ -247,9 +261,19 @@ export class AsterAdapter implements ExchangeAdapter {
     method: 'GET' | 'POST' | 'PUT' | 'DELETE',
     path: string,
     params: Record<string, string | number | boolean> = {},
+    // Las cancelaciones, el apalancamiento y el modo de posición iban por el
+    // cupo de lectura: un pánico competía con las lecturas de los demás bots
+    // (001/F-10). Con `write` entran hasta el fondo de la reserva.
+    priority: BudgetPriority = 'read',
   ): Promise<T> {
-    const query = await this.signedQuery(params);
-    return this.call<T>(() => this.http<T>(method, path + '?' + query), asterWeight(path, params));
+    // Se firma DENTRO de la cola, no antes: el nonce nace al enviar, con lo que
+    // ni la espera del presupuesto ni la del limitador pueden dejarlo fuera de
+    // la ventana del venue (001/F-75). Cada reintento vuelve a firmar.
+    return this.call<T>(
+      async () => this.http<T>(method, path + '?' + (await this.signedQuery(params))),
+      asterWeight(path, params),
+      priority,
+    );
   }
 
   /**
@@ -262,13 +286,17 @@ export class AsterAdapter implements ExchangeAdapter {
     path: string,
     params: Record<string, string | number | boolean> = {},
   ): Promise<T> {
-    const query = await this.signedQuery(params);
     // Reserva de escritura: una avalancha de lecturas no puede dejar sin caudal
-    // a la cancelación de un pánico.
+    // a la cancelación de un pánico. Y se firma dentro de la cola, como en
+    // `signedRequest`: el nonce nace al enviar.
     this.cooldown.comprobar();
     await this.budget.take(this.venue, 1, 'write', this.testnet);
+    // Colocar una orden consume además el cupo de ÓRDENES (1200/min y 300/10 s),
+    // que el peso no modela (001/F-24). Solo las órdenes: el margen y el
+    // apalancamiento cuentan peso, no órdenes.
+    if (path === '/fapi/v3/order') await this.budget.takeOrders?.(this.venue, 1, this.testnet);
     return this.limiter
-      .run(() => this.http<T>(method, path + '?' + query))
+      .run(async () => this.http<T>(method, path + '?' + (await this.signedQuery(params))))
       .catch((e) => {
         this.cooldown.registrar(e);
         throw e;
@@ -297,6 +325,12 @@ export class AsterAdapter implements ExchangeAdapter {
       },
     });
     const text = await res.text();
+    // Realimentación del presupuesto con lo que el venue dice haber contado:
+    // «Every request will contain X-MBX-USED-WEIGHT-…» y «Every order response
+    // will contain a X-MBX-ORDER-COUNT-…». Se ignoraban, y el presupuesto local
+    // iba a ciegas frente a la API y a cualquier otro cliente de la misma IP
+    // (001/F-76).
+    this.observarCabeceras(res.headers);
     let body: unknown;
     try {
       body = text ? JSON.parse(text) : {};
@@ -328,11 +362,32 @@ export class AsterAdapter implements ExchangeAdapter {
    * Tenía un valor por defecto de 2 y ese defecto se aplicaba a todo: también a
    * `ticker/24hr` sin símbolo, que pesa **40** y lo pide un cron cada 30 s.
    */
-  private call<T>(fn: () => Promise<T>, weight: number): Promise<T> {
+  private observarCabeceras(
+    headers: { get(name: string): string | null } | null | undefined,
+  ): void {
+    if (!headers || typeof headers.get !== 'function') return;
+    const leer = (name: string): number | undefined => {
+      const v = Number(headers.get(name));
+      return Number.isFinite(v) && headers.get(name) != null ? v : undefined;
+    };
+    const lectura = {
+      usedWeightPerMinute: leer('x-mbx-used-weight-1m'),
+      ordersPerMinute: leer('x-mbx-order-count-1m'),
+      ordersPer10s: leer('x-mbx-order-count-10s'),
+    };
+    if (Object.values(lectura).every((v) => v === undefined)) return;
+    this.budget.observe?.(this.venue, this.testnet, lectura);
+  }
+
+  private call<T>(
+    fn: () => Promise<T>,
+    weight: number,
+    priority: BudgetPriority = 'read',
+  ): Promise<T> {
     return withRetry(
       async () => {
         this.cooldown.comprobar();
-        await this.budget.take(this.venue, weight, 'read', this.testnet);
+        await this.budget.take(this.venue, weight, priority, this.testnet);
         return this.limiter.run(fn).catch((e) => {
           this.cooldown.registrar(e);
           throw e;
@@ -353,6 +408,11 @@ export class AsterAdapter implements ExchangeAdapter {
       .map((s) => {
         const price = s.filters.find((f) => f.filterType === 'PRICE_FILTER');
         const lot = s.filters.find((f) => f.filterType === 'LOT_SIZE');
+        // Las órdenes a mercado tienen su propio tope, y en Aster es SIEMPRE
+        // menor que el de las límite (sonda del spec 001, F-22: 572 de 572
+        // símbolos). Sin leerlo, un cierre a mercado mayor que ese tope lo
+        // rechazaba el venue entero.
+        const marketLot = s.filters.find((f) => f.filterType === 'MARKET_LOT_SIZE');
         const notional = s.filters.find((f) => f.filterType === 'MIN_NOTIONAL');
         const tickSize = price?.tickSize ?? '0.01';
         const stepSize = lot?.stepSize ?? '0.001';
@@ -367,6 +427,7 @@ export class AsterAdapter implements ExchangeAdapter {
           minNotional: notional?.notional ?? null,
           minQty: lot?.minQty ?? null,
           maxQty: lot?.maxQty ?? null,
+          maxMarketQty: marketLot?.maxQty ?? null,
           maxLeverage: ASSUMED_MAX_LEVERAGE,
           // Se derivan del filtro y NO de pricePrecision/quantityPrecision: la
           // propia documentación avisa de que esos campos no son el tick ni el
@@ -374,12 +435,32 @@ export class AsterAdapter implements ExchangeAdapter {
           priceDecimals: decimalsOf(tickSize),
           qtyDecimals: decimalsOf(stepSize),
           active: s.status === 'TRADING',
+          // MAX_NUM_ORDERS es 200 en todos los símbolos (sonda del spec 001,
+          // F-23): la vista previa avisa si la retícula tiende más.
+          maxActiveOrders: 200,
         } satisfies MarketSpec;
       });
   }
 
   async verify(): Promise<{ ok: boolean; publicRef: string; detail?: string }> {
     try {
+      // El reloj primero. Aster acepta una firma solo si su marca cae en una
+      // ventana de ±60 s frente a SU reloj, y el adaptador nunca lo miraba: con
+      // el reloj local desviado, todas las peticiones firmadas fallaban con un
+      // mensaje que no decía por qué (001/F-38). Se dice aquí, en la
+      // verificación de la credencial, que es cuando alguien está mirando.
+      const { serverTime } = await this.publicRequest<{ serverTime: number }>('/fapi/v3/time');
+      const drift = Date.now() - serverTime;
+      if (Math.abs(drift) > CLOCK_DRIFT_MAX_MS) {
+        const segundos = Math.round(Math.abs(drift) / 1000);
+        return {
+          ok: false,
+          publicRef: this.creds.userAddress,
+          detail:
+            `El reloj de esta máquina va ${segundos} s ${drift > 0 ? 'adelantado' : 'atrasado'} respecto a ` +
+            'Aster: las peticiones firmadas serán rechazadas (ventana de ±60 s). Sincroniza el reloj (NTP).',
+        };
+      }
       await this.signedRequest<AsterBalance[]>('GET', '/fapi/v3/balance');
       return { ok: true, publicRef: this.creds.userAddress };
     } catch (e) {
@@ -552,9 +633,16 @@ export class AsterAdapter implements ExchangeAdapter {
    * stream de usuario se cae o reconecta tarde.
    */
   async getRecentFills(symbol: string, sinceMs: number): Promise<Fill[]> {
+    // «The time between startTime and endTime cannot be longer than 7 days»
+    // (`-1127`): un bot sin ejecución propia en una semana —retícula lejos del
+    // precio, TDCA espaciado— mandaba un `startTime` de hace más de siete días
+    // y sin `endTime` (001/F-74). Se acota la ventana y se manda cerrada.
+    const ahora = Date.now();
+    const desde = Math.max(sinceMs, ahora - USER_TRADES_MAX_WINDOW_MS);
     const trades = await this.signedRequest<AsterUserTrade[]>('GET', '/fapi/v3/userTrades', {
       symbol,
-      startTime: String(sinceMs),
+      startTime: String(desde),
+      endTime: String(ahora),
       limit: '500',
     });
     return trades.map((t) => ({
@@ -573,7 +661,12 @@ export class AsterAdapter implements ExchangeAdapter {
       side: t.buyer ? ('BUY' as const) : ('SELL' as const),
       price: D(t.price).toFixed(),
       qty: D(t.qty).toFixed(),
-      fee: firstNum(t.commission, 0).toFixed(),
+      // En valor absoluto: la doc no define el signo de `commission` y su ejemplo
+      // trae -0.078 en un taker. Una comisión es un coste; guardarla con signo
+      // haría que la contabilidad la SUMARA al realizado si el venue expresa lo
+      // pagado en negativo (001/F-78). Si algún día Aster pagara rebates habrá
+      // que distinguirlos con una lectura firmada.
+      fee: firstNum(t.commission, 0).abs().toFixed(),
       feeAsset: t.commissionAsset ?? 'USDT',
       isTaker: t.maker === false,
       ts: t.time,
@@ -594,7 +687,18 @@ export class AsterAdapter implements ExchangeAdapter {
     };
 
     if (req.type !== 'MARKET') {
-      params.price = req.price ?? '';
+      // Sin precio no hay orden en reposo que mandar. Antes iba `price: ''` y el
+      // venue contestaba con un rechazo que no decía qué faltaba; el motor nunca
+      // llega aquí sin precio, pero la frontera con el venue no se fía del motor
+      // (001/F-79).
+      if (!req.price) {
+        throw new ExchangeError(
+          'RULES',
+          `Una orden ${req.type} sobre ${req.symbol} exige precio.`,
+          this.venue,
+        );
+      }
+      params.price = req.price;
       // POST_ONLY se expresa como GTX (good-till-crossing): el venue rechaza la
       // orden si fuera a cruzar el libro, que es exactamente el contrato de una
       // post-only y lo que mantiene al market maker del lado maker.
@@ -666,7 +770,7 @@ export class AsterAdapter implements ExchangeAdapter {
     } else {
       throw new ExchangeError('FATAL', 'Cancelar exige clientOrderId o venueOrderId', this.venue);
     }
-    await this.signedRequest('DELETE', '/fapi/v3/order', params);
+    await this.signedRequest('DELETE', '/fapi/v3/order', params, 'write');
   }
 
   /**
@@ -680,10 +784,12 @@ export class AsterAdapter implements ExchangeAdapter {
   async cancelOwn(symbol: string, clientOrderIds: string[]): Promise<void> {
     for (const coid of clientOrderIds) {
       try {
-        await this.signedRequest('DELETE', '/fapi/v3/order', {
-          symbol,
-          origClientOrderId: asterCodec.encode(coid),
-        });
+        await this.signedRequest(
+          'DELETE',
+          '/fapi/v3/order',
+          { symbol, origClientOrderId: asterCodec.encode(coid) },
+          'write',
+        );
       } catch (e) {
         if (!/unknown order|does not exist|not found/i.test(messageOf(e))) throw e;
       }
@@ -696,28 +802,36 @@ export class AsterAdapter implements ExchangeAdapter {
    * global debe llamar aquí; para limpiar un bot está `cancelOwn`.
    */
   async cancelAll(symbol: string): Promise<void> {
-    await this.signedRequest('DELETE', '/fapi/v3/allOpenOrders', { symbol });
+    await this.signedRequest('DELETE', '/fapi/v3/allOpenOrders', { symbol }, 'write');
   }
 
-  // `modifyOrder` se deja SIN implementar a propósito: Aster solo permite
-  // modificar en lote (PUT /fapi/v3/batchOrders) y con restricciones. Al ser
-  // opcional en la interfaz, el motor cae solo en cancelar + recolocar, que
-  // para una reconciliación por clientOrderId da el mismo resultado con menos
-  // superficie de fallo.
+  // `modifyOrder` se deja SIN implementar a propósito. Aster sí permite
+  // modificar una orden (PUT /fapi/v3/order, y en lote PUT /fapi/v3/batchOrders),
+  // pero al ser opcional en la interfaz el motor cae solo en cancelar +
+  // recolocar, que para una reconciliación por clientOrderId da el mismo
+  // resultado con menos superficie de fallo (001/F-79: el comentario anterior
+  // decía que solo existía la variante en lote).
 
   async setLeverage(symbol: string, leverage: number, mode: MarginMode): Promise<void> {
     // El orden importa: cambiar el modo de margen con posición abierta falla,
     // así que se intenta primero y se ignora el rechazo "sin cambios".
     try {
-      await this.signedRequest('POST', '/fapi/v3/marginType', {
-        symbol,
-        marginType: mode === 'CROSS' ? 'CROSSED' : 'ISOLATED',
-      });
+      await this.signedRequest(
+        'POST',
+        '/fapi/v3/marginType',
+        { symbol, marginType: mode === 'CROSS' ? 'CROSSED' : 'ISOLATED' },
+        'write',
+      );
     } catch (e) {
       const msg = toExchangeError(e, this.venue).message;
-      if (!/no need to change|not change/i.test(msg)) throw e;
+      // -4046 «No need to change margin type»: ya está así. -4047 y -4048: no
+      // se puede cambiar con posición u órdenes abiertas. En los tres casos el
+      // modo se queda como está y el apalancamiento SÍ se puede fijar; abortar
+      // aquí dejaba el apalancamiento sin tocar y un WARN en cada readopción
+      // con posición (001/F-79).
+      if (!/no need to change|not change|cannot be changed|-4046|-4047|-4048/i.test(msg)) throw e;
     }
-    await this.signedRequest('POST', '/fapi/v3/leverage', { symbol, leverage });
+    await this.signedRequest('POST', '/fapi/v3/leverage', { symbol, leverage }, 'write');
   }
 
   /**
@@ -765,9 +879,12 @@ export class AsterAdapter implements ExchangeAdapter {
 
   async setPositionMode(mode: PositionMode): Promise<void> {
     try {
-      await this.signedRequest('POST', '/fapi/v3/positionSide/dual', {
-        dualSidePosition: mode === 'HEDGE' ? 'true' : 'false',
-      });
+      await this.signedRequest(
+        'POST',
+        '/fapi/v3/positionSide/dual',
+        { dualSidePosition: mode === 'HEDGE' ? 'true' : 'false' },
+        'write',
+      );
     } catch (e) {
       const msg = toExchangeError(e, this.venue).message;
       if (!/no need to change|not change/i.test(msg)) throw e;
@@ -796,21 +913,41 @@ export class AsterAdapter implements ExchangeAdapter {
     let stream = this.tickers.get(symbol);
     if (stream) return stream;
 
-    stream = this.sharedSocket<Ticker>((emit) =>
-      this.openSocket(
-        () => this.ws + '/ws/' + symbol.toLowerCase() + '@bookTicker',
+    // Flujo COMBINADO: el libro (`bookTicker`) y la marca (`markPrice@1s`).
+    // `mark` era el punto medio del libro, que no es lo que el venue usa para
+    // liquidar: entre ticks y en un cierre de pánico las guardas veían otro
+    // precio (001/F-72). El venue envuelve los mensajes de un flujo combinado
+    // en `{ stream, data }`; un mensaje suelto (sin envoltorio) se acepta igual.
+    const s = symbol.toLowerCase();
+    stream = this.sharedSocket<Ticker>((emit) => {
+      let mark: Decimal | null = null;
+      return this.openSocket(
+        () => `${this.ws}/stream?streams=${s}@bookTicker/${s}@markPrice@1s`,
         (raw) => {
           try {
-            const ev = JSON.parse(raw) as { b?: string; a?: string; E?: number };
+            const msg = JSON.parse(raw) as { data?: unknown } & Record<string, unknown>;
+            const ev = (msg.data ?? msg) as {
+              e?: string;
+              p?: string;
+              b?: string;
+              a?: string;
+              E?: number;
+            };
+            if (ev.e === 'markPriceUpdate') {
+              mark = firstNum(ev.p, 0);
+              return;
+            }
+            if (ev.b === undefined && ev.a === undefined) return;
             const bid = firstNum(ev.b, 0);
             const ask = firstNum(ev.a, 0);
+            const mid = bid.plus(ask).div(2);
             emit({
               venue: Venue.ASTER,
               symbol,
-              last: bid.plus(ask).div(2).toFixed(),
+              last: mid.toFixed(),
               bid: bid.toFixed(),
               ask: ask.toFixed(),
-              mark: bid.plus(ask).div(2).toFixed(),
+              mark: (mark && !mark.isZero() ? mark : mid).toFixed(),
               ts: ev.E ?? Date.now(),
             });
           } catch {
@@ -818,8 +955,8 @@ export class AsterAdapter implements ExchangeAdapter {
           }
         },
         { stream: 'ticker', symbol },
-      ),
-    );
+      );
+    });
     this.tickers.set(symbol, stream);
     return stream;
   }
@@ -886,7 +1023,7 @@ export class AsterAdapter implements ExchangeAdapter {
     url: () => string | Promise<string>,
     onMessage: (raw: string) => void,
     what: { stream: StreamHealth['stream']; symbol?: string },
-  ): { stop: () => void } {
+  ): { stop: () => void; reconnect: (motivo: string) => void } {
     const socket = new ReconnectingSocket({
       url,
       onMessage,
@@ -906,10 +1043,13 @@ export class AsterAdapter implements ExchangeAdapter {
         socket.stop();
         this.sockets = this.sockets.filter((s) => s !== socket);
       },
+      reconnect: (motivo: string) => socket.reconnect(motivo),
     };
   }
 
   private userStreamStarted = false;
+  /** El socket de usuario, para poder forzar su reconexión (001/F-73). */
+  private userSocket: { stop: () => void; reconnect: (motivo: string) => void } | null = null;
 
   /**
    * El stream de usuario de Aster va por `listenKey`, que caduca a los 60
@@ -925,7 +1065,7 @@ export class AsterAdapter implements ExchangeAdapter {
     // El listenKey se pide en CADA (re)conexión, no una sola vez: al reconectar
     // tras un corte largo el anterior puede haber caducado, y volver con uno
     // muerto deja el socket abierto sin recibir jamás un evento.
-    this.openSocket(
+    this.userSocket = this.openSocket(
       async () => {
         const { listenKey } = await this.signedRequest<{ listenKey: string }>(
           'POST',
@@ -954,6 +1094,14 @@ export class AsterAdapter implements ExchangeAdapter {
     } catch {
       return;
     }
+    // «No more user data event will be updated after this event received until
+    // a new valid listenKey used», y no cierra el socket: quedaba abierto y
+    // mudo hasta el corte de 24 h (001/F-73). Se fuerza la reconexión, que pide
+    // un listenKey nuevo.
+    if (ev.e === 'listenKeyExpired') {
+      this.userSocket?.reconnect('listenKey caducado');
+      return;
+    }
     if (ev.e !== 'ORDER_TRADE_UPDATE' || !ev.o) return;
     const o = ev.o;
 
@@ -974,14 +1122,24 @@ export class AsterAdapter implements ExchangeAdapter {
     });
 
     // Aster —como toda la familia de perps de Binance— no marca la ejecución,
-    // marca la ORDEN: la que abre el venue para liquidar llega con tipo
-    // `LIQUIDATION`. Se miran los dos campos porque `o` es el tipo vigente y
-    // `ot` el original, y según el caso la etiqueta viaja en uno o en otro.
-    const liquidacion = o.o === 'LIQUIDATION' || o.ot === 'LIQUIDATION';
+    // marca la ORDEN. Y no lo hace (solo) con el tipo `LIQUIDATION`: según su
+    // doc V3, la orden que abre el venue para liquidar lleva el id de cliente
+    // `autoclose-…` (o `adl_autoclose` en un ADL), su ejecución llega con
+    // `x: CALCULATED` y su estado con `X: NEW_INSURANCE` o `NEW_ADL`. Mirando
+    // solo el tipo, ninguna liquidación real se reconocía y el bot seguía
+    // creyendo tener la posición (001/F-70).
+    const liquidacion =
+      o.o === 'LIQUIDATION' ||
+      o.ot === 'LIQUIDATION' ||
+      o.x === 'CALCULATED' ||
+      o.X === 'NEW_INSURANCE' ||
+      o.X === 'NEW_ADL' ||
+      /^(autoclose-|adl_autoclose)/.test(o.c ?? '');
 
     // `x === 'TRADE'` es lo que distingue una ejecución real de un simple
-    // cambio de estado; sin ese filtro se contarían fills que no existen.
-    if (o.x === 'TRADE' && o.t && !firstNum(o.l, 0).isZero()) {
+    // cambio de estado; sin ese filtro se contarían fills que no existen. La
+    // ejecución de una liquidación llega como `CALCULATED`, y también es real.
+    if ((o.x === 'TRADE' || o.x === 'CALCULATED') && o.t && !firstNum(o.l, 0).isZero()) {
       this.fills$.next({
         venue: Venue.ASTER,
         symbol: o.s,
@@ -991,7 +1149,8 @@ export class AsterAdapter implements ExchangeAdapter {
         side: o.S as OrderSide,
         price: firstNum(o.L, o.p, 0).toFixed(),
         qty: firstNum(o.l, 0).toFixed(),
-        fee: firstNum(o.n, 0).toFixed(),
+        // Mismo criterio que en `getRecentFills`: coste, sea cual sea el signo.
+        fee: firstNum(o.n, 0).abs().toFixed(),
         feeAsset: o.N ?? 'USDT',
         isTaker: o.m === false,
         ts: ev.E,

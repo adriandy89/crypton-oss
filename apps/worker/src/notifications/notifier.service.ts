@@ -127,7 +127,15 @@ export class NotifierService implements OnModuleInit, OnModuleDestroy {
     }
 
     const events$ = await this.bus.listen(BUS_CHANNELS.BOT_EVENTS);
-    events$.subscribe((message) => void this.onEvent(message));
+    // Con `catch`: `onEvent` consulta la base, y un fallo ahí era una promesa
+    // sin manejar que en Node tumba el proceso entero con todos sus bots
+    // (001/F-07).
+    events$.subscribe(
+      (message) =>
+        void this.onEvent(message).catch((e: Error) =>
+          this.logger.warn(`No se pudo procesar un evento para Telegram: ${e.message}`),
+        ),
+    );
     this.logger.log('Alertas de Telegram activas');
   }
 

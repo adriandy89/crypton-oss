@@ -3,10 +3,11 @@ import { ConfigService } from '@nestjs/config';
 import { Observable } from 'rxjs';
 import type {
   Balance,
+  CancelRequest,
   Candle,
   CandleInterval,
-  CancelRequest,
   Fill,
+  MarginAction,
   MarginMode,
   MarketSpec,
   MarketTicker,
@@ -14,17 +15,24 @@ import type {
   OrderUpdate,
   PlaceOrderRequest,
   Position,
+  PositionMode,
+  PositionSide,
   Ticker,
-  Venue,
   VenueCapabilities,
   VenueOrder,
 } from '@crypton/shared';
-import { venueKey } from '@crypton/shared';
+import { Venue, venueKey } from '@crypton/shared';
 import type { CandleQuery, ExchangeAdapter, StreamHealth } from '@crypton/exchange-core';
 import { DryRunAdapter } from '@crypton/exchange-core';
 import { MarketDataService } from '../marketdata';
 import { CredentialsService } from './credentials.service';
 import { PaperStateStore } from './paper-state.store';
+
+/**
+ * Tope oficial de Hyperliquid: «Maximum of 10 websocket connections» por IP (y
+ * diez usuarios distintos). Se avisa al alcanzarlo (001/F-27).
+ */
+const HL_WS_CONNECTION_LIMIT = 10;
 
 /** Cuánto vale una lectura de estado de cuenta antes de repetirla. */
 const DEFAULT_STATE_TTL_MS = 1000;
@@ -294,6 +302,26 @@ export class AccountHub implements OnModuleDestroy {
       };
     } else {
       entry.adapter = await this.credentials.openAdapter(exchangeAccountId, false);
+      // Hyperliquid admite diez conexiones WebSocket y diez usuarios distintos
+      // por IP, y aquí hay una conexión por cuenta real. A partir de la
+      // undécima las conexiones nuevas se rechazan: los bots no mueren (el
+      // tick por REST converge), pero pierden los fills en tiempo real y la
+      // recotización rápida, que es justo lo que necesita un market maker. Se
+      // avisa en la décima; compartir el transporte entre cuentas es la
+      // solución de fondo y va aparte (001/F-27).
+      if (venue === Venue.HYPERLIQUID) {
+        const abiertas =
+          [...this.accounts.values()].filter(
+            (e) => !e.dryRun && !e.closed && e.adapter?.venue === Venue.HYPERLIQUID,
+          ).length + 1;
+        if (abiertas >= HL_WS_CONNECTION_LIMIT) {
+          this.logger.warn(
+            `Hyperliquid: ${abiertas} cuentas reales abiertas en este proceso y el venue admite ` +
+              `${HL_WS_CONNECTION_LIMIT} conexiones WebSocket por IP; a partir de ahí los bots nuevos ` +
+              'pierden los fills en tiempo real.',
+          );
+        }
+      }
     }
 
     this.accounts.set(key, entry);
@@ -643,7 +671,44 @@ class AccountHandle implements ExchangeAdapter {
     private readonly testnet: boolean,
   ) {
     this.venue = venue;
+
+    // Los dos métodos OPCIONALES de `ExchangeAdapter` se reexponen solo si el
+    // adaptador de la cuenta los tiene: el runner decide por su PRESENCIA
+    // («Aportar margen» y «Modo de posición» avisan de que el venue no lo
+    // permite cuando faltan), así que inventarlos aquí mentiría. Antes no
+    // estaban ni cuando el adaptador sí los tenía, y el runner los daba por
+    // ausentes en los tres venues: el margen nunca llegaba a la posición
+    // mientras la API ya había subido el capital asignado (001/F-34).
+    const adapter = entry.adapter;
+    if (adapter.adjustIsolatedMargin) {
+      this.adjustIsolatedMargin = async (sym, amountUsd, action, side) => {
+        try {
+          await adapter.adjustIsolatedMargin!(sym, amountUsd, action, side);
+        } finally {
+          this.hub.invalidate(this.entry, sym);
+        }
+      };
+    }
+    if (adapter.setPositionMode) {
+      this.setPositionMode = async (mode) => {
+        try {
+          await adapter.setPositionMode!(mode);
+        } finally {
+          // El modo es de la cuenta entera; lo cacheado de los hermanos caduca
+          // solo en un segundo, y este símbolo es el que va a operar ya.
+          this.hub.invalidate(this.entry, this.symbol);
+        }
+      };
+    }
   }
+
+  readonly adjustIsolatedMargin?: (
+    symbol: string,
+    amountUsd: string,
+    action: MarginAction,
+    side: PositionSide,
+  ) => Promise<void>;
+  readonly setPositionMode?: (mode: PositionMode) => Promise<void>;
 
   // ── Datos de mercado ────────────────────────────────────────────
   //

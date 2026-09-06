@@ -51,6 +51,30 @@ export interface Strategy<C extends CommonBotConfig = BotConfig> {
    */
   readonly recycleLevelOnExit?: boolean;
 
+  /**
+   * true = las recompras (GRID_BUY) de la estrategia NO marcan su índice en
+   * `filledLevelIndexes`.
+   *
+   * GridMart: la rejilla de ventas y sus recompras reutilizan índice con las
+   * seguridades (SAFETY#j ↔ GRID_SELL#j/GRID_BUY#j). Contabilizar la recompra
+   * como escalón tomado hacía desaparecer del plan la seguridad j para el resto
+   * del ciclo (001/F-82). La recompra sigue sumando a la posición y al medio;
+   * solo deja de ocupar un escalón que no es suyo.
+   */
+  readonly rebuysOffLevelIndexes?: boolean;
+
+  /**
+   * true = quedar plana la posición NO cierra el ciclo.
+   *
+   * Para un market maker «quedar plano» es el final de cada par casado, no de
+   * una operación: cerrar el ciclo ahí cambiaba los ids de todas las capas (el
+   * reconciliador las cancelaba y reponía, perdiendo el sitio en el libro),
+   * borraba la cotización vigente, la espera tras el fill, las muestras de
+   * volatilidad y el armado de la condición de activación (001/F-58, F-62).
+   * Con esto el ciclo es la vida del bot hasta que se para o se cierra a mano.
+   */
+  readonly keepCycleOnFlat?: boolean;
+
   /** Valores por defecto sensatos para un usuario que empieza. */
   defaults(): Record<string, unknown>;
 

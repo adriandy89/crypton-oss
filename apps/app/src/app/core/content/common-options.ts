@@ -53,9 +53,9 @@ export const COMMON_OPTION_DOCS: Record<keyof CommonBotConfig, OptionDoc> = {
     tip: 'El mínimo es 10 USDC, pero el mínimo útil es más alto: cada orden suelta tiene que superar el mínimo del par, que también ronda los 10 USDC.',
   },
   maxNotionalCap: {
-    what: 'Tope del valor de la posición. Solo Martingala y GridMart lo aplican al tender la escalera, cortándola en el escalón que lo superaría.',
+    what: 'Tope del valor de la posición. Martingala, GridMart y la rejilla clásica lo aplican al tender, cortando en el escalón o la línea que lo superaría.',
     affects:
-      'En la rejilla clásica actúa después de superarse (deja de abrir entradas nuevas, pero no recorta las compras ya colgadas). La rejilla neutral, el DCA temporizado y los market makers no lo leen: cada una tiene su propio freno.',
+      'En la rejilla clásica acota lo que se tiende: posición abierta más compras vivas, de la línea más cercana al precio hacia fuera. La rejilla neutral, el DCA temporizado y los market makers no lo leen: cada una tiene su propio freno.',
     tip: 'En escaleras, ponlo por debajo de capital por apalancamiento si quieres recortar los últimos escalones. En el resto, usa el freno propio de la estrategia y deja este vacío.',
   },
   stopLossPct: {
@@ -71,7 +71,7 @@ export const COMMON_OPTION_DOCS: Record<keyof CommonBotConfig, OptionDoc> = {
     tip: 'Útil sobre todo en las estrategias que promedian a la baja, donde un mal día encadena varias entradas.',
   },
   cooldownMinutes: {
-    what: 'Espera entre el final de un ciclo y el comienzo del siguiente. Hoy solo la respetan Martingala y GridMart; la rejilla clásica, la neutral, el DCA y los market makers no lo leen.',
+    what: 'Espera entre el final de un ciclo y el comienzo del siguiente. La respetan las estrategias con ciclos: rejillas, DCA, Martingala y GridMart. Los market makers no cierran ciclos, así que ahí no aplica.',
     affects:
       'Con 0, el bot vuelve a abrir en cuanto cierra. Subiéndolo evitas que reentre en medio del mismo movimiento que acaba de cerrarle el ciclo. Se puede cambiar en caliente: el valor vigente se aplica al cerrar el siguiente ciclo.',
     tip: 'Unos pocos minutos bastan para no reentrar en el mismo impulso.',

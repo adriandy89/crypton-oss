@@ -43,6 +43,42 @@ export function liquidationDistancePct(currentPrice: Numeric, liquidationPrice: 
   return D(liquidationPrice).minus(cur).div(cur).mul(100).abs();
 }
 
+/**
+ * Distancia mínima a la liquidación estimada que la API exige al crear o editar
+ * un bot, en %. La misma cifra manda en `validateCommon`, en `RiskService` y en
+ * el asistente: antes el formulario avisaba a 12×, la API rechazaba a 19× con
+ * otro mensaje y ninguna pantalla decía dónde estaba el límite (001/F-44).
+ */
+export const MIN_LIQUIDATION_DISTANCE_PCT = 5;
+
+/**
+ * Tasa de mantenimiento de un mercado. La ficha la trae cuando el venue la
+ * publica; si no, la regla de Hyperliquid («la mitad del margen inicial al
+ * apalancamiento máximo»), que aproxima los tramos bajos de Aster y Lighter
+ * mejor que un 0,5 % plano: BTC a 40× → 1,25 %, DOGE a 10× → 5 % (001/F-93).
+ * Sin apalancamiento máximo conocido, la tasa plana.
+ */
+export function maintenanceMarginRateOf(market: {
+  maintenanceMarginRate?: number | null;
+  maxLeverage?: number | null;
+}): number {
+  const declarada = market.maintenanceMarginRate;
+  if (declarada != null && Number.isFinite(declarada) && declarada > 0) return declarada;
+  const maxLev = market.maxLeverage ?? 0;
+  return maxLev > 0 ? 1 / (2 * maxLev) : DEFAULT_MAINTENANCE_MARGIN_RATE;
+}
+
+/**
+ * Apalancamiento máximo (entero) con el que la liquidación estimada queda a
+ * `minDistancePct` o más del precio: `1/lev − mmr ≥ d` → `lev ≤ 1/(d + mmr)`.
+ */
+export function maxLeverageWithinDistance(
+  mmr: number,
+  minDistancePct: number = MIN_LIQUIDATION_DISTANCE_PCT,
+): number {
+  return Math.max(1, Math.floor(1 / (minDistancePct / 100 + mmr) + 1e-9));
+}
+
 /** Lo mínimo de una posición para saber qué caja la respalda. */
 export interface CollateralPosition {
   symbol: string;

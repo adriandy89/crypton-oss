@@ -93,6 +93,7 @@ const GRIDMART_FIELDS: readonly FieldMeta[] = [
     kind: 'integer',
     mutability: Mutability.WARM,
     labelKey: 'strategy.gridmart.gridSellCount',
+    reshapes: true,
     min: 1,
     max: 20,
     step: 1,
@@ -104,6 +105,7 @@ const GRIDMART_FIELDS: readonly FieldMeta[] = [
     kind: 'percent',
     mutability: Mutability.WARM,
     labelKey: 'strategy.gridmart.gridSellInitialSeparationPct',
+    reshapes: true,
     min: 0.05,
     max: 20,
     step: 0.05,
@@ -115,6 +117,7 @@ const GRIDMART_FIELDS: readonly FieldMeta[] = [
     kind: 'number',
     mutability: Mutability.WARM,
     labelKey: 'strategy.gridmart.gridSellDistanceMultiplier',
+    reshapes: true,
     min: 1,
     max: 3,
     step: 0.05,
@@ -126,6 +129,7 @@ const GRIDMART_FIELDS: readonly FieldMeta[] = [
     kind: 'percent',
     mutability: Mutability.WARM,
     labelKey: 'strategy.gridmart.corePctSoldAtLevel1',
+    reshapes: true,
     helpKey: 'strategy.gridmart.corePctSoldAtLevel1Help',
     min: 1,
     max: 100,
@@ -138,6 +142,7 @@ const GRIDMART_FIELDS: readonly FieldMeta[] = [
     kind: 'number',
     mutability: Mutability.WARM,
     labelKey: 'strategy.gridmart.gridSellQtyMultiplier',
+    reshapes: true,
     min: 0.1,
     max: 3,
     step: 0.05,
@@ -181,9 +186,12 @@ const META: StrategyMeta = {
  *
  * Las cantidades se recortan para que la suma jamás supere el núcleo: sin ese
  * recorte, las últimas ventas serían reduce-only sobre una posición que ya no
- * existe y el venue las rechazaría una por una en cada tick.
+ * existe y el venue las rechazaría una por una en cada tick. Y el último
+ * escalón se lleva lo que quede: con porcentajes que no suman 100 el resto del
+ * núcleo se quedaba sin venta programada, polvo en la posición hasta el TP
+ * (001/F-89). Lo que el step del venue no deje vender sigue siendo polvo.
  */
-function gridSellLevels(
+export function gridSellLevels(
   cfg: GridMartConfig,
   breakeven: Decimal,
   coreQty: Decimal,
@@ -204,7 +212,7 @@ function gridSellLevels(
     separation = separation.mul(cfg.gridSellDistanceMultiplier);
 
     const price = breakeven.mul(D(1).plus(sign.mul(cumulative).div(100)));
-    const take = Decimal.min(qty, remaining);
+    const take = j === count - 1 ? remaining : Decimal.min(qty, remaining);
     if (take.lte(0)) break;
 
     out.push({ index: j, price, qty: take });
@@ -222,6 +230,9 @@ export const gridmart: Strategy<GridMartConfig> = {
   // → la venta vuelve. El plan filtra los escalones con recompra pendiente, y
   // ese filtro es lo que hace segura la reutilización.
   reusesOrderSlots: true,
+  // Y ese mismo índice lo comparten con las seguridades: la recompra j no debe
+  // marcar el escalón j como tomado o SAFETY#j desaparece del plan (001/F-82).
+  rebuysOffLevelIndexes: true,
   kind: StrategyKind.GRIDMART,
   meta: META,
 
@@ -305,6 +316,14 @@ export const gridmart: Strategy<GridMartConfig> = {
         );
       }
     }
+    // Sin estos dos, `gridSellLevels` hacía `separation.mul(undefined)` y la
+    // vista previa y el plan reventaban con un DecimalError (001/F-13).
+    for (const key of ['gridSellDistanceMultiplier', 'gridSellQtyMultiplier'] as const) {
+      const v = D(cfg[key] ?? NaN);
+      if (!v.isFinite() || v.lte(0)) {
+        issues.push(err(key, 'Hace falta un multiplicador mayor que cero.'));
+      }
+    }
     return toResult(issues);
   },
 
@@ -353,7 +372,10 @@ export const gridmart: Strategy<GridMartConfig> = {
       refPrice,
       direction: cfg.direction,
       leverage: cfg.leverage,
-      takeProfitPct: cfg.classicMode ? cfg.satelliteTpPct : cfg.takeProfitPct,
+      marginMode: cfg.marginMode,
+      // El TP que existe es el del satélite en los dos modos: `takeProfitPct` no
+      // gobierna ninguna orden en GridMart (001/F-12).
+      takeProfitPct: cfg.satelliteTpPct,
       issues,
     });
   },
@@ -561,6 +583,10 @@ export const gridmart: Strategy<GridMartConfig> = {
     if (parsed?.kind === LevelKind.GRID_SELL) {
       const sign = cfg.direction === 'SHORT' ? D(1) : D(-1);
       const price = D(fill.price).mul(D(1).plus(sign.mul(D(cfg.gridRebuyDiscountPct)).div(100)));
+      // Una venta ejecutada a trozos anota UNA recompra con la suma: cada trozo
+      // sobrescribía la anterior y solo se recompraba el último (001/F-89).
+      const previa = rebuys.find((r) => r.index === parsed.levelIndex);
+      const qty = previa ? D(previa.qty).plus(fill.qty) : D(fill.qty);
       return {
         ...cycle,
         scratch: {
@@ -572,7 +598,7 @@ export const gridmart: Strategy<GridMartConfig> = {
               // Se guarda ya formateada al lado de la recompra: así el precio
               // que se anota es exactamente el que se mandará al venue.
               price: px(ctx.market, price, entrySide(cfg.direction)),
-              qty: qy(ctx.market, fill.qty),
+              qty: qy(ctx.market, qty),
             },
           ],
         },

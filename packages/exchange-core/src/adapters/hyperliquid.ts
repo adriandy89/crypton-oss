@@ -26,14 +26,16 @@ import {
   type PositionSide,
   type Ticker,
   type VenueOrder,
+  roundPriceForSide,
 } from '@crypton/shared';
 import { changePct, checkInterval, finishCandles, num, numOrNull, resolveRange } from '../candles';
 import { HL_INTERVALS, VENUE_CAPABILITIES } from '../capabilities';
 import { hyperliquidCodec } from '../coid';
+import { VenueCooldown } from '../cooldown';
 import { toExchangeError } from '../errors';
 import { MarketSpecCache, canonicalSymbol } from '../market-cache';
 import { RateLimiter, withRetry, withWriteRetry } from '../rate-limit';
-import { NO_BUDGET, type VenueBudget } from '../venue-budget';
+import { NO_BUDGET, type BudgetPriority, type VenueBudget } from '../venue-budget';
 import { hyperliquidWeight } from '../venue-weights';
 import type {
   AdapterOptions,
@@ -75,6 +77,16 @@ type HlCreds = Extract<VenueCredentials, { venue: 'HYPERLIQUID' }>;
  * ella es exactamente eso: que se puede soltar UNA sin cerrar el transporte.
  */
 type HlSubscription = { unsubscribe: () => Promise<unknown> };
+type AssetCtx = Awaited<ReturnType<HL.InfoClient['metaAndAssetCtxs']>>[1][number];
+
+/** Cuánto vive el contexto de activos memoizado (`markPx` y compañía). */
+const ASSET_CTX_TTL_MS = 2_000;
+/**
+ * Tope de la comisión de builder en perps: 0,1 % = 100 décimas de punto básico.
+ * Un valor fuera de rango no se «corrige» en silencio ni hace rechazar la orden
+ * entera: se omite el builder (001/F-16).
+ */
+const BUILDER_FEE_MAX_TENTH_BPS = 100;
 
 /** Mínimo de valor por orden que impone Hyperliquid en perps. */
 const MIN_NOTIONAL_USD = '10';
@@ -244,6 +256,9 @@ export class HyperliquidAdapter implements ExchangeAdapter {
    */
   private readonly health$ = new Subject<StreamHealth>();
   private readonly openSubs: HlSubscription[] = [];
+  /** Enfriamiento tras un throttle, como en Lighter y Aster (001/F-28). */
+  private readonly cooldown = new VenueCooldown(Venue.HYPERLIQUID);
+  private ctxMemo: { at: number; value: Promise<Map<string, AssetCtx>> } | null = null;
   private streamsStarted = false;
   private closed = false;
   /**
@@ -322,9 +337,17 @@ export class HyperliquidAdapter implements ExchangeAdapter {
         minQty: step.toFixed(),
         maxQty: null,
         maxLeverage: asset.maxLeverage,
+        // «The maintenance margin is half of the initial margin at max
+        // leverage» (docs, Margining). Antes la estimación usaba un 0,5 % plano,
+        // optimista en cualquier par con menos de 100x (001/F-93).
+        maintenanceMarginRate: asset.maxLeverage > 0 ? 1 / (2 * asset.maxLeverage) : null,
         priceDecimals: Math.max(0, -Math.floor(Math.log10(tick.toNumber()))),
         qtyDecimals: asset.szDecimals,
         active: asset.isDelisted !== true,
+        // «Prices can have up to 5 significant figures»: la regla vive en la
+        // puerta de redondeo compartida, así la estrategia y este adaptador
+        // calculan el mismo precio (001/F-04).
+        maxSignificantDigits: 5,
       } satisfies MarketSpec;
     });
   }
@@ -411,8 +434,14 @@ export class HyperliquidAdapter implements ExchangeAdapter {
         clientOrderId: o.cloid ?? null,
         venueOrderId: String(o.oid),
         side: o.side === 'B' ? ('BUY' as const) : ('SELL' as const),
-        type: o.orderType === 'Market' ? ('MARKET' as const) : ('LIMIT' as const),
+        // El tipo REAL y no «todo lo que no es Market es límite»: un stop a
+        // mercado («Stop Market») es una MARKET con disparador, y para el
+        // reconciliador un stop-loss y una límite al mismo precio eran la misma
+        // cosa (001/F-29). `limitPx` sigue siendo el precio: en un stop es el
+        // tope al que se ejecuta una vez disparado.
+        type: o.orderType.endsWith('Market') ? ('MARKET' as const) : ('LIMIT' as const),
         price: D(o.limitPx).toFixed(),
+        triggerPrice: o.isTrigger ? D(o.triggerPx).toFixed() : null,
         qty: D(o.origSz).toFixed(),
         filledQty: D(o.origSz).minus(o.sz).toFixed(),
         avgPrice: null,
@@ -423,19 +452,63 @@ export class HyperliquidAdapter implements ExchangeAdapter {
   }
 
   async getTicker(symbol: string): Promise<Ticker> {
-    const book = await this.call(() => this.info.l2Book({ coin: symbol }));
-    const bid = book?.levels[0]?.[0]?.px ?? '0';
-    const ask = book?.levels[1]?.[0]?.px ?? '0';
-    const mid = D(bid).plus(ask).div(2);
+    const [book, ctx] = await Promise.all([
+      this.call(() => this.info.l2Book({ coin: symbol })),
+      this.assetCtx(symbol),
+    ]);
+    const bid = book?.levels[0]?.[0]?.px;
+    const ask = book?.levels[1]?.[0]?.px;
+    const mark = ctx?.markPx;
+    // Con un lado del libro vacío no se inventa la mitad del otro (001/F-26):
+    // manda la marca del venue y, si tampoco la hay, RETRYABLE, que el motor
+    // ya sabe tratar. Antes salía un precio falso pero verosímil que entraba en
+    // las guardas de riesgo con toda convicción.
+    let mid: Decimal;
+    if (bid && ask) mid = D(bid).plus(ask).div(2);
+    else if (mark) mid = D(mark);
+    else {
+      throw new ExchangeError(
+        'RETRYABLE',
+        `Libro de ${symbol} con un lado vacío y sin precio de marca`,
+        this.venue,
+      );
+    }
     return {
       venue: Venue.HYPERLIQUID,
       symbol,
       last: mid.toFixed(),
-      bid: D(bid).toFixed(),
-      ask: D(ask).toFixed(),
-      mark: mid.toFixed(),
+      bid: (bid ? D(bid) : mid).toFixed(),
+      ask: (ask ? D(ask) : mid).toFixed(),
+      // La MARCA del venue, que es la que gobierna la liquidación, y no el
+      // punto medio del libro (001/F-25): es lo que el tipo `Ticker` promete y
+      // lo que ya hacen Aster y Lighter.
+      mark: (mark ? D(mark) : mid).toFixed(),
       ts: Date.now(),
     };
+  }
+
+  /**
+   * Contexto del activo (`markPx`, `oraclePx`, `midPx`…) memoizado un par de
+   * segundos: `metaAndAssetCtxs` pesa 20 y trae los doscientos activos de una
+   * vez, así que N bots preguntando por su marca son una petición.
+   */
+  private assetCtx(symbol: string): Promise<AssetCtx | undefined> {
+    const now = Date.now();
+    if (!this.ctxMemo || now - this.ctxMemo.at > ASSET_CTX_TTL_MS) {
+      const value = this.call(() => this.info.metaAndAssetCtxs(), 20).then(([meta, ctxs]) => {
+        const porSimbolo = new Map<string, AssetCtx>();
+        meta.universe.forEach((asset, index) => {
+          const ctx = ctxs[index];
+          if (ctx) porSimbolo.set(asset.name, ctx);
+        });
+        return porSimbolo;
+      });
+      this.ctxMemo = { at: now, value };
+      void value.catch(() => {
+        this.ctxMemo = null;
+      });
+    }
+    return this.ctxMemo.value.then((m) => m.get(symbol)).catch(() => undefined);
   }
 
   /**
@@ -606,7 +679,18 @@ export class HyperliquidAdapter implements ExchangeAdapter {
             ...(builder ? { builder } : {}),
           }),
         );
-        return this.toAck(req.clientOrderId, result.response.data.statuses[0]);
+        const status = result.response.data.statuses?.[0];
+        if (status === undefined) {
+          // Sin estados no hay acuse que leer; reventar aquí con un TypeError
+          // dejaba la fila sin clasificar (001/F-16). Como RETRYABLE, la
+          // comprobación de `withWriteRetry` decide si la orden entró.
+          throw new ExchangeError(
+            'RETRYABLE',
+            'Acuse de Hyperliquid sin estados: la orden puede haber entrado.',
+            this.venue,
+          );
+        }
+        return this.toAck(req.clientOrderId, status);
       },
       () => this.findPlaced(req.symbol, req.clientOrderId, cloid),
       { venue: this.venue },
@@ -643,14 +727,20 @@ export class HyperliquidAdapter implements ExchangeAdapter {
     // la orden se modificó, pero el cloid es nuestro y no se mueve.
     if (req.clientOrderId) {
       const cloid = hyperliquidCodec.encode(req.clientOrderId) as `0x${string}`;
-      await this.call(() => this.exchange.cancelByCloid({ cancels: [{ asset, cloid }] }));
+      await this.call(
+        () => this.exchange.cancelByCloid({ cancels: [{ asset, cloid }] }),
+        1,
+        'write',
+      );
       return;
     }
     if (!req.venueOrderId) {
       throw new ExchangeError('FATAL', 'Cancelar exige clientOrderId o venueOrderId', this.venue);
     }
-    await this.call(() =>
-      this.exchange.cancel({ cancels: [{ a: asset, o: Number(req.venueOrderId) }] }),
+    await this.call(
+      () => this.exchange.cancel({ cancels: [{ a: asset, o: Number(req.venueOrderId) }] }),
+      1,
+      'write',
     );
   }
 
@@ -667,7 +757,7 @@ export class HyperliquidAdapter implements ExchangeAdapter {
       asset,
       cloid: hyperliquidCodec.encode(coid) as `0x${string}`,
     }));
-    await this.call(() => this.exchange.cancelByCloid({ cancels }));
+    await this.call(() => this.exchange.cancelByCloid({ cancels }), 1, 'write');
   }
 
   /**
@@ -679,10 +769,13 @@ export class HyperliquidAdapter implements ExchangeAdapter {
     const open = await this.getOpenOrders(symbol);
     if (open.length === 0) return;
     const asset = await this.assetIdOf(symbol);
-    await this.call(() =>
-      this.exchange.cancel({
-        cancels: open.map((o) => ({ a: asset, o: Number(o.venueOrderId) })),
-      }),
+    await this.call(
+      () =>
+        this.exchange.cancel({
+          cancels: open.map((o) => ({ a: asset, o: Number(o.venueOrderId) })),
+        }),
+      1,
+      'write',
     );
   }
 
@@ -694,19 +787,27 @@ export class HyperliquidAdapter implements ExchangeAdapter {
     if (!existing) {
       throw new ExchangeError('RULES', 'La orden a modificar ya no existe', this.venue);
     }
-    await this.call(() =>
-      this.exchange.modify({
-        oid: Number(existing.venueOrderId),
-        order: {
-          a: asset,
-          b: existing.side === 'BUY',
-          p: req.price ?? existing.price,
-          s: req.qty ?? existing.qty,
-          r: existing.reduceOnly,
-          t: { limit: { tif: 'Gtc' } },
-          c: hyperliquidCodec.encode(req.clientOrderId),
-        },
-      }),
+    // El precio pasa por la misma puerta que en `placeOrder` y el tif se
+    // conserva: una post-only modificada seguía como Gtc y podía cruzar el
+    // libro y pagar taker (001/F-04b). El motor hoy reemplaza cancelando y
+    // colocando, pero el camino existe y tiene que ser correcto.
+    const price = await this.formatPrice(req.symbol, D(req.price ?? existing.price), existing.side);
+    await this.call(
+      () =>
+        this.exchange.modify({
+          oid: Number(existing.venueOrderId),
+          order: {
+            a: asset,
+            b: existing.side === 'BUY',
+            p: price,
+            s: req.qty ?? existing.qty,
+            r: existing.reduceOnly,
+            t: { limit: { tif: existing.type === 'POST_ONLY' ? 'Alo' : 'Gtc' } },
+            c: hyperliquidCodec.encode(req.clientOrderId),
+          },
+        }),
+      1,
+      'write',
     );
     return {
       clientOrderId: req.clientOrderId,
@@ -718,12 +819,15 @@ export class HyperliquidAdapter implements ExchangeAdapter {
 
   async setLeverage(symbol: string, leverage: number, mode: MarginMode): Promise<void> {
     const asset = await this.assetIdOf(symbol);
-    await this.call(() =>
-      this.exchange.updateLeverage({
-        asset,
-        isCross: mode === 'CROSS',
-        leverage,
-      }),
+    await this.call(
+      () =>
+        this.exchange.updateLeverage({
+          asset,
+          isCross: mode === 'CROSS',
+          leverage,
+        }),
+      1,
+      'write',
     );
   }
 
@@ -824,8 +928,15 @@ export class HyperliquidAdapter implements ExchangeAdapter {
     let stream = this.tickers.get(symbol);
     if (!stream) {
       stream = this.shared<Ticker>(
-        (emit) =>
-          this.subs.bbo({ coin: symbol }, (ev) => {
+        (emit) => {
+          // La marca no viaja en el bbo sino en `activeAssetCtx`: se guarda la
+          // última y cada bbo la lleva (001/F-25). Hasta que llegue la primera
+          // va el mid, que es lo que había.
+          let mark: string | null = null;
+          const ctx = this.subs.activeAssetCtx({ coin: symbol }, (ev) => {
+            mark = ev.ctx.markPx ?? mark;
+          });
+          const bbo = this.subs.bbo({ coin: symbol }, (ev) => {
             const [bid, ask] = ev.bbo;
             const mid = firstNum(bid?.px, 0)
               .plus(ask?.px ?? 0)
@@ -836,10 +947,14 @@ export class HyperliquidAdapter implements ExchangeAdapter {
               last: mid.toFixed(),
               bid: firstNum(bid?.px, 0).toFixed(),
               ask: firstNum(ask?.px, 0).toFixed(),
-              mark: mid.toFixed(),
+              mark: mark ?? mid.toFixed(),
               ts: ev.time,
             });
-          }),
+          });
+          return Promise.all([bbo, ctx]).then(([b, c]) => ({
+            unsubscribe: () => Promise.all([b.unsubscribe(), c.unsubscribe()]),
+          }));
+        },
         { stream: 'ticker', symbol },
       );
       this.tickers.set(symbol, stream);
@@ -931,13 +1046,17 @@ export class HyperliquidAdapter implements ExchangeAdapter {
               clientOrderId: ev.order.cloid ?? null,
               venueOrderId: String(ev.order.oid),
               side: ev.order.side === 'B' ? 'BUY' : 'SELL',
+              // El evento del WebSocket trae la orden «básica» (sin tipo ni
+              // disparador): aquí solo importa el ESTADO, y el tipo real lo
+              // conserva el barrido REST de `getOpenOrders` (001/F-29).
               type: 'LIMIT',
               price: D(ev.order.limitPx).toFixed(),
+              triggerPrice: null,
               qty: D(ev.order.origSz).toFixed(),
               filledQty: D(ev.order.origSz).minus(ev.order.sz).toFixed(),
               avgPrice: null,
               status: mapOrderStatus(ev.status),
-              reduceOnly: false,
+              reduceOnly: ev.order.reduceOnly === true,
               createdAt: ev.order.timestamp,
             });
           }
@@ -1022,10 +1141,9 @@ export class HyperliquidAdapter implements ExchangeAdapter {
 
   private builder(): { b: `0x${string}`; f: number } | null {
     if (!this.opts.builderAddress || !this.opts.builderFeeTenthBps) return null;
-    return {
-      b: this.opts.builderAddress as `0x${string}`,
-      f: this.opts.builderFeeTenthBps,
-    };
+    const f = this.opts.builderFeeTenthBps;
+    if (!Number.isInteger(f) || f <= 0 || f > BUILDER_FEE_MAX_TENTH_BPS) return null;
+    return { b: this.opts.builderAddress as `0x${string}`, f };
   }
 
   private async assetIdOf(symbol: string): Promise<number> {
@@ -1044,10 +1162,12 @@ export class HyperliquidAdapter implements ExchangeAdapter {
    */
   private async formatPrice(symbol: string, price: Decimal, side: 'BUY' | 'SELL'): Promise<string> {
     const spec = await this.markets.get(symbol);
-    const tick = D(spec.tickSize);
-    const mode = side === 'BUY' ? Decimal.ROUND_DOWN : Decimal.ROUND_UP;
-    const rounded = price.div(tick).toDecimalPlaces(0, mode).mul(tick);
-    return rounded.toSignificantDigits(5).toFixed();
+    // La MISMA puerta que usa la estrategia (001/F-04): retícula y cinco cifras
+    // significativas hacia el lado seguro, con los enteros intactos. Antes se
+    // recortaba aquí con HALF_UP y la estrategia no recortaba: dos precios
+    // distintos para la misma orden y el reconciliador cancelando y
+    // recolocando en cada tick.
+    return roundPriceForSide(price, spec.tickSize, side, spec.maxSignificantDigits ?? 5).toFixed();
   }
 
   /**
@@ -1057,11 +1177,26 @@ export class HyperliquidAdapter implements ExchangeAdapter {
    * decir, esta cuenta—; `budget` acota lo que manda todo lo que sale por esta
    * IP, que es como cuenta Hyperliquid sus 1200 de peso por minuto.
    */
-  private call<T>(fn: () => Promise<T>, weight = hyperliquidWeight('l2Book')): Promise<T> {
+  private call<T>(
+    fn: () => Promise<T>,
+    weight = hyperliquidWeight('l2Book'),
+    // Las cancelaciones y el apalancamiento iban por el cupo de LECTURA: un
+    // pánico competía por el presupuesto con las lecturas de los demás bots,
+    // que es justo lo que la reserva de escritura existe para impedir
+    // (001/F-10). Se reintentan igual: son idempotentes.
+    priority: BudgetPriority = 'read',
+  ): Promise<T> {
     return withRetry(
       async () => {
-        await this.budget.take(this.venue, weight, 'read', this.isTestnet);
-        return this.limiter.run(fn);
+        // Si el venue nos tiene cortados, la mejor petición es la que no se
+        // manda: insistir alarga el castigo («one request every 10 seconds»).
+        // Era el único adaptador sin esto (001/F-28).
+        this.cooldown.comprobar();
+        await this.budget.take(this.venue, weight, priority, this.isTestnet);
+        return this.limiter.run(fn).catch((e) => {
+          this.cooldown.registrar(e);
+          throw e;
+        });
       },
       { venue: this.venue },
     );
@@ -1073,8 +1208,12 @@ export class HyperliquidAdapter implements ExchangeAdapter {
    * dejar sin caudal a la cancelación de un pánico.
    */
   private async callWrite<T>(fn: () => Promise<T>): Promise<T> {
+    this.cooldown.comprobar();
     await this.budget.take(this.venue, 1, 'write', this.isTestnet);
-    return this.limiter.run(fn);
+    return this.limiter.run(fn).catch((e) => {
+      this.cooldown.registrar(e);
+      throw e;
+    });
   }
 
   /**

@@ -40,7 +40,7 @@ import { endpointsFor } from '../endpoints';
 import { isThrottled, messageOf, shortMessage, toExchangeError } from '../errors';
 import { MarketSpecCache, canonicalSymbol } from '../market-cache';
 import { RateLimiter, withRetry, withWriteRetry } from '../rate-limit';
-import { NO_BUDGET, type VenueBudget } from '../venue-budget';
+import { NO_BUDGET, type BudgetPriority, type VenueBudget } from '../venue-budget';
 import { lighterCost } from '../venue-weights';
 import { VenueCooldown } from '../cooldown';
 import { ReconnectingSocket, sharedStream } from '../ws';
@@ -349,7 +349,7 @@ export class LighterAdapter implements ExchangeAdapter {
    * propósito: el SDK lo lee en cada llamada, así que renovar el token aquí
    * alcanza también a lo que manda él.
    */
-  private readonly sdkHeaders: Record<string, string> = { Accept: 'application/json' };
+  private sdkHeaders: Record<string, string> = { Accept: 'application/json' };
   private authCache: { token: string; until: number } | null = null;
   /** Órdenes ya notificadas, para no reemitir en cada sondeo. */
   private readonly seenOrders = new Map<number, string>();
@@ -383,13 +383,17 @@ export class LighterAdapter implements ExchangeAdapter {
     const endpoints = endpointsFor(Venue.LIGHTER, this.testnet);
     this.url = creds.baseUrl ?? endpoints.rest;
     this.wsUrl = opts.wsUrl ?? endpoints.ws;
-    // `baseOptions.headers` es el objeto mutable de arriba: el SDK lo mezcla en
-    // cada petición, así que el token viaja también en las llamadas que hace él
-    // y no solo en las de `publicGet`.
     const config = new Configuration({
       basePath: this.url,
       baseOptions: { headers: this.sdkHeaders },
     });
+    // El SDK COPIA las cabeceras al construir la configuración
+    // (`...param.baseOptions?.headers`) y después lee SU copia en cada petición:
+    // mutar el objeto original, que es lo que se hacía, no llegaba a ninguna
+    // llamada del SDK y el token de autenticación nunca viajaba en las lecturas
+    // de cuenta (001/F-49). Se guarda la copia viva del SDK y es esa la que se
+    // renueva en `authHeaderToken`.
+    this.sdkHeaders = (config.baseOptions as { headers: Record<string, string> }).headers;
     this.orderApi = new OrderApi(config);
     this.accountApi = new AccountApi(config);
     this.limiter = new RateLimiter(opts.rateLimitPerSecond ?? 8);
@@ -445,16 +449,25 @@ export class LighterAdapter implements ExchangeAdapter {
    */
   private async signerReady(): Promise<SignerClient> {
     const client = this.signer;
-    this.nonceReady ??= (
-      client as unknown as { nonce_manager: { initialize(): Promise<void> } }
-    ).nonce_manager
-      .initialize()
-      // Si la carga inicial falla, se deja reintentar en la siguiente escritura
-      // en vez de dar por bueno un contador a cero para siempre.
-      .catch(() => {
-        this.nonceReady = null;
-      });
+    const nonceManager = (
+      client as unknown as {
+        nonce_manager: { initialize(): Promise<void>; nonces?: Map<number, number> };
+      }
+    ).nonce_manager;
+    this.nonceReady ??= nonceManager.initialize().catch(() => {
+      this.nonceReady = null;
+    });
     await this.nonceReady;
+    // `initialize()` del SDK traga el fallo de `nextNonce` (un console.warn) y
+    // RESUELVE con el contador a cero, así que el `.catch` de arriba nunca veía
+    // nada y la carga no se volvía a intentar jamás: la primera escritura salía
+    // con nonce 0 → 21104 (001/F-53). Un contador a cero tras cargar no se da
+    // por bueno: se olvida la promesa y la siguiente escritura vuelve a cargar.
+    // Una clave recién creada también empieza en cero y paga una lectura de
+    // más por escritura hasta su primera transacción; nada más.
+    if (nonceManager.nonces && (nonceManager.nonces.get(this.creds.apiKeyIndex) ?? 0) === 0) {
+      this.nonceReady = null;
+    }
     return client;
   }
 
@@ -497,7 +510,10 @@ export class LighterAdapter implements ExchangeAdapter {
   }
 
   /** Relee el contador de nonce del venue. Ver `signerReady` y `signedWrite`. */
-  private refreshNonce(client: SignerClient): Promise<void> {
+  private async refreshNonce(client: SignerClient): Promise<void> {
+    // Releer el contador es una petición más al venue (`nextNonce`), y el SDK
+    // la hacía fuera del limitador: se descuenta del presupuesto (001/F-10).
+    await this.budget.take(this.venue, lighterCost('nextNonce'), 'write', this.testnet);
     return (
       client as unknown as {
         nonce_manager: { hard_refresh_nonce(apiKeyIndex: number): Promise<void> };
@@ -509,6 +525,16 @@ export class LighterAdapter implements ExchangeAdapter {
   private unwrap<T>(result: [T, unknown, string | null] | [T, string | null]): T {
     const error = result[result.length - 1];
     if (typeof error === 'string' && error.length > 0) {
+      // La tupla del SDK solo trae el texto, sin estado HTTP: «Too Many
+      // Requests!» (23000) casaba con RETRYABLE y `withWriteRetry` lo
+      // reintentaba tres veces, justo lo que alarga el corte del cortafuegos
+      // (60 s para toda la IP). Es THROTTLED, y el enfriamiento se registra
+      // aquí porque este camino no pasa por `call()` (001/F-48).
+      if (/too many requests|human verification|<html/i.test(error)) {
+        const corte = new ExchangeError('THROTTLED', error, this.venue);
+        this.cooldown.registrar(corte);
+        throw corte;
+      }
       throw toExchangeError(error, this.venue);
     }
     return result[0];
@@ -519,13 +545,26 @@ export class LighterAdapter implements ExchangeAdapter {
    * `budget` lo que manda todo lo que sale por esta IP — que es el ámbito en el
    * que el venue cuenta de verdad.
    */
-  private call<T>(fn: () => Promise<T>, weight = lighterCost('')): Promise<T> {
+  private call<T>(
+    fn: () => Promise<T>,
+    weight = lighterCost(''),
+    // Cancelar y fijar el apalancamiento pasaban por aquí como lecturas: un
+    // pánico competía por las 60 peticiones por minuto con las lecturas de los
+    // demás bots (001/F-10). Con `write` entran hasta el fondo de la reserva.
+    priority: BudgetPriority = 'read',
+  ): Promise<T> {
     return withRetry(
       async () => {
         // Antes que el presupuesto y que la red: si el venue nos tiene
         // cortados, la mejor petición es la que no se manda.
         this.cooldown.comprobar();
-        await this.budget.take(this.venue, weight, 'read', this.testnet);
+        // La cabecera `authorization` del SDK se renovaba solo al pedir velas
+        // por `publicGet`, y un adaptador de bot nunca las pide: sus lecturas
+        // de cuenta salían sin firmar y gastaban el cupo de IP (60/min para
+        // todos los bots de la máquina) en vez del de la cuenta (001/F-49). El
+        // SDK lee `baseOptions.headers` en cada petición: basta renovarla aquí.
+        this.authHeaderToken();
+        await this.budget.take(this.venue, weight, priority, this.testnet);
         return this.limiter.run(fn).catch((e) => {
           this.cooldown.registrar(e);
           throw e;
@@ -546,6 +585,7 @@ export class LighterAdapter implements ExchangeAdapter {
     return withRetry(
       async () => {
         this.cooldown.comprobar();
+        this.authHeaderToken(); // Ver `call()` (001/F-49).
         await this.budget.take(this.venue, weight, 'read', this.testnet);
         return this.pollLimiter.run(fn).catch((e) => {
           this.cooldown.registrar(e);
@@ -595,9 +635,13 @@ export class LighterAdapter implements ExchangeAdapter {
           minQty: d.min_base_amount ?? null,
           maxQty: null,
           maxLeverage: maxLeverageOf(d),
+          maintenanceMarginRate: maintenanceRateOf(d),
           priceDecimals: d.supported_price_decimals,
           qtyDecimals: d.supported_size_decimals,
           active: d.status === 'active',
+          // «Active Orders — Standard: Per Market 30» (docs/rate-limits). El
+          // tier no se conoce desde aquí: la vista previa avisa, no veta.
+          maxActiveOrders: 30,
         } satisfies MarketSpec;
       });
   }
@@ -702,7 +746,20 @@ export class LighterAdapter implements ExchangeAdapter {
     call: <T>(fn: () => Promise<T>) => Promise<T>,
   ): Promise<VenueOrder[]> {
     const specs = await this.markets.all();
-    const targets = symbol ? [symbol] : specs.filter((s) => s.active).map((s) => s.symbol);
+    // Sin símbolo son tantas peticiones FIRMADAS como mercados activos (216 en
+    // mainnet) contra un cupo Standard de 60 por minuto: más de tres minutos
+    // del cupo de toda la IP en una llamada, y el CAPTCHA del cortafuegos
+    // detrás. Ningún consumidor lo necesita así; se rechaza (001/F-10).
+    if (!symbol) {
+      throw new ExchangeError(
+        'FATAL',
+        'Lighter: consultar las órdenes abiertas exige un símbolo (sin él serían ' +
+          specs.filter((s) => s.active).length +
+          ' peticiones firmadas).',
+        this.venue,
+      );
+    }
+    const targets = [symbol];
 
     const batches = await Promise.all(
       targets.map(async (sym) => {
@@ -765,16 +822,16 @@ export class LighterAdapter implements ExchangeAdapter {
         return {
           venue: Venue.LIGHTER,
           symbol,
-          // NO se marca `liquidation`: el payload de trades de Lighter no trae
-          // ningún campo que lo diga, al contrario que Hyperliquid (`dir`) y
-          // Aster (tipo de orden `LIQUIDATION`). Sin la marca, una liquidación
-          // aquí se comporta como siempre: la posición desaparece del venue pero
-          // la contabilidad del bot no se entera. Si el campo aparece en su API,
-          // añadirlo es una línea.
-          //
           // El `trade_id` es del venue y único dentro de él; el ledger deduplica
           // por (orden, id), así que basta con esto.
           venueFillId: String(t.trade_id),
+          // `Trade.type` del SDK: `trade`, `liquidation`, `deleverage` o
+          // `market-settlement`. Todo lo que no es `trade` es un cierre FORZADO
+          // por el venue, y el motor tiene que tratarlo como liquidación (pausar
+          // y avisar) en vez de contarlo como ejecución propia. Un comentario
+          // aquí afirmaba que el payload no traía ningún campo que lo dijera
+          // (001/F-05).
+          ...(t.type && t.type !== 'trade' ? { liquidation: true } : {}),
           venueOrderId: String(weAsk ? t.ask_id : t.bid_id),
           clientOrderId: String(weAsk ? t.ask_client_id : t.bid_client_id),
           side: weAsk ? ('SELL' as const) : ('BUY' as const),
@@ -1021,9 +1078,9 @@ export class LighterAdapter implements ExchangeAdapter {
     try {
       const token = this.authToken();
       this.authCache = { token, until: Date.now() + AUTH_TOKEN_TTL_MS };
-      // El SDK lee `baseOptions.headers` en CADA petición, así que mutar este
-      // mismo objeto basta para que el token nuevo llegue también a las
-      // llamadas que hace el SDK por su cuenta.
+      // `sdkHeaders` es la copia que el SDK lee en cada petición (ver el
+      // constructor): así el token nuevo llega también a las llamadas que hace
+      // el SDK por su cuenta.
       this.sdkHeaders.authorization = token;
       return token;
     } catch {
@@ -1120,6 +1177,17 @@ export class LighterAdapter implements ExchangeAdapter {
     // con ciclo nuevo el bot volvía a entrar y a salir (001/F-46). La rama de
     // abajo, con `ORDER_TYPE_STOP_LOSS`, existía y era inalcanzable.
     if (req.type === 'MARKET' && !condicional) {
+      // Precio tope de la MARKET: el pedido (el mark) con un 5 % de holgura en
+      // contra, la misma que aplica Hyperliquid y que ya llevan aquí los
+      // disparadores a mercado. Sin ella, «the worst price you're willing to
+      // accept» era el mark exacto: con el libro un tick peor, el secuenciador
+      // la cancelaba y el acuse de abajo la daba por ejecutada (001/F-47).
+      const precioMercado = scaled(
+        D(req.price ?? '0')
+          .mul(isAsk ? '0.95' : '1.05')
+          .toFixed(spec.priceDecimals, isAsk ? Decimal.ROUND_DOWN : Decimal.ROUND_UP),
+        spec.priceDecimals,
+      );
       // También la rama MARKET verifica antes de reenviar. Es donde el reenvío
       // a ciegas hace más daño: una market ya ejecutada no aparece entre las
       // abiertas, así que sin mirar las ejecuciones se reenviaría y la posición
@@ -1135,17 +1203,25 @@ export class LighterAdapter implements ExchangeAdapter {
                 marketId,
                 clientIndex,
                 baseAmount,
-                price,
+                precioMercado,
                 isAsk,
                 req.reduceOnly === true,
               ),
             ),
           );
+          const yaEstaba = await this.acuseSiYaEstaba(result, req, String(clientIndex));
+          if (yaEstaba) return yaEstaba;
           this.unwrap(result as [unknown, unknown, string | null]);
+          // PENDING, no FILLED: un 200 de sendTx solo dice que la transacción
+          // tiene la sintaxis correcta («does not guarantee the execution»).
+          // La ejecución la confirma el sondeo de trades; si el secuenciador
+          // la canceló, la fila vence a los cinco minutos (001/F-37) y el
+          // nivel se recoloca. Antes se decía FILLED por decreto y una entrada
+          // que no cruzó quedaba «ejecutada» en la base para siempre.
           return {
             clientOrderId: req.clientOrderId,
             venueOrderId: String(clientIndex),
-            status: OrderStatus.FILLED,
+            status: OrderStatus.PENDING,
             ts: Date.now(),
           };
         },
@@ -1155,12 +1231,14 @@ export class LighterAdapter implements ExchangeAdapter {
     }
 
     // Un disparador a MERCADO es IOC, como hace el propio SDK en
-    // `create_sl_order`/`create_tp_order`; el resto, GTT (o post-only).
+    // `create_sl_order`/`create_tp_order`; una LIMIT que pide IOC, también
+    // (antes el tif de la petición se ignoraba y salía GTT, 001/F-16); el
+    // resto, GTT (o post-only).
     const disparoAMercado = condicional && req.type === 'MARKET';
     const timeInForce =
       req.type === 'POST_ONLY'
         ? SignerClient.ORDER_TIME_IN_FORCE_POST_ONLY
-        : disparoAMercado
+        : disparoAMercado || req.timeInForce === 'IOC'
           ? SignerClient.ORDER_TIME_IN_FORCE_IMMEDIATE_OR_CANCEL
           : SignerClient.ORDER_TIME_IN_FORCE_GOOD_TILL_TIME;
 
@@ -1215,6 +1293,8 @@ export class LighterAdapter implements ExchangeAdapter {
             ),
           ),
         );
+        const yaEstaba = await this.acuseSiYaEstaba(result, req, String(clientIndex));
+        if (yaEstaba) return yaEstaba;
         this.unwrap(result as [unknown, unknown, string | null]);
 
         // Lighter no devuelve el `order_index` definitivo en el ack: se asigna
@@ -1231,6 +1311,23 @@ export class LighterAdapter implements ExchangeAdapter {
       () => this.findPlaced(req.symbol, req.clientOrderId, String(clientIndex)),
       { venue: this.venue },
     );
+  }
+
+  /**
+   * «client order index already exists» (21728) tras un acuse perdido: la orden
+   * ESTÁ. Marcarla rechazada dejaba la base mintiendo hasta la siguiente
+   * reconciliación (001/F-52). Se busca y se devuelve su acuse; si no aparece,
+   * null, y `unwrap` lanza el error tal cual.
+   */
+  private async acuseSiYaEstaba(
+    result: unknown,
+    req: PlaceOrderRequest,
+    clientIndex: string,
+  ): Promise<OrderAck | null> {
+    const tupla = result as unknown[];
+    const error = tupla[tupla.length - 1];
+    if (typeof error !== 'string' || !/client order index already exists/i.test(error)) return null;
+    return this.findPlaced(req.symbol, req.clientOrderId, clientIndex);
   }
 
   /**
@@ -1284,7 +1381,11 @@ export class LighterAdapter implements ExchangeAdapter {
     }
     this.unwrap(
       (await this.signedWrite((signer) =>
-        this.call(() => signer.cancel_order(marketId, BigInt(orderIndex))),
+        this.call(
+          () => signer.cancel_order(marketId, BigInt(orderIndex)),
+          lighterCost('sendTx'),
+          'write',
+        ),
       )) as [unknown, unknown, string | null],
     );
   }
@@ -1312,7 +1413,11 @@ export class LighterAdapter implements ExchangeAdapter {
       if (!orderIndex) continue;
       this.unwrap(
         (await this.signedWrite((signer) =>
-          this.call(() => signer.cancel_order(marketId, BigInt(orderIndex))),
+          this.call(
+            () => signer.cancel_order(marketId, BigInt(orderIndex)),
+            lighterCost('sendTx'),
+            'write',
+          ),
         )) as [unknown, unknown, string | null],
       );
     }
@@ -1326,22 +1431,25 @@ export class LighterAdapter implements ExchangeAdapter {
   async cancelAll(_symbol: string): Promise<void> {
     this.unwrap(
       await this.signedWrite((signer) =>
-        this.call(() =>
-          // El segundo argumento va a CERO, no a `Date.now()`.
-          //
-          // Con `CANCEL_ALL_TIF_IMMEDIATE` el venue exige que el instante venga
-          // vacio y rechaza la transaccion con «CancelAllTime should be nil»:
-          // el kill-switch de Lighter no cancelaba NADA y devolvia un error que
-          // no se parecia en nada al problema. Comprobado contra testnet, con
-          // dos ordenes abiertas y nonce explicito para aislar la causa:
-          //
-          //   IMMEDIATE + Date.now()  -> «CancelAllTime should be nil»
-          //   IMMEDIATE + 0           -> OK, las dos canceladas
-          //   SCHEDULED + ahora+60 s  -> «invalid cancel all time»
-          //
-          // El instante solo lo lleva la variante programada, y ni siquiera con
-          // un valor en milisegundos: aqui no se usa.
-          signer.cancel_all_orders(SignerClient.CANCEL_ALL_TIF_IMMEDIATE, 0),
+        this.call(
+          () =>
+            // El segundo argumento va a CERO, no a `Date.now()`.
+            //
+            // Con `CANCEL_ALL_TIF_IMMEDIATE` el venue exige que el instante venga
+            // vacio y rechaza la transaccion con «CancelAllTime should be nil»:
+            // el kill-switch de Lighter no cancelaba NADA y devolvia un error que
+            // no se parecia en nada al problema. Comprobado contra testnet, con
+            // dos ordenes abiertas y nonce explicito para aislar la causa:
+            //
+            //   IMMEDIATE + Date.now()  -> «CancelAllTime should be nil»
+            //   IMMEDIATE + 0           -> OK, las dos canceladas
+            //   SCHEDULED + ahora+60 s  -> «invalid cancel all time»
+            //
+            // El instante solo lo lleva la variante programada, y ni siquiera con
+            // un valor en milisegundos: aqui no se usa.
+            signer.cancel_all_orders(SignerClient.CANCEL_ALL_TIF_IMMEDIATE, 0),
+          lighterCost('sendTx'),
+          'write',
         ),
       ),
     );
@@ -1351,12 +1459,15 @@ export class LighterAdapter implements ExchangeAdapter {
     const marketId = await this.marketIdOf(symbol);
     this.unwrap(
       await this.signedWrite((signer) =>
-        this.call(() =>
-          signer.update_leverage(
-            marketId,
-            mode === 'CROSS' ? SignerClient.CROSS_MARGIN_MODE : SignerClient.ISOLATED_MARGIN_MODE,
-            leverage,
-          ),
+        this.call(
+          () =>
+            signer.update_leverage(
+              marketId,
+              mode === 'CROSS' ? SignerClient.CROSS_MARGIN_MODE : SignerClient.ISOLATED_MARGIN_MODE,
+              leverage,
+            ),
+          lighterCost('sendTx'),
+          'write',
         ),
       ),
     );
@@ -1698,9 +1809,15 @@ export class LighterAdapter implements ExchangeAdapter {
       // socket vuelve pero no llega un solo dato: la avería más difícil de ver,
       // porque el canal está abierto y la salud dice UP.
       onOpen: (socket) => {
-        for (const channel of this.channels) {
-          socket.send(JSON.stringify({ type: 'subscribe', channel }));
-        }
+        // Espaciado (ver `resubscribePaced`). Si el socket se cae a medias, el
+        // envío falla en silencio y la siguiente apertura vuelve a empezar.
+        void resubscribePaced([...this.channels], (channel) => {
+          try {
+            socket.send(JSON.stringify({ type: 'subscribe', channel }));
+          } catch {
+            // El socket ya no está: la próxima reconexión reenviará todo.
+          }
+        });
       },
       keepalive: {
         everyMs: WS_PING_EVERY_MS,
@@ -1969,8 +2086,39 @@ export class LighterAdapter implements ExchangeAdapter {
           : null,
       status: filled.isZero() ? OrderStatus.OPEN : OrderStatus.PARTIALLY_FILLED,
       reduceOnly: o.reduce_only === true,
-      createdAt: Date.now(),
+      // La marca del venue, no la del sondeo: con `Date.now()` todas las
+      // órdenes parecían recién puestas y la caducidad por edad de los market
+      // makers (`orderMaxAgeSeconds`) nunca disparaba en Lighter (001/F-55).
+      createdAt: creadaEn(o),
     };
+  }
+}
+
+/** Hora de creación de una orden del venue, en ms; si no la trae, ahora. */
+function creadaEn(o: { timestamp?: number; created_at?: number }): number {
+  const marca = o.timestamp || o.created_at;
+  return marca ? normalizeTs(marca) : Date.now();
+}
+
+/**
+ * Reenvío de suscripciones al reconectar, por debajo de «200 mensajes por
+ * minuto» (001/F-56): los primeros cincuenta de golpe —un bot tiene dos o tres
+ * canales y no nota nada— y el resto cada 350 ms. Sin esto, el adaptador de
+ * datos de mercado con muchos gráficos reenviaba todo en ráfaga y entraba en
+ * bucle 30009 → desconexión → reconexión.
+ */
+export async function resubscribePaced(
+  channels: Iterable<string>,
+  send: (channel: string) => void,
+  sleep: (ms: number) => Promise<void> = (ms) => new Promise((r) => setTimeout(r, ms)),
+  burst = 50,
+  spacingMs = 350,
+): Promise<void> {
+  let enviados = 0;
+  for (const channel of channels) {
+    if (enviados >= burst) await sleep(spacingMs);
+    send(channel);
+    enviados++;
   }
 }
 
@@ -2041,6 +2189,15 @@ function maxLeverageOf(detail: PerpsOrderBookDetail): number {
   const fraction = Number(detail.min_initial_margin_fraction);
   if (!Number.isFinite(fraction) || fraction <= 0) return 20;
   return Math.max(1, Math.min(100, Math.floor(10_000 / fraction)));
+}
+
+/**
+ * `maintenance_margin_fraction` viene en 1/10 000, como la inicial. Null si el
+ * venue no lo trae: entonces manda la regla de `maintenanceMarginRateOf` (001/F-93).
+ */
+function maintenanceRateOf(detail: PerpsOrderBookDetail): number | null {
+  const fraction = Number(detail.maintenance_margin_fraction);
+  return Number.isFinite(fraction) && fraction > 0 ? fraction / 10_000 : null;
 }
 
 function leverageFromMarginFraction(fraction: string | number | undefined): number {

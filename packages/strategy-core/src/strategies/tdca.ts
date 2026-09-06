@@ -200,7 +200,9 @@ export const tdca: Strategy<TdcaConfig> = {
   },
 
   preview(cfg: TdcaConfig, market: MarketSpec, refPrice: string): PreviewResult {
-    const issues = validateCommon(cfg, market).concat(this.validate(cfg, market).issues);
+    // `validate()` ya incluye los avisos comunes: concatenarlos otra vez los
+    // enseñaba dos veces en la vista previa (001/F-14).
+    const issues = [...this.validate(cfg, market).issues];
     // Ver `invalidPreview`: sin config valida, calcular es reventar.
     if (issues.some((i) => i.severity === 'ERROR')) return invalidPreview(issues);
     const ref = D(refPrice);
@@ -236,6 +238,7 @@ export const tdca: Strategy<TdcaConfig> = {
       refPrice,
       direction: cfg.direction,
       leverage: cfg.leverage,
+      marginMode: cfg.marginMode,
       takeProfitPct: cfg.takeProfitPct,
       issues,
     });
@@ -292,9 +295,19 @@ export const tdca: Strategy<TdcaConfig> = {
       }
     }
 
-    if (cfg.maxPositionNotional) {
-      const cap = D(cfg.maxPositionNotional);
-      if (cap.gt(0) && pos.mul(mark).gte(cap)) blockers.push('tope de posición alcanzado');
+    // Espera entre ciclos (001/F-12): el campo común no se leía aquí.
+    const espera = ctx.cycle.cooldownUntil ?? 0;
+    if (espera > ctx.now) {
+      blockers.push('espera entre ciclos: faltan ' + Math.ceil((espera - ctx.now) / 1000) + ' s');
+    }
+
+    // Dos topes con la misma semántica: el propio (`maxPositionNotional`) y el
+    // común (`maxNotionalCap`), que aquí no se leía (001/F-12). Manda el menor.
+    const topes = [cfg.maxPositionNotional, cfg.maxNotionalCap]
+      .map((t) => (t ? D(t) : D(0)))
+      .filter((t) => t.gt(0));
+    if (topes.length > 0 && pos.mul(mark).gte(topes.reduce((a, b) => (a.lt(b) ? a : b)))) {
+      blockers.push('tope de posición alcanzado');
     }
 
     if (blockers.length === 0) {

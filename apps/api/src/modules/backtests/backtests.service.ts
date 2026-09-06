@@ -242,6 +242,10 @@ export class BacktestsService {
             sourceSymbol,
             interval: dto.interval,
             venue: bot.venue,
+            // Con la estrategia y su configuración: los market makers llevan sus
+            // propios avisos de paridad (001/F-65).
+            strategy: bot.strategy,
+            config: revision.config as Record<string, unknown>,
           }),
           ...out.warnings,
           ...(historia.barsMissing > 0

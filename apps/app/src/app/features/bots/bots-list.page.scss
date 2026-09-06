@@ -67,6 +67,24 @@
   }
 }
 
+/* La linea de datos bajo las cifras: posicion y su valor, margen, tiempo
+   activo. Texto pequeno y en gris, separado por huecos: es contexto, no un dato
+   mas de la rejilla, y en la rejilla no cabia sin partirla en dos filas. */
+.bot .facts {
+  margin: -3px 0 0;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 3px 12px;
+  font-size: 11px;
+  line-height: 1.4;
+  color: var(--text-3);
+
+  b {
+    font-weight: 600;
+    color: var(--text-2);
+  }
+}
+
 /* Ordenar. Pastillas pequenas y no un segmento: es un ajuste secundario de la
    lista, no una seccion, y un tercer segmento debajo de dos toolbars pesaria
    mas que la propia lista. */

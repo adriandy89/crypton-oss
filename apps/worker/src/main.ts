@@ -55,7 +55,7 @@ async function bootstrap(): Promise<void> {
   health.listen(port, () => logger.log(`Salud del motor en :${port}/health`));
 
   let cerrando = false;
-  const stop = async (signal: string): Promise<void> => {
+  const stop = async (signal: string, codigo = 0): Promise<void> => {
     if (cerrando) return;
     cerrando = true;
     logger.log(`Recibida ${signal}: cerrando el motor...`);
@@ -73,7 +73,9 @@ async function bootstrap(): Promise<void> {
       }, SHUTDOWN_TIMEOUT_MS).unref(),
     );
     await Promise.race([cierre, tope]);
-    process.exit(0);
+    // Código 1 en un fatal: con 0 el orquestador cree que fue un apagado
+    // ordenado y no distingue un reinicio por avería de uno pedido (001/F-18).
+    process.exit(codigo);
   };
   process.on('SIGTERM', () => void stop('SIGTERM'));
   process.on('SIGINT', () => void stop('SIGINT'));
@@ -89,11 +91,11 @@ async function bootstrap(): Promise<void> {
    */
   process.on('unhandledRejection', (reason) => {
     logger.error(`Promesa sin manejar: ${reason instanceof Error ? reason.stack : String(reason)}`);
-    void stop('unhandledRejection');
+    void stop('unhandledRejection', 1);
   });
   process.on('uncaughtException', (error) => {
     logger.error(`Excepcion sin capturar: ${error.stack ?? error.message}`);
-    void stop('uncaughtException');
+    void stop('uncaughtException', 1);
   });
 
   logger.log('Motor de bots en marcha');

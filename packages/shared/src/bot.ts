@@ -250,6 +250,16 @@ export interface BotSummary {
   realizedPnl: string;
   unrealizedPnl: string;
   roiPct: string;
+  /**
+   * Capital actual: lo asignado más lo realizado más lo abierto. Es patrimonio,
+   * no resultado —la curva del detalle sigue siendo «resultado acumulado»—, y es
+   * la cifra que contesta «¿cuánto dinero tiene ahora este bot?» (spec 025).
+   */
+  currentCapital: string;
+  /** Valor de la posición a precio de marca (|cantidad| × marca). null sin precio. */
+  positionValue: string | null;
+  /** Margen inmovilizado por la posición, del último snapshot. */
+  marginUsed: string;
   positionQty: string;
   averageEntry: string | null;
   liquidationPrice: string | null;

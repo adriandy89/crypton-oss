@@ -182,11 +182,17 @@ export function reconcile(input: ReconcileInput): ReconcilePlan {
     }
 
     const priceChanged = !samePrice(have.price, want.price, market);
-    // La cantidad se compara contra lo que QUEDA vivo, no contra la original:
-    // una orden parcialmente ejecutada sigue siendo correcta aunque su tamaño
-    // inicial ya no coincida con lo deseado.
+    // Una orden parcialmente ejecutada sigue siendo correcta en dos casos, y los
+    // dos se aceptan: si lo deseado coincide con lo que QUEDA vivo (una salida
+    // cuyo tamaño sale de la posición: el plan pide el resto) o con la cantidad
+    // ORIGINAL (una línea de tamaño fijo: retícula, recompra, cotización, en las
+    // que el plan sigue pidiendo la línea entera). Antes solo valía el resto, y
+    // una línea de 1,0 con 0,3 ejecutado se cancelaba y recolocaba entera: 1,3
+    // en esa línea, un 30 % más de margen del diseñado (001/F-83). Si lo deseado
+    // no casa con ninguna de las dos, la cantidad cambió de verdad.
     const remaining = D(have.qty).minus(have.filledQty);
-    const qtyChanged = !sameQty(remaining.toFixed(), want.qty, market);
+    const qtyChanged =
+      !sameQty(remaining.toFixed(), want.qty, market) && !sameQty(have.qty, want.qty, market);
 
     if (priceChanged || qtyChanged) {
       toReplace.push({

@@ -2,6 +2,7 @@ import { Injectable, Logger } from '@nestjs/common';
 import {
   D,
   Decimal,
+  startOfDay,
   type CycleState,
   type DesiredOrder,
   type Fill,
@@ -68,51 +69,9 @@ export interface RiskGuards {
 /** Cuánto vale la pérdida diaria de un usuario antes de recalcularla. */
 const DAILY_PNL_TTL_MS = 20_000;
 
-/**
- * Medianoche en la zona del usuario, expresada en hora absoluta.
- *
- * Se usa el desfase que `Intl` reporta para ESA zona en este momento, así que
- * el corte del día es el que el usuario tiene en su reloj y no el del
- * contenedor —que en Docker es UTC y no coincide con casi nadie.
- */
-function startOfDay(timezone: string | null | undefined): Date {
-  const now = new Date();
-  if (!timezone) {
-    const midnight = new Date(now);
-    midnight.setHours(0, 0, 0, 0);
-    return midnight;
-  }
-  try {
-    const parts = new Intl.DateTimeFormat('en-CA', {
-      timeZone: timezone,
-      year: 'numeric',
-      month: '2-digit',
-      day: '2-digit',
-      hour: '2-digit',
-      minute: '2-digit',
-      second: '2-digit',
-      hour12: false,
-    }).formatToParts(now);
-    const get = (t: string): number => Number(parts.find((p) => p.type === t)?.value ?? 0);
-    // Diferencia entre la hora local del usuario y la UTC, en milisegundos.
-    const asUtc = Date.UTC(
-      get('year'),
-      get('month') - 1,
-      get('day'),
-      get('hour') % 24,
-      get('minute'),
-      get('second'),
-    );
-    const offset = asUtc - now.getTime();
-    return new Date(Date.UTC(get('year'), get('month') - 1, get('day')) - offset);
-  } catch {
-    // Zona desconocida: se cae a la del proceso en vez de fallar. Un límite
-    // diario que se corta a la hora equivocada es malo; no comprobarlo, peor.
-    const midnight = new Date(now);
-    midnight.setHours(0, 0, 0, 0);
-    return midnight;
-  }
-}
+// La medianoche del usuario (`startOfDay`) vive en `shared` desde el spec 019:
+// la API la calculaba a la medianoche del servidor y este proceso a la del
+// usuario, dos «días» distintos para la misma guarda (001/F-43).
 
 @Injectable()
 export class BotStore {
@@ -125,6 +84,18 @@ export class BotStore {
     private readonly db: DbService,
     private readonly bus: BusService,
   ) {}
+
+  /**
+   * Escrituras «best-effort»: no tumban el tick, pero tampoco callan. Se
+   * tragaban con `.catch(() => undefined)` y una base que rechazara UPDATEs
+   * dejaba filas desalineadas sin una sola línea de registro (001/F-18).
+   */
+  private mudo(que: string): (e: unknown) => undefined {
+    return (e: unknown) => {
+      this.logger.warn(`Escritura best-effort fallida (${que}): ${(e as Error).message}`);
+      return undefined;
+    };
+  }
 
   // ═══════════════════════════════════════════════════════════════
   // Estado del bot
@@ -261,7 +232,7 @@ export class BotStore {
         },
         data: { status: 'CANCELED', closed_at: new Date() },
       })
-      .catch(() => undefined);
+      .catch(this.mudo('marcar canceladas por id'));
   }
 
   /**
@@ -290,6 +261,15 @@ export class BotStore {
       minNotional: m.min_notional?.toString() ?? null,
       minQty: m.min_qty?.toString() ?? null,
       maxQty: m.max_qty?.toString() ?? null,
+      // Los cuatro campos del venue que los specs 013, 014, 019 y 023 añadieron
+      // a `MarketSpec`. Sin ellos aquí, la estrategia redondeaba sin la regla de
+      // cifras significativas de Hyperliquid mientras el adaptador sí la aplicaba
+      // (F-04 seguía vivo) y el cierre troceado no conocía su tope (spec 024).
+      maxMarketQty: m.max_market_qty?.toString() ?? null,
+      maxActiveOrders: m.max_active_orders ?? null,
+      maxSignificantDigits: m.max_significant_digits ?? null,
+      maintenanceMarginRate:
+        m.maintenance_margin_rate == null ? null : Number(m.maintenance_margin_rate),
       maxLeverage: m.max_leverage,
       priceDecimals: m.price_decimals,
       qtyDecimals: m.qty_decimals,
@@ -359,7 +339,7 @@ export class BotStore {
         where: { client_order_id: clientOrderId },
         data: { status: 'REJECTED', raw_error: error, closed_at: new Date() },
       })
-      .catch(() => undefined);
+      .catch(this.mudo('marcar rechazada'));
   }
 
   /**
@@ -382,7 +362,7 @@ export class BotStore {
         },
         data: { status: 'CANCELED', closed_at: new Date() },
       })
-      .catch(() => undefined);
+      .catch(this.mudo('marcar cancelada'));
   }
 
   /** Refleja en la fila lo que el venue dice de la orden. */
@@ -401,7 +381,7 @@ export class BotStore {
             : {}),
         },
       })
-      .catch(() => undefined);
+      .catch(this.mudo('sincronizar estado de orden'));
   }
 
   // ═══════════════════════════════════════════════════════════════
@@ -461,12 +441,19 @@ export class BotStore {
       throw e;
     }
 
-    // El acumulado se INCREMENTA en la base, no se lee-suma-escribe aquí: dos
-    // ejecuciones de la misma orden llegando a la vez leían el mismo valor y la
-    // segunda pisaba a la primera.
+    // El acumulado es la SUMA de las ejecuciones del ledger, deduplicadas por
+    // id del venue, y no un incremento sobre lo que hubiera: `syncOrderState`
+    // escribe el acumulado ABSOLUTO que dice el venue, y un incremento encima
+    // de ese valor contaba dos veces el mismo trozo y daba la orden por
+    // ejecutada antes de tiempo (001/F-17). La suma es idempotente venga por el
+    // camino que venga, y se escribe en un solo update.
+    const suma = await this.db.botFill.aggregate({
+      where: { bot_order_id: order.id },
+      _sum: { qty: true },
+    });
     const updated = await this.db.botOrder.update({
       where: { id: order.id },
-      data: { filled_qty: { increment: fill.qty }, avg_price: fill.price },
+      data: { filled_qty: (suma._sum.qty ?? fill.qty).toString(), avg_price: fill.price },
       select: { filled_qty: true, qty: true },
     });
 
@@ -591,7 +578,13 @@ export class BotStore {
     botId: string,
     cycle: CycleState,
     fill: Fill,
-    opts: { recycleLevelOnExit?: boolean; trackMmStats?: boolean; cooldownMinutes?: number } = {},
+    opts: {
+      recycleLevelOnExit?: boolean;
+      rebuysOffLevelIndexes?: boolean;
+      keepCycleOnFlat?: boolean;
+      trackMmStats?: boolean;
+      cooldownMinutes?: number;
+    } = {},
   ): Promise<CycleState> {
     const outcome = await this.db.$transaction(async (tx) => {
       // `FOR UPDATE` sobre el ciclo abierto: cualquier otra transacción que
@@ -608,6 +601,18 @@ export class BotStore {
       const dbCycle = await tx.botCycle.findUniqueOrThrow({
         where: { id: locked[0].id },
       });
+
+      // ¿Completa esta ejecución su orden? `recordFill` ya acumuló el trozo en
+      // la fila; si aún queda cantidad viva, el escalón no se da por tomado y
+      // el plan sigue deseando la línea (001/F-83). Sin fila (una liquidación
+      // sintética) se toma por completa, que es lo que era.
+      const orden = fill.clientOrderId
+        ? await tx.botOrder.findUnique({
+            where: { client_order_id: fill.clientOrderId },
+            select: { qty: true, filled_qty: true },
+          })
+        : null;
+      const levelComplete = orden ? D(orden.filled_qty.toString()).gte(orden.qty.toString()) : true;
 
       // La aritmética la hace `cycleAfterFill`, en `strategy-core`. Aquí solo
       // queda el bloqueo, leer la fila y escribirla: lo que de verdad es de la
@@ -626,7 +631,13 @@ export class BotStore {
           lastEntryAt: dbCycle.last_entry_at ? dbCycle.last_entry_at.getTime() : null,
         },
         fill,
-        { recycleLevelOnExit: opts.recycleLevelOnExit, cooldownMinutes: opts.cooldownMinutes },
+        {
+          recycleLevelOnExit: opts.recycleLevelOnExit,
+          rebuysOffLevelIndexes: opts.rebuysOffLevelIndexes,
+          keepCycleOnFlat: opts.keepCycleOnFlat,
+          cooldownMinutes: opts.cooldownMinutes,
+          levelComplete,
+        },
         Date.now(),
       );
 
@@ -818,7 +829,7 @@ export class BotStore {
       })
       // El bot puede haberse borrado entre la lectura y la escritura: perder
       // una marca de agua no justifica tumbar el tick.
-      .catch(() => undefined);
+      .catch(this.mudo('marcas de market making'));
   }
 
   async saveCycleScratch(botId: string, scratch: Record<string, unknown>): Promise<void> {
@@ -1011,6 +1022,7 @@ export class BotStore {
     botId: string,
     venueQty: string,
     recycleLevelOnExit: boolean,
+    rebuysOffLevelIndexes = false,
   ): Promise<{ before: string; after: string; entriesFilled: number; indexes: number[] } | null> {
     const cycle = await this.db.botCycle.findFirst({
       where: { bot_id: botId, closed_at: null },
@@ -1032,7 +1044,12 @@ export class BotStore {
     });
 
     const indexes = new Set<number>();
-    for (const o of orders) if (ENTRY_KINDS.has(o.level_kind)) indexes.add(o.level_index);
+    for (const o of orders) {
+      // Misma regla que en `cycleAfterFill`: las recompras de GridMart no
+      // ocupan escalón (001/F-82).
+      if (rebuysOffLevelIndexes && o.level_kind === 'GRID_BUY') continue;
+      if (ENTRY_KINDS.has(o.level_kind)) indexes.add(o.level_index);
+    }
     // Misma regla que en `applyFillToCycle`: donde la estrategia recicla el
     // nivel al salir (Grid Classic), vender lo devuelve a disponible.
     if (recycleLevelOnExit) {

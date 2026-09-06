@@ -22,9 +22,9 @@ export const FIELD_LABELS: Record<string, string> = {
   'strategy.common.totalInvestmentHelp': 'Margen que este bot puede usar. No sale de tu cuenta.',
   'strategy.common.maxNotionalCap': 'Tope de exposición',
   'strategy.common.maxNotionalCapHelp':
-    'Tope del valor de la posición. Solo Martingala y GridMart lo aplican al tender la escalera; ' +
-    'la rejilla clásica lo mira después de superarlo, y la rejilla neutral, el DCA y los market makers ' +
-    'no lo leen: usa el freno propio de cada estrategia.',
+    'Tope del valor de la posición. Martingala, GridMart y la rejilla clásica lo aplican al tender, ' +
+    'cortando en el escalón o la línea que lo superaría; la rejilla neutral y el DCA lo aplican como ' +
+    'segundo tope junto al suyo; los market makers no lo leen.',
   'strategy.common.stopLossPct': 'Stop loss (%)',
   'strategy.common.maxDailyLossPct': 'Pérdida diaria máxima (%)',
   'strategy.common.cooldownMinutes': 'Espera entre ciclos (min)',
@@ -189,12 +189,13 @@ export const FIELD_LABELS: Record<string, string> = {
     'La distancia sigue la anchura real del libro en vez de ser un número fijo.',
   'strategy.mm.referencePrice': 'Precio de referencia',
   'strategy.mm.referencePriceHelp':
-    'Ancla manual. Con esto puesto el bot cotiza alrededor de este precio y no del mercado, la espera ' +
-    'tras un fill deja de actuar y nadie te avisa si el mercado se aleja del ancla: vigílalo tú.',
+    'Ancla manual. Con esto puesto el bot cotiza alrededor de este precio y no del mercado; si el ' +
+    'mercado se aleja del ancla, la nota del bot lo dice. La espera tras un fill sigue actuando.',
   'strategy.mm.positionMode': 'Modo de posición',
   'strategy.mm.positionModeHelp':
     'Automático deja el de la cuenta. En cobertura una venta abre un corto en paralelo al largo en vez ' +
-    'de reducirlo. Hoy el motor no llega a aplicar este ajuste en ningún venue: manda el modo de la cuenta.',
+    'de reducirlo. Se aplica al arrancar el bot solo en Aster (Unidireccional; Cobertura no se admite ' +
+    'allí). En Hyperliquid y Lighter no existe: manda el modo de la cuenta.',
   'strategy.mm.direction': 'Dirección',
   'strategy.mm.priceFloor': 'No operar por debajo de',
   'strategy.mm.priceFloorHelp': 'Por debajo de este precio el bot solo reduce, no abre.',
@@ -265,8 +266,8 @@ export const FIELD_LABELS: Record<string, string> = {
   'strategy.mmv2.volatilityMultiplierHelp': 'Cuánto de la volatilidad medida pasa al diferencial.',
   'strategy.mmv2.maxDynamicSpreadBps': 'Spread dinámico máximo',
   'strategy.mmv2.maxDynamicSpreadBpsHelp':
-    'Techo del diferencial compuesto. Se aplica antes de los multiplicadores de nivel y de comportamiento, ' +
-    'así que solo es un techo duro con un nivel y comportamiento Equilibrado. Con 0 se desactiva.',
+    'Techo del diferencial compuesto, aplicado después de los multiplicadores de nivel, comportamiento ' +
+    'y modo de riesgo: ninguna capa cotiza más ancha. Con 0 no hay techo (la app avisa).',
   'strategy.mmv2.useFullSizeUntilMax': 'Usar tamaño normal hasta el máximo',
   'strategy.mmv2.useFullSizeUntilMaxHelp':
     'Activado, la última capa se coloca entera o no se coloca; desactivado, se recorta al hueco.',
@@ -277,7 +278,8 @@ export const FIELD_LABELS: Record<string, string> = {
   'strategy.mmv2.positionMode': 'Modo de posición',
   'strategy.mmv2.positionModeHelp':
     'Automático deja el de la cuenta. En cobertura una venta abre un corto en paralelo al largo en vez ' +
-    'de reducirlo. Hoy el motor no llega a aplicar este ajuste en ningún venue: manda el modo de la cuenta.',
+    'de reducirlo. Se aplica al arrancar el bot solo en Aster (Unidireccional; Cobertura no se admite ' +
+    'allí). En Hyperliquid y Lighter no existe: manda el modo de la cuenta.',
   'strategy.mmv2.direction': 'Dirección',
   'strategy.mmv2.priceSource': 'Fuente de precio',
   'strategy.mmv2.priceSourceHelp':

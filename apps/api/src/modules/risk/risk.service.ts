@@ -1,6 +1,13 @@
 import { BadRequestException, ForbiddenException, Injectable, Logger } from '@nestjs/common';
-import { D, type BotConfig, type MarketSpec } from '@crypton/shared';
-import { estimateLiquidationPrice, liquidationDistancePct } from '@crypton/strategy-core';
+import {
+  D,
+  MIN_LIQUIDATION_DISTANCE_PCT,
+  maintenanceMarginRateOf,
+  maxLeverageWithinDistance,
+  startOfDay,
+  type BotConfig,
+  type MarketSpec,
+} from '@crypton/shared';
 import { DbService } from 'src/libs';
 import { UpdateRiskLimitsDto } from './dtos';
 
@@ -49,7 +56,12 @@ export class RiskService {
    * Un bot que liquida con un 4 % de movimiento adverso es una pérdida casi
    * segura, y merece un rechazo, no un aviso perdido en un tooltip.
    */
-  async assertWithinLimits(userId: string, config: BotConfig, market: MarketSpec): Promise<void> {
+  async assertWithinLimits(
+    userId: string,
+    config: BotConfig,
+    market: MarketSpec,
+    opts: { excludeBotId?: string } = {},
+  ): Promise<void> {
     const limits = await this.get(userId);
     const leverage = Number(config.leverage ?? 1);
     const investment = D(config.totalInvestment ?? 0);
@@ -71,7 +83,7 @@ export class RiskService {
     }
 
     if (limits.max_total_notional != null) {
-      const current = await this.currentTotalNotional(userId);
+      const current = await this.currentTotalNotional(userId, opts.excludeBotId);
       const projected = current.plus(notional);
       if (projected.gt(limits.max_total_notional.toString())) {
         throw new ForbiddenException(
@@ -80,17 +92,17 @@ export class RiskService {
       }
     }
 
-    // La liquidación se estima sobre el precio de referencia del mercado; el
-    // número exacto lo da el venue, pero el orden de magnitud basta para
-    // detectar una configuración temeraria antes de que exista posición.
-    const liq = estimateLiquidationPrice(1, leverage, config.direction ?? 'LONG');
-    if (liq) {
-      const distance = liquidationDistancePct(1, liq);
-      if (distance.lt(5)) {
-        throw new ForbiddenException(
-          `A ${leverage}× la liquidación llega con un movimiento adverso de solo ${distance.toFixed(1)} %. Baja el apalancamiento.`,
-        );
-      }
+    // La liquidación se estima antes de que exista posición; el número exacto
+    // lo da el venue, pero el orden de magnitud basta para detectar una
+    // configuración temeraria. Misma cuenta que `validateCommon` y el asistente,
+    // con la tasa de mantenimiento del MERCADO: la tasa plana del 0,5 %
+    // prohibía 19× en todos los pares y ningún formulario lo decía (001/F-44,
+    // F-93).
+    const tope = maxLeverageWithinDistance(maintenanceMarginRateOf(market));
+    if (leverage > tope) {
+      throw new ForbiddenException(
+        `A ${leverage}× la liquidación estimada llega con menos del ${MIN_LIQUIDATION_DISTANCE_PCT} % de movimiento adverso en ${market.symbol}: el máximo aquí es ${tope}×.`,
+      );
     }
 
     if (!market.active) {
@@ -146,9 +158,16 @@ export class RiskService {
    * discrepara, y el sintoma seria el peor posible: la pantalla diciendo «te
    * caben 5.000 mas» y el servidor respondiendo que no.
    */
-  async currentTotalNotional(userId: string) {
+  async currentTotalNotional(userId: string, excludeBotId?: string) {
+    // Al editar un bot vivo se excluye a sí mismo: contaba una vez como
+    // «actual» y otra como «nuevo», y cualquier cambio —incluso apretar el
+    // stop— recibía un 403 cerca del tope total (001/F-42).
     const bots = await this.db.bot.findMany({
-      where: { user_id: userId, status: { in: ['STARTING', 'RUNNING', 'PAUSED'] } },
+      where: {
+        user_id: userId,
+        status: { in: ['STARTING', 'RUNNING', 'PAUSED'] },
+        ...(excludeBotId ? { id: { not: excludeBotId } } : {}),
+      },
       select: { total_investment: true, leverage: true },
     });
     return bots.reduce(
@@ -159,8 +178,13 @@ export class RiskService {
 
   /** PnL realizado del día, sumando los ciclos cerrados desde medianoche. */
   private async todayRealizedPnl(userId: string) {
-    const midnight = new Date();
-    midnight.setHours(0, 0, 0, 0);
+    // La medianoche del USUARIO, con el mismo cálculo que el worker: dos cortes
+    // distintos daban dos «días» distintos para la misma guarda (001/F-43).
+    const user = await this.db.user.findUnique({
+      where: { id: userId },
+      select: { timezone: true },
+    });
+    const midnight = startOfDay(user?.timezone);
 
     const cycles = await this.db.botCycle.findMany({
       where: { bot: { user_id: userId }, closed_at: { gte: midnight } },

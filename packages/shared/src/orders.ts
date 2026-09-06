@@ -68,6 +68,14 @@ export interface VenueOrder {
   status: OrderStatus;
   reduceOnly: boolean;
   createdAt: number;
+  /**
+   * Precio de disparo si la orden es condicional (un stop-loss nativo), null o
+   * ausente si es una orden en reposo. Sin él, un stop y una límite al mismo
+   * precio eran indistinguibles en la frontera con el venue (001/F-29). Es
+   * información, no una decisión: el reconciliador sigue emparejando por
+   * `clientOrderId`.
+   */
+  triggerPrice?: string | null;
 }
 
 export type OrderUpdate = VenueOrder;

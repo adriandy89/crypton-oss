@@ -98,6 +98,7 @@ jest.mock(
       ExchangeClient: class {},
       SubscriptionClient: class {
         bbo = alta;
+        activeAssetCtx = alta;
         candle = alta;
         orderUpdates = alta;
         userFills = alta;
@@ -249,7 +250,8 @@ describe('Hyperliquid — la suscripcion se suelta al irse el ultimo interesado'
     const h = hlAdapter();
     const sub = h.streamTicker('BTC').subscribe();
     await asentar();
-    expect(hlLog.vivas).toBe(1);
+    // Dos altas por ticker: el bbo y el contexto que trae la marca (spec 014).
+    expect(hlLog.vivas).toBe(2);
 
     sub.unsubscribe();
     await asentar();
@@ -266,7 +268,7 @@ describe('Hyperliquid — la suscripcion se suelta al irse el ultimo interesado'
       await asentar();
     }
     expect(hlLog.vivas).toBe(0);
-    expect(hlLog.altas).toBe(20);
+    expect(hlLog.altas).toBe(40);
     await h.close();
   });
 
@@ -282,16 +284,16 @@ describe('Hyperliquid — la suscripcion se suelta al irse el ultimo interesado'
     await h.close();
   });
 
-  it('con DOS interesados hay UNA sola alta, y hacen falta las dos bajas', async () => {
+  it('con DOS interesados hay UN solo par de altas (libro y contexto), y hacen falta las dos bajas', async () => {
     const h = hlAdapter();
     const uno = h.streamTicker('BTC').subscribe();
     const dos = h.streamTicker('BTC').subscribe();
     await asentar();
-    expect(hlLog.altas).toBe(1);
+    expect(hlLog.altas).toBe(2);
 
     uno.unsubscribe();
     await asentar();
-    expect(hlLog.vivas).toBe(1);
+    expect(hlLog.vivas).toBe(2);
 
     dos.unsubscribe();
     await asentar();
@@ -349,6 +351,69 @@ describe('El contrato del flujo compartido', () => {
     const dos: Observable<Ticker> = a.streamTicker('BTCUSDT');
     expect(uno).toBe(dos);
     void a.close();
+  });
+});
+
+describe('Aster — la marca y el listenKey (spec 015)', () => {
+  const espera = (ms: number) => new Promise((r) => setTimeout(r, ms));
+
+  /**
+   * Spec 001, F-72. `mark` era el punto medio del libro; el venue publica la
+   * marca en `<symbol>@markPrice@1s` y los flujos combinados llegan envueltos
+   * en `{ stream, data }`.
+   */
+  it('el ticker lleva la ultima marca recibida, no el punto medio', async () => {
+    const a = asterAdapter();
+    const recibidos: Ticker[] = [];
+    a.streamTicker('BTCUSDT').subscribe((t) => recibidos.push(t));
+    await asentar();
+
+    expect(wsLog.urls.at(-1)).toContain('@bookTicker/btcusdt@markPrice@1s');
+    wsLog.ultimo!.emit(
+      'message',
+      JSON.stringify({
+        stream: 'btcusdt@markPrice@1s',
+        data: { e: 'markPriceUpdate', p: '11.5', E: 1 },
+      }),
+    );
+    wsLog.ultimo!.emit(
+      'message',
+      JSON.stringify({ stream: 'btcusdt@bookTicker', data: { b: '10', a: '12', E: 2 } }),
+    );
+
+    expect(recibidos).toHaveLength(1);
+    expect(recibidos[0].last).toBe('11');
+    expect(recibidos[0].mark).toBe('11.5');
+    await a.close();
+  });
+
+  /**
+   * Spec 001, F-73. «No more user data event will be updated after this event
+   * received until a new valid listenKey used»; el socket seguia abierto y
+   * mudo hasta el corte de 24 h.
+   */
+  it('listenKeyExpired reabre el socket de usuario con un listenKey nuevo', async () => {
+    let claves = 0;
+    (globalThis as unknown as { fetch: unknown }).fetch = jest.fn(async () => ({
+      ok: true,
+      status: 200,
+      statusText: 'OK',
+      text: async () => JSON.stringify({ listenKey: 'clave-' + ++claves }),
+    }));
+    const a = asterAdapter();
+    try {
+      a.streamFills().subscribe();
+      await espera(100);
+      expect(wsLog.urls.at(-1)).toContain('clave-1');
+
+      wsLog.ultimo!.emit('message', JSON.stringify({ e: 'listenKeyExpired', E: 1 }));
+      await espera(1_200);
+
+      expect(wsLog.urls.at(-1)).toContain('clave-2');
+    } finally {
+      // Siempre: el keepalive del listenKey (30 min) mantendria vivo el proceso.
+      await a.close();
+    }
   });
 });
 

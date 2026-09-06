@@ -19,6 +19,9 @@ import {
   type ValidationResult,
   estimateLiquidationPrice,
   liquidationDistancePct,
+  maintenanceMarginRateOf,
+  maxLeverageWithinDistance,
+  MIN_LIQUIDATION_DISTANCE_PCT,
 } from '@crypton/shared';
 import { weightedAverage } from './ladder';
 
@@ -191,6 +194,20 @@ export const warn = (field: string | null, message: string): ValidationIssue => 
 export function validateCommon(config: CommonBotConfig, market: MarketSpec): ValidationIssue[] {
   const issues: ValidationIssue[] = [];
 
+  // Aster en modo cobertura exige `positionSide` en cada orden y prohíbe
+  // `reduceOnly`; el adaptador habla solo el dialecto unidireccional. Pedir
+  // cobertura cambiaría el modo de TODA la cuenta (afecta a todos sus bots) y a
+  // partir de ahí cada orden recibiría -4061 (001/F-71). En los otros venues el
+  // ajuste no existe y el motor lo salta con un aviso: no hace daño.
+  if (config.positionMode === 'HEDGE' && market.venue === 'ASTER') {
+    issues.push(
+      err(
+        'positionMode',
+        'En Aster el modo cobertura no se puede usar: cambiaría el modo de toda la cuenta y el bot no podría operar. Elige Automático o Unidireccional.',
+      ),
+    );
+  }
+
   if (!config.symbol) issues.push(err('symbol', 'Falta el par.'));
   if (!config.exchangeAccountId) {
     issues.push(err('exchangeAccountId', 'Falta la conexion de exchange.'));
@@ -202,6 +219,25 @@ export function validateCommon(config: CommonBotConfig, market: MarketSpec): Val
   } else if (lev > market.maxLeverage) {
     issues.push(
       err('leverage', market.symbol + ' admite como maximo ' + market.maxLeverage + 'x aqui.'),
+    );
+  } else if (lev > maxLeverageWithinDistance(maintenanceMarginRateOf(market))) {
+    // La misma cuenta que la API (`RiskService`) y el asistente, con la tasa
+    // de mantenimiento de ESTE mercado: antes el formulario avisaba a 12x, la
+    // API rechazaba a 19x en todos los pares y nadie decia el tope (001/F-44).
+    const mmr = maintenanceMarginRateOf(market);
+    issues.push(
+      err(
+        'leverage',
+        'A ' +
+          lev +
+          'x la liquidacion estimada llega con menos del ' +
+          MIN_LIQUIDATION_DISTANCE_PCT +
+          ' % de movimiento adverso (mantenimiento del ' +
+          (mmr * 100).toFixed(2) +
+          ' %): el maximo aqui es ' +
+          maxLeverageWithinDistance(mmr) +
+          'x.',
+      ),
     );
   } else if (lev > 10) {
     const move = (100 / lev).toFixed(1);
@@ -260,6 +296,52 @@ export function validateCommon(config: CommonBotConfig, market: MarketSpec): Val
   return issues;
 }
 
+/**
+ * Lo que `meta.fields` declara y solo el formulario aplicaba: minimos, maximos,
+ * opciones de las enumeraciones y enteros. La API recibe `config` como objeto
+ * libre, asi que un cliente que saltara el formulario (o el asistente) colaba
+ * valores fuera de rango que reventaban en `plan()` o dejaban una guarda
+ * apagada (001/F-13). Solo mira valores PRESENTES; los obligatorios sin valor
+ * por defecto (precios, importes) deben venir.
+ */
+export function validateMeta(
+  config: Record<string, unknown>,
+  fields: readonly FieldMeta[],
+): ValidationIssue[] {
+  const issues: ValidationIssue[] = [];
+  const numericos = new Set(['number', 'percent', 'money', 'integer', 'price']);
+  for (const f of fields) {
+    const v = config[f.key];
+    if (v == null || v === '') {
+      if (f.required && f.default === undefined) issues.push(err(f.key, 'Falta ' + f.key + '.'));
+      continue;
+    }
+    if (f.kind === 'enum') {
+      const texto = typeof v === 'string' || typeof v === 'number' ? String(v) : '';
+      if (f.options && !f.options.includes(texto)) {
+        issues.push(err(f.key, f.key + ' debe ser uno de: ' + f.options.join(', ') + '.'));
+      }
+      continue;
+    }
+    if (!numericos.has(f.kind)) continue;
+    const n = typeof v === 'number' || typeof v === 'string' ? D(v) : null;
+    if (!n || !n.isFinite()) {
+      issues.push(err(f.key, f.key + ' no es un numero.'));
+      continue;
+    }
+    if (f.kind === 'integer' && !n.isInteger()) {
+      issues.push(err(f.key, f.key + ' debe ser un numero entero.'));
+    }
+    if (f.min != null && n.lt(f.min)) {
+      issues.push(err(f.key, f.key + ' no puede ser menor que ' + f.min + '.'));
+    }
+    if (f.max != null && n.gt(f.max)) {
+      issues.push(err(f.key, f.key + ' no puede ser mayor que ' + f.max + '.'));
+    }
+  }
+  return issues;
+}
+
 export const toResult = (issues: ValidationIssue[]): ValidationResult => ({
   ok: !issues.some((i) => i.severity === 'ERROR'),
   issues,
@@ -313,6 +395,21 @@ export interface BuildPreviewOptions {
   leverage: number;
   takeProfitPct?: Numeric | null;
   issues?: ValidationIssue[];
+  /**
+   * Modo de margen de la config. En cruzado la fórmula aislada es una COTA: el
+   * venue suma todo el saldo libre de la cuenta y las demás posiciones, así que
+   * la liquidación real queda en otro sitio (001/F-14). Se avisa en vez de
+   * callarlo bajo la etiqueta «fórmula del venue».
+   */
+  marginMode?: string | null;
+  /**
+   * true = retícula neutral: las dos mitades abren posición en sentidos
+   * opuestos. La liquidación que se enseña es la del lado largo (todas las
+   * compras ejecutadas) y la del lado corto (todas las ventas) va como aviso:
+   * antes se calculaba una sola sobre la media de las dos mitades, que no es
+   * el precio de ninguna posición posible (001/F-14).
+   */
+  neutral?: boolean;
 }
 
 /**
@@ -323,11 +420,34 @@ export interface BuildPreviewOptions {
  */
 export function buildPreview(opts: BuildPreviewOptions): PreviewResult {
   const { levels, market, refPrice, direction, leverage } = opts;
+
   const ref = D(refPrice);
   const issues = [...(opts.issues ?? [])];
+  // Tope de órdenes activas por mercado del venue (Lighter Standard: 30; Aster:
+  // 200). Una retícula con más niveles se recortaba en silencio ya en marcha:
+  // el venue rechaza el exceso orden a orden y el bot entra en cuarentena por
+  // forma con un ERROR por nivel (001/F-50, F-23). Se avisa aquí, antes de
+  // crear el bot; es un aviso y no un veto porque el tope depende del tier de
+  // la cuenta, que desde aquí no se conoce.
+  const tope = market.maxActiveOrders;
+  const nombreVenue: Record<string, string> = {
+    LIGHTER: 'Lighter',
+    ASTER: 'Aster',
+    HYPERLIQUID: 'Hyperliquid',
+  };
+  if (tope != null && levels.length > tope) {
+    issues.push(
+      warn(
+        'gridLevels',
+        `${nombreVenue[market.venue] ?? market.venue} admite ${tope} órdenes activas por mercado ` +
+          `(con cuenta estándar); esta configuración tiende ${levels.length}: el exceso se ` +
+          'rechazará orden a orden.',
+      ),
+    );
+  }
 
   const out: LevelPreview[] = [];
-  const entriesSoFar: { price: Decimal; qty: Decimal }[] = [];
+  const entriesSoFar: { price: Decimal; qty: Decimal; side: OrderSide }[] = [];
   let cumulativeNotional = D(0);
   let cumulativeMargin = D(0);
 
@@ -338,7 +458,7 @@ export function buildPreview(opts: BuildPreviewOptions): PreviewResult {
     if (lv.isEntry) {
       cumulativeNotional = cumulativeNotional.plus(notional);
       cumulativeMargin = cumulativeMargin.plus(D(lv.margin));
-      if (norm.qty.gt(0)) entriesSoFar.push({ price: norm.price, qty: norm.qty });
+      if (norm.qty.gt(0)) entriesSoFar.push({ price: norm.price, qty: norm.qty, side: lv.side });
     }
 
     const avg = entriesSoFar.length ? weightedAverage(entriesSoFar) : null;
@@ -360,7 +480,39 @@ export function buildPreview(opts: BuildPreviewOptions): PreviewResult {
   }
 
   const worstAvg = entriesSoFar.length ? weightedAverage(entriesSoFar) : null;
-  const liq = worstAvg ? estimateLiquidationPrice(worstAvg, leverage, direction) : null;
+  // Con la tasa de mantenimiento del MERCADO, no el 0,5 % plano (001/F-93).
+  const mmr = maintenanceMarginRateOf(market);
+  // Retícula neutral: la liquidación que manda es la del lado largo (todas las
+  // compras ejecutadas); el lado corto va como aviso, más abajo.
+  const largos = entriesSoFar.filter((e) => e.side === 'BUY');
+  const cortos = entriesSoFar.filter((e) => e.side === 'SELL');
+  const avgLiq = opts.neutral ? (largos.length ? weightedAverage(largos) : null) : worstAvg;
+  const liq = avgLiq ? estimateLiquidationPrice(avgLiq, leverage, direction, mmr) : null;
+  const avgCorto = opts.neutral && cortos.length > 0 ? weightedAverage(cortos) : null;
+  if (avgCorto) {
+    const liqCorto = estimateLiquidationPrice(avgCorto, leverage, 'SHORT', mmr);
+    if (liqCorto) {
+      issues.push(
+        warn(
+          null,
+          'Lado corto: con todas las ventas ejecutadas, la liquidación estimada queda en ' +
+            liqCorto.toFixed(market.priceDecimals) +
+            ' (a ' +
+            liquidationDistancePct(ref, liqCorto).toFixed(2) +
+            ' % del precio de referencia).',
+        ),
+      );
+    }
+  }
+  if (opts.marginMode === 'CROSS') {
+    issues.push(
+      warn(
+        'marginMode',
+        'En margen cruzado la liquidación estimada es una cota: el venue suma todo el saldo ' +
+          'libre de la cuenta y las demás posiciones, así que la real queda en otro sitio.',
+      ),
+    );
+  }
 
   const tpSign = direction === 'SHORT' ? D(-1) : D(1);
   const tp =
@@ -398,7 +550,11 @@ export function buildPreview(opts: BuildPreviewOptions): PreviewResult {
  * que se ve en el preview es literalmente lo que se manda.
  */
 export const px = (market: MarketSpec, price: Numeric, side: OrderSide): string =>
-  roundPriceForSide(price, market.tickSize, side).toFixed(market.priceDecimals);
+  // Con el tope de cifras significativas del venue cuando lo declara: así lo
+  // que planifica la estrategia es lo que envía el adaptador (001/F-04).
+  roundPriceForSide(price, market.tickSize, side, market.maxSignificantDigits).toFixed(
+    market.priceDecimals,
+  );
 
 /** Cantidad truncada al step del venue: nunca pide más margen del previsto. */
 export const qy = (market: MarketSpec, qty: Numeric): string =>

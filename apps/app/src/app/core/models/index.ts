@@ -105,6 +105,15 @@ export interface Market {
   /** Los pide `MarketSpec` para calcular el preview en local. */
   min_qty: string | null;
   max_qty: string | null;
+  /**
+   * Campos del venue que llegaron a la fila en el spec 024. Opcionales: un
+   * servidor sin actualizar no los manda, y `MarketSpec` los admite ausentes.
+   * Los decimales viajan como texto, como el resto.
+   */
+  max_market_qty?: string | null;
+  max_active_orders?: number | null;
+  max_significant_digits?: number | null;
+  maintenance_margin_rate?: string | null;
   max_leverage: number;
   price_decimals: number;
   qty_decimals: number;
@@ -124,6 +133,12 @@ export interface BotDetail extends BotSummary {
   exchange_account_id: string;
   /** Modo de margen del bot. COLD: se fija al crear y no se puede cambiar. */
   margin_mode: 'CROSS' | 'ISOLATED';
+  /**
+   * Lo que el usuario PUSO al crear el bot (revisión 1 de la configuración). El
+   * asignado de hoy (`totalInvestment`) puede haber subido con «Aportar margen»
+   * contando como capital o al editar la configuración (spec 025).
+   */
+  initialInvestment: string;
   config: Record<string, unknown>;
   fields: FieldMeta[];
   config_version: number;

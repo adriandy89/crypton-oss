@@ -2,7 +2,13 @@ import { Injectable, Logger } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import type { Venue } from '@crypton/db';
 import { getStrategy } from '@crypton/strategy-core';
-import type { BotConfig, PreviewResult, StrategyKind } from '@crypton/shared';
+import {
+  maintenanceMarginRateOf,
+  maxLeverageWithinDistance,
+  type BotConfig,
+  type PreviewResult,
+  type StrategyKind,
+} from '@crypton/shared';
 import { CacheService } from 'src/libs';
 import { MarketDataService } from '../market-data';
 import { MarketsService } from '../markets';
@@ -426,8 +432,9 @@ export class AdvisorService {
     const lev = Number(config['leverage'] ?? 1);
     if (limites.maxLeverage != null && lev > limites.maxLeverage) return false;
 
-    // La distancia a liquidacion, con la misma cuenta que hace el servidor.
-    if (100 / lev - 0.5 < 5) return false;
+    // La distancia a liquidacion, con la misma cuenta que hace el servidor y la
+    // tasa de mantenimiento del mercado (001/F-44, F-93).
+    if (lev > maxLeverageWithinDistance(maintenanceMarginRateOf(ctx.market))) return false;
 
     const notional = ctx.totalInvestment * lev;
     if (limites.maxNotionalPerBot != null && notional > limites.maxNotionalPerBot) return false;

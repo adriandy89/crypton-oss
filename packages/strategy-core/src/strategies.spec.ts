@@ -1,17 +1,30 @@
 import {
+  D,
   FairPriceOrigin,
   LevelKind,
+  estimateLiquidationPrice,
   Mutability,
   PriceSource,
   StrategyKind,
+  Venue,
   type BotConfig,
 } from '@crypton/shared';
+import { px } from './common';
+import { makeCoid } from './client-order-id';
+import { gridSellLevels } from './strategies/gridmart';
 import { BASE_LIMIT_TTL_MS } from './ladder';
 import { diffConfig } from './mutability';
 import { getStrategy, listStrategies } from './registry';
 import { parseCoid } from './client-order-id';
 import { withStopLoss } from './stop-loss';
-import { BASE_CONFIG, makeContext, makeMarket, makePosition, makeVenueOrder } from './testing';
+import {
+  BASE_CONFIG,
+  makeContext,
+  makeCycle,
+  makeMarket,
+  makePosition,
+  makeVenueOrder,
+} from './testing';
 
 const cfg = (extra: Record<string, unknown>): BotConfig => ({ ...BASE_CONFIG, ...extra });
 
@@ -146,6 +159,439 @@ describe('gridClassic.plan', () => {
 // ═══════════════════════════════════════════════════════════════
 // MARTINGALE
 // ═══════════════════════════════════════════════════════════════
+
+describe('px y las cifras significativas del venue', () => {
+  /**
+   * Spec 001, F-04. En Hyperliquid el precio planificado y el enviado se
+   * calculaban con reglas distintas y el reconciliador cancelaba y recolocaba
+   * la orden en cada tick. Ahora `px()` aplica la misma regla que la puerta
+   * del adaptador: 1,00001 con tick 0,00001 y cinco cifras es 1 en compra y
+   * 1,0001 en venta; sin tope declarado, el tick manda.
+   */
+  it('recorta a las cifras significativas del mercado, hacia el lado seguro', () => {
+    const hl = makeMarket({ tickSize: '0.00001', priceDecimals: 5, maxSignificantDigits: 5 });
+    expect(px(hl, '1.00001', 'BUY')).toBe('1.00000');
+    expect(px(hl, '1.00001', 'SELL')).toBe('1.00010');
+    expect(px(makeMarket({ tickSize: '0.00001', priceDecimals: 5 }), '1.00001', 'BUY')).toBe(
+      '1.00001',
+    );
+  });
+});
+
+describe('preview y los topes del venue', () => {
+  /**
+   * Spec 001, F-50 (Lighter) y F-23 (Aster). Los venues limitan las ordenes
+   * activas por mercado (Lighter Standard: 30; Aster: 200) y una reticula con
+   * mas niveles se recortaba en silencio, orden a orden, ya en marcha. La vista
+   * previa avisa antes de crear el bot; sin tope conocido, no dice nada.
+   */
+  it('avisa cuando la configuracion tiende mas ordenes de las que admite el venue', () => {
+    const cfg40 = cfg({
+      gridSpacing: 'ARITHMETIC',
+      sizingMode: 'QUOTE',
+      lowerPrice: '60',
+      upperPrice: '140',
+      gridLevels: 40,
+      totalInvestment: '100000',
+      leverage: 1,
+    });
+    const grid = getStrategy(StrategyKind.GRID_CLASSIC);
+
+    const conTope = grid.preview(cfg40, makeMarket({ maxActiveOrders: 30 }), '100');
+    expect(conTope.issues.some((i) => i.severity === 'WARNING' && /30/.test(i.message))).toBe(true);
+
+    const sinTope = grid.preview(cfg40, makeMarket(), '100');
+    expect(sinTope.issues.some((i) => /activas/.test(i.message))).toBe(false);
+  });
+});
+
+describe('validación genérica y parámetros comunes (spec 019)', () => {
+  const gridCfg = cfg({
+    gridSpacing: 'ARITHMETIC',
+    sizingMode: 'QUOTE',
+    lowerPrice: '90',
+    upperPrice: '110',
+    gridLevels: 5,
+    totalInvestment: '100',
+    leverage: 1,
+  });
+  const neutralCfg = cfg({
+    direction: 'NEUTRAL',
+    lowerPrice: '90',
+    upperPrice: '110',
+    anchorPrice: '100',
+    gridLevels: 5,
+    gridSpacing: 'ARITHMETIC',
+    sizeMultiplier: '1',
+    totalInvestment: '100',
+    leverage: 1,
+    maxExposure: '1000',
+  });
+  const gmCfg = cfg({
+    numLimitBuys: 2,
+    initialSeparationPct: '1',
+    stepScale: '2',
+    volumeScale: '2',
+    totalInvestment: '70',
+    takeProfitPct: '1',
+    satelliteTpPct: '0.5',
+    gridSellCount: 2,
+    gridSellInitialSeparationPct: '1',
+    gridSellDistanceMultiplier: '2',
+    corePctSoldAtLevel1: '50',
+    gridSellQtyMultiplier: '1',
+    gridRebuyDiscountPct: '0.5',
+    leverage: 1,
+  });
+  const grid = getStrategy(StrategyKind.GRID_CLASSIC);
+  const neutral = getStrategy(StrategyKind.NEUTRAL_GRID);
+  const tdca = getStrategy(StrategyKind.TDCA);
+  const gm = getStrategy(StrategyKind.GRIDMART);
+  const mm2 = getStrategy(StrategyKind.MARKET_MAKER_V2);
+  const errorEn = (
+    r: { issues: { field: string | null; severity: string }[] },
+    field: string,
+  ): boolean => r.issues.some((i) => i.field === field && i.severity === 'ERROR');
+
+  /** Spec 001, F-13: solo el formulario aplicaba min/max/step/options. */
+  it('rechaza lo que meta.fields acota y validate() no miraba', () => {
+    const m = makeMarket();
+    expect(
+      errorEn(
+        neutral.validate(cfg({ ...(neutralCfg as object), sizeMultiplier: '5' }), m),
+        'sizeMultiplier',
+      ),
+    ).toBe(true);
+    expect(
+      errorEn(
+        tdca.validate(cfg({ ...tdca.defaults(), maxBuysPerCycle: 600 }), m),
+        'maxBuysPerCycle',
+      ),
+    ).toBe(true);
+    expect(
+      errorEn(
+        gm.validate(cfg({ ...(gmCfg as object), gridRebuyDiscountPct: '150' }), m),
+        'gridRebuyDiscountPct',
+      ),
+    ).toBe(true);
+    expect(
+      errorEn(grid.validate(cfg({ ...(gridCfg as object), leverage: 2.5 }), m), 'leverage'),
+    ).toBe(true);
+    expect(
+      errorEn(
+        grid.validate(cfg({ ...(gridCfg as object), gridSpacing: 'RARO' }), m),
+        'gridSpacing',
+      ),
+    ).toBe(true);
+    const v2 = cfg({
+      ...mm2.defaults(),
+      orderSizePerSide: '100',
+      maxBotPositionValue: '1000',
+      repriceThresholdBps: '0',
+    });
+    expect(errorEn(mm2.validate(v2, m), 'repriceThresholdBps')).toBe(true);
+    expect(grid.validate(gridCfg, m).ok).toBe(true);
+  });
+
+  it('GridMart sin multiplicadores devuelve una vista previa inválida, no revienta', () => {
+    const sin = { ...(gmCfg as object) } as Record<string, unknown>;
+    delete sin['gridSellDistanceMultiplier'];
+    delete sin['gridSellQtyMultiplier'];
+    const p = gm.preview(sin as never, makeMarket(), '100');
+    expect(p.valid).toBe(false);
+    expect(p.issues.some((i) => i.field === 'gridSellDistanceMultiplier')).toBe(true);
+  });
+
+  /** Spec 001, F-44 y F-93: la misma cuenta que la API, con la tasa del mercado. */
+  it('rechaza el apalancamiento que deja la liquidación a menos del 5 % en ese mercado', () => {
+    // El mercado de pruebas admite 40x: mantenimiento 1,25 % → 1/(0,05 + 0,0125) = 16x.
+    expect(
+      errorEn(
+        grid.validate(cfg({ ...(gridCfg as object), leverage: 17 }), makeMarket()),
+        'leverage',
+      ),
+    ).toBe(true);
+    expect(
+      errorEn(
+        grid.validate(cfg({ ...(gridCfg as object), leverage: 16 }), makeMarket()),
+        'leverage',
+      ),
+    ).toBe(false);
+  });
+
+  it('la liquidación estimada usa la tasa de mantenimiento del mercado', () => {
+    const p = grid.preview(cfg({ ...(gridCfg as object), leverage: 2 }), makeMarket(), '100');
+    const esperado = estimateLiquidationPrice(p.worstCaseAverageEntry ?? '0', 2, 'LONG', 0.0125);
+    expect(
+      D(p.estimatedLiquidationPrice ?? '0')
+        .minus(esperado ?? 0)
+        .abs()
+        .lt(0.15),
+    ).toBe(true);
+  });
+
+  /** Spec 001, F-12: `cooldownMinutes` no se leía en tres estrategias. */
+  it('la espera entre ciclos frena las entradas de las rejillas y del DCA', () => {
+    const espera = {
+      now: 1_000_000,
+      cycle: { scratch: { cycleSeq: 2 }, cooldownUntil: 1_060_000 },
+    };
+    const g = grid.plan(
+      makeContext({
+        strategy: StrategyKind.GRID_CLASSIC,
+        config: gridCfg,
+        price: '100',
+        ...espera,
+      }),
+    );
+    expect(g.orders.filter((o) => o.levelKind === LevelKind.GRID_BUY)).toHaveLength(0);
+    expect(g.note).toMatch(/espera/i);
+    const n = neutral.plan(
+      makeContext({
+        strategy: StrategyKind.NEUTRAL_GRID,
+        config: neutralCfg,
+        price: '100',
+        ...espera,
+      }),
+    );
+    expect(n.orders).toHaveLength(0);
+    expect(n.note).toMatch(/espera/i);
+    const t = tdca.plan(
+      makeContext({
+        strategy: StrategyKind.TDCA,
+        config: cfg(tdca.defaults()),
+        price: '100',
+        ...espera,
+      }),
+    );
+    expect(t.immediate).toHaveLength(0);
+    expect(t.note).toMatch(/espera/i);
+  });
+
+  it('el tope de exposición común también frena en la neutral y en el DCA', () => {
+    const n = neutral.plan(
+      makeContext({
+        strategy: StrategyKind.NEUTRAL_GRID,
+        config: cfg({ ...(neutralCfg as object), maxNotionalCap: '50' }),
+        price: '100',
+        position: makePosition('1', '100'),
+      }),
+    );
+    expect(n.orders.length).toBeGreaterThan(0);
+    expect(n.orders.every((o) => o.side === 'SELL')).toBe(true);
+    const t = tdca.plan(
+      makeContext({
+        strategy: StrategyKind.TDCA,
+        config: cfg({ ...tdca.defaults(), maxNotionalCap: '50' }),
+        price: '100',
+        position: makePosition('1', '100'),
+        cycle: { scratch: { cycleSeq: 1 }, entriesFilled: 1 },
+      }),
+    );
+    expect(t.immediate).toHaveLength(0);
+    expect(t.note).toMatch(/tope/i);
+  });
+
+  it('la vista previa de GridMart pinta el TP del satélite, el único que existe', () => {
+    const p = gm.preview(gmCfg, makeMarket(), '100');
+    const satelite = D(p.worstCaseAverageEntry ?? '0').mul('1.005');
+    expect(
+      D(p.takeProfitPrice ?? '0')
+        .minus(satelite)
+        .abs()
+        .lt(0.15),
+    ).toBe(true);
+  });
+
+  it('avisa de que la dirección no sesga la retícula neutral', () => {
+    const r = neutral.validate(cfg({ ...(neutralCfg as object), direction: 'LONG' }), makeMarket());
+    expect(r.issues.some((i) => i.field === 'direction' && i.severity === 'WARNING')).toBe(true);
+  });
+});
+
+describe('rejillas: dimensionado y vista previa (spec 017)', () => {
+  const neutralCfg = cfg({
+    direction: 'NEUTRAL',
+    lowerPrice: '90',
+    upperPrice: '110',
+    anchorPrice: '100',
+    gridLevels: 5,
+    gridSpacing: 'ARITHMETIC',
+    sizeMultiplier: '1',
+    totalInvestment: '100',
+    leverage: 1,
+    maxExposure: '1000',
+  });
+  const gridCfg = (over: Record<string, unknown> = {}) =>
+    cfg({
+      gridSpacing: 'ARITHMETIC',
+      sizingMode: 'QUOTE',
+      lowerPrice: '90',
+      upperPrice: '110',
+      gridLevels: 5,
+      totalInvestment: '100',
+      leverage: 1,
+      ...over,
+    });
+  const gmCfg = cfg({
+    numLimitBuys: 2,
+    initialSeparationPct: '1',
+    stepScale: '2',
+    volumeScale: '2',
+    totalInvestment: '70',
+    takeProfitPct: '1',
+    satelliteTpPct: '0.5',
+    gridSellCount: 2,
+    gridSellInitialSeparationPct: '1',
+    gridSellDistanceMultiplier: '2',
+    corePctSoldAtLevel1: '50',
+    gridSellQtyMultiplier: '1',
+    gridRebuyDiscountPct: '0.5',
+    leverage: 1,
+  });
+
+  /**
+   * Spec 001, F-81. La banda muerta de medio escalon cancelaba la linea justo
+   * antes de que pudiera ejecutarse: una compra en 95 (paso 5) solo vivia con el
+   * precio por encima de 97,5. Ahora la banda gobierna solo el CAMBIO de lado
+   * (histeresis sobre el lado memorizado) y la compra sigue viva mientras el
+   * precio se le acerca desde arriba.
+   */
+  it('una compra sigue viva mientras el precio se le acerca desde arriba', () => {
+    const neutral = getStrategy(StrategyKind.NEUTRAL_GRID);
+    const compra95 = (p: { orders: { levelIndex: number; side: string }[] }) =>
+      p.orders.find((o) => o.levelIndex === 1 && o.side === 'BUY');
+    const primero = neutral.plan(
+      makeContext({ strategy: StrategyKind.NEUTRAL_GRID, config: neutralCfg, price: '98' }),
+    );
+    expect(compra95(primero)).toBeDefined();
+
+    const segundo = neutral.plan(
+      makeContext({
+        strategy: StrategyKind.NEUTRAL_GRID,
+        config: neutralCfg,
+        price: '96',
+        cycle: { scratch: { cycleSeq: 1, ...primero.scratchPatch } },
+      }),
+    );
+    expect(compra95(segundo)).toBeDefined();
+  });
+
+  /** Spec 001, F-82: las recompras de GridMart viven fuera del espacio de indices de las seguridades. */
+  it('GridMart declara que sus recompras no marcan escalones', () => {
+    expect(getStrategy(StrategyKind.GRIDMART).rebuysOffLevelIndexes).toBe(true);
+  });
+
+  /**
+   * Spec 001, F-89. Cada trozo de una venta de rejilla SOBRESCRIBIA la recompra
+   * anotada: una venta en dos trozos recompraba solo el ultimo. Ahora suman.
+   */
+  it('los trozos de una venta de rejilla suman en la recompra', () => {
+    const gm = getStrategy(StrategyKind.GRIDMART);
+    const ctx = makeContext({ strategy: StrategyKind.GRIDMART, config: gmCfg, price: '100' });
+    const venta = (qty: string) => ({
+      venue: Venue.HYPERLIQUID,
+      symbol: 'BTC',
+      venueFillId: 'f' + qty,
+      venueOrderId: 'o1',
+      clientOrderId: makeCoid(ctx.botId, 1, 'GRID_SELL', 0),
+      side: 'SELL' as const,
+      price: '101',
+      qty,
+      fee: '0',
+      feeAsset: 'USDC',
+      isTaker: false,
+      ts: 1,
+    });
+    const c1 = gm.onFill!(ctx, venta('0.03'), makeCycle());
+    const c2 = gm.onFill!(ctx, venta('0.02'), c1);
+    const rebuys = c2.scratch['rebuys'] as { index: number; qty: string }[];
+    expect(rebuys).toHaveLength(1);
+    expect(rebuys[0].qty).toBe('0.05000');
+  });
+
+  it('el reparto del nucleo entrega el resto al ultimo escalon: sin polvo', () => {
+    const niveles = gridSellLevels(
+      {
+        ...(gmCfg as object),
+        gridSellCount: 3,
+        corePctSoldAtLevel1: '33.33',
+        gridSellQtyMultiplier: '1',
+      } as never,
+      D(100),
+      D('0.00196'),
+    );
+    const suma = niveles.reduce((acc, n) => acc.plus(n.qty), D(0));
+    expect(suma.toFixed()).toBe('0.00196');
+  });
+
+  /**
+   * Spec 001, F-03. En «Cantidad de moneda» la cantidad por linea se calculaba
+   * con el mark de cada tick: la reticula entera se cancelaba y recolocaba con
+   * cada movimiento del precio. Ahora el precio de referencia se fija en el
+   * primer plan del ciclo.
+   */
+  it('en Cantidad de moneda la cantidad no cambia con el precio', () => {
+    const grid = getStrategy(StrategyKind.GRID_CLASSIC);
+    const base = gridCfg({ sizingMode: 'BASE' });
+    const qtyDe = (p: { orders: { levelIndex: number; qty: string }[] }, i: number) =>
+      p.orders.find((o) => o.levelIndex === i)?.qty;
+    const a = grid.plan(
+      makeContext({ strategy: StrategyKind.GRID_CLASSIC, config: base, price: '100' }),
+    );
+    const b = grid.plan(
+      makeContext({
+        strategy: StrategyKind.GRID_CLASSIC,
+        config: base,
+        price: '105',
+        cycle: { scratch: { cycleSeq: 1, ...a.scratchPatch } },
+      }),
+    );
+    expect(qtyDe(a, 0)).toBeDefined();
+    expect(qtyDe(b, 0)).toBe(qtyDe(a, 0));
+  });
+
+  /** Spec 001, F-87: el tope acota lo que se tiende (notional proyectado), no solo lo ya abierto. */
+  it('el tope de exposicion acota lo que se TIENDE, no solo lo ya abierto', () => {
+    const grid = getStrategy(StrategyKind.GRID_CLASSIC);
+    const p = grid.plan(
+      makeContext({
+        strategy: StrategyKind.GRID_CLASSIC,
+        config: gridCfg({ maxNotionalCap: '30' }),
+        price: '100',
+      }),
+    );
+    const compras = p.orders.filter((o) => o.levelKind === LevelKind.GRID_BUY);
+    const tendido = compras.reduce((acc, o) => acc.plus(D(o.price).mul(o.qty)), D(0));
+    expect(tendido.lte(30)).toBe(true);
+    expect(compras.some((o) => o.levelIndex === 1)).toBe(true);
+  });
+
+  /** Spec 001, F-88: el peor caso es que el precio recorra TODA la reticula. */
+  it('la vista previa cuenta TODAS las lineas como peor caso', () => {
+    const p = getStrategy(StrategyKind.GRID_CLASSIC).preview(gridCfg(), makeMarket(), '100');
+    expect(p.worstCaseNotional).toBe('100.00');
+    expect(p.worstCaseMargin).toBe('100.00');
+  });
+
+  /** Spec 001, F-14. */
+  it('TDCA no repite los avisos comunes en la vista previa', () => {
+    const tdca = getStrategy(StrategyKind.TDCA);
+    const p = tdca.preview(cfg({ ...tdca.defaults(), leverage: 5 }), makeMarket(), '100');
+    const mensajes = p.issues.map((i) => i.message);
+    expect(new Set(mensajes).size).toBe(mensajes.length);
+  });
+
+  it('en cruzado y neutral la vista previa avisa de que la liquidacion es una cota y da la del lado corto', () => {
+    const p = getStrategy(StrategyKind.NEUTRAL_GRID).preview(
+      cfg({ ...(neutralCfg as object), marginMode: 'CROSS' }),
+      makeMarket(),
+      '100',
+    );
+    expect(p.issues.some((i) => /cruzado/i.test(i.message))).toBe(true);
+    expect(p.issues.some((i) => /corto/i.test(i.message))).toBe(true);
+  });
+});
 
 describe('martingale.plan', () => {
   const config = cfg({
@@ -499,6 +945,36 @@ describe('neutralGrid.plan', () => {
     const ctx = makeContext({ strategy: StrategyKind.NEUTRAL_GRID, config, price: '95' });
     const { orders } = getStrategy(StrategyKind.NEUTRAL_GRID).plan(ctx);
     expect(orders.map((o) => o.price)).not.toContain('95.0');
+  });
+
+  /**
+   * Spec 001, F-94. Con espaciado geométrico el paso no es uniforme y la banda
+   * de rearme era medio paso MEDIO: abajo, donde las líneas están juntas, una
+   * línea cruzada tardaba en volver más de lo que mide su propio escalón.
+   */
+  it('con espaciado geométrico la banda de rearme es la mitad del paso local de cada línea', () => {
+    const geometrica = cfg({
+      ...(config as object),
+      lowerPrice: '100',
+      upperPrice: '400',
+      anchorPrice: '200',
+      gridLevels: 4,
+      gridSpacing: 'GEOMETRIC',
+      totalInvestment: '1000',
+    });
+    // Líneas en 100, 158,7, 252 y 400: paso medio 100, paso local abajo 58,7.
+    // La línea de 100 se cruzó y el precio está en 135: a más de medio paso
+    // local (29,4) pero a menos de medio paso medio (50).
+    const ctx = makeContext({
+      strategy: StrategyKind.NEUTRAL_GRID,
+      config: geometrica,
+      price: '135',
+      cycle: { scratch: { cycleSeq: 1, lineSides: { '100': 'CRUZADA' } } },
+    });
+
+    const { orders } = getStrategy(StrategyKind.NEUTRAL_GRID).plan(ctx);
+
+    expect(orders.some((o) => o.side === 'BUY' && o.price === '100.0')).toBe(true);
   });
 
   it('con el tope de exposición alcanzado solo deja vivas las que reducen', () => {
@@ -916,6 +1392,28 @@ describe('diffConfig', () => {
 // ═══════════════════════════════════════════════════════════════
 
 describe('registro de estrategias', () => {
+  /**
+   * Spec 001, F-71. Aster en modo cobertura exige `positionSide` en cada orden
+   * y prohibe `reduceOnly`; el adaptador habla solo el dialecto unidireccional.
+   * Pedir cobertura cambiaria el modo de TODA la cuenta (afecta a todos sus
+   * bots) y a partir de ahi cada orden recibiria -4061. Se rechaza al validar,
+   * y solo en Aster: en los otros venues el ajuste no existe y no hace daño.
+   */
+  it('el modo cobertura se rechaza en Aster en los dos market makers', () => {
+    for (const kind of [StrategyKind.MARKET_MAKER, StrategyKind.MARKET_MAKER_V2]) {
+      const s = getStrategy(kind);
+      const config = {
+        ...BASE_CONFIG,
+        ...s.defaults(),
+        positionMode: 'HEDGE',
+      } as unknown as BotConfig;
+      const enAster = s.validate(config, makeMarket({ venue: Venue.ASTER })).issues;
+      expect(enAster.some((i) => i.field === 'positionMode' && i.severity === 'ERROR')).toBe(true);
+      const enHl = s.validate(config, makeMarket()).issues;
+      expect(enHl.some((i) => i.field === 'positionMode' && i.severity === 'ERROR')).toBe(false);
+    }
+  });
+
   it('todas exponen los campos comunes y valores por defecto', () => {
     for (const s of listStrategies()) {
       const keys = s.meta.fields.map((f) => f.key);
@@ -1005,6 +1503,202 @@ describe('registro de estrategias', () => {
 // ═══════════════════════════════════════════════════════════════
 // MARKET MAKER — paridad V1
 // ═══════════════════════════════════════════════════════════════
+
+describe('market makers (spec 018)', () => {
+  const v1 = cfg({
+    direction: 'NEUTRAL',
+    orderSizePerSide: '100',
+    maxBotPositionValue: '1000',
+    buyDistanceBps: '20',
+    sellDistanceBps: '20',
+    minAllowedDistanceBps: '8',
+    refreshSeconds: 30,
+    layers: 2,
+    layerDistanceMultiplier: '1.5',
+    layerSizeMultiplier: '1',
+    riskProfile: 'BALANCED',
+    dynamicSpread: false,
+    inventoryPriceAdjustment: false,
+    leverage: 1,
+  });
+  const v2 = cfg({
+    direction: 'NEUTRAL',
+    orderSizePerSide: '100',
+    maxBotPositionValue: '1000',
+    buyDistanceBps: '40',
+    sellDistanceBps: '40',
+    minAllowedDistanceBps: '8',
+    refreshSeconds: 30,
+    repriceThresholdBps: '30',
+    orderMaxAgeSeconds: 0,
+    fillCooldownSeconds: 0,
+    layers: 1,
+    layerDistanceMultiplier: '1',
+    layerSizeMultiplier: '1',
+    behaviorPreset: 'BALANCED',
+    dynamicSpread: false,
+    feeEstimateBps: '0',
+    safetyBufferBps: '0',
+    minProfitMarginBps: '0',
+    maxDynamicSpreadBps: '1000',
+    leverage: 1,
+  });
+  const mm = getStrategy(StrategyKind.MARKET_MAKER);
+  const mm2 = getStrategy(StrategyKind.MARKET_MAKER_V2);
+  const plan1 = (extra: Record<string, unknown>, ctxExtra: Record<string, unknown> = {}) =>
+    mm.plan(
+      makeContext({
+        strategy: StrategyKind.MARKET_MAKER,
+        config: cfg({ ...(v1 as object), ...extra }),
+        price: '100',
+        ...ctxExtra,
+      }),
+    );
+  const plan2 = (extra: Record<string, unknown>, ctxExtra: Record<string, unknown> = {}) =>
+    mm2.plan(
+      makeContext({
+        strategy: StrategyKind.MARKET_MAKER_V2,
+        config: cfg({ ...(v2 as object), ...extra }),
+        price: '100',
+        ...ctxExtra,
+      }),
+    );
+
+  /** Spec 001, F-57: la vista previa enseñaba 12 USDC por capa y el bot mandaba 8,40. */
+  it('la vista previa aplica el x0,7 del perfil conservador al tamaño', () => {
+    const p1 = mm.preview(
+      cfg({ ...(v1 as object), riskProfile: 'CONSERVATIVE', orderSizePerSide: '12' }),
+      makeMarket(),
+      '100',
+    );
+    expect(D(p1.levels[0].notional).lt(10)).toBe(true);
+    expect(p1.valid).toBe(false);
+
+    const p2 = mm2.preview(
+      cfg({ ...(v2 as object), behaviorPreset: 'CONSERVATIVE', orderSizePerSide: '12' }),
+      makeMarket(),
+      '100',
+    );
+    expect(D(p2.levels[0].notional).lt(10)).toBe(true);
+    expect(p2.valid).toBe(false);
+  });
+
+  /** Spec 001, F-58 y F-62: un par casado no reinicia el bot. */
+  it('los market makers declaran que quedar plano no cierra el ciclo', () => {
+    expect(mm.keepCycleOnFlat).toBe(true);
+    expect(mm2.keepCycleOnFlat).toBe(true);
+  });
+
+  /** Spec 001, F-59: el tope por lado era un freno mudo. */
+  it('el tope largo dispara la acción al límite y lo dice la nota', () => {
+    const p = plan1(
+      { maxLongPosition: '200', limitAction: 'CLOSE_ALL' },
+      { position: makePosition('2.5', '100') },
+    );
+    expect(p.immediate).toHaveLength(1);
+    expect(p.note).toMatch(/tope largo/i);
+  });
+
+  /** Spec 001, F-64: al copiar un bot llegaba '0.00' y el lado moría. */
+  it('un tope por lado a cero es «sin tope propio», no un lado muerto', () => {
+    const p = plan1({ maxLongPosition: '0.00' });
+    expect(byKind(p.orders, LevelKind.QUOTE_BID).length).toBeGreaterThan(0);
+  });
+
+  it('rechaza un tope por lado que no deja sitio ni a la cotización más pequeña', () => {
+    const r = mm.validate(cfg({ ...(v1 as object), maxLongPosition: '0.40' }), makeMarket());
+    expect(r.ok).toBe(false);
+    expect(r.issues.some((i) => i.field === 'maxLongPosition' && i.severity === 'ERROR')).toBe(
+      true,
+    );
+  });
+
+  /** Spec 001, F-60: el techo se aplicaba antes de capa, preset y régimen. */
+  it('el techo del spread se aplica después de los multiplicadores', () => {
+    const { orders } = plan2({
+      buyDistanceBps: '500',
+      sellDistanceBps: '500',
+      maxDynamicSpreadBps: '50',
+      behaviorPreset: 'CONSERVATIVE',
+    });
+    // 50 bps = 0,5 % → 99,5. Antes el preset Conservador cotizaba a 75 bps.
+    expect(byKind(orders, LevelKind.QUOTE_BID)[0].price).toBe('99.5');
+  });
+
+  it('avisa si el techo del spread está a cero', () => {
+    const r = mm2.validate(cfg({ ...(v2 as object), maxDynamicSpreadBps: '0' }), makeMarket());
+    expect(r.issues.some((i) => i.field === 'maxDynamicSpreadBps')).toBe(true);
+  });
+
+  /** Spec 001, F-61: la volatilidad se recalculaba en cada tick y movía las órdenes. */
+  it('la volatilidad medida no mueve los precios entre recotizaciones', () => {
+    const t0 = 1_000_000;
+    const extra = {
+      dynamicSpread: true,
+      volatilityMultiplier: '1',
+      orderBookMarginBps: '0',
+      volatilitySampleSeconds: 120,
+    };
+    const primero = plan2(extra, {
+      now: t0,
+      cycle: {
+        scratch: {
+          cycleSeq: 1,
+          volSamples: [
+            [t0 - 110_000, '99'],
+            [t0 - 20_000, '101'],
+          ],
+        },
+      },
+    });
+    expect(primero.scratchPatch?.quotedMid).toBeDefined();
+    const segundo = plan2(extra, {
+      now: t0 + 15_000,
+      cycle: { scratch: { cycleSeq: 1, ...primero.scratchPatch } },
+    });
+    expect(segundo.scratchPatch).toBeUndefined();
+    expect(byKind(segundo.orders, LevelKind.QUOTE_BID)[0].price).toBe(
+      byKind(primero.orders, LevelKind.QUOTE_BID)[0].price,
+    );
+  });
+
+  /** Spec 001, F-63: el recorte al hueco dejaba una capa de 5 USDC que el venue rechazaba cada 30 s. */
+  it('el recorte al hueco no deja una capa por debajo del mínimo del par', () => {
+    const { orders } = plan2(
+      { useFullSizeUntilMax: false },
+      { position: makePosition('9.95', '100') },
+    );
+    expect(byKind(orders, LevelKind.QUOTE_BID)).toHaveLength(0);
+    expect(byKind(orders, LevelKind.QUOTE_ASK).length).toBeGreaterThan(0);
+  });
+
+  /** Spec 001, F-15 (parte MM): con precio de referencia la espera tras un fill nunca regía. */
+  it('la espera tras un fill rige también con precio de referencia', () => {
+    const p = plan1(
+      { referencePrice: '100', fillCooldownSeconds: 60 },
+      { now: 1_000_000, cycle: { scratch: { cycleSeq: 1 }, lastEntryAt: 1_000_000 - 10_000 } },
+    );
+    expect(p.note).toMatch(/espera/i);
+  });
+
+  it('avisa si la comisión estimada de la V2 es cero', () => {
+    const r = mm2.validate(cfg({ ...(v2 as object), feeEstimateBps: '0' }), makeMarket());
+    expect(r.issues.some((i) => i.field === 'feeEstimateBps' && i.severity === 'WARNING')).toBe(
+      true,
+    );
+  });
+
+  /** Spec 001, F-67: «la app avisa» si el mercado se aleja del ancla; no había aviso. */
+  it('la nota avisa cuando el mercado se aleja del precio de referencia', () => {
+    const p = plan1({ referencePrice: '100' }, { price: '110' });
+    expect(p.note).toMatch(/ancla/i);
+  });
+
+  it('el aviso del suelo distingue la distancia mínima de la comisión y el margen', () => {
+    const r = mm2.validate(cfg({ ...(v2 as object), minAllowedDistanceBps: '50' }), makeMarket());
+    expect(r.issues.some((i) => /distancia mínima/i.test(i.message))).toBe(true);
+  });
+});
 
 describe('marketMaker.plan — guardas nuevas', () => {
   const base = cfg({

@@ -39,6 +39,56 @@ describe('clasificacion de errores del venue', () => {
     });
   });
 
+  /**
+   * Spec 001, F-75 y F-77. Los textos son los del capitulo de errores de Aster
+   * V3, no los de Binance: «Filter failure: …» no existe alli. Una firma que no
+   * casa (-1022) tiene que soltar el bot y avisar, no agotar el cortacircuitos;
+   * un nonce caducado (-4225, «Please retry») se reintenta con nonce nuevo; y
+   * un rechazo por filtro es una regla del mercado, no una averia.
+   */
+  describe('el vocabulario real de Aster', () => {
+    it.each([
+      ['Signature for this request is not valid.', 'AUTH'],
+      ['Nonce Expired. Please retry', 'RETRYABLE'],
+      ['Order would immediately trigger.', 'RULES'],
+      ['Position is not sufficient.', 'RULES'],
+      ['Reach max open order limit.', 'RULES'],
+      ['Exceeded the maximum allowable position at current leverage.', 'RULES'],
+      ['Quantity less than min quantity.', 'RULES'],
+      ['Quantity greater than max quantity.', 'RULES'],
+      ['Price less than min price.', 'RULES'],
+      ['Price greater than max price.', 'RULES'],
+      ['Price is higher than mark price multiplier cap.', 'RULES'],
+      ['Price is lower than mark price multiplier floor.', 'RULES'],
+    ])('%s -> %s', (mensaje, esperado) => {
+      expect(classify(mensaje)).toBe(esperado);
+    });
+  });
+
+  /**
+   * Spec 001, F-52, F-50 y F-48. Mensajes literales del capitulo de errores de
+   * Lighter (21xxx / 23000). Una clave revocada tiene que soltar el bot (AUTH);
+   * quedarse sin margen es INSUFFICIENT_FUNDS; los topes del venue son reglas;
+   * un libro lleno se reintenta.
+   */
+  describe('el vocabulario real de Lighter', () => {
+    it.each([
+      ['invalid PublicKey,please run changePubKey', 'AUTH'],
+      ['api key not found', 'AUTH'],
+      ["account is below maintenance margin, can't execute transaction", 'INSUFFICIENT_FUNDS'],
+      ["account is below initial margin, can't execute transaction", 'INSUFFICIENT_FUNDS'],
+      ['limit order price is too far from the mark price', 'RULES'],
+      ['SL/TP order price is too far from the trigger price', 'RULES'],
+      ['order price flagged as an accidental price', 'RULES'],
+      ['maximum active limit order count per market reached', 'RULES'],
+      ['maximum pending order count reached', 'RULES'],
+      ['margin mode change on a market with position or open order is not allowed', 'RULES'],
+      ['order book is full', 'RETRYABLE'],
+    ])('%s -> %s', (mensaje, esperado) => {
+      expect(classify(mensaje)).toBe(esperado);
+    });
+  });
+
   describe('sin tragarse lo que NO es una regla', () => {
     it.each([
       ['insufficient balance to place order', 'INSUFFICIENT_FUNDS'],

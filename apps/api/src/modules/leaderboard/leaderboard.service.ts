@@ -229,7 +229,11 @@ export class LeaderboardService {
       throw new BadRequestException('Indica cuánto capital quieres asignar al bot.');
     }
 
-    const config = expandFromShare(blob, input);
+    const config = expandFromShare(
+      blob,
+      { ...input, sourceSymbol: share.bot.symbol },
+      getStrategy(blob.strategy as StrategyKind).meta.fields,
+    );
 
     // Se cuenta la copia aquí y no al crear el bot: interesa saber cuánta gente
     // ha partido de esa configuración, la lleve a producción o no.

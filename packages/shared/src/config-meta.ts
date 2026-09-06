@@ -72,6 +72,14 @@ export interface FieldMeta {
   control?: FieldControl;
   /** Orden dentro de su grupo; sin esto se respeta el orden de declaración. */
   order?: number;
+  /**
+   * true = cambiarlo redibuja la escalera o la retícula: los precios o las
+   * cantidades de cada línea dejan de ser los que eran. Con escalones ya
+   * ejecutados en el ciclo, ese redibujo deja la salida de lo comprado en una
+   * línea que ya no existe o que cambió de sitio (001/F-90), así que la API
+   * rechaza la revisión mientras haya inventario del ciclo.
+   */
+  reshapes?: boolean;
 }
 
 export interface StrategyMeta {

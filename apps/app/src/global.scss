@@ -1057,6 +1057,13 @@ ion-toast {
   border-radius: var(--radius-md);
 }
 
+/* El bloque de capital va encima del de resultado y lleva su propio hueco:
+   son dos preguntas distintas —cuanto hay, cuanto se ha ganado— y pegarlos los
+   convertia en una sola tarjeta con dos cifras grandes. */
+.bd-cap {
+  margin-bottom: var(--space-3);
+}
+
 .bd-res-top {
   display: flex;
   align-items: flex-start;

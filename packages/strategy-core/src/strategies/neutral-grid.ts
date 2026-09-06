@@ -6,15 +6,17 @@ import {
   StrategyKind,
   type BotContext,
   type CommonBotConfig,
+  type CycleState,
   type DesiredOrder,
   type DesiredState,
   type FieldMeta,
+  type Fill,
   type MarketSpec,
   type PreviewResult,
   type StrategyMeta,
   type ValidationResult,
 } from '@crypton/shared';
-import { makeCoid } from '../client-order-id';
+import { makeCoid, parseCoid } from '../client-order-id';
 import {
   commonFieldsWith,
   buildPreview,
@@ -51,6 +53,7 @@ const NEUTRAL_FIELDS: readonly FieldMeta[] = [
     kind: 'price',
     mutability: Mutability.WARM,
     labelKey: 'strategy.neutral.lowerPrice',
+    reshapes: true,
     required: true,
     risky: true,
   },
@@ -59,6 +62,7 @@ const NEUTRAL_FIELDS: readonly FieldMeta[] = [
     kind: 'price',
     mutability: Mutability.WARM,
     labelKey: 'strategy.neutral.upperPrice',
+    reshapes: true,
     required: true,
     risky: true,
   },
@@ -67,6 +71,7 @@ const NEUTRAL_FIELDS: readonly FieldMeta[] = [
     kind: 'price',
     mutability: Mutability.WARM,
     labelKey: 'strategy.neutral.anchorPrice',
+    reshapes: true,
     helpKey: 'strategy.neutral.anchorPriceHelp',
     required: true,
   },
@@ -75,6 +80,7 @@ const NEUTRAL_FIELDS: readonly FieldMeta[] = [
     kind: 'integer',
     mutability: Mutability.WARM,
     labelKey: 'strategy.neutral.levels',
+    reshapes: true,
     min: 4,
     max: 200,
     step: 1,
@@ -86,6 +92,7 @@ const NEUTRAL_FIELDS: readonly FieldMeta[] = [
     kind: 'enum',
     mutability: Mutability.WARM,
     labelKey: 'strategy.neutral.spacing',
+    reshapes: true,
     options: ['ARITHMETIC', 'GEOMETRIC'],
     required: false,
     default: 'GEOMETRIC',
@@ -95,6 +102,7 @@ const NEUTRAL_FIELDS: readonly FieldMeta[] = [
     kind: 'number',
     mutability: Mutability.WARM,
     labelKey: 'strategy.neutral.sizeMultiplier',
+    reshapes: true,
     helpKey: 'strategy.neutral.sizeMultiplierHelp',
     min: 1,
     max: 3,
@@ -177,6 +185,49 @@ interface GridLine {
  * abajo se compra más cuanto más barato y arriba se vende más cuanto más caro,
  * que es lo que hace que la posición neta revierta a cero cerca del centro.
  */
+/**
+ * Lado memorizado de una línea: el que tiene tendido, o CRUZADA si el precio
+ * la atravesó (normalmente porque su orden se ejecutó) y espera a alejarse.
+ */
+type LadoLinea = 'BUY' | 'SELL' | 'CRUZADA';
+
+const leerLados = (cycle: CycleState): Record<string, LadoLinea> => {
+  const raw = cycle.scratch['lineSides'];
+  return raw && typeof raw === 'object' ? (raw as Record<string, LadoLinea>) : {};
+};
+
+/**
+ * Histéresis de cada línea (001/F-81).
+ *
+ * Una línea del lado correcto sigue viva hasta que el precio la CRUZA; la
+ * banda muerta solo gobierna el CAMBIO de lado: la línea cruzada se queda sin
+ * orden hasta que el mark se aleja medio escalón, y entonces vuelve con el
+ * lado contrario (o el mismo, si el precio volvió por donde vino). Antes la
+ * banda cancelaba la línea en cuanto el precio se le acercaba a menos de medio
+ * escalón: una compra en 95 (paso 5) solo vivía con el mark por encima de 97,5
+ * y en una bajada gradual no se ejecutaba nunca; solo cobraba saltos de más de
+ * medio escalón dentro de un latido.
+ */
+function ladoDeLinea(
+  previo: LadoLinea | undefined,
+  price: Decimal,
+  mark: Decimal,
+  deadband: Decimal,
+): LadoLinea {
+  if (previo === 'BUY') return price.lt(mark) ? 'BUY' : 'CRUZADA';
+  if (previo === 'SELL') return price.gt(mark) ? 'SELL' : 'CRUZADA';
+  if (previo === 'CRUZADA') {
+    if (price.lt(mark.minus(deadband))) return 'BUY';
+    if (price.gt(mark.plus(deadband))) return 'SELL';
+    return 'CRUZADA';
+  }
+  // Sin memoria (primer plan del ciclo): el lado lo dicta el precio, y la
+  // línea que cae justo en el mark espera a que se decida.
+  if (price.lt(mark)) return 'BUY';
+  if (price.gt(mark)) return 'SELL';
+  return 'CRUZADA';
+}
+
 function buildLines(cfg: NeutralGridConfig): GridLine[] {
   const levels = Math.max(4, Math.floor(cfg.gridLevels ?? 4));
   const prices =
@@ -273,6 +324,16 @@ export const neutralGrid: Strategy<NeutralGridConfig> = {
         ),
       );
     }
+    // `plan()` no lee la dirección: la retícula es la misma en los tres casos y
+    // la guía in-app prometía un sesgo que no existe (001/F-12).
+    if (cfg.direction === 'LONG' || cfg.direction === 'SHORT') {
+      issues.push(
+        warn(
+          'direction',
+          'La dirección no sesga la retícula neutral: compras bajo el ancla y ventas encima, sea cual sea el valor.',
+        ),
+      );
+    }
     return toResult(issues);
   },
 
@@ -301,6 +362,10 @@ export const neutralGrid: Strategy<NeutralGridConfig> = {
       refPrice,
       direction: cfg.direction === 'SHORT' ? 'SHORT' : 'LONG',
       leverage: cfg.leverage,
+      marginMode: cfg.marginMode,
+      // `plan()` no lee `direction`: la retícula es neutral siempre, y la
+      // vista previa enseña las dos liquidaciones (001/F-14).
+      neutral: true,
       issues: validation.issues,
     });
   },
@@ -312,20 +377,42 @@ export const neutralGrid: Strategy<NeutralGridConfig> = {
 
     const lines = buildLines(cfg);
 
-    // Banda muerta de medio escalón alrededor del precio: sin ella, la línea
-    // más cercana al mercado cambiaría de lado en cada tick y el bot se pasaría
-    // el día cancelando y recolocando la misma orden.
-    const stepAvg =
-      lines.length > 1
-        ? D(cfg.upperPrice)
-            .minus(cfg.lowerPrice)
-            .div(lines.length - 1)
-        : D(ctx.market.tickSize);
-    const deadband = stepAvg.div(2);
+    // Banda muerta de medio escalón LOCAL alrededor de cada línea: sin banda,
+    // la línea más cercana al mercado cambiaría de lado en cada tick y el bot
+    // se pasaría el día cancelando y recolocando la misma orden. Con espaciado
+    // geométrico el paso no es uniforme —abajo las líneas están juntas, arriba
+    // separadas— y una banda única de medio paso MEDIO dejaba dos vecinas de
+    // abajo dentro de la banda y rearmaba tarde las de arriba (001/F-94): cada
+    // línea usa la mitad de la distancia a su vecina más próxima.
+    const medioPasoLocal = (i: number): Decimal => {
+      const abajo = i > 0 ? lines[i].price.minus(lines[i - 1].price) : null;
+      const arriba = i < lines.length - 1 ? lines[i + 1].price.minus(lines[i].price) : null;
+      const paso =
+        abajo && arriba ? Decimal.min(abajo, arriba) : (abajo ?? arriba ?? D(ctx.market.tickSize));
+      return paso.div(2);
+    };
+
+    // Memoria por PRECIO y no por índice: sobrevive a un cambio de forma (una
+    // línea que ya no existe simplemente no se lee) y no confunde dos líneas
+    // distintas que hereden el mismo índice.
+    const previos = leerLados(ctx.cycle);
+    const lados: Record<string, LadoLinea> = {};
+    let cambiado = Object.keys(previos).length !== lines.length;
+    for (const [i, line] of lines.entries()) {
+      const clave = line.price.toFixed();
+      const lado = ladoDeLinea(previos[clave], line.price, mark, medioPasoLocal(i));
+      lados[clave] = lado;
+      if (previos[clave] !== lado) cambiado = true;
+    }
 
     const posQty = ctx.position ? D(ctx.position.qty) : D(0);
     const exposure = posQty.abs().mul(mark);
-    const cap = cfg.maxExposure ? D(cfg.maxExposure) : null;
+    // Dos topes con la misma semántica: el propio (`maxExposure`) y el común
+    // (`maxNotionalCap`), que aquí no se leía (001/F-12). Manda el menor.
+    const topes = [cfg.maxExposure, cfg.maxNotionalCap]
+      .map((t) => (t ? D(t) : D(0)))
+      .filter((t) => t.gt(0));
+    const cap = topes.length ? topes.reduce((a, b) => (a.lt(b) ? a : b)) : null;
     const capReached = cap != null && cap.gt(0) && exposure.gte(cap);
 
     const orders: DesiredOrder[] = [];
@@ -333,14 +420,14 @@ export const neutralGrid: Strategy<NeutralGridConfig> = {
     for (const line of lines) {
       if (line.qty.lte(0)) continue;
 
-      const isBuy = line.price.lt(mark.minus(deadband));
-      const isSell = line.price.gt(mark.plus(deadband));
-      if (!isBuy && !isSell) continue;
+      const lado = lados[line.price.toFixed()];
+      if (lado === 'CRUZADA') continue;
+      const isBuy = lado === 'BUY';
 
       // Con el tope alcanzado solo se dejan vivas las órdenes que REDUCEN la
       // posición neta; las que la aumentarían se retiran.
       if (capReached) {
-        const wouldIncrease = (isBuy && posQty.gte(0)) || (isSell && posQty.lte(0));
+        const wouldIncrease = (isBuy && posQty.gte(0)) || (!isBuy && posQty.lte(0));
         if (wouldIncrease) continue;
       }
 
@@ -363,6 +450,14 @@ export const neutralGrid: Strategy<NeutralGridConfig> = {
     let note = 'Retícula neutral: ' + orders.length + ' órdenes activas.';
     if (capReached) note = 'Tope de exposición alcanzado: solo órdenes que reducen posición.';
 
+    // Espera entre ciclos (001/F-12): al volver a plano se cierra el ciclo y, si
+    // hay espera configurada, la retícula no vuelve a tenderse hasta que pase.
+    const espera = ctx.cycle.cooldownUntil ?? 0;
+    if (espera > ctx.now) {
+      orders.length = 0;
+      note = 'Espera entre ciclos: ' + Math.ceil((espera - ctx.now) / 1000) + ' s sin órdenes.';
+    }
+
     if (cfg.reanchorOnDrift && cfg.reanchorThresholdPct) {
       const drift = mark.minus(cfg.anchorPrice).div(cfg.anchorPrice).mul(100).abs();
       if (drift.gte(cfg.reanchorThresholdPct)) {
@@ -370,6 +465,32 @@ export const neutralGrid: Strategy<NeutralGridConfig> = {
       }
     }
 
-    return { orders, immediate: [], targetLeverage: cfg.leverage, note };
+    return {
+      orders,
+      immediate: [],
+      targetLeverage: cfg.leverage,
+      note,
+      ...(cambiado ? { scratchPatch: { lineSides: lados } } : {}),
+    };
+  },
+
+  /**
+   * La ejecución de una línea la deja CRUZADA en la memoria: así el plan
+   * siguiente no la vuelve a tender aunque el mark siga un pelo del lado bueno
+   * (el mark va con retraso respecto al último cruce) y, con la reutilización
+   * de ids, el motor no recoloca la misma compra encima de la que acaba de
+   * ejecutarse. El plan tiene además su propio detector por precio, por si
+   * esta ejecución no llegara.
+   */
+  onFill(ctx: BotContext, fill: Fill, cycle: CycleState): CycleState {
+    const parsed = fill.clientOrderId ? parseCoid(fill.clientOrderId) : null;
+    if (!parsed || (parsed.kind !== LevelKind.GRID_BUY && parsed.kind !== LevelKind.GRID_SELL)) {
+      return cycle;
+    }
+    const cfg = ctx.config as unknown as NeutralGridConfig;
+    const line = buildLines(cfg).find((l) => l.index === parsed.levelIndex);
+    if (!line) return cycle;
+    const lados = { ...leerLados(cycle), [line.price.toFixed()]: 'CRUZADA' as LadoLinea };
+    return { ...cycle, scratch: { ...cycle.scratch, lineSides: lados } };
   },
 };

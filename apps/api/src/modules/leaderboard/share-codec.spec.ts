@@ -200,6 +200,46 @@ describe('expandFromShare', () => {
     expect(copied['leverage']).toBe(3);
   });
 
+  /**
+   * Spec 001, F-64. Los precios absolutos (piso, techo, disparo, ancla) y el
+   * símbolo de origen alternativo son del PAR del autor: copiados a otro par
+   * anclaban al copiador al símbolo ajeno y le ponían un piso de BTC a ETH.
+   */
+  it('al copiar a otro par no viajan los precios absolutos ni el símbolo de origen', () => {
+    const v2 = getStrategy('MARKET_MAKER_V2');
+    const original = {
+      ...v2.defaults(),
+      exchangeAccountId: 'acc-1',
+      symbol: 'BTC',
+      totalInvestment: '1000',
+      orderSizePerSide: '100',
+      maxBotPositionValue: '500',
+      priceFloor: '70000',
+      activationMode: 'PRICE_BELOW',
+      activationPrice: '80000',
+      sourceSymbolOverride: 'BTCUSDT',
+    } as unknown as BotConfig;
+    const blob = sanitizeForShare(original, v2.meta.fields, 'MARKET_MAKER_V2');
+
+    const otroPar = expandFromShare(
+      blob,
+      { exchangeAccountId: 'acc-2', symbol: 'ETH', totalInvestment: '500', sourceSymbol: 'BTC' },
+      v2.meta.fields,
+    ) as Record<string, unknown>;
+    expect(otroPar['priceFloor']).toBeUndefined();
+    expect(otroPar['activationPrice']).toBeUndefined();
+    expect(otroPar['sourceSymbolOverride']).toBeUndefined();
+    expect(otroPar['activationMode']).toBe('PRICE_BELOW');
+
+    const mismoPar = expandFromShare(
+      blob,
+      { exchangeAccountId: 'acc-2', symbol: 'BTC', totalInvestment: '500', sourceSymbol: 'BTC' },
+      v2.meta.fields,
+    ) as Record<string, unknown>;
+    expect(mismoPar['priceFloor']).toBe('70000');
+    expect(mismoPar['sourceSymbolOverride']).toBe('BTCUSDT');
+  });
+
   it('ida y vuelta con el mismo capital reproduce el original', () => {
     const copied = expandFromShare(shared, {
       exchangeAccountId: 'acc-del-autor',
@@ -284,6 +324,7 @@ describe('integracion con las estrategias reales', () => {
       'MARTINGALE',
       'GRIDMART',
       'MARKET_MAKER',
+      'MARKET_MAKER_V2',
     ] as const) {
       const strategy = getStrategy(kind);
       const config = {

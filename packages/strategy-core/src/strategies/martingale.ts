@@ -1,6 +1,7 @@
 import {
   D,
   Decimal,
+  maintenanceMarginRateOf,
   LevelKind,
   Mutability,
   StrategyKind,
@@ -51,6 +52,7 @@ export const MARTINGALE_FIELDS: readonly FieldMeta[] = [
     kind: 'integer',
     mutability: Mutability.WARM,
     labelKey: 'strategy.martingale.numLimitBuys',
+    reshapes: true,
     helpKey: 'strategy.martingale.numLimitBuysHelp',
     min: 1,
     max: 30,
@@ -64,6 +66,7 @@ export const MARTINGALE_FIELDS: readonly FieldMeta[] = [
     kind: 'percent',
     mutability: Mutability.WARM,
     labelKey: 'strategy.martingale.initialSeparationPct',
+    reshapes: true,
     helpKey: 'strategy.martingale.initialSeparationPctHelp',
     min: 0.05,
     max: 20,
@@ -76,6 +79,7 @@ export const MARTINGALE_FIELDS: readonly FieldMeta[] = [
     kind: 'number',
     mutability: Mutability.WARM,
     labelKey: 'strategy.martingale.volumeScale',
+    reshapes: true,
     helpKey: 'strategy.martingale.volumeScaleHelp',
     min: 1,
     max: 5,
@@ -89,6 +93,7 @@ export const MARTINGALE_FIELDS: readonly FieldMeta[] = [
     kind: 'number',
     mutability: Mutability.WARM,
     labelKey: 'strategy.martingale.stepScale',
+    reshapes: true,
     helpKey: 'strategy.martingale.stepScaleHelp',
     min: 1,
     max: 3,
@@ -180,7 +185,12 @@ export function validateLadderConfig(
       gap = gap.mul(step);
     }
     const lev = Number(cfg.leverage) || 1;
-    const liqDistance = D(100).div(lev);
+    // Con la tasa de mantenimiento del mercado: comparar con 100/apalancamiento
+    // a secas dejaba los últimos escalones más allá de la liquidación real
+    // (001/F-93).
+    const liqDistance = D(100)
+      .div(lev)
+      .minus(D(maintenanceMarginRateOf(market)).mul(100));
     if (coverage.gte(liqDistance)) {
       issues.push(
         err(
@@ -275,6 +285,7 @@ export const martingale: Strategy<MartingaleConfig> = {
       refPrice,
       direction: cfg.direction,
       leverage: cfg.leverage,
+      marginMode: cfg.marginMode,
       takeProfitPct: cfg.takeProfitPct,
       issues,
     });

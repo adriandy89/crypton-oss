@@ -8,6 +8,7 @@ import { AccountHub } from './account-hub.service';
 import { BotStore, type RiskGuards } from './bot-store';
 import { CommandInbox } from './command-inbox.service';
 import { LeaseService } from './lease.service';
+import { evaluarSalud } from './health';
 import { PriceSourceService } from '../marketdata';
 
 /**
@@ -78,7 +79,11 @@ export class EngineService implements OnModuleInit, OnModuleDestroy {
         this.accounts.abandonPaper(botId);
         this.pendingDetach.set(botId, reason);
       }
-      void this.applyDetachments();
+      // Con `catch`: soltar un bot escribe en la base y en Redis, y una promesa
+      // suelta que rechace tumba el worker entero (001/F-07).
+      void this.applyDetachments().catch((e: Error) =>
+        this.logger.error(`Fallo soltando bots: ${e.message}`),
+      );
     };
 
     await this.subscribeToBus();
@@ -133,7 +138,7 @@ export class EngineService implements OnModuleInit, OnModuleDestroy {
       // murió— debe ejecutarse en este mismo barrido, no en el siguiente.
       await this.adoptPending();
       await this.drainCommands();
-      await this.inbox.recoverStale(COMMAND_STALE_MS);
+      await this.inbox.recoverStale(COMMAND_STALE_MS, (botId) => this.leases.holder(botId));
     } catch (e) {
       this.logger.error(`Barrido fallido: ${(e as Error).message}`);
     } finally {
@@ -268,7 +273,12 @@ export class EngineService implements OnModuleInit, OnModuleDestroy {
     // segundos para no encontrar nada.
     const byBot = await this.inbox
       .claimForBots([...this.runners.keys()], this.leases.workerId)
-      .catch(() => new Map<string, never[]>());
+      .catch((e: Error) => {
+        // Con la base caída, un PANIC parecía «sin comandos». No se puede hacer
+        // más que esperar al siguiente barrido, pero se dice (001/F-18).
+        this.logger.error(`No se pudieron reclamar los comandos: ${e.message}. Esperan.`);
+        return new Map<string, never[]>();
+      });
 
     for (const [botId, commands] of byBot) {
       const runner = this.runners.get(botId);
@@ -280,15 +290,17 @@ export class EngineService implements OnModuleInit, OnModuleDestroy {
       }
       for (const cmd of commands) {
         try {
-          await runner.handleCommand(cmd.command as RunnerCommand, cmd.payload);
-          await this.inbox.markExecuted(cmd.id);
+          // La bandeja decide cuándo se cierra el comando: los que mueven
+          // dinero, antes de correr; el resto, al terminar. Y si falla, lo
+          // cierra con el motivo en vez de dejarlo pendiente: un comando que
+          // falla y sigue en la cola se reintentaría en cada barrido para
+          // siempre sin que nadie lo hubiera vuelto a pedir.
+          await this.inbox.execute(cmd, () =>
+            runner.handleCommand(cmd.command as RunnerCommand, cmd.payload),
+          );
         } catch (e) {
           const message = (e as Error).message;
           this.logger.error(`Comando ${cmd.command} fallido en ${botId}: ${message}`);
-          // Se cierra con el motivo en vez de dejarlo pendiente: un comando que
-          // falla y sigue en la cola se reintentaría en cada barrido para
-          // siempre sin que nadie lo hubiera vuelto a pedir.
-          await this.inbox.markFailed(cmd.id, message);
           // Con el user_id REAL: el aviso sin destinatario se escribía en la
           // tabla pero ni el SSE ni Telegram lo entregaban a nadie — la misma
           // lección que ya costó el aviso de arranque fallido.
@@ -502,7 +514,9 @@ export class EngineService implements OnModuleInit, OnModuleDestroy {
       startPaused: bot.status === 'PAUSED' || bot.status === 'STOPPING',
       onDetach: (id, reason) => {
         this.pendingDetach.set(id, reason);
-        void this.applyDetachments();
+        void this.applyDetachments().catch((e: Error) =>
+          this.logger.error(`Fallo soltando bots: ${e.message}`),
+        );
       },
     });
 
@@ -600,14 +614,15 @@ export class EngineService implements OnModuleInit, OnModuleDestroy {
       bots: [...this.runners.keys()],
       stalled: stalled.length,
       stalledBots: stalled,
-      /**
-       * Solo se declara enfermo el motor cuando están atascados TODOS sus
-       * runners. Un bot suelto atascado no es asunto del contenedor —de ese se
-       * encarga el cortacircuitos del propio runner, que lo pausa—, y hacer que
-       * uno malo marque el worker entero como no sano dejaría a los otros
-       * doscientos cuarenta y nueve señalados por su culpa.
-       */
-      healthy: this.runners.size === 0 || stalled.length < this.runners.size,
+      redis: this.leases.redisReady(),
+      // La regla vive en `evaluarSalud` (y su test): enfermo sin Redis, o con
+      // TODOS los runners atascados. Antes «cero runners» era sano también
+      // cuando la causa era haberlos soltado todos por Redis caído (001/F-18).
+      healthy: evaluarSalud({
+        runners: this.runners.size,
+        stalled: stalled.length,
+        leasesConfirmed: this.leases.redisReady(),
+      }),
     };
   }
 }

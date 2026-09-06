@@ -1,11 +1,13 @@
 import {
   BarPath,
+  ExchangeError,
   StrategyKind,
   Venue,
   type BacktestParams,
   type Candle,
   type MarketSpec,
 } from '@crypton/shared';
+import { DryRunAdapter } from '@crypton/exchange-core';
 import { runReplay } from './engine';
 
 /** Mismo mercado que usan los tests del motor, para poder contrastar cifras. */
@@ -232,6 +234,29 @@ describe('runReplay', () => {
  * estrategia volvía a entrar en bucle. El backtest devolvía resultados falsos
  * para cualquier configuración con stop, que es la de quien más cuidado tiene.
  */
+describe('runReplay — rechazos del simulador (spec 001, F-65)', () => {
+  /**
+   * El `catch` vacío al colocar hacía que un replay pudiera «funcionar» con
+   * órdenes que el simulador rechazó una a una, sin que el resultado lo dijera.
+   */
+  it('los rechazos al colocar se cuentan y salen en los avisos con su motivo', async () => {
+    // Rechaza como el simulador real: con una promesa, no con un throw síncrono.
+    const spy = jest
+      .spyOn(DryRunAdapter.prototype, 'placeOrder')
+      .mockImplementationOnce(() =>
+        Promise.reject(new ExchangeError('RULES', 'rechazo de prueba', Venue.HYPERLIQUID)),
+      );
+    try {
+      const out = await run(rampa(3, 100, 90));
+      expect(out.warnings.some((w) => /rechazad/i.test(w) && /rechazo de prueba/.test(w))).toBe(
+        true,
+      );
+    } finally {
+      spy.mockRestore();
+    }
+  });
+});
+
 describe('runReplay — stop-loss', () => {
   it('una caída que no llega al stop deja la posición abierta y no vende nada', async () => {
     // De 100 a 96 se llena el nivel de compra de ~97,1; el stop, un 10 % por

@@ -1,7 +1,7 @@
 import { createServer, type Server } from 'node:http';
 import type { AddressInfo } from 'node:net';
 import { WebSocketServer, type WebSocket as WS } from 'ws';
-import { LighterAdapter } from './adapters/lighter';
+import { LighterAdapter, resubscribePaced } from './adapters/lighter';
 
 /**
  * Pruebas del transporte de Lighter contra servidores LOCALES.
@@ -175,11 +175,161 @@ describe('Lighter REST — los casos que el venue no deja provocar', () => {
     expect(rest.ultimasCabeceras.authorization).toBeUndefined();
   });
 
+  const catalogo = JSON.stringify({
+    order_book_details: [
+      {
+        symbol: 'BTC',
+        market_id: 1,
+        market_type: 'perp',
+        status: 'active',
+        supported_price_decimals: 1,
+        supported_size_decimals: 5,
+        min_initial_margin_fraction: 200,
+        last_trade_price: '77000',
+      },
+    ],
+  });
+
+  /**
+   * Spec 001, F-49. La cabecera `authorization` solo se escribia en las
+   * llamadas del SDK DESPUES de pedir velas por publicGet, y un adaptador de bot
+   * nunca las pide: `account`, `orderBookDetails` y `orderBookOrders` salian
+   * sin firmar y gastaban el cupo de IP (60/min para todos los bots de la
+   * maquina) en vez del de la cuenta.
+   */
+  it('las lecturas de cuenta del SDK van con la cabecera authorization', async () => {
+    rest.rutas.set('/api/v1/account', {
+      cuerpo: JSON.stringify({
+        accounts: [{ collateral: '10', available_balance: '10', positions: [] }],
+      }),
+    });
+    adapter = new LighterAdapter({
+      venue: 'LIGHTER',
+      accountIndex: 0,
+      apiKeyIndex: 0,
+      apiPrivateKey: '0x01',
+      baseUrl: rest.url,
+    });
+    (adapter as unknown as { authToken(): string }).authToken = () => 'token-de-prueba';
+
+    await adapter.getBalances();
+
+    expect(rest.pedidos.some((p) => p.includes('/api/v1/account'))).toBe(true);
+    expect(rest.ultimasCabeceras.authorization).toBe('token-de-prueba');
+  });
+
+  /**
+   * Spec 001, F-55. `createdAt` era `Date.now()` en cada sondeo: la caducidad
+   * por edad de los market makers (`orderMaxAgeSeconds`) nunca disparaba en
+   * Lighter porque todas las ordenes parecian recien puestas.
+   */
+  it('la hora de creacion de una orden viva es la del venue, no la del sondeo', async () => {
+    rest.rutas.set('/api/v1/orderBookDetails', { cuerpo: catalogo });
+    rest.rutas.set('/api/v1/accountActiveOrders', {
+      cuerpo: JSON.stringify({
+        orders: [
+          {
+            order_index: 7,
+            client_order_index: 5,
+            is_ask: false,
+            type: 'limit',
+            price: '77000',
+            initial_base_amount: '0.001',
+            remaining_base_amount: '0.001',
+            filled_quote_amount: '0',
+            reduce_only: false,
+            timestamp: 1_700_000_000,
+            created_at: 1_700_000_000,
+          },
+        ],
+      }),
+    });
+    const a = crear();
+    (a as unknown as { authToken(): string }).authToken = () => 'tok';
+
+    const [orden] = await a.getOpenOrders('BTC');
+
+    expect(orden.createdAt).toBe(1_700_000_000_000);
+  });
+
+  /**
+   * Spec 001, F-05. El SDK declara `Trade.type` (`trade`, `liquidation`,
+   * `deleverage`, `market-settlement`) y el adaptador lo ignoraba: una
+   * liquidacion llegaba como un fill normal y el bot seguia operando a ciegas.
+   */
+  it('una ejecucion forzada por el venue llega marcada como liquidacion', async () => {
+    rest.rutas.set('/api/v1/orderBookDetails', { cuerpo: catalogo });
+    const trade = (type: string, id: number) => ({
+      trade_id: id,
+      type,
+      market_id: 1,
+      size: '0.001',
+      price: '77000',
+      usd_amount: '77',
+      ask_id: 1,
+      bid_id: 2,
+      ask_account_id: 0,
+      bid_account_id: 99,
+      ask_client_id: 5,
+      bid_client_id: 6,
+      is_maker_ask: true,
+      maker_fee: 0,
+      taker_fee: 0,
+      timestamp: 1_700_000_000,
+    });
+    rest.rutas.set('/api/v1/trades', {
+      cuerpo: JSON.stringify({ trades: [trade('liquidation', 1), trade('trade', 2)] }),
+    });
+    const a = crear();
+    (a as unknown as { authToken(): string }).authToken = () => 'tok';
+
+    const fills = await a.getRecentFills('BTC', 0);
+
+    expect(fills.find((f) => f.venueFillId === '1')?.liquidation).toBe(true);
+    expect(fills.find((f) => f.venueFillId === '2')?.liquidation).toBeUndefined();
+  });
+
   it('el catalogo se pide con filter=perp, para que filtre el venue', async () => {
     rest.rutas.set('/api/v1/candles', { cuerpo: JSON.stringify({ code: 200, c: [] }) });
     await crear().getCandles('BTC', '4h', { startMs: 0, limit: 2 });
     const catalogo = rest.pedidos.find((p) => p.includes('orderBookDetails'));
     expect(catalogo).toContain('filter=perp');
+  });
+
+  /**
+   * Spec 001, F-10. Sin simbolo eran tantas peticiones FIRMADAS como mercados
+   * activos (216 en mainnet) contra un cupo de 60 por minuto: mas de tres
+   * minutos del cupo de toda la IP en una sola llamada.
+   */
+  it('consultar las ordenes abiertas sin simbolo se rechaza', async () => {
+    await expect(crear().getOpenOrders()).rejects.toThrow(/símbolo/);
+  });
+});
+
+describe('Lighter WebSocket — resuscripcion sin rafaga', () => {
+  /**
+   * Spec 001, F-56. Al reconectar, `onOpen` reenviaba todos los canales de
+   * golpe; con mas de ~200 (el adaptador de datos de mercado con muchos
+   * graficos) superaba «200 mensajes por minuto» y entraba en bucle 30009 →
+   * desconexion → reconexion.
+   */
+  it('reenvia los primeros cincuenta canales de golpe y espacia el resto', async () => {
+    const enviados: string[] = [];
+    const esperas: number[] = [];
+    const canales = Array.from({ length: 120 }, (_, i) => 'c' + i);
+
+    await resubscribePaced(
+      canales,
+      (c) => enviados.push(c),
+      async (ms) => {
+        esperas.push(ms);
+      },
+    );
+
+    expect(enviados).toEqual(canales);
+    expect(esperas).toHaveLength(70);
+    // 200 mensajes por minuto son 300 ms entre mensajes: nunca por debajo.
+    expect(Math.min(...esperas)).toBeGreaterThanOrEqual(300);
   });
 });
 

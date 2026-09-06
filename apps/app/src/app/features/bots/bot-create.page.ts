@@ -346,6 +346,11 @@ export class BotCreatePage implements OnInit, OnDestroy {
   /**
    * Ultimo precio del par, como STRING.
    *
+   * Es el ultimo negociado que trae el ticker: la app no recibe la marca en
+   * lote. La vista previa del servidor recibe este mismo numero como
+   * `refPrice`, asi que panel y servidor calculan la escalera sobre el mismo
+   * precio; solo al CREAR el bot toma el servidor la marca del venue (001/F-66).
+   *
    * Que devuelva el string y no el objeto del ticker es deliberado y es lo que
    * hace viable el panel en vivo: `tickerOf()` construye un objeto nuevo en
    * cada volcado —cinco por segundo— y un `computed` que lo leyera recalcularia
@@ -1106,6 +1111,11 @@ export class BotCreatePage implements OnInit, OnDestroy {
         // La MISMA forma que se valida en local, no una copia a mano: es
         // justo el objeto que el servidor valida tal cual en `/bots/preview`.
         config: this.fullConfig(),
+        // El MISMO precio que uso el panel. Sin el, el servidor tomaba la marca
+        // del venue y el panel el ultimo negociado —en Lighter son precios
+        // distintos— y cerca del minimo con `sizingMode: BASE` podian discrepar
+        // en un nivel (001/F-66).
+        refPrice: this.mark() ?? undefined,
       });
       this.preview.set(result);
       this.step.set('preview');

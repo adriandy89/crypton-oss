@@ -667,7 +667,7 @@ export function composeSpreadBps(
   cfg: MarketMakerV2Config,
   baseBps: Decimal,
   volBps: Decimal,
-): { bps: Decimal; floorBps: Decimal; dynamicAdd: Decimal } {
+): { bps: Decimal; floorBps: Decimal; dynamicAdd: Decimal; capBps: Decimal } {
   const fee = D(cfg.feeEstimateBps ?? 0);
   const buffer = D(cfg.safetyBufferBps ?? 0);
   const roundTripCost = fee.mul(2);
@@ -683,11 +683,21 @@ export function composeSpreadBps(
       : D(cfg.orderBookMarginBps ?? 0).plus(volBps.mul(D(cfg.volatilityMultiplier ?? 0)));
 
   const raw = baseBps.plus(dynamicAdd).plus(roundTripCost).plus(buffer);
-  const cap = D(cfg.maxDynamicSpreadBps ?? 0);
-  const capped = cap.gt(0) ? Decimal.min(raw, cap) : raw;
+  // El techo NO se aplica aquí: va DESPUÉS de los multiplicadores de capa,
+  // preset y régimen, en `plan()` (`conTecho`). Aplicado al total base, el
+  // preset Conservador cotizaba a 150 bps con techo 100 (001/F-60).
+  const capBps = D(cfg.maxDynamicSpreadBps ?? 0);
 
-  return { bps: Decimal.max(floorBps, capped), floorBps, dynamicAdd };
+  return { bps: Decimal.max(floorBps, raw), floorBps, dynamicAdd, capBps };
 }
+
+/**
+ * Techo del diferencial ya multiplicado por capa, preset y régimen. El suelo
+ * por coste sigue mandando: por debajo de él no se cotiza con beneficio, y
+ * `validate` rechaza un techo menor que el suelo.
+ */
+const conTecho = (s: { floorBps: Decimal; capBps: Decimal }, bps: Decimal): Decimal =>
+  Decimal.max(s.floorBps, s.capBps.gt(0) ? Decimal.min(s.capBps, bps) : bps);
 
 /**
  * Coherencia de la fuente de precio externa.
@@ -771,6 +781,9 @@ export const marketMakerV2: Strategy<MarketMakerV2Config> = {
   kind: StrategyKind.MARKET_MAKER_V2,
   meta: META,
   reusesOrderSlots: true,
+  // Quedar plano no cierra el ciclo (ver la V1): aquí además sobreviven las
+  // muestras de volatilidad y el armado de la activación (001/F-58, F-62).
+  keepCycleOnFlat: true,
 
   defaults() {
     return {
@@ -852,17 +865,46 @@ export const marketMakerV2: Strategy<MarketMakerV2Config> = {
     // otra cosa ANTES de crear el bot, no después de mirar el libro.
     const { floorBps } = composeSpreadBps(cfg, buyBps, D(0));
     if (floorBps.gt(buyBps) || floorBps.gt(sellBps)) {
+      // La causa importa: el suelo puede venir de la distancia mínima
+      // permitida y no de la comisión y el margen (001/F-67).
+      const porDistanciaMinima = D(cfg.minAllowedDistanceBps ?? 1).gte(floorBps);
       issues.push(
-        warn(
-          'minProfitMarginBps',
-          'Comisión y margen mínimo obligan a un diferencial de al menos ' +
-            floorBps.toFixed(1) +
-            ' bps: las distancias configuradas se elevarán hasta ahí.',
-        ),
+        porDistanciaMinima
+          ? warn(
+              'minAllowedDistanceBps',
+              'La distancia mínima permitida (' +
+                floorBps.toFixed(1) +
+                ' bps) supera las distancias configuradas: se elevarán hasta ahí.',
+            )
+          : warn(
+              'minProfitMarginBps',
+              'Comisión y margen mínimo obligan a un diferencial de al menos ' +
+                floorBps.toFixed(1) +
+                ' bps: las distancias configuradas se elevarán hasta ahí.',
+            ),
       );
     }
 
+    // El techo a 0 apagaba la guarda en silencio (001/F-60) y la comisión a 0
+    // deja el suelo por coste en solo el margen mínimo (001/F-15). Cambiar los
+    // valores de fábrica es decisión del usuario: aquí solo se avisa.
     const cap = D(cfg.maxDynamicSpreadBps ?? 0);
+    if (!cap.gt(0)) {
+      issues.push(
+        warn(
+          'maxDynamicSpreadBps',
+          'Sin techo del diferencial: con volatilidad alta el bot puede cotizar tan lejos que no ejecute en horas.',
+        ),
+      );
+    }
+    if (D(cfg.feeEstimateBps ?? 0).lte(0)) {
+      issues.push(
+        warn(
+          'feeEstimateBps',
+          'Sin comisión estimada, el suelo por coste es solo el margen mínimo: el bot cotiza como si operar fuese gratis. Pon tu comisión real por lado.',
+        ),
+      );
+    }
     if (cap.gt(0) && cap.lt(floorBps)) {
       issues.push(
         err(
@@ -902,7 +944,8 @@ export const marketMakerV2: Strategy<MarketMakerV2Config> = {
     const layers = Math.max(1, Math.floor(cfg.layers ?? 1));
     const sizeWeights = geometricWeights(layers, cfg.layerSizeMultiplier ?? 1);
     const distWeights = geometricWeights(layers, cfg.layerDistanceMultiplier ?? 1);
-    const size = D(cfg.orderSizePerSide ?? 0);
+    // Con el perfil (×0,7 en Conservador), que es lo que se manda (001/F-57).
+    const size = D(cfg.orderSizePerSide ?? 0).mul(profile.size);
     const lev = D(cfg.leverage);
 
     // Sin histórico no hay volatilidad que medir: el preview enseña el
@@ -953,6 +996,7 @@ export const marketMakerV2: Strategy<MarketMakerV2Config> = {
       refPrice,
       direction: cfg.direction === 'SHORT' ? 'SHORT' : 'LONG',
       leverage: cfg.leverage,
+      marginMode: cfg.marginMode,
       issues: validation.issues,
     });
   },
@@ -986,7 +1030,7 @@ export const marketMakerV2: Strategy<MarketMakerV2Config> = {
     if (gate.patch) Object.assign(scratchPatch, gate.patch);
 
     // ── 3. ¿Toca recotizar? ──
-    const refreshMs = Math.max(5, Math.floor(cfg.refreshSeconds ?? 30)) * 1000;
+    const refreshMs = Math.max(15, Math.floor(cfg.refreshSeconds ?? 30)) * 1000;
     const quotedMidRaw = scratch['quotedMid'] as string | undefined;
     const quotedAt = Number(scratch['quotedAt'] ?? 0);
     const quotedMid = quotedMidRaw ? D(quotedMidRaw) : null;
@@ -1050,6 +1094,13 @@ export const marketMakerV2: Strategy<MarketMakerV2Config> = {
       shouldRequote && cfg.dynamicSpread !== false,
     );
     if (vol.samples) scratchPatch['volSamples'] = vol.samples;
+    // La volatilidad que fija los precios es la de la ÚLTIMA recotización.
+    // Entre recotizaciones el anillo se poda y `volBps` cambiaba, y con él los
+    // precios deseados: el reconciliador cancelaba y reponía todas las capas sin
+    // que nadie hubiera decidido recotizar (001/F-61).
+    const quotedVolRaw = scratch['quotedVolBps'];
+    const volBps = shouldRequote || typeof quotedVolRaw !== 'string' ? vol.volBps : D(quotedVolRaw);
+    if (shouldRequote) scratchPatch['quotedVolBps'] = vol.volBps.toFixed(4);
 
     // ── 5. Inventario, régimen y guardas ──
     const maxPos = D(cfg.maxBotPositionValue ?? 0);
@@ -1062,8 +1113,8 @@ export const marketMakerV2: Strategy<MarketMakerV2Config> = {
 
     // ── 6. Diferencial compuesto ──
     const profile = profileOf(cfg.behaviorPreset);
-    const buy = composeSpreadBps(cfg, D(cfg.buyDistanceBps), vol.volBps);
-    const sell = composeSpreadBps(cfg, D(cfg.sellDistanceBps), vol.volBps);
+    const buy = composeSpreadBps(cfg, D(cfg.buyDistanceBps), volBps);
+    const sell = composeSpreadBps(cfg, D(cfg.sellDistanceBps), volBps);
 
     const layers = layerCount;
     const sizeWeights = geometricWeights(layers, cfg.layerSizeMultiplier ?? 1);
@@ -1081,6 +1132,7 @@ export const marketMakerV2: Strategy<MarketMakerV2Config> = {
     const orders: DesiredOrder[] = [];
     let projectedLong = inv.exposure.gt(0) ? inv.exposure : D(0);
     let projectedShort = inv.exposure.lt(0) ? inv.exposure.abs() : D(0);
+    const minNotional = D(ctx.market.minNotional ?? 0);
 
     for (let l = 0; l < layers; l++) {
       const unit = size.mul(sizeWeights[l]);
@@ -1093,10 +1145,7 @@ export const marketMakerV2: Strategy<MarketMakerV2Config> = {
         buyMul.gt(0) &&
         !(buyRole === 'adding' && (band.blockBuy || breach.pauseEntries))
       ) {
-        const bps = Decimal.max(
-          buy.floorBps,
-          buy.bps.mul(distWeights[l]).mul(profile.distance).mul(buyMul),
-        );
+        const bps = conTecho(buy, buy.bps.mul(distWeights[l]).mul(profile.distance).mul(buyMul));
         const price = mid.mul(D(1).minus(bps.div(BPS)));
         const coid = makeCoid(ctx.botId, seq, LevelKind.QUOTE_BID, l);
         const reduceOnly = buyRole === 'reducing' && regime === 'HIGH_RISK';
@@ -1108,7 +1157,7 @@ export const marketMakerV2: Strategy<MarketMakerV2Config> = {
           // «cabían» en un hueco de 1000 USDC y se colocaban 50 000.
           const wanted = sizeToQty(cfg.sizingMode, unit, price);
           const room = maxPos.gt(0) && !reduceOnly ? maxPos.minus(projectedLong) : wanted.notional;
-          const notional = fitToRoom(cfg, wanted.notional, room, reduceOnly);
+          const notional = fitToRoom(cfg, wanted.notional, room, reduceOnly, minNotional);
           // Sin recorte se conserva la cantidad exacta que pidió el usuario, en
           // vez de reconstruirla dividiendo y perdiendo el último decimal.
           const qty = notional.eq(wanted.notional) ? wanted.qty : notional.div(price);
@@ -1135,10 +1184,7 @@ export const marketMakerV2: Strategy<MarketMakerV2Config> = {
         sellMul.gt(0) &&
         !(sellRole === 'adding' && (band.blockSell || breach.pauseEntries))
       ) {
-        const bps = Decimal.max(
-          sell.floorBps,
-          sell.bps.mul(distWeights[l]).mul(profile.distance).mul(sellMul),
-        );
+        const bps = conTecho(sell, sell.bps.mul(distWeights[l]).mul(profile.distance).mul(sellMul));
         const price = mid.mul(D(1).plus(bps.div(BPS)));
         const coid = makeCoid(ctx.botId, seq, LevelKind.QUOTE_ASK, l);
         const reduceOnly = sellRole === 'reducing' && regime === 'HIGH_RISK';
@@ -1150,7 +1196,7 @@ export const marketMakerV2: Strategy<MarketMakerV2Config> = {
           // «cabían» en un hueco de 1000 USDC y se colocaban 50 000.
           const wanted = sizeToQty(cfg.sizingMode, unit, price);
           const room = maxPos.gt(0) && !reduceOnly ? maxPos.minus(projectedShort) : wanted.notional;
-          const notional = fitToRoom(cfg, wanted.notional, room, reduceOnly);
+          const notional = fitToRoom(cfg, wanted.notional, room, reduceOnly, minNotional);
           // Sin recorte se conserva la cantidad exacta que pidió el usuario, en
           // vez de reconstruirla dividiendo y perdiendo el último decimal.
           const qty = notional.eq(wanted.notional) ? wanted.qty : notional.div(price);
@@ -1200,7 +1246,7 @@ export const marketMakerV2: Strategy<MarketMakerV2Config> = {
         '/' +
         sell.bps.toFixed(1) +
         ' bps (vol ' +
-        vol.volBps.toFixed(1) +
+        volBps.toFixed(1) +
         '), inventario ' +
         inv.loadPct.toFixed(0) +
         ' % del tope, ' +
@@ -1236,9 +1282,13 @@ function fitToRoom(
   notional: Decimal,
   room: Decimal,
   reduceOnly: boolean,
+  minNotional: Decimal,
 ): Decimal {
   if (reduceOnly) return notional;
   if (room.lte(0)) return D(0);
   if (notional.lte(room)) return notional;
-  return cfg.useFullSizeUntilMax ? D(0) : room;
+  if (cfg.useFullSizeUntilMax) return D(0);
+  // Un resto por debajo del mínimo del par no sale nunca: el venue lo rechaza
+  // en cada recotización y la capa se queda prometida para siempre (001/F-63).
+  return room.lt(minNotional) ? D(0) : room;
 }

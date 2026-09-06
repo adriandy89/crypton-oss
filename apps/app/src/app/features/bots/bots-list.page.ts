@@ -43,6 +43,7 @@ import {
   pct,
   pnlColor,
   price,
+  qty,
   signed,
   strategyLabel,
   uptime,
@@ -282,7 +283,16 @@ const VIVOS = ['STARTING', 'RUNNING', 'PAUSED'];
                 />
               }
 
+              <!-- Cuanto dinero hay AHORA, primero: es la pregunta que trae al
+                   usuario a esta pantalla y hasta el spec 025 tenia que sumarla de
+                   cabeza. Debajo, lo que puso, para leer las dos cifras juntas. La
+                   suma la hace el servidor con el paquete compartido: la app no suma dinero. -->
               <div class="grid">
+                <ui-stat
+                  label="Capital actual"
+                  [value]="money(bot.currentCapital)"
+                  [hint]="'de ' + money(bot.totalInvestment) + ' asignados'"
+                />
                 <ui-stat
                   label="PnL total"
                   [value]="signed(total(bot))"
@@ -290,8 +300,31 @@ const VIVOS = ['STARTING', 'RUNNING', 'PAUSED'];
                 />
                 <ui-stat label="ROI" [value]="pct(bot.roiPct)" [tone]="pnlColor(bot.roiPct)" />
                 <ui-stat label="Órdenes" [value]="bot.openOrders" />
-                <ui-stat label="Activo" [value]="uptime(bot.uptimeSeconds)" />
               </div>
+
+              <!-- Lo que hay en juego, como lo pone un exchange junto a la
+                   posicion: cuanta hay y que vale a precio de marca, que margen la
+                   sostiene y cuanto lleva el bot en marcha. -->
+              <p class="facts num">
+                @if (enPosicion(bot)) {
+                  <span>
+                    Posición <b>{{ qty(bot.positionQty) }}</b>
+                    @if (bot.positionValue) {
+                      ≈ <b>{{ money(bot.positionValue) }}</b>
+                    }
+                  </span>
+                  @if (conMargen(bot)) {
+                    <span
+                      >Margen <b>{{ money(bot.marginUsed) }}</b></span
+                    >
+                  }
+                } @else {
+                  <span>Sin posición</span>
+                }
+                <span
+                  >Activo <b>{{ uptime(bot.uptimeSeconds) }}</b></span
+                >
+              </p>
 
               <!-- La distancia a liquidación es LA métrica de riesgo: se muestra
                    en la tarjeta, no escondida en el detalle. -->
@@ -341,6 +374,7 @@ export class BotsListPage implements OnInit {
 
   readonly money = money;
   readonly price = price;
+  readonly qty = qty;
   readonly signed = signed;
   readonly pct = pct;
   readonly pnlColor = pnlColor;
@@ -503,6 +537,18 @@ export class BotsListPage implements OnInit {
   /** Resultado total de la tarjeta. Con `Decimal`, no con `Number`: invariante 1. */
   total(bot: BotSummary): string {
     return sumaExacta([bot.realizedPnl, bot.unrealizedPnl]);
+  }
+
+  /** Hay posicion abierta, en cualquiera de los dos sentidos. */
+  enPosicion(bot: BotSummary): boolean {
+    return D(bot.positionQty ?? 0)
+      .abs()
+      .gt(0);
+  }
+
+  /** El snapshot trae margen usado. `?? 0`: un servidor sin actualizar no manda el campo. */
+  conMargen(bot: BotSummary): boolean {
+    return D(bot.marginUsed ?? 0).gt(0);
   }
 
   /**

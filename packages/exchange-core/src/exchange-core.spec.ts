@@ -1183,6 +1183,47 @@ describe('MemoryVenueBudget', () => {
     await budget.take(Venue.HYPERLIQUID, 4, 'read', false);
     expect(Date.now() - empezado).toBeGreaterThanOrEqual(20);
   });
+
+  /**
+   * Spec 001, F-24. Aster limita también las ÓRDENES (1200/min y 300/10 s) y el
+   * presupuesto solo contaba peso: un market maker de varias capas podía pasarse
+   * sin que nadie lo notara. El depósito de órdenes admite 85 de golpe (lo que
+   * garantiza que ninguna ventana de diez segundos pase de 255) y luego 17/s.
+   */
+  it('las órdenes de Aster tienen su propio cupo: 85 de golpe y la siguiente espera', async () => {
+    const budget = new MemoryVenueBudget();
+    const empezado = Date.now();
+    for (let i = 0; i < 85; i++) await budget.takeOrders(Venue.ASTER, 1, false);
+    expect(Date.now() - empezado).toBeLessThan(200);
+
+    const antes = Date.now();
+    await budget.takeOrders(Venue.ASTER, 1, false);
+    expect(Date.now() - antes).toBeGreaterThanOrEqual(20);
+
+    // En los demás venues no hay cupo de órdenes: no espera nada.
+    const hl = Date.now();
+    for (let i = 0; i < 200; i++) await budget.takeOrders(Venue.HYPERLIQUID, 1, false);
+    expect(Date.now() - hl).toBeLessThan(100);
+  });
+
+  /**
+   * Spec 001, F-76. Lo que el venue dice haber contado (cabeceras de Aster)
+   * recorta el depósito a lo que queda de verdad; nunca lo amplía.
+   */
+  it('lo que el venue dice haber contado recorta el depósito, nunca lo amplía', async () => {
+    const opts = { ratePerSecond: { [Venue.ASTER]: 20 }, burstSeconds: 1, writeReserve: 0 };
+    const agotado = new MemoryVenueBudget(opts);
+    agotado.observe(Venue.ASTER, false, { usedWeightPerMinute: 2400 });
+    const empezado = Date.now();
+    await agotado.take(Venue.ASTER, 1, 'read', false);
+    expect(Date.now() - empezado).toBeGreaterThanOrEqual(20);
+
+    const libre = new MemoryVenueBudget(opts);
+    libre.observe(Venue.ASTER, false, { usedWeightPerMinute: 0 });
+    const antes = Date.now();
+    for (let i = 0; i < 20; i++) await libre.take(Venue.ASTER, 1, 'read', false);
+    expect(Date.now() - antes).toBeLessThan(100);
+  });
 });
 
 describe('passthrough de ids ya codificados', () => {

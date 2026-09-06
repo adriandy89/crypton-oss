@@ -1,3 +1,4 @@
+import { Logger } from '@nestjs/common';
 import { type DryRunState } from '@crypton/exchange-core';
 import { AccountHub } from './account-hub.service';
 import { BotStore } from './bot-store';
@@ -330,6 +331,87 @@ describe('AccountHub — un sandbox por bot, una fuente por venue', () => {
     const b = await abrir(hub, 'bot-b', 'BTC');
 
     expect(b).not.toBe(a);
+    await hub.onModuleDestroy();
+  });
+
+  /**
+   * Spec 001, F-34. `AccountHandle` cumple `ExchangeAdapter` para que el runner
+   * no distinga si habla con la cuenta o con su vista, pero no reexponia los
+   * dos metodos OPCIONALES: `adjustIsolatedMargin` y `setPositionMode`. El
+   * runner comprobaba `if (!adapter.adjustIsolatedMargin)` y siempre era
+   * cierto: «Aportar margen» fallaba en los tres venues, que si lo implementan,
+   * y «Modo de posicion» nunca llegaba a Aster.
+   */
+  it('el handle expone el ajuste de margen y el modo de posicion cuando el adaptador los tiene', async () => {
+    const { hub } = buildHub();
+    // El simulador implementa los dos.
+    const handle = await abrir(hub, 'bot-a', 'BTC');
+
+    expect(typeof handle.adjustIsolatedMargin).toBe('function');
+    expect(typeof handle.setPositionMode).toBe('function');
+    await hub.onModuleDestroy();
+  });
+
+  it('y no los inventa cuando el adaptador no los tiene', async () => {
+    // El runner decide por su PRESENCIA: en Hyperliquid y Lighter avisa de que
+    // el venue no lo permite. Un handle que los fingiera convertiria ese aviso
+    // en un fallo al llamar.
+    const { hub, credentials } = buildHub();
+    credentials.openAdapter.mockResolvedValue({
+      venue: VENUE,
+      close: jest.fn().mockResolvedValue(undefined),
+    });
+    const handle = await hub.open(ACCOUNT_ID, 'bot-a', VENUE, 'BTC', false, false);
+
+    expect(handle.adjustIsolatedMargin).toBeUndefined();
+    expect(handle.setPositionMode).toBeUndefined();
+    await hub.onModuleDestroy();
+  });
+
+  it('el ajuste de margen llega al adaptador e invalida lo cacheado del simbolo', async () => {
+    const { hub, credentials } = buildHub();
+    const adjustIsolatedMargin = jest.fn().mockResolvedValue(undefined);
+    const getPositions = jest.fn().mockResolvedValue([]);
+    credentials.openAdapter.mockResolvedValue({
+      venue: VENUE,
+      adjustIsolatedMargin,
+      getPositions,
+      close: jest.fn().mockResolvedValue(undefined),
+    });
+    const handle = await hub.open(ACCOUNT_ID, 'bot-a', VENUE, 'BTC', false, false);
+
+    await handle.getPositions('BTC');
+    await handle.getPositions('BTC'); // cacheado: sigue siendo una lectura
+    await handle.adjustIsolatedMargin!('BTC', '10', 'ADD', 'LONG');
+    await handle.getPositions('BTC'); // tras escribir, se vuelve a leer
+
+    expect(adjustIsolatedMargin).toHaveBeenCalledWith('BTC', '10', 'ADD', 'LONG');
+    expect(getPositions).toHaveBeenCalledTimes(2);
+    await hub.onModuleDestroy();
+  });
+
+  /**
+   * Spec 001, F-27. Hyperliquid admite diez conexiones WebSocket y diez
+   * usuarios distintos por IP, y el hub abre un adaptador (una conexion) por
+   * cuenta real. A partir de la undecima cuenta las conexiones nuevas se
+   * rechazan y los bots pierden los fills en tiempo real sin que nada avise.
+   */
+  it('avisa al abrir la decima cuenta real de Hyperliquid del proceso', async () => {
+    const { hub, credentials } = buildHub();
+    credentials.openAdapter.mockImplementation(async () => ({
+      venue: 'HYPERLIQUID',
+      close: jest.fn().mockResolvedValue(undefined),
+    }));
+    const warn = jest.spyOn(Logger.prototype, 'warn').mockImplementation(() => undefined);
+
+    for (let i = 0; i < 9; i++) {
+      await hub.open(`acc-${i}`, `bot-${i}`, 'HYPERLIQUID', 'BTC', false, false);
+    }
+    expect(warn.mock.calls.some((c) => /Hyperliquid/.test(String(c[0])))).toBe(false);
+    await hub.open('acc-9', 'bot-9', 'HYPERLIQUID', 'BTC', false, false);
+    expect(warn.mock.calls.some((c) => /Hyperliquid/.test(String(c[0])))).toBe(true);
+
+    warn.mockRestore();
     await hub.onModuleDestroy();
   });
 

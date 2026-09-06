@@ -12,11 +12,13 @@ import {
 } from '@crypton/shared';
 
 /**
- * Constructores de contexto para tests y para el modo dry-run.
+ * Constructores de contexto sintético para los tests del paquete.
  *
- * Viven en el paquete (y no en la carpeta de tests) porque el worker los usa
- * también: poder montar un `BotContext` sintético es lo que permite ejecutar
- * una estrategia contra precios reales sin mandar una sola orden.
+ * Viven junto al código y no en una carpeta de tests porque los comparten
+ * varios specs (`strategies.spec.ts`, `ladder.spec.ts`) y porque fijan la forma
+ * canónica de un `BotContext` mínimo válido. Nadie los importa fuera de los
+ * specs: el modo dry-run del motor monta su contexto con el mercado y el ticker
+ * reales (001/F-94: el comentario anterior decía que el worker los usaba).
  */
 
 export const TEST_MARKET: MarketSpec = {

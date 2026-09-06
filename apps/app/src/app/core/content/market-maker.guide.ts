@@ -207,13 +207,13 @@ export const MARKET_MAKER_GUIDE: StrategyGuide<MarketMakerConfig> = {
     referencePrice: {
       what: 'Ancla manual. Con esto puesto, el bot cotiza alrededor de este precio y no del mercado.',
       affects:
-        'Congela el centro de la cotización donde tu digas. Si el mercado se aleja del ancla, el bot deja de tener órdenes cerca del precio real y puede quedarse sin operar; nadie te avisa de esa deriva. Con el ancla puesta, la Espera tras un fill deja de actuar.',
-      tip: 'Déjalo vacio salvo que quieras cotizar alrededor de un nivel concreto. Si lo pones, vigílalo tú: no hay aviso automático.',
+        'Congela el centro de la cotización donde tu digas. Si el mercado se aleja del ancla más del doble de la capa más lejana, la nota del bot lo dice («Mercado a N bps del ancla…») y las órdenes quedan lejos del precio real. La Espera tras un fill sigue actuando con el ancla puesta.',
+      tip: 'Déjalo vacio salvo que quieras cotizar alrededor de un nivel concreto. Si lo pones, mira la nota del bot de vez en cuando: no hay evento aparte.',
     },
     direction: {
       what: 'Hacia qué lado se inclina la cotización. Aquí no describe una posición, sino una intención.',
       affects:
-        'En neutral cotiza igual a los dos lados. Con intención long o short el bot entiende que quieres acabar cargado en ese sentido y trata la posición contraria como algo a deshacer.',
+        'En neutral cotiza igual a los dos lados. Con intención long el bot coloca SOLO compras (y con short, solo ventas): acumula sin salida propia, y una posición contraria previa no se deshace sola. Para inclinarte a un lado, deja neutral y acorta la distancia de ese lado.',
       tip: 'Neutral es lo natural en un market maker. No se puede cambiar después.',
     },
     limitAction: {

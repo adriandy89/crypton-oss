@@ -19,7 +19,7 @@ import {
   type Ticker,
   type VenueOrder,
 } from '@crypton/shared';
-import type { ExchangeAdapter, StreamHealth } from '@crypton/exchange-core';
+import { hyperliquidCodec, type ExchangeAdapter, type StreamHealth } from '@crypton/exchange-core';
 import { makeCoid } from '@crypton/strategy-core';
 import { BotRunner } from './bot-runner';
 import type { BotRecord, BotStore } from './bot-store';
@@ -467,6 +467,44 @@ describe('BotRunner', () => {
       expect(adapter.placed.some((c) => c.endsWith('.TP999'))).toBe(true);
       expect(adapter.calls).toContain('getTicker');
 
+      await runner.dispose();
+    });
+
+    /**
+     * Spec 001, F-22. Aster acota las órdenes A MERCADO con `MARKET_LOT_SIZE`,
+     * siempre más estrecho que el de las límite (120 BTC frente a 1000): un
+     * cierre mayor que ese tope lo rechazaba el venue ENTERO y el motor lo
+     * trataba como un fallo de acción cualquiera.
+     */
+    it('una posición mayor que el tope de las órdenes a mercado se cierra en varios trozos', async () => {
+      const { runner, adapter } = build({ orders: [], immediate: [] });
+      adapter.position = {
+        venue: Venue.HYPERLIQUID,
+        symbol: 'BTC',
+        qty: '2.5',
+        entryPrice: '100',
+        markPrice: '100',
+        unrealizedPnl: '0',
+        leverage: 1,
+        marginMode: 'ISOLATED',
+        liquidationPrice: null,
+        marginUsed: '0',
+      };
+      await runner.start();
+      (runner as unknown as { market: MarketSpec }).market = { ...MARKET, maxMarketQty: '1' };
+
+      await runner.handleCommand('CLOSE_NOW');
+
+      const cierres = adapter.requests.filter((r) => r.type === 'MARKET');
+      expect(cierres.map((r) => r.qty)).toEqual(['1.000', '1.000', '0.500']);
+      // Cada trozo con su índice, hacia abajo desde 999: ni chocan entre sí ni
+      // con la escalera.
+      expect(cierres.map((r) => r.clientOrderId.split('.').pop())).toEqual([
+        'TP999',
+        'TP998',
+        'TP997',
+      ]);
+      expect(cierres.every((r) => r.reduceOnly === true && r.side === 'SELL')).toBe(true);
       await runner.dispose();
     });
 
@@ -992,6 +1030,161 @@ describe('reutilización de ids por estrategia', () => {
         expect.anything(),
         expect.objectContaining({ cooldownMinutes: 30 }),
       );
+    });
+  });
+
+  describe('modo de posicion en Aster', () => {
+    /**
+     * Spec 001, F-71. El veto de `validate()` protege lo que se crea a partir
+     * de ahora; esto protege a un bot que ya tuviera cobertura guardada. En
+     * Aster el cambio de modo es de TODA la cuenta y rompe a todos sus bots.
+     */
+    it('un bot de Aster con cobertura guardada no cambia el modo de la cuenta', async () => {
+      const eventos: { type: string; message: string }[] = [];
+      const { runner, adapter } = build(
+        { orders: [], immediate: [] },
+        {
+          event: jest.fn(async (_bot: unknown, type: string, _sev: string, message: string) => {
+            eventos.push({ type, message });
+          }) as never,
+        },
+        { positionMode: 'HEDGE' },
+      );
+      const setPositionMode = jest.fn().mockResolvedValue(undefined);
+      (adapter as unknown as { setPositionMode: unknown }).setPositionMode = setPositionMode;
+      // Sin tocar la constante BOT, que comparten todos los tests.
+      const r = runner as unknown as { deps: { bot: Record<string, unknown> } };
+      r.deps = { ...r.deps, bot: { ...r.deps.bot, venue: 'ASTER' } };
+      await runner.start();
+      await runner.dispose();
+
+      expect(setPositionMode).not.toHaveBeenCalled();
+      const aviso = eventos.find((e) => e.type === 'POSITION_MODE_SKIPPED');
+      expect(aviso?.message).toMatch(/cobertura/i);
+    });
+  });
+
+  describe('lo que safely() no puede tragarse (spec 001, F-06)', () => {
+    /**
+     * `safely()` convertía TODO en un ACTION_FAILED de nivel WARN, también una
+     * credencial revocada o un castigo del venue en pleno reemplazo. El bot
+     * seguía «vivo» con el lease renovándose; un market maker que solo
+     * reemplaza no pasaba nunca por `toPlace`, que sí relanzaba.
+     */
+    it.each(['AUTH', 'THROTTLED'] as const)(
+      'relanza %s en vez de convertirlo en un aviso',
+      async (kind) => {
+        const { runner, store } = build({ orders: [], immediate: [] });
+        const safely = (
+          runner as unknown as {
+            safely(accion: string, ref: string, fn: () => Promise<void>): Promise<void>;
+          }
+        ).safely.bind(runner);
+
+        await expect(
+          safely('reemplazar', 'x', async () => {
+            throw new ExchangeError(kind, 'venue', Venue.HYPERLIQUID);
+          }),
+        ).rejects.toThrow();
+        await runner.dispose();
+
+        expect(store.events).not.toContain('ACTION_FAILED');
+      },
+    );
+
+    it('un AUTH durante un reemplazo para el bot en ese mismo tick', async () => {
+      const coid = makeCoid(BOT_ID, 1, 'GRID_BUY', 0);
+      const enVenue = hyperliquidCodec.encode(coid);
+      const { runner, adapter, store, detached } = build(
+        { orders: [level(0)], immediate: [] },
+        { ownVenueClientIds: jest.fn().mockResolvedValue([enVenue]) },
+      );
+      // La orden está en el libro a otro precio: el plan la reemplaza.
+      adapter.getOpenOrders = async () => [
+        {
+          venue: Venue.HYPERLIQUID,
+          symbol: 'BTC',
+          clientOrderId: enVenue,
+          venueOrderId: 'v1',
+          side: 'BUY',
+          type: 'LIMIT',
+          price: '90.0',
+          qty: '1.000',
+          filledQty: '0',
+          avgPrice: null,
+          status: 'OPEN',
+          reduceOnly: false,
+          createdAt: Date.now(),
+        },
+      ];
+      adapter.placeError = new ExchangeError('AUTH', 'clave revocada', Venue.HYPERLIQUID);
+
+      await runner.start();
+
+      expect(store.events).toContain('AUTH_ERROR');
+      expect(detached).toContain(BOT_ID);
+      await runner.dispose();
+    });
+  });
+
+  describe('promesas sueltas con acceso a la base (spec 001, F-07)', () => {
+    /**
+     * `acquireFairPrice` avisaba con `void this.event(...)` y `store.event`
+     * escribe en la base: si la base rechazaba, la promesa quedaba sin manejar
+     * y `main.ts` sale del proceso con todos los bots.
+     */
+    it('un fallo al registrar el aviso de la fuente de precio no queda sin manejar', async () => {
+      const sueltas: unknown[] = [];
+      const captura = (r: unknown): void => {
+        sueltas.push(r);
+      };
+      process.on('unhandledRejection', captura);
+      const { runner } = build(
+        { orders: [], immediate: [] },
+        {
+          event: jest.fn(async (_bot: unknown, type: string) => {
+            if (type === 'FAIR_PRICE_UNAVAILABLE') throw new Error('base caída');
+          }),
+        },
+        { priceSource: 'COINGECKO' },
+      );
+
+      await runner.start();
+      await new Promise((r) => setTimeout(r, 30));
+      process.off('unhandledRejection', captura);
+      await runner.dispose();
+
+      expect(sueltas).toEqual([]);
+    });
+  });
+
+  describe('cancelar lo que ya no existe es un no-op en los tres venues', () => {
+    /**
+     * Spec 001, F-51. La regex de `safely()` conocia «not found», «unknown
+     * order» y «does not exist», pero no el vocabulario de Lighter (21600,
+     * 21715, 21709, 21708, 21707): cada carrera lectura→cancelacion producia un
+     * ACTION_FAILED en WARN y, en un reemplazo, saltaba la recolocacion.
+     */
+    it.each([
+      'given order is not an active limit order',
+      'given order is not an active order',
+      'order is inactive',
+      'order is empty',
+      'account is not owner of the order',
+    ])('«%s» no genera ningun aviso', async (mensaje) => {
+      const { runner, store } = build({ orders: [], immediate: [] });
+      const safely = (
+        runner as unknown as {
+          safely(accion: string, ref: string, fn: () => Promise<void>): Promise<void>;
+        }
+      ).safely.bind(runner);
+
+      await safely('cancelar', 'x', async () => {
+        throw new ExchangeError('FATAL', mensaje, Venue.LIGHTER);
+      });
+      await runner.dispose();
+
+      expect(store.events).not.toContain('ACTION_FAILED');
     });
   });
 

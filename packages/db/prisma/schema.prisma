@@ -45,10 +45,10 @@ model User {
   // El perfil es PRIVADO: solo lo ve su dueño. No hay endpoint que devuelva el
   // perfil de otro usuario, y el ranking ya no publica ni el capital ni el
   // resultado absoluto de nadie.
-  bio        String? @db.VarChar(280)
-  country    String? @db.VarChar(2)
+  bio              String? @db.VarChar(280)
+  country          String? @db.VarChar(2)
   /// Zona IANA (`Europe/Madrid`). Decide cómo se fechan los avisos y el resumen.
-  timezone   String? @db.VarChar(64)
+  timezone         String? @db.VarChar(64)
   /// Moneda en la que se muestran los importes. No cambia con qué se opera.
   display_currency String? @db.VarChar(8)
 
@@ -249,6 +249,19 @@ model Market {
   min_qty      Decimal? @db.Decimal(38, 18)
   max_qty      Decimal? @db.Decimal(38, 18)
 
+  /// Los cuatro campos del venue que `MarketSpec` gano en los specs 013, 014, 019
+  /// y 023. El motor, la API y la app construyen el mercado desde esta fila, y sin
+  /// ellos aqui las correcciones de esos specs se quedaban en el adaptador
+  /// (spec 024). Null = el venue no lo declara o la fila aun no se ha sincronizado.
+  /// Tope de cantidad de una orden A MERCADO (Aster: `MARKET_LOT_SIZE`), aparte del de las limite.
+  max_market_qty          Decimal? @db.Decimal(38, 18)
+  /// Tope de ordenes activas por mercado (Lighter Standard 30, Aster 200).
+  max_active_orders       Int?
+  /// Cifras significativas que admite el venue en un precio (Hyperliquid 5).
+  max_significant_digits  Int?
+  /// Tasa de margen de mantenimiento, como fraccion (0.0125 = 1,25 %).
+  maintenance_margin_rate Decimal? @db.Decimal(38, 18)
+
   max_leverage   Int
   price_decimals Int
   qty_decimals   Int
@@ -335,24 +348,24 @@ model Bot {
   // fuentes de verdad sobre el papel, una sola en la práctica, y un índice
   // que solo costaba escrituras.
 
-  started_at DateTime? @db.Timestamptz(6)
-  stopped_at DateTime? @db.Timestamptz(6)
+  started_at   DateTime? @db.Timestamptz(6)
+  stopped_at   DateTime? @db.Timestamptz(6)
   last_tick_at DateTime? @db.Timestamptz(6)
-  last_error String?   @db.Text
-  note       String?   @db.VarChar(256)
+  last_error   String?   @db.Text
+  note         String?   @db.VarChar(256)
 
   created_at DateTime  @default(now()) @db.Timestamptz(6)
   updated_at DateTime? @updatedAt @db.Timestamptz(6)
 
-  revisions BotConfigRevision[]
-  levels    BotLevel[]
-  orders    BotOrder[]
-  cycles    BotCycle[]
-  events    BotEvent[]
-  commands  BotCommand[]
-  snapshots BotSnapshot[]
-  mm_stats  BotMmStat?
-  share     BotShare?
+  revisions   BotConfigRevision[]
+  levels      BotLevel[]
+  orders      BotOrder[]
+  cycles      BotCycle[]
+  events      BotEvent[]
+  commands    BotCommand[]
+  snapshots   BotSnapshot[]
+  mm_stats    BotMmStat?
+  share       BotShare?
   /// Solo en los simulados: el sandbox contra el que operan.
   paper_state PaperState?
   /// Backtests lanzados sobre su configuración. Ver `BacktestRun`.
@@ -390,10 +403,10 @@ model BotConfigRevision {
   bot_id String
   bot    Bot    @relation(fields: [bot_id], references: [id], onDelete: Cascade)
 
-  version Int
-  config  Json
+  version     Int
+  config      Json
   /// Solo los campos que cambiaron respecto de la revisión anterior.
-  diff    Json?
+  diff        Json?
   /// HOT | WARM | COLD — cómo se aplicó.
   apply_level String? @db.VarChar(8)
   applied_by  String? @db.VarChar(64)
@@ -564,8 +577,8 @@ model BotCycle {
   opened_at DateTime  @default(now()) @db.Timestamptz(6)
   closed_at DateTime? @db.Timestamptz(6)
 
-  entries_filled Int      @default(0)
-  last_entry_at  DateTime? @db.Timestamptz(6)
+  entries_filled       Int       @default(0)
+  last_entry_at        DateTime? @db.Timestamptz(6)
   /// Índices de nivel ya ejecutados en este ciclo.
   filled_level_indexes Int[]
   cooldown_until       DateTime? @db.Timestamptz(6)
@@ -698,7 +711,6 @@ model ActivityLog {
   @@index([actor_id, created_at(sort: Desc)], map: "idx_activity_actor")
   /// «Todos los PANIC», «todas las altas de credencial».
   @@index([action, created_at(sort: Desc)], map: "idx_activity_action")
-
   /// OJO: en la base hay ademas un CUARTO indice, parcial, que Prisma no sabe
   /// declarar y que por tanto NO aparece aqui:
   ///
@@ -727,7 +739,7 @@ model BotCommand {
   bot_id String
   bot    Bot    @relation(fields: [bot_id], references: [id], onDelete: Cascade)
 
-  command String @db.VarChar(32)
+  command      String  @db.VarChar(32)
   /// Quién lo pidió. Null = lo generó el propio sistema (kill-switch, plan).
   requested_by String? @db.VarChar(64)
 
@@ -864,15 +876,15 @@ model RiskLimit {
   user_id String @unique
   user    User   @relation(fields: [user_id], references: [id], onDelete: Cascade)
 
-  max_notional_per_bot Decimal? @db.Decimal(38, 18)
-  max_total_notional   Decimal? @db.Decimal(38, 18)
-  max_leverage         Int?
-  max_open_bots        Int?
-  max_daily_loss       Decimal? @db.Decimal(38, 18)
+  max_notional_per_bot     Decimal? @db.Decimal(38, 18)
+  max_total_notional       Decimal? @db.Decimal(38, 18)
+  max_leverage             Int?
+  max_open_bots            Int?
+  max_daily_loss           Decimal? @db.Decimal(38, 18)
   /// Al superarse esta caída, el bot se pausa solo y se avisa.
   kill_switch_drawdown_pct Decimal? @db.Decimal(10, 4)
   /// Distancia a liquidación por debajo de la cual se emite alerta crítica.
-  liquidation_alert_pct Decimal? @default(10) @db.Decimal(10, 4)
+  liquidation_alert_pct    Decimal? @default(10) @db.Decimal(10, 4)
 
   updated_at DateTime @updatedAt @db.Timestamptz(6)
 
@@ -884,8 +896,8 @@ model TelegramLink {
   user_id String @unique
   user    User   @relation(fields: [user_id], references: [id], onDelete: Cascade)
 
-  chat_id   String? @db.VarChar(32)
-  link_code String? @unique @db.VarChar(16)
+  chat_id              String?   @db.VarChar(32)
+  link_code            String?   @unique @db.VarChar(16)
   /// Caducidad del código de vinculación.
   ///
   /// Sin ella, todo el que pulsó «vincular» y no terminó dejaba un código
@@ -898,7 +910,7 @@ model TelegramLink {
   link_code_expires_at DateTime? @db.Timestamptz(6)
   verified_at          DateTime? @db.Timestamptz(6)
   /// Qué eventos quiere recibir: { fills, cycles, errors, risk, liquidation, daily }
-  prefs Json @default("{}")
+  prefs                Json      @default("{}")
 
   created_at DateTime @default(now()) @db.Timestamptz(6)
 
@@ -923,10 +935,10 @@ model BotShare {
   user_id String
   user    User   @relation(fields: [user_id], references: [id], onDelete: Cascade)
 
-  share_code  String  @unique @db.VarChar(16)
-  config_blob Json
-  public      Boolean @default(false)
-  copies_count Int    @default(0)
+  share_code   String  @unique @db.VarChar(16)
+  config_blob  Json
+  public       Boolean @default(false)
+  copies_count Int     @default(0)
 
   created_at DateTime @default(now()) @db.Timestamptz(6)
 
@@ -1032,7 +1044,7 @@ model BacktestRun {
   fills_total Int
   duration_ms Int
 
-  metrics Json
+  metrics      Json
   /// Curva de equity ya agregada, conservando los extremos de cada cubo.
   ///
   /// Se remuestrea DESPUÉS de calcular el drawdown máximo sobre la serie
@@ -1040,8 +1052,8 @@ model BacktestRun {
   equity_curve Json
   /// Velas para el gráfico, agregadas. Agregadas y no muestreadas: una vela
   /// muestreada pierde las mechas, y las mechas son lo que ejecutó las órdenes.
-  candles  Json
-  warnings Json
+  candles      Json
+  warnings     Json
 
   created_at DateTime @default(now()) @db.Timestamptz(6)
 

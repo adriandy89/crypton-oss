@@ -90,6 +90,23 @@ describe('reconcile', () => {
     expect(plan.toReplace).toHaveLength(0);
     expect(plan.unchanged).toBe(1);
   });
+  /**
+   * Spec 001, F-83. Una linea de TAMAÑO FIJO (reticula, recompra, cotizacion)
+   * sigue deseada entera tras un parcial; comparar solo contra lo que queda vivo
+   * la daba por cambiada y se cancelaba y recolocaba entera: 1,0 con 0,3
+   * ejecutado → hasta 1,3 en esa linea.
+   */
+  it('una linea de tamaño fijo con ejecucion parcial no se recoloca completa', () => {
+    const plan = run([want({ qty: '1.000' })], [have({ qty: '1.000', filledQty: '0.300' })]);
+    expect(plan.toReplace).toHaveLength(0);
+    expect(plan.unchanged).toBe(1);
+  });
+
+  it('si la cantidad deseada no casa ni con la original ni con el resto, se reemplaza', () => {
+    const plan = run([want({ qty: '2.000' })], [have({ qty: '1.000', filledQty: '0.300' })]);
+    expect(plan.toReplace).toHaveLength(1);
+  });
+
   it('cancela nuestras órdenes que ya no están en el plan', () => {
     const orphan = have({
       clientOrderId: makeCoid(BOT_ID, 1, 'SAFETY', 7),

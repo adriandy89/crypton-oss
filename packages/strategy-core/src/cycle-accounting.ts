@@ -100,6 +100,24 @@ export interface CycleFillOptions {
   recycleLevelOnExit?: boolean;
   /** Minutos de espera antes de que el ciclo siguiente pueda abrir. */
   cooldownMinutes?: number;
+  /**
+   * ¿Esta ejecución COMPLETA su orden? Por defecto sí. Con false (un parcial),
+   * el escalón no se marca como tomado ni se cuenta la entrada: el plan sigue
+   * deseando la línea y el resto se queda en el libro. Antes el primer trozo
+   * marcaba el índice y el resto se cancelaba: escalón a medias sin reposición
+   * (001/F-83).
+   */
+  levelComplete?: boolean;
+  /**
+   * Las recompras (GRID_BUY) no marcan escalón: en GridMart comparten índice
+   * con las seguridades y marcarlo borraba SAFETY#j del plan (001/F-82).
+   */
+  rebuysOffLevelIndexes?: boolean;
+  /**
+   * Quedar plano no cierra el ciclo (market makers): sobreviven ids, scratch,
+   * `lastEntryAt` y el realizado del ciclo (001/F-58).
+   */
+  keepCycleOnFlat?: boolean;
 }
 
 export function cycleAfterFill(
@@ -141,14 +159,16 @@ export function cycleAfterFill(
 
   const accDelta = realized.minus(prevRealized);
 
+  const completa = opts.levelComplete ?? true;
   const filledIndexes = new Set(totals.filledLevelIndexes);
-  if (isEntry && parsed) filledIndexes.add(parsed.levelIndex);
+  const marcaEscalon = !(opts.rebuysOffLevelIndexes && levelKind === 'GRID_BUY');
+  if (isEntry && parsed && completa && marcaEscalon) filledIndexes.add(parsed.levelIndex);
   if (opts.recycleLevelOnExit && parsed?.kind === 'GRID_SELL') {
     filledIndexes.delete(parsed.levelIndex);
   }
 
   const anchor = totals.anchorPrice ?? (isEntry && levelKind === 'BASE' ? D(fill.price) : null);
-  const entriesFilled = totals.entriesFilled + (isEntry ? 1 : 0);
+  const entriesFilled = totals.entriesFilled + (isEntry && completa ? 1 : 0);
   const fees = totals.fees.plus(fill.fee);
   const flat = nextQty.abs().lt(QTY_EPSILON);
 
@@ -163,15 +183,20 @@ export function cycleAfterFill(
     lastEntryAt: isEntry ? fill.ts : totals.lastEntryAt,
   };
 
-  if (!flat) {
+  if (!flat || opts.keepCycleOnFlat) {
+    // Plano pero con el ciclo vivo (market makers): sin posición no hay medio
+    // ni escalones tomados, y todo lo demás —memoria, ids, realizado— sigue.
+    const sinPosicion = flat;
     return {
-      totals: nextTotals,
+      totals: sinPosicion
+        ? { ...nextTotals, averageEntry: null, filledLevelIndexes: [] }
+        : nextTotals,
       cycle: {
         ...cycle,
         entriesFilled,
         lastEntryAt: isEntry ? fill.ts : cycle.lastEntryAt,
-        filledLevelIndexes: [...filledIndexes],
-        averageEntry: averageEntry.toFixed(),
+        filledLevelIndexes: sinPosicion ? [] : [...filledIndexes],
+        averageEntry: sinPosicion ? null : averageEntry.toFixed(),
         anchorPrice: anchor?.toFixed() ?? cycle.anchorPrice,
         realizedPnl: realized.toFixed(),
         realizedPnlAcc: D(cycle.realizedPnlAcc).plus(accDelta).toFixed(),

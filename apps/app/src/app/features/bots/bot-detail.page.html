@@ -106,6 +106,45 @@
           </ui-notice>
         }
 
+        <!-- ── Capital ──
+             Cuanto dinero hay AHORA, cuanto se puso y cuanto hay en juego. Es
+             patrimonio, no resultado: la curva de abajo sigue siendo el
+             «resultado acumulado». El inicial solo se enseña cuando difiere del
+             asignado —«Aportar margen» contando como capital, o una edicion—: si
+             son iguales, repetirlo es ruido (spec 025). -->
+        <div class="bd-res bd-cap">
+          <div class="bd-res-top">
+            <div>
+              <span class="bd-lbl">Capital actual</span>
+              <div class="bd-big num">{{ money(b.currentCapital) }}</div>
+              <div class="bd-split">
+                <b class="num">{{ money(b.totalInvestment) }}</b> asignados
+                @if (inicialDistinto(); as ini) {
+                  · <b class="num">{{ money(ini) }}</b> al crear el bot
+                }
+                · <b class="num" [class]="'num c-' + pnlColor(total())">{{ signed(total()) }}</b>
+                de resultado
+              </div>
+            </div>
+          </div>
+          <!-- Lo que hay en juego, como lo pone un exchange junto a la posicion:
+               que vale a precio de marca, que margen la sostiene y cuanto rinde
+               ese margen ahora mismo. -->
+          <div class="bd-foot3">
+            <ui-stat
+              label="Valor de la posición"
+              [value]="b.positionValue ? money(b.positionValue) : '—'"
+            />
+            <ui-stat label="Margen usado" [value]="money(b.marginUsed)" />
+            <ui-stat
+              label="PnL abierto"
+              [value]="signed(b.unrealizedPnl)"
+              [hint]="roe() ? pct(roe()) + ' sobre el margen' : ''"
+              [tone]="pnlColor(b.unrealizedPnl)"
+            />
+          </div>
+        </div>
+
         <!-- ── Resultado acumulado ──
              «Resultado», nunca «equity» ni «capital»: la columna `equity` de
              bot_snapshots es realized + unrealized, o sea PnL. El cero de la
@@ -223,6 +262,16 @@
           <div>
             <span class="k">Precio medio</span>
             <span class="v">{{ price(b.averageEntry) }}</span>
+          </div>
+          <!-- Marca junto al medio: la distancia entre los dos ES el PnL abierto,
+               y hasta ahora la marca solo salia al pie de la liquidacion. -->
+          <div>
+            <span class="k">Precio de marca</span>
+            <span class="v">{{ price(b.snapshot?.mark_price) }}</span>
+          </div>
+          <div>
+            <span class="k">Apalancamiento</span>
+            <span class="v">{{ b.leverage }}×</span>
           </div>
           <div>
             <span class="k">Órdenes vivas</span>

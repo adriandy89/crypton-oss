@@ -19,8 +19,9 @@ import { Venue } from '@crypton/shared';
  * Cupo por minuto y por IP de cada venue, en su propia unidad.
  *
  *   · Lighter — «Standard accounts: 60 requests per rolling minute». Es un
- *     cupo de PETICIONES, no ponderado: cuando la cuenta no es Standard pasa a
- *     ser ponderado y lo ajusta `LIGHTER_REST_QUOTA_PER_MINUTE`.
+ *     cupo de PETICIONES, no ponderado; las cuentas por encima de Standard
+ *     tienen uno ponderado y mayor, pero aquí se toma el de Standard, el más
+ *     estrecho, y ninguna variable de entorno lo cambia (001/F-20).
  *     https://apidocs.lighter.xyz/docs/rate-limits
  *   · Hyperliquid — «REST requests share an aggregated weight limit of 1200 per
  *     minute».
@@ -52,6 +53,17 @@ export const VENUE_QUOTA_UNIT: Record<Venue, 'requests' | 'weight'> = {
   [Venue.LIGHTER]: 'requests',
   [Venue.ASTER]: 'weight',
 };
+
+/**
+ * Cupo de ÓRDENES de Aster, aparte del peso: `rateLimits[]` de
+ * `/fapi/v3/exchangeInfo` declara `ORDERS` 1200 por minuto y 300 cada 10
+ * segundos («counted against each account»). El presupuesto solo modelaba el
+ * peso, así que un market maker de varias capas podía pasarse de 300 órdenes
+ * en diez segundos sin que nadie lo notara: 429 y, si se insiste, 418 con veto
+ * de IP «from 2 minutes to 3 days» (001/F-24). Se cuenta por IP, que es más
+ * conservador que por cuenta y basta.
+ */
+export const ASTER_ORDER_QUOTA = { perMinute: 1200, per10Seconds: 300 } as const;
 
 /**
  * Margen de seguridad sobre el cupo publicado.

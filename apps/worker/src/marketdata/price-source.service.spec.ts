@@ -68,6 +68,17 @@ describe('PriceSourceService', () => {
     await jest.advanceTimersByTimeAsync(0);
   };
 
+  describe('Redis no es la fuente (spec 001, F-40)', () => {
+    it('un fallo al cachear no cuenta como fallo del feed', async () => {
+      cacheSet.mockRejectedValue(new Error('redis caído'));
+      const key = svc.acquire(PERP)!;
+      await settle();
+
+      expect(svc.peek(key)?.price).toBe('101');
+      expect(svc.status(key)).toBeNull();
+    });
+  });
+
   describe('las tres rutas de Binance', () => {
     it('PERP toma el mid del libro de futuros', async () => {
       const key = svc.acquire(PERP)!;
@@ -106,6 +117,20 @@ describe('PriceSourceService', () => {
       await settle();
 
       expect(urls[0]).toContain('symbol=1000PEPEUSDT');
+    });
+
+    /**
+     * Spec 001, F-19. El mid se calculaba con `Number`: (0,1 + 0,2) / 2 en coma
+     * flotante da 0,15000000000000002 y ese ruido viajaba como precio de
+     * referencia del market maker. Era el único float que quedaba en un camino
+     * de precio.
+     */
+    it('el mid sale exacto: sin ruido de coma flotante', async () => {
+      fetchMock.mockResolvedValue(book('0.1', '0.2'));
+      const key = svc.acquire(PERP)!;
+      await settle();
+
+      expect(svc.peek(key)?.price).toBe('0.15');
     });
 
     it('un libro vacío no se toma por precio', async () => {

@@ -205,9 +205,9 @@ export const MARKET_MAKER_V2_GUIDE: StrategyGuide<MarketMakerV2Config> = {
       tip: 'Es el mando principal de esta versión. Toca este antes que las distancias base.',
     },
     maxDynamicSpreadBps: {
-      what: 'Techo del diferencial compuesto (base, libro, volatilidad y coste). Se aplica ANTES de los multiplicadores de nivel, de comportamiento y de modo de riesgo, así que solo es un techo duro con un nivel y comportamiento Equilibrado.',
+      what: 'Techo del diferencial compuesto (base, libro, volatilidad y coste). Se aplica DESPUÉS de los multiplicadores de nivel, de comportamiento y de modo de riesgo: ninguna capa cotiza más ancha que esto.',
       affects:
-        'Impide que un pico puntual mande la cotización tan lejos que deje de ejecutarse durante horas. Con techo 100 bps, el comportamiento Conservador cotiza a 150, el modo defensivo a 150 y varios niveles más lejos todavía. Con 0 el techo se desactiva.',
+        'Impide que un pico puntual mande la cotización tan lejos que deje de ejecutarse durante horas. El suelo por coste sigue mandando por debajo. Con 0 no hay techo, y la app lo avisa.',
       tip: 'Tiene que quedar por encima del suelo calculado (comisión de ida y vuelta más margen mínimo); si no, la app rechaza la configuración porque el bot no podría cotizar con beneficio.',
     },
     layers: {
@@ -259,8 +259,8 @@ export const MARKET_MAKER_V2_GUIDE: StrategyGuide<MarketMakerV2Config> = {
     activationMode: {
       what: 'Condición de precio que tiene que cumplirse para que el bot empiece a cotizar.',
       affects:
-        'Con una condición puesta, el bot no coloca ni una orden hasta que el precio cruce el disparador. Una vez armado sigue cotizando mientras dure el ciclo; hoy el armado se pierde al cerrarse un ciclo (cada par casado cierra uno), así que si el precio ha retrocedido el bot vuelve a esperar.',
-      tip: 'Útil para dejar preparado un bot que solo quieres que arranque a un precio concreto. Cuando ya cotice, quita la condición (se puede en caliente).',
+        'Con una condición puesta, el bot no coloca ni una orden hasta que el precio cruce el disparador. Una vez armado sigue armado mientras el bot viva: un par casado no cierra el ciclo ni borra el armado, y un retroceso del precio no lo duerme.',
+      tip: 'Útil para dejar preparado un bot que solo quieres que arranque a un precio concreto. Parar el bot y volverlo a arrancar sí vuelve a evaluar la condición.',
     },
     activationPrice: {
       what: 'El precio que tiene que cruzarse para que el bot se arme y empiece.',
@@ -288,7 +288,7 @@ export const MARKET_MAKER_V2_GUIDE: StrategyGuide<MarketMakerV2Config> = {
     direction: {
       what: 'Hacia qué lado se inclina la cotización. Aquí no describe una posición, sino una intención.',
       affects:
-        'En neutral cotiza igual a los dos lados; con intención long o short trata la posición contraria como algo a deshacer.',
+        'En neutral cotiza igual a los dos lados; con intención long coloca SOLO compras (y con short, solo ventas): acumula sin salida propia y una posición contraria previa no se deshace sola.',
       tip: 'Neutral es lo natural en un market maker. No se puede cambiar después.',
     },
     priceFloor: {

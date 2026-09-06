@@ -13,6 +13,9 @@ import { Component, input } from '@angular/core';
   template: `
     <span class="k">{{ label() }}</span>
     <span class="v num" [class]="tone() ? 'c-' + tone() : ''">{{ value() }}</span>
+    @if (hint()) {
+      <span class="h num">{{ hint() }}</span>
+    }
   `,
   styles: [
     `
@@ -42,6 +45,16 @@ import { Component, input } from '@angular/core';
         overflow-wrap: anywhere;
       }
 
+      /* La linea secundaria: «de 1.000,00 asignados» bajo el capital actual.
+         Mas pequena y en gris, para que la cifra grande siga siendo la que se
+         lee primero. */
+      .h {
+        font-size: 10.5px;
+        line-height: 1.3;
+        color: var(--text-3);
+        overflow-wrap: anywhere;
+      }
+
       :host([size='lg']) .k {
         font-size: 11px;
       }
@@ -57,4 +70,6 @@ export class UiStatComponent {
   readonly value = input.required<string | number>();
   /** '' para el color de texto normal. */
   readonly tone = input<string>('');
+  /** Linea secundaria bajo la cifra ('' = ninguna). Spec 025. */
+  readonly hint = input<string>('');
 }

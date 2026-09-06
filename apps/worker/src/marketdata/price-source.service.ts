@@ -1,13 +1,26 @@
 import { Injectable, Logger, OnModuleDestroy } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import {
+  D,
   PriceSource,
+  type Decimal,
   SourceMarketType,
   binanceSymbol,
   fairPriceKey,
   fairPriceRedisKey,
 } from '@crypton/shared';
 import { BusService } from '../libs';
+
+/** Un campo del venue como Decimal, o null si no es un número finito. */
+function decimalOrNull(raw: string | undefined): Decimal | null {
+  if (raw === undefined || raw === '') return null;
+  try {
+    const d = D(raw);
+    return d.isFinite() ? d : null;
+  } catch {
+    return null;
+  }
+}
 
 /** Qué feed externo quiere un bot. */
 export interface FairPriceRequest {
@@ -293,7 +306,14 @@ export class PriceSourceService implements OnModuleDestroy {
       // en el camino de fallo porque un retroceso que no se deshace convierte un
       // corte de treinta segundos en cinco minutos sin cotizar.
       this.reschedule(key, feed, POLL_MS[feed.req.source]);
-      await this.bus.cacheSet(fairPriceRedisKey(key), feed.last, SHARED_TTL_SECONDS);
+      // Cachear en Redis no es parte de obtener el precio: un Redis caído
+      // contaba como fallo de la fuente y contaminaba `status()` y el aviso al
+      // usuario aunque el precio se hubiera obtenido bien (001/F-40).
+      await this.bus
+        .cacheSet(fairPriceRedisKey(key), feed.last, SHARED_TTL_SECONDS)
+        .catch((e: Error) =>
+          this.logger.warn(key + ': no se pudo cachear el precio: ' + e.message),
+        );
     } catch (e) {
       const cause = e instanceof SourceHttpError ? e.kind : 'OTHER';
       feed.failures += 1;
@@ -388,10 +408,14 @@ export class PriceSourceService implements OnModuleDestroy {
         : this.binanceFapi + '/fapi/v1/ticker/bookTicker?symbol=';
 
     const body = await this.getJson<{ bidPrice?: string; askPrice?: string }>(base + symbol);
-    const bid = Number(body.bidPrice);
-    const ask = Number(body.askPrice);
-    if (!Number.isFinite(bid) || !Number.isFinite(ask) || bid <= 0 || ask <= 0) return null;
-    return String((bid + ask) / 2);
+    // Con Decimal y no con Number: (0,1 + 0,2) / 2 en coma flotante da
+    // 0,15000000000000002, y ese ruido viajaba como precio de referencia del
+    // market maker. Era el único float que quedaba en un camino de precio
+    // (001/F-19). Lo que no sea un número se descarta como antes.
+    const bid = decimalOrNull(body.bidPrice);
+    const ask = decimalOrNull(body.askPrice);
+    if (!bid || !ask || bid.lte(0) || ask.lte(0)) return null;
+    return bid.plus(ask).div(2).toFixed();
   }
 
   private async getJson<T>(url: string): Promise<T> {

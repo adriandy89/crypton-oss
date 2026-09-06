@@ -68,6 +68,18 @@ export class ReconnectingSocket {
     this.closeSocket();
   }
 
+  /**
+   * Cierra el socket actual para que la reconexión lo reabra evaluando de
+   * nuevo la URL. Lo usa Aster cuando el venue avisa de que el `listenKey`
+   * caducó: el socket sigue abierto pero ya no entrega nada (001/F-73). El
+   * cierre dispara el manejador de `close`, que es quien programa la vuelta.
+   */
+  reconnect(motivo: string): void {
+    if (this.stopped) return;
+    this.health('DOWN', motivo);
+    this.closeSocket();
+  }
+
   private clearTimers(): void {
     if (this.timer) clearTimeout(this.timer);
     this.timer = null;

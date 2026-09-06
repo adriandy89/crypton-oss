@@ -44,7 +44,14 @@ const fill = (
   side: 'BUY' | 'SELL',
   price: string,
   qty: string,
-  kind: 'BASE' | 'SAFETY' | 'GRID_BUY' | 'GRID_SELL' | 'TAKE_PROFIT' = 'BASE',
+  kind:
+    | 'BASE'
+    | 'SAFETY'
+    | 'GRID_BUY'
+    | 'GRID_SELL'
+    | 'TAKE_PROFIT'
+    | 'QUOTE_BID'
+    | 'QUOTE_ASK' = 'BASE',
   index = 0,
   fee = '0',
 ): Fill => ({
@@ -74,6 +81,85 @@ describe('cycleAfterFill', () => {
     // martingala, y recalcularla con el precio vivo las iría alejando.
     expect(r.totals.anchorPrice!.toFixed()).toBe('100');
     expect(r.closed).toBe(false);
+  });
+
+  /**
+   * Spec 001, F-83. El primer trozo de una seguridad marcaba el escalon como
+   * tomado; el plan dejaba de desearlo y el resto de la orden se cancelaba:
+   * escalon a medias sin reposicion. Con `levelComplete: false` la posicion y el
+   * medio si se actualizan, pero el escalon sigue libre hasta el trozo final.
+   */
+  it('un parcial no marca el escalon ni cuenta la entrada; el trozo final si', () => {
+    const t = totals({
+      qty: D(1),
+      averageEntry: D(100),
+      entriesFilled: 1,
+      filledLevelIndexes: [0],
+    });
+    const parcial = cycleAfterFill(
+      cycle(),
+      t,
+      fill('BUY', '80', '0.3', 'SAFETY', 1),
+      { levelComplete: false },
+      0,
+    );
+    expect(parcial.totals.qty.toFixed()).toBe('1.3');
+    expect(parcial.totals.filledLevelIndexes).toEqual([0]);
+    expect(parcial.totals.entriesFilled).toBe(1);
+
+    const final = cycleAfterFill(
+      cycle(),
+      parcial.totals,
+      fill('BUY', '80', '0.7', 'SAFETY', 1),
+      { levelComplete: true },
+      0,
+    );
+    expect(final.totals.qty.toFixed()).toBe('2');
+    expect(final.totals.filledLevelIndexes).toEqual([0, 1]);
+    expect(final.totals.entriesFilled).toBe(2);
+  });
+
+  /**
+   * Spec 001, F-82. Las recompras de GridMart (GRID_BUY#j) son entradas y
+   * marcaban filledLevelIndexes[j]: la seguridad SAFETY#j, que comparte indice,
+   * desaparecia del plan para el resto del ciclo.
+   */
+  it('con las recompras fuera del espacio de indices, GRID_BUY no marca el escalon', () => {
+    const t = totals({
+      qty: D(1),
+      averageEntry: D(100),
+      entriesFilled: 1,
+      filledLevelIndexes: [0],
+    });
+    const r = cycleAfterFill(
+      cycle(),
+      t,
+      fill('BUY', '99', '0.1', 'GRID_BUY', 1),
+      { rebuysOffLevelIndexes: true },
+      0,
+    );
+    expect(r.totals.filledLevelIndexes).toEqual([0]);
+    expect(r.totals.qty.toFixed()).toBe('1.1');
+  });
+
+  /**
+   * Spec 001, F-58 y F-62. Para un market maker «quedar plano» es el final de
+   * cada par casado: cerrar el ciclo cambiaba los ids (cancelar y reponer todas
+   * las capas) y borraba la cotización, la espera y el armado.
+   */
+  it('con keepCycleOnFlat el ciclo sobrevive a quedar plano', () => {
+    const t = totals({ qty: D(1), averageEntry: D(100), entriesFilled: 1 });
+    const r = cycleAfterFill(
+      cycle({ scratch: { cycleSeq: 2, armedAt: 5, quotedMid: '100' } }),
+      t,
+      fill('SELL', '101', '1', 'QUOTE_ASK', 0),
+      { keepCycleOnFlat: true },
+      0,
+    );
+    expect(r.closed).toBe(false);
+    expect(r.totals.qty.isZero()).toBe(true);
+    expect(r.cycle.scratch).toEqual({ cycleSeq: 2, armedAt: 5, quotedMid: '100' });
+    expect(r.cycle.realizedPnl).toBe('1');
   });
 
   it('aumentar promedia ponderando por cantidad', () => {

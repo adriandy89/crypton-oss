@@ -5,6 +5,7 @@ import {
   Injectable,
   Logger,
   NotFoundException,
+  type OnModuleInit,
 } from '@nestjs/common';
 import {
   D,
@@ -19,6 +20,8 @@ import {
   type Position,
   type PreviewResult,
   type BotSummary,
+  capitalActual,
+  valorDePosicion,
 } from '@crypton/shared';
 import type { DryRunState } from '@crypton/exchange-core';
 
@@ -31,7 +34,14 @@ import type { DryRunState } from '@crypton/exchange-core';
 type PaperPosition = DryRunState['positions'][number];
 import { diffConfig, getStrategy } from '@crypton/strategy-core';
 import { BotStatus, MarginMode, StrategyKind, Venue } from '@crypton/db';
-import { BUS_CHANNELS, BusService, CacheService, DbService, VenueBudgetProvider } from 'src/libs';
+import {
+  BUS_CHANNELS,
+  BusService,
+  CacheService,
+  DbService,
+  VenueBudgetProvider,
+  type BusMessage,
+} from 'src/libs';
 import { ExchangeAccountsService } from '../exchange-accounts';
 import { MarketsService } from '../markets';
 import { RiskService } from '../risk';
@@ -114,7 +124,7 @@ function withTimeout<T>(work: Promise<T>, ms: number): Promise<T> {
 }
 
 @Injectable()
-export class BotsService {
+export class BotsService implements OnModuleInit {
   private readonly logger = new Logger(BotsService.name);
 
   /**
@@ -649,9 +659,16 @@ export class BotsService {
 
   async detail(userId: string, id: string) {
     const bot = await this.mustOwn(userId, id);
-    const [revision, cycle, snapshot, openOrders, share] = await Promise.all([
+    const [revision, primera, cycle, snapshot, openOrders, share] = await Promise.all([
       this.db.botConfigRevision.findUnique({
         where: { bot_id_version: { bot_id: id, version: bot.config_version } },
+      }),
+      // La revisión 1 guarda lo que el usuario PUSO al crear el bot; el asignado
+      // de hoy puede haber subido con «Aportar margen» contando como capital o
+      // al editar la configuración, y el detalle enseña las dos cifras (spec 025).
+      this.db.botConfigRevision.findUnique({
+        where: { bot_id_version: { bot_id: id, version: 1 } },
+        select: { config: true },
       }),
       this.db.botCycle.findFirst({
         where: { bot_id: id },
@@ -696,6 +713,7 @@ export class BotsService {
       // que poder decir en qué libro opera este bot sin deducirlo de nada.
       ...red,
       config: revision?.config ?? {},
+      initialInvestment: inicialDe(primera?.config, bot.total_investment.toString()),
       // Se envían los descriptores junto al bot para que la pantalla de ajustes
       // sepa qué puede cambiarse en caliente sin una segunda petición.
       fields: strategy.meta.fields,
@@ -736,6 +754,7 @@ export class BotsService {
       position_qty: { toString(): string };
       average_entry: { toString(): string } | null;
       mark_price: { toString(): string };
+      margin_used: { toString(): string };
       liquidation_price: { toString(): string } | null;
       open_orders: number;
     } | null,
@@ -755,6 +774,17 @@ export class BotsService {
       realizedPnl: realized.toFixed(),
       unrealizedPnl: unrealized.toFixed(),
       roiPct: invested.gt(0) ? realized.plus(unrealized).div(invested).mul(100).toFixed(2) : '0.00',
+      // Lo que hay ahora, lo que hay en juego y lo que lo sostiene (spec 025).
+      // El capital actual es patrimonio (asignado + realizado + abierto); el
+      // valor de la posición va al precio más fresco, el mismo que la distancia
+      // a liquidación; el margen usado es el del snapshot. La aritmética está en
+      // `shared` con test: aquí solo se cablea.
+      currentCapital: capitalActual(invested, realized, unrealized),
+      positionValue: valorDePosicion(
+        snapshot?.position_qty?.toString() ?? 0,
+        markLive ?? snapshot?.mark_price?.toString() ?? null,
+      ),
+      marginUsed: snapshot?.margin_used?.toString() ?? '0',
       positionQty: snapshot?.position_qty?.toString() ?? '0',
       averageEntry: snapshot?.average_entry?.toString() ?? null,
       liquidationPrice: snapshot?.liquidation_price?.toString() ?? null,
@@ -938,6 +968,36 @@ export class BotsService {
         coldFields: diff.coldFields,
       });
     }
+    // Cambiar la FORMA de la escalera con escalones ya ejecutados deja la
+    // salida de lo comprado en una línea que ya no existe o que cambió de
+    // sitio: `filledLevelIndexes` no se remapea (001/F-90). Se rechaza mientras
+    // el ciclo tenga inventario; el usuario cierra la posición o espera al fin
+    // del ciclo. Va antes de pedir la confirmación WARM para no pedir permiso
+    // por algo que se va a rechazar igual.
+    const redibuja = diff.changed
+      .map((c) => c.key)
+      .filter((key) => strategy.meta.fields.some((f) => f.key === key && f.reshapes === true));
+    if (redibuja.length > 0) {
+      const ciclo = await this.db.botCycle.findFirst({
+        where: { bot_id: id, closed_at: null },
+        orderBy: { seq: 'desc' },
+        select: { filled_level_indexes: true },
+      });
+      if (ciclo && ciclo.filled_level_indexes.length > 0) {
+        throw new ConflictException({
+          message:
+            'Con escalones ya ejecutados en este ciclo no se puede cambiar la forma de la escalera ' +
+            '(' +
+            redibuja.join(', ') +
+            '): las salidas de lo comprado dejarían de corresponder a sus líneas. ' +
+            'Cierra la posición o espera a que termine el ciclo.',
+          level: 'WARM',
+          reason: 'RESHAPE_WITH_INVENTORY',
+          changed: diff.changed,
+          filledLevelIndexes: ciclo.filled_level_indexes,
+        });
+      }
+    }
     if (diff.level === 'WARM' && dto.acceptRelayout !== true) {
       throw new ConflictException({
         message:
@@ -955,7 +1015,8 @@ export class BotsService {
         issues: validation.issues,
       });
     }
-    await this.risk.assertWithinLimits(userId, next, market);
+    // Excluyendo al propio bot del agregado: si no, contaba dos veces (001/F-42).
+    await this.risk.assertWithinLimits(userId, next, market, { excludeBotId: id });
 
     const version = bot.config_version + 1;
     await this.db.$transaction(async (tx) => {
@@ -1103,7 +1164,17 @@ export class BotsService {
             // cuánto colateral mover y en qué sentido. Mandárselo invitaría a
             // que algún día el worker tocase `totalInvestment` por su cuenta,
             // que es de quien tiene el lease de la configuración, no del tick.
-            payload: margin ? { amount: margin.amount, action: margin.action } : undefined,
+            // `countAsBotCapital` viaja en la fila para que, cuando el worker
+            // confirme la transferencia, la API sepa si tiene que subir el
+            // capital asignado (ver `onWorkerEvent`). El worker lo ignora: el
+            // capital es de quien tiene el lease de la configuración, no del tick.
+            payload: margin
+              ? {
+                  amount: margin.amount,
+                  action: margin.action,
+                  countAsBotCapital: margin.countAsBotCapital === true,
+                }
+              : undefined,
           },
         }),
         this.db.botEvent.create({
@@ -1141,18 +1212,10 @@ export class BotsService {
       // su bandeja al siguiente tick.
       .catch(() => undefined);
 
-    // El capital asignado se sube DESPUÉS de encolar la transferencia y solo si
-    // el usuario lo pidió. El orden importa: la transferencia es lo que defiende
-    // la posición y no puede quedar detrás de un cambio de configuración que
-    // cancela y vuelve a tender la escalera.
-    //
-    // Y si esto falla, la transferencia ya está encolada y sigue su curso: es
-    // deliberado. Lo contrario —renunciar a defender la posición porque el ROI
-    // se iba a calcular sobre el denominador viejo— sería cambiar dinero por
-    // contabilidad.
-    if (margin?.countAsBotCapital) {
-      await this.raiseAssignedCapital(userId, id, margin.amount);
-    }
+    // El capital asignado ya NO se sube aquí: se sube cuando el worker confirma
+    // que el margen ha llegado (`onWorkerEvent`). Subirlo al encolar dejaba,
+    // cada vez que la transferencia fallaba, un bot con un capital que nunca
+    // existió, y de ese denominador salen el ROI y el drawdown del kill-switch.
 
     return { accepted: true, command: dto.command };
   }
@@ -1247,6 +1310,60 @@ export class BotsService {
    * retiende la escalera — y por eso es un interruptor y no el comportamiento
    * por defecto.
    */
+  /**
+   * Escucha los acuses del worker. Hoy solo uno importa aquí: el ajuste de
+   * margen confirmado, que es cuando el capital asignado puede subir.
+   */
+  async onModuleInit(): Promise<void> {
+    const events$ = await this.bus.listen(BUS_CHANNELS.BOT_EVENTS);
+    events$.subscribe((message) => {
+      void this.onWorkerEvent(message).catch((e) =>
+        this.logger.warn(`Acuse del worker sin procesar: ${(e as Error).message}`),
+      );
+    });
+  }
+
+  /**
+   * `MARGIN_ADJUSTED` con el id del comando: si el usuario pidió contar el
+   * aporte como capital, se suma AHORA, que es cuando el margen ha llegado.
+   *
+   * Idempotente por el update condicional sobre la bandera de la fila: el bus
+   * es pub/sub y con varias réplicas de la API todas reciben el acuse, pero
+   * solo la que cambia la bandera de `true` a `applied` suma. Retirar nunca
+   * suma: la bandera solo se guarda encendida para aportes.
+   */
+  async onWorkerEvent(message: BusMessage): Promise<void> {
+    if (message.type !== 'MARGIN_ADJUSTED' || !message.botId) return;
+    const commandId = message.data?.commandId;
+    if (typeof commandId !== 'string' || !/^[0-9]+$/.test(commandId)) return;
+
+    const row = await this.db.botCommand.findUnique({
+      where: { id: BigInt(commandId) },
+      select: {
+        id: true,
+        bot_id: true,
+        command: true,
+        payload: true,
+        bot: { select: { user_id: true } },
+      },
+    });
+    if (!row || row.bot_id !== message.botId || row.command !== 'ADJUST_MARGIN') return;
+    const payload = (row.payload ?? {}) as {
+      amount?: string;
+      action?: string;
+      countAsBotCapital?: unknown;
+    };
+    if (payload.countAsBotCapital !== true || payload.action !== 'ADD' || !payload.amount) return;
+
+    const { count } = await this.db.botCommand.updateMany({
+      where: { id: row.id, payload: { path: ['countAsBotCapital'], equals: true } },
+      data: { payload: { ...payload, countAsBotCapital: 'applied' } as never },
+    });
+    if (count !== 1) return;
+
+    await this.raiseAssignedCapital(row.bot.user_id, row.bot_id, payload.amount);
+  }
+
   private async raiseAssignedCapital(userId: string, botId: string, amount: string) {
     const bot = await this.db.bot.findUniqueOrThrow({
       where: { id: botId },
@@ -1598,6 +1715,18 @@ export function liquidationDistanceOf(
   const liq = D(snapshot.liquidation_price.toString());
   if (!mark.isFinite() || !liq.isFinite() || mark.lte(0) || liq.lte(0)) return null;
   return liquidationDistancePct(mark, liq).toFixed(2);
+}
+
+/**
+ * `totalInvestment` de una revisión (JSON de Prisma), o el respaldo si la
+ * revisión no existe o no lo trae. Se acepta texto o número: las revisiones
+ * antiguas lo guardaron como venía del formulario.
+ */
+function inicialDe(config: unknown, respaldo: string): string {
+  const raw = (config as { totalInvestment?: unknown } | null | undefined)?.totalInvestment;
+  if (typeof raw === 'string' && raw !== '') return raw;
+  if (typeof raw === 'number' && Number.isFinite(raw)) return String(raw);
+  return respaldo;
 }
 
 /** Clave del mapa de precios vivos: venue, símbolo y red. */

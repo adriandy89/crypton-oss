@@ -16,7 +16,7 @@ import {
   type StrategyKind,
   type Venue,
 } from '@crypton/shared';
-import { DryRunAdapter, ReplaySourceAdapter, codecFor } from '@crypton/exchange-core';
+import { DryRunAdapter, ReplaySourceAdapter, codecFor, messageOf } from '@crypton/exchange-core';
 import {
   cycleAfterFill,
   getStrategy,
@@ -189,6 +189,8 @@ export async function runReplay(opts: ReplayOptions): Promise<ReplayOutput> {
     },
   ];
   const warnings: string[] = [];
+  /** Rechazos del simulador al colocar: se cuentan, no se tragan (001/F-65). */
+  const rechazados: string[] = [];
   let liquidations = 0;
   let grossMatched = D(0);
   let ticks = 0;
@@ -219,6 +221,8 @@ export async function runReplay(opts: ReplayOptions): Promise<ReplayOutput> {
         fill,
         {
           recycleLevelOnExit: strategy.recycleLevelOnExit,
+          rebuysOffLevelIndexes: strategy.rebuysOffLevelIndexes,
+          keepCycleOnFlat: strategy.keepCycleOnFlat,
           cooldownMinutes: Number(opts.config.cooldownMinutes ?? 0),
         },
         clock,
@@ -442,7 +446,11 @@ export async function runReplay(opts: ReplayOptions): Promise<ReplayOutput> {
             }
           : {}),
       })
-      .catch(() => undefined);
+      .catch((e: unknown) => {
+        // Antes era un `catch` vacío: un replay podía «funcionar» con órdenes
+        // que el simulador rechazó una a una sin que el resultado lo dijera.
+        rechazados.push(messageOf(e));
+      });
   }
 
   async function snapshot(): Promise<{ equity: Decimal; position: Decimal }> {
@@ -458,6 +466,13 @@ export async function runReplay(opts: ReplayOptions): Promise<ReplayOutput> {
       equity: D(balances[0]?.total ?? '0').plus(noRealizado),
       position: pos ? D(pos.qty) : D(0),
     };
+  }
+
+  if (rechazados.length > 0) {
+    const motivos = [...new Set(rechazados)].slice(0, 3).join(' · ');
+    warnings.push(
+      `${rechazados.length} orden(es) rechazada(s) por el simulador al colocarlas; motivos: ${motivos}.`,
+    );
   }
 
   sub.unsubscribe();

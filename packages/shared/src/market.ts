@@ -20,12 +20,45 @@ export interface MarketSpec {
   stepSize: string;
   minNotional: string | null;
   minQty: string | null;
+  /** Tope de cantidad de una orden LÍMITE (Aster: `LOT_SIZE.maxQty`). */
   maxQty: string | null;
+  /**
+   * Tope de cantidad de una orden A MERCADO, cuando el venue lo acota aparte
+   * (Aster: `MARKET_LOT_SIZE.maxQty`, menor que el de las límite en todos sus
+   * símbolos: 120 BTC frente a 1000). Null o ausente = manda `maxQty`. El motor
+   * trocea el cierre a mercado de una posición mayor que este tope; antes el
+   * venue rechazaba la orden entera (001/F-22).
+   */
+  maxMarketQty?: string | null;
   maxLeverage: number;
   priceDecimals: number;
   qtyDecimals: number;
   /** false = el venue lo ha deslistado o pausado; los bots sobre él se pausan. */
   active: boolean;
+  /**
+   * Tope de órdenes activas por mercado que impone el venue (Lighter Standard:
+   * 30; Aster: 200). Null o ausente = sin tope conocido. Sirve para AVISAR al
+   * crear el bot de que una retícula con más niveles se recortará: el venue
+   * rechaza el exceso orden a orden y el bot no lo ve venir (001/F-50, F-23).
+   */
+  maxActiveOrders?: number | null;
+  /**
+   * Tope de cifras significativas que admite el venue en un precio (Hyperliquid:
+   * 5, con los enteros siempre válidos). Null o ausente = solo manda el tick. Lo
+   * aplica la única puerta de redondeo (`roundPriceForSide`) para que el precio
+   * que planifica la estrategia y el que envía el adaptador sean el mismo; si
+   * no, el reconciliador ve dos precios distintos y cancela y recoloca la orden
+   * en cada tick (001/F-04).
+   */
+  maxSignificantDigits?: number | null;
+  /**
+   * Tasa de margen de mantenimiento del mercado (fracción: 0,0125 = 1,25 %).
+   * Hyperliquid: la mitad del margen inicial al apalancamiento máximo; Lighter:
+   * `maintenance_margin_fraction`. Null o ausente = se deriva del apalancamiento
+   * máximo con la regla de Hyperliquid (`maintenanceMarginRateOf`). Antes la
+   * estimación usaba un 0,5 % plano, optimista en altcoins (001/F-93).
+   */
+  maintenanceMarginRate?: number | null;
 }
 
 export interface Ticker {

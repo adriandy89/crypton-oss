@@ -40,7 +40,11 @@ function build(botOver: Record<string, unknown> = {}, available: string | null =
       findUnique: jest.fn().mockResolvedValue({ testnet: false }),
       findUniqueOrThrow: jest.fn().mockResolvedValue(bot),
     },
-    botCommand: { create: jest.fn((a: unknown) => a) },
+    botCommand: {
+      create: jest.fn((a: unknown) => a),
+      findUnique: jest.fn().mockResolvedValue(null),
+      updateMany: jest.fn().mockResolvedValue({ count: 0 }),
+    },
     botEvent: { create: jest.fn((a: unknown) => a) },
     botConfigRevision: {
       findUniqueOrThrow: jest
@@ -118,7 +122,7 @@ describe('BotsService.command — ADJUST_MARGIN', () => {
       expect.objectContaining({
         data: expect.objectContaining({
           command: 'ADJUST_MARGIN',
-          payload: { amount: '100', action: 'ADD' },
+          payload: { amount: '100', action: 'ADD', countAsBotCapital: false },
         }),
       }),
     );
@@ -180,7 +184,7 @@ describe('BotsService.command — ADJUST_MARGIN', () => {
     expect(db.botCommand.create).toHaveBeenCalledWith(
       expect.objectContaining({
         data: expect.objectContaining({
-          payload: { amount: '100', action: 'REMOVE' },
+          payload: { amount: '100', action: 'REMOVE', countAsBotCapital: false },
         }),
       }),
     );
@@ -205,18 +209,22 @@ describe('BotsService.command — ADJUST_MARGIN', () => {
     expect(subir).not.toHaveBeenCalled();
   });
 
-  it('el interruptor encendido suma el aporte al capital asignado', async () => {
-    const { service } = build();
+  it('el interruptor encendido viaja en el comando y NO toca el capital al encolar', async () => {
+    // Spec 011 (F-34): el capital sube cuando el margen HA LLEGADO, con el acuse
+    // del worker. Al encolar solo se anota la intencion en el propio comando.
+    // Antes se subia aqui mismo, y como la transferencia fallaba siempre, el bot
+    // se quedaba con un capital que nunca existio.
+    const { service, db } = build();
     const subir = jest.spyOn(service, 'updateConfig').mockResolvedValue({} as never);
 
     await service.command(USER_ID, BOT_ID, ajuste({ countAsBotCapital: true }));
 
-    expect(subir).toHaveBeenCalledWith(
-      USER_ID,
-      BOT_ID,
+    expect(subir).not.toHaveBeenCalled();
+    expect(db.botCommand.create).toHaveBeenCalledWith(
       expect.objectContaining({
-        acceptRelayout: true,
-        config: expect.objectContaining({ totalInvestment: '600' }),
+        data: expect.objectContaining({
+          payload: { amount: '100', action: 'ADD', countAsBotCapital: true },
+        }),
       }),
     );
   });
@@ -245,5 +253,75 @@ describe('BotsService.command — ADJUST_MARGIN', () => {
     await expect(service.command(USER_ID, BOT_ID, ajuste())).rejects.toThrow(
       /no atiende comandos/i,
     );
+  });
+});
+
+describe('BotsService.onWorkerEvent — el capital sube con el acuse del worker', () => {
+  const acuse = (over: Record<string, unknown> = {}) =>
+    ({
+      channel: 'crypton:bot-events',
+      userId: USER_ID,
+      botId: BOT_ID,
+      type: 'MARGIN_ADJUSTED',
+      ts: 1,
+      data: { severity: 'INFO', message: 'x', amount: '100', action: 'ADD', commandId: '7' },
+      ...over,
+    }) as never;
+  const fila = (countAsBotCapital: boolean) => ({
+    id: 7n,
+    bot_id: BOT_ID,
+    command: 'ADJUST_MARGIN',
+    payload: { amount: '100', action: 'ADD', countAsBotCapital },
+    bot: { user_id: USER_ID },
+  });
+
+  it('MARGIN_ADJUSTED de un comando con el interruptor encendido suma el aporte', async () => {
+    const { service, db } = build();
+    db.botCommand.findUnique.mockResolvedValue(fila(true));
+    db.botCommand.updateMany.mockResolvedValue({ count: 1 });
+    const subir = jest.spyOn(service, 'updateConfig').mockResolvedValue({} as never);
+
+    await service.onWorkerEvent(acuse());
+
+    expect(subir).toHaveBeenCalledWith(
+      USER_ID,
+      BOT_ID,
+      expect.objectContaining({
+        acceptRelayout: true,
+        config: expect.objectContaining({ totalInvestment: '600' }),
+      }),
+    );
+  });
+
+  it('con el interruptor apagado no toca el capital', async () => {
+    const { service, db } = build();
+    db.botCommand.findUnique.mockResolvedValue(fila(false));
+    const subir = jest.spyOn(service, 'updateConfig').mockResolvedValue({} as never);
+
+    await service.onWorkerEvent(acuse());
+
+    expect(subir).not.toHaveBeenCalled();
+    expect(db.botCommand.updateMany).not.toHaveBeenCalled();
+  });
+
+  it('si otra replica de la API ya lo aplico, no suma dos veces', async () => {
+    // El bus es pub/sub: con dos replicas escuchando, las dos reciben el acuse.
+    // El update condicional sobre la bandera decide quien gana.
+    const { service, db } = build();
+    db.botCommand.findUnique.mockResolvedValue(fila(true));
+    db.botCommand.updateMany.mockResolvedValue({ count: 0 });
+    const subir = jest.spyOn(service, 'updateConfig').mockResolvedValue({} as never);
+
+    await service.onWorkerEvent(acuse());
+
+    expect(subir).not.toHaveBeenCalled();
+  });
+
+  it('ignora los eventos que no son acuses de margen', async () => {
+    const { service, db } = build();
+
+    await service.onWorkerEvent(acuse({ type: 'FILL' }));
+
+    expect(db.botCommand.findUnique).not.toHaveBeenCalled();
   });
 });

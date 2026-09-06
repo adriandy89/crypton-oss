@@ -1,6 +1,6 @@
 import { Venue, venueKey } from '@crypton/shared';
 import { sleep } from './rate-limit';
-import { QUOTA_HEADROOM, VENUE_QUOTA_PER_MINUTE } from './venue-weights';
+import { ASTER_ORDER_QUOTA, QUOTA_HEADROOM, VENUE_QUOTA_PER_MINUTE } from './venue-weights';
 
 /**
  * Presupuesto de caudal por VENUE e IP.
@@ -29,6 +29,20 @@ import { QUOTA_HEADROOM, VENUE_QUOTA_PER_MINUTE } from './venue-weights';
 
 export type BudgetPriority = 'read' | 'write';
 
+/**
+ * Lo que el venue dice haber contado de nosotros (y de cualquier otro cliente
+ * de la misma IP) en la ventana en curso. Aster lo devuelve en cabeceras con
+ * cada respuesta (001/F-76). Todo opcional: cada venue publica lo que publica.
+ */
+export interface BudgetObservation {
+  /** `X-MBX-USED-WEIGHT-1M`: peso consumido en el minuto en curso. */
+  usedWeightPerMinute?: number;
+  /** `X-MBX-ORDER-COUNT-1M`: órdenes contadas en el minuto en curso. */
+  ordersPerMinute?: number;
+  /** `X-MBX-ORDER-COUNT-10S`: órdenes contadas en los diez segundos en curso. */
+  ordersPer10s?: number;
+}
+
 export interface VenueBudget {
   /**
    * Espera hasta tener presupuesto para `weight` y lo consume.
@@ -43,6 +57,22 @@ export interface VenueBudget {
    * es el mismo en sus dos redes.
    */
   take(venue: Venue, weight: number, priority: BudgetPriority, testnet: boolean): Promise<void>;
+
+  /**
+   * Espera hasta poder COLOCAR `n` órdenes y las consume del cupo de órdenes.
+   * Solo Aster publica uno (`ASTER_ORDER_QUOTA`); en los demás venues no hace
+   * nada. Opcional para que los dobles de test y `NO_BUDGET` sigan valiendo.
+   */
+  takeOrders?(venue: Venue, n: number, testnet: boolean): Promise<void>;
+
+  /**
+   * Realimenta los depósitos con lo que el venue dice haber contado: nunca los
+   * amplía, solo los recorta a lo que queda de verdad. Es lo que hace que el
+   * presupuesto deje de ir a ciegas frente a otros clientes de la misma IP
+   * (la API y el worker comparten salida) y frente a un contador que no está
+   * alineado con el nuestro.
+   */
+  observe?(venue: Venue, testnet: boolean, lectura: BudgetObservation): void;
 }
 
 export interface VenueBudgetOptions {
@@ -83,6 +113,25 @@ const DEFAULT_RATE: Record<Venue, number> = {
 
 function perSecond(venue: Venue): number {
   return (VENUE_QUOTA_PER_MINUTE[venue] * QUOTA_HEADROOM) / 60;
+}
+
+/**
+ * Depósito de órdenes de Aster, derivado de sus DOS límites con el margen de
+ * seguridad: el caudal es el del minuto (1200 × 0,85 / 60 = 17 por segundo) y
+ * la capacidad la que garantiza que ninguna ventana de diez segundos pase de
+ * 300 × 0,85: capacidad + 10 × caudal ≤ 255 → 85. Con un solo depósito de
+ * caudal 17 y ráfaga de 300 se colaban 470 en diez segundos.
+ */
+const ORDER_RATE: Partial<Record<Venue, { rate: number; capacity: number }>> = (() => {
+  const rate = (ASTER_ORDER_QUOTA.perMinute * QUOTA_HEADROOM) / 60;
+  const capacity = Math.max(rate, ASTER_ORDER_QUOTA.per10Seconds * QUOTA_HEADROOM - 10 * rate);
+  return { [Venue.ASTER]: { rate, capacity } };
+})();
+
+/** Lo que queda del cupo según el venue, como fracción del depósito (0 a 1). */
+function fraccionRestante(usado: number | undefined, cupo: number): number | null {
+  if (usado == null || !Number.isFinite(usado) || usado < 0) return null;
+  return Math.max(0, 1 - usado / cupo);
 }
 
 interface Bucket {
@@ -141,6 +190,51 @@ export class MemoryVenueBudget implements VenueBudget {
       const falta = need - bucket.tokens;
       await sleep(Math.max(20, Math.ceil((falta / rate) * 1000)));
     }
+  }
+
+  async takeOrders(venue: Venue, n: number, testnet: boolean): Promise<void> {
+    const quota = ORDER_RATE[venue];
+    if (!quota) return;
+    const bucketKey = venueKey(venue, testnet) + ':orders';
+    const need = Math.min(n, quota.capacity);
+    for (;;) {
+      const bucket = this.refill(bucketKey, quota.rate, quota.capacity);
+      if (bucket.tokens >= need) {
+        bucket.tokens -= n;
+        return;
+      }
+      await sleep(Math.max(20, Math.ceil(((need - bucket.tokens) / quota.rate) * 1000)));
+    }
+  }
+
+  observe(venue: Venue, testnet: boolean, lectura: BudgetObservation): void {
+    const rate = this.rate[venue] ?? 10;
+    const capacity = rate * this.burstSeconds;
+    this.recortar(
+      venueKey(venue, testnet),
+      rate,
+      capacity,
+      fraccionRestante(lectura.usedWeightPerMinute, VENUE_QUOTA_PER_MINUTE[venue]),
+    );
+    const quota = ORDER_RATE[venue];
+    if (!quota) return;
+    const porMinuto = fraccionRestante(lectura.ordersPerMinute, ASTER_ORDER_QUOTA.perMinute);
+    const porDiez = fraccionRestante(lectura.ordersPer10s, ASTER_ORDER_QUOTA.per10Seconds);
+    const restante =
+      porMinuto == null ? porDiez : porDiez == null ? porMinuto : Math.min(porMinuto, porDiez);
+    this.recortar(venueKey(venue, testnet) + ':orders', quota.rate, quota.capacity, restante);
+  }
+
+  /** Recorta un depósito a la fracción que el venue dice que queda; nunca lo amplía. */
+  private recortar(
+    bucketKey: string,
+    rate: number,
+    capacity: number,
+    fraccion: number | null,
+  ): void {
+    if (fraccion == null) return;
+    const bucket = this.refill(bucketKey, rate, capacity);
+    bucket.tokens = Math.min(bucket.tokens, capacity * fraccion);
   }
 
   private refill(bucketKey: string, rate: number, capacity: number): Bucket {
@@ -213,6 +307,22 @@ redis.call('PEXPIRE', key, 60000)
 local falta = need - tokens
 return math.ceil((falta / rate) * 1000)`;
 
+/**
+ * Recorte del depósito a lo que el venue dice que queda (`observe`). Solo baja:
+ * un depósito por encima de la cota se pone en ella; uno por debajo se deja.
+ */
+const CLAMP_SCRIPT = `
+local key = KEYS[1]
+local cap = tonumber(ARGV[1])
+local now = tonumber(ARGV[2])
+local data = redis.call('HMGET', key, 'tokens', 'at')
+local tokens = tonumber(data[1])
+if tokens == nil or tokens > cap then
+  redis.call('HSET', key, 'tokens', cap, 'at', now)
+  redis.call('PEXPIRE', key, 60000)
+end
+return 0`;
+
 export class RedisVenueBudget implements VenueBudget {
   private readonly rate: Record<Venue, number>;
   private readonly burstSeconds: number;
@@ -271,6 +381,66 @@ export class RedisVenueBudget implements VenueBudget {
 
       if (waitMs <= 0) return;
       await sleep(Math.max(20, Math.min(waitMs, 5000)));
+    }
+  }
+
+  async takeOrders(venue: Venue, n: number, testnet: boolean): Promise<void> {
+    const quota = ORDER_RATE[venue];
+    if (!quota) return;
+    const key = `crypton:budget:${this.egressId}:${venueKey(venue, testnet)}:orders`;
+    for (;;) {
+      let waitMs: number;
+      try {
+        waitMs = Number(
+          await this.redis.eval(TAKE_SCRIPT, {
+            keys: [key],
+            arguments: [
+              String(quota.rate),
+              String(quota.capacity),
+              String(n),
+              '0',
+              String(Date.now()),
+            ],
+          }),
+        );
+      } catch {
+        return this.fallback.takeOrders(venue, n, testnet);
+      }
+      if (waitMs <= 0) return;
+      await sleep(Math.max(20, Math.min(waitMs, 5000)));
+    }
+  }
+
+  observe(venue: Venue, testnet: boolean, lectura: BudgetObservation): void {
+    // Sin esperar: es una pista para el depósito, no una puerta. Si Redis no
+    // responde, recorta el de memoria, que es el que se usa cuando Redis falla.
+    this.fallback.observe(venue, testnet, lectura);
+    const rate = this.rate[venue] ?? 10;
+    const capacity = rate * this.burstSeconds;
+    const base = `crypton:budget:${this.egressId}:${venueKey(venue, testnet)}`;
+    const recortes: [string, number | null, number][] = [
+      [
+        base,
+        fraccionRestante(lectura.usedWeightPerMinute, VENUE_QUOTA_PER_MINUTE[venue]),
+        capacity,
+      ],
+    ];
+    const quota = ORDER_RATE[venue];
+    if (quota) {
+      const porMinuto = fraccionRestante(lectura.ordersPerMinute, ASTER_ORDER_QUOTA.perMinute);
+      const porDiez = fraccionRestante(lectura.ordersPer10s, ASTER_ORDER_QUOTA.per10Seconds);
+      const restante =
+        porMinuto == null ? porDiez : porDiez == null ? porMinuto : Math.min(porMinuto, porDiez);
+      recortes.push([base + ':orders', restante, quota.capacity]);
+    }
+    for (const [key, fraccion, cap] of recortes) {
+      if (fraccion == null) continue;
+      void this.redis
+        .eval(CLAMP_SCRIPT, {
+          keys: [key],
+          arguments: [String(cap * fraccion), String(Date.now())],
+        })
+        .catch(() => undefined);
     }
   }
 }

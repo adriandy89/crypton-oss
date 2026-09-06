@@ -5,6 +5,9 @@ import 'reflect-metadata';
 import { plainToInstance } from 'class-transformer';
 import { validateSync } from 'class-validator';
 import { UpdateRiskLimitsDto } from './dtos';
+import { ForbiddenException } from '@nestjs/common';
+import { startOfDay } from '@crypton/shared';
+import { RiskService } from './risk.service';
 
 /**
  * Los topes de riesgo del usuario, por la parte que puede hacer daño.
@@ -98,5 +101,102 @@ describe('UpdateRiskLimitsDto', () => {
     it('acepta los valores razonables', () => {
       expect(errores({ maxLeverage: 10, maxOpenBots: 5 })).toEqual([]);
     });
+  });
+});
+
+/**
+ * Las guardas que decide la API antes de que exista posición (spec 001, F-42,
+ * F-44 y F-43): el propio bot no cuenta dos veces al editarlo, la puerta del 5 %
+ * usa la tasa de mantenimiento del mercado, y el «día» de la pérdida diaria es
+ * el del usuario, como en el worker.
+ */
+describe('RiskService', () => {
+  const MARKET = {
+    venue: 'HYPERLIQUID',
+    symbol: 'BTC',
+    tickSize: '0.1',
+    stepSize: '0.00001',
+    minNotional: '10',
+    minQty: null,
+    maxQty: null,
+    maxLeverage: 40,
+    priceDecimals: 1,
+    qtyDecimals: 5,
+    active: true,
+  } as never;
+  const config = (over: Record<string, unknown> = {}) =>
+    ({
+      exchangeAccountId: 'a',
+      symbol: 'BTC',
+      direction: 'LONG',
+      marginMode: 'ISOLATED',
+      leverage: 1,
+      totalInvestment: '1000',
+      ...over,
+    }) as never;
+  const decimal = (v: string) => ({ toString: () => v, neg: () => decimal('-' + v) });
+
+  function build(
+    limits: Record<string, unknown>,
+    bots: { id: string; total_investment: string; leverage: number }[],
+  ) {
+    const db = {
+      riskLimit: {
+        findUnique: jest.fn().mockResolvedValue({
+          user_id: 'u1',
+          max_notional_per_bot: null,
+          max_total_notional: null,
+          max_leverage: null,
+          max_open_bots: null,
+          max_daily_loss: null,
+          ...limits,
+        }),
+      },
+      bot: {
+        findMany: jest.fn(async (args: { where: { id?: { not: string } } }) =>
+          bots.filter((b) => b.id !== args.where.id?.not),
+        ),
+        count: jest.fn().mockResolvedValue(0),
+        findUnique: jest
+          .fn()
+          .mockResolvedValue({ exchange_account: { status: 'VERIFIED', venue: 'HYPERLIQUID' } }),
+      },
+      botCycle: { findMany: jest.fn().mockResolvedValue([]) },
+      user: { findUnique: jest.fn().mockResolvedValue({ timezone: 'Asia/Tokyo' }) },
+    };
+    return { service: new RiskService(db as never), db };
+  }
+
+  it('al editar un bot no lo suma dos veces contra el tope total', async () => {
+    const { service } = build({ max_total_notional: 1000 }, [
+      { id: 'b1', total_investment: '1000', leverage: 1 },
+    ]);
+    await expect(service.assertWithinLimits('u1', config(), MARKET)).rejects.toThrow(
+      ForbiddenException,
+    );
+    await expect(
+      service.assertWithinLimits('u1', config(), MARKET, { excludeBotId: 'b1' }),
+    ).resolves.toBeUndefined();
+  });
+
+  it('la puerta del 5 % usa la tasa de mantenimiento del mercado y dice el tope', async () => {
+    const { service } = build({}, []);
+    // 40x de máximo → mantenimiento 1,25 % → 16x como mucho.
+    await expect(
+      service.assertWithinLimits('u1', config({ leverage: 17 }), MARKET),
+    ).rejects.toThrow(/16/);
+    await expect(
+      service.assertWithinLimits('u1', config({ leverage: 16 }), MARKET),
+    ).resolves.toBeUndefined();
+  });
+
+  it('la pérdida diaria se corta a la medianoche del usuario', async () => {
+    const { service, db } = build({ max_daily_loss: decimal('100') }, []);
+    await service.assertCanStart('u1', 'b1');
+    const args = db.botCycle.findMany.mock.calls[0][0] as {
+      where: { closed_at: { gte: Date } };
+    };
+    const esperado = startOfDay('Asia/Tokyo').getTime();
+    expect(Math.abs(args.where.closed_at.gte.getTime() - esperado)).toBeLessThan(60_000);
   });
 });

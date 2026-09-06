@@ -78,6 +78,12 @@ export class MarketsService implements OnModuleInit {
         // no detectaria las mismas violaciones que el del servidor.
         min_qty: true,
         max_qty: true,
+        // Y los cuatro campos del venue (spec 024): el preview local los necesita
+        // igual que el del servidor.
+        max_market_qty: true,
+        max_active_orders: true,
+        max_significant_digits: true,
+        maintenance_margin_rate: true,
         max_leverage: true,
         price_decimals: true,
         qty_decimals: true,
@@ -115,6 +121,14 @@ export class MarketsService implements OnModuleInit {
       minNotional: market.min_notional?.toString() ?? null,
       minQty: market.min_qty?.toString() ?? null,
       maxQty: market.max_qty?.toString() ?? null,
+      // Los cuatro campos del venue que los specs 013, 014, 019 y 023 añadieron
+      // a `MarketSpec`: sin ellos en la fila, las correcciones se quedaban en el
+      // adaptador (spec 024).
+      maxMarketQty: market.max_market_qty?.toString() ?? null,
+      maxActiveOrders: market.max_active_orders ?? null,
+      maxSignificantDigits: market.max_significant_digits ?? null,
+      maintenanceMarginRate:
+        market.maintenance_margin_rate == null ? null : Number(market.maintenance_margin_rate),
       maxLeverage: market.max_leverage,
       priceDecimals: market.price_decimals,
       qtyDecimals: market.qty_decimals,
@@ -160,6 +174,10 @@ export class MarketsService implements OnModuleInit {
         min_notional: spec.minNotional,
         min_qty: spec.minQty,
         max_qty: spec.maxQty,
+        max_market_qty: spec.maxMarketQty ?? null,
+        max_active_orders: spec.maxActiveOrders ?? null,
+        max_significant_digits: spec.maxSignificantDigits ?? null,
+        maintenance_margin_rate: spec.maintenanceMarginRate ?? null,
         max_leverage: spec.maxLeverage,
         price_decimals: spec.priceDecimals,
         qty_decimals: spec.qtyDecimals,

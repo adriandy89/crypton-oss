@@ -22,12 +22,20 @@ import { ExchangeError, type ExchangeErrorKind, type Venue } from '@crypton/shar
 
 const PATTERNS: { kind: ExchangeErrorKind; re: RegExp }[] = [
   {
+    // Aster dice «Signature for this request is not valid» (-1022): sin la
+    // segunda alternativa caia en FATAL y una credencial mal emparejada agotaba
+    // el cortacircuitos en vez de avisar en CRITICAL y soltar el bot (001/F-77).
+    // Y el de Lighter: «invalid PublicKey,please run changePubKey» (21108) y
+    // «api key not found» (21109) son una clave revocada o no registrada; caian
+    // en FATAL y el bot no entraba en el camino AUTH → detach (001/F-52).
     kind: 'AUTH',
-    re: /unauthor|invalid.?(api|key|signature)|forbidden|permission|expired.?token/i,
+    re: /unauthor|invalid.?(api|key|signature|publickey)|signature.{0,40}not valid|api key not found|changepubkey|forbidden|permission|expired.?token/i,
   },
   {
+    // Lighter 21507/21508: «account is below maintenance/initial margin, can't
+    // execute transaction» es quedarse sin margen, no una averia (001/F-52).
     kind: 'INSUFFICIENT_FUNDS',
-    re: /insufficient|not enough|margin is insufficient|exceeds free collateral|balance/i,
+    re: /insufficient|not enough|margin is insufficient|exceeds free collateral|balance|below (maintenance|initial) margin/i,
   },
   {
     // Cada venue nombra lo mismo de forma distinta, y esa es toda la dificultad.
@@ -46,8 +54,26 @@ const PATTERNS: { kind: ExchangeErrorKind; re: RegExp }[] = [
     re: /min.?notional|tick.?size|lot.?size|step.?size|price.?filter|reduce.?only|precision|too small|invalid price|invalid size|post.?only|would immediately match|invalid order|base amount|quote amount|min.?base|min.?quote/i,
   },
   {
+    // El capitulo de errores de Aster V3 no habla de «Filter failure»: sus
+    // rechazos por filtro tienen frase propia (-2021, -2024, -2025, -2027, -4004,
+    // -4005, -4013, -4014, -4016, -4017) y caian todos en FATAL (001/F-77).
+    kind: 'RULES',
+    re: /would immediately trigger|position is not sufficient|max open order limit|maximum allowable position|(less|greater) than (min|max) (quantity|price)|mark price multiplier/i,
+  },
+  {
+    // Lighter: precio demasiado lejos del mark o del disparador (21734, 21735),
+    // precio «accidental» (21733), topes de ordenes activas o pendientes por
+    // mercado y por cuenta (21717-21720, 001/F-50) y el cambio de modo de margen
+    // con posicion (21132). Reglas del mercado, no averias (001/F-52).
+    kind: 'RULES',
+    re: /too far from the (mark|trigger) price|accidental price|maximum (active|pending) .*order count|margin mode change/i,
+  },
+  {
+    // «Nonce Expired. Please retry» (-4225) es lo que dice Aster cuando una
+    // peticion firmada llega mas de diez segundos despues de generar su nonce;
+    // se reintenta con un nonce nuevo, no es una averia (001/F-75).
     kind: 'RETRYABLE',
-    re: /timeout|timed out|ETIMEDOUT|ECONNRESET|ECONNREFUSED|ENOTFOUND|EAI_AGAIN|socket hang up|rate.?limit|too many requests|429|502|503|504|temporarily|try again/i,
+    re: /timeout|timed out|ETIMEDOUT|ECONNRESET|ECONNREFUSED|ENOTFOUND|EAI_AGAIN|socket hang up|rate.?limit|too many requests|429|502|503|504|temporarily|try again|nonce.?expired|order book is full/i,
   },
 ];
 

@@ -43,6 +43,7 @@ import {
   indiceDePeorCaida,
   repartoDeEjecucion,
   resumenDeCiclos,
+  retornoSobreMargen,
   aCsv,
   cronologiaPorCiclo,
   sumaExacta,
@@ -341,6 +342,22 @@ export class BotDetailPage implements OnInit {
   readonly total = computed(() => {
     const b = this.bot();
     return b ? sumaExacta([b.realizedPnl, b.unrealizedPnl]) : '0';
+  });
+  /**
+   * El capital inicial, SOLO si difiere del asignado de hoy: si son iguales
+   * repetirlo es ruido. null también con un servidor sin actualizar, que no
+   * manda el campo (spec 025).
+   */
+  readonly inicialDistinto = computed(() => {
+    const b = this.bot();
+    const ini = b?.initialInvestment;
+    if (!b || ini === undefined || ini === null || ini === '') return null;
+    return D(ini).eq(D(b.totalInvestment)) ? null : ini;
+  });
+  /** PnL abierto sobre el margen usado, en %: el «ROE» de la posición. null sin margen. */
+  readonly roe = computed(() => {
+    const b = this.bot();
+    return b ? retornoSobreMargen(b.unrealizedPnl, b.marginUsed) : null;
   });
   /**
    * Distancia a liquidación, del SERVIDOR (medida contra el precio de la caché de

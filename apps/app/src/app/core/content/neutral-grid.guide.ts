@@ -12,7 +12,7 @@ export const NEUTRAL_GRID_GUIDE: StrategyGuide<NeutralGridConfig> = {
     'Reparte los niveles por todo el rango y coloca compras en los que están por debajo del precio actual y ventas en los que están por encima.',
     'El capital no se reparte a partes iguales: los niveles más lejanos al ancla pesan más, para que las entradas fuertes ocurran en los extremos.',
     'Cada vez que una compra se ejecuta, tu posición se vuelve más larga; cada venta, más corta. En el centro del rango la posición neta vuelve a rondar cero.',
-    'Alrededor del precio actual el bot deja una banda muerta de medio escalón, para no cancelar y recolocar órdenes en cada movimiento mínimo.',
+    'Una línea tendida sigue viva hasta que el precio la cruza; la línea cruzada se queda sin orden hasta que el precio se aleja medio escalón, y vuelve con el lado que toque. Así no se recompra encima de lo que acaba de ejecutarse ni se recoloca nada en cada movimiento mínimo.',
   ],
   goodWhen: [
     'Quieres exposición neutral: ganar del vaivén sin quedarte estructuralmente largo ni corto.',
@@ -136,7 +136,7 @@ export const NEUTRAL_GRID_GUIDE: StrategyGuide<NeutralGridConfig> = {
     direction: {
       what: 'Hacia donde se inclina la retícula. Hoy el motor no lo lee al planificar: en neutral, largo o corto la retícula es la misma, compras bajo el ancla y ventas encima.',
       affects:
-        'Solo cambia la dirección con la que la vista previa estima la liquidación. No sesga ninguna orden. Neutral es lo que le da sentido a esta estrategia.',
+        'No sesga ninguna orden ni cambia la vista previa, que enseña las dos liquidaciones; la app avisa si lo cambias. Neutral es lo que le da sentido a esta estrategia.',
       tip: 'Déjalo en Neutral. No se puede cambiar después.',
     },
   },

@@ -61,8 +61,9 @@ services:
       NODE_ENV: production
       API_PORT: 3200
       SWAGGER_ENABLE: ${SWAGGER_ENABLE:-false}
-      # Bitácora de actividad. Apagada por defecto.
-      AUDIT_LOG_ENABLE: ${AUDIT_LOG_ENABLE:-false}
+      # Bitácora de actividad. Encendida por defecto, como en .env.example: el
+      # incidente más grave del motor (soltar todos los bots) se registra ahí.
+      AUDIT_LOG_ENABLE: ${AUDIT_LOG_ENABLE:-true}
       # Retención de la curva de la cartera. La aplica el worker; la API solo la
       # declara en la respuesta. El mismo valor en los dos.
       RETENTION_PORTFOLIO_DAYS: ${RETENTION_PORTFOLIO_DAYS:-365}
@@ -254,7 +255,8 @@ services:
       RETENTION_SNAPSHOT_DAYS: ${RETENTION_SNAPSHOT_DAYS:-30}
       RETENTION_EVENT_DAYS: ${RETENTION_EVENT_DAYS:-90}
       RETENTION_CRITICAL_EVENT_DAYS: ${RETENTION_CRITICAL_EVENT_DAYS:-365}
-      AUDIT_LOG_ENABLE: ${AUDIT_LOG_ENABLE:-false}
+      RETENTION_COMMAND_DAYS: ${RETENTION_COMMAND_DAYS:-90}
+      AUDIT_LOG_ENABLE: ${AUDIT_LOG_ENABLE:-true}
       RETENTION_AUDIT_DAYS: ${RETENTION_AUDIT_DAYS:-180}
       # La curva de la cartera (spec 003): el cron que la escribe cada cinco
       # minutos y cuánto se conserva. El mismo valor de retención que la API.
