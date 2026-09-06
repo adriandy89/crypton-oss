@@ -65,8 +65,7 @@ El bot solo compra si **ninguna** de estas lo bloquea; la nota del bot enumera l
 | La posición no ha alcanzado «Notional máximo de la posición» | `tope de posición alcanzado` |
 
 La **primera compra** de un ciclo no tiene media con la que compararse: entra en cuanto arranca el bot
-(o pasa el intervalo desde el cierre anterior… ver [F-12](#5-limitaciones-conocidas-hallazgos-abiertos)
-sobre la espera entre ciclos).
+(o pasa la **espera entre ciclos**, si la configuraste).
 
 ### Paso 3 — La compra
 
@@ -206,8 +205,8 @@ margen, media **0,08777**, take profit en **0,09215**.
 
 | Campo | Realidad |
 |---|---|
-| **Tope de exposición** (`maxNotionalCap`) | ⚠️ **Muerto en esta estrategia.** El freno que el motor consulta es **Notional máximo de la posición**. La ayuda genérica del formulario («tope duro… pase lo que pase») no aplica aquí. |
-| **Espera entre ciclos** (`cooldownMinutes`) | ⚠️ **Muerto.** Al cerrar un ciclo, la siguiente compra entra en la siguiente revisión. |
+| **Tope de exposición** (`maxNotionalCap`) | **Sí**, como segundo tope junto a **Notional máximo de la posición**: manda el menor de los dos. |
+| **Espera entre ciclos** (`cooldownMinutes`) | **Sí.** Al cerrar un ciclo, la siguiente compra espera estos minutos; el «intervalo» sigue mandando entre compras dentro del ciclo. |
 | **Capital asignado** (`totalInvestment`) | **No dimensiona las compras**: el tamaño lo da «Importe por compra». Se usa como techo declarado (la app exige `importe × compras ≤ capital`) y como denominador de la pérdida diaria y del kill-switch. |
 | **Adelantar seguridad** y **Recentrar la retícula** (comandos) | No hacen nada aquí: el DCA no tiene escalera colgada ni ancla. |
 
@@ -220,25 +219,9 @@ la cuenta.
 
 Confirmadas en `specs/001-revision-integral/findings.md`, abiertas a 2026-09-06.
 
-> ⚠️ **Limitación conocida (F-47, solo Lighter).** En Lighter una orden a mercado se manda con el precio
-> de marca como tope, sin holgura, y el motor la da por ejecutada sin comprobarlo: una compra puede
-> **no cruzar** y quedar como «ejecutada» en la base sin serlo.
-> **Hasta que se corrija:** para este bot prefiere Hyperliquid o Aster, o la simulación; si operas en
-> Lighter, comprueba en la bitácora que a cada compra le sigue su `FILL`.
-
-> ⚠️ **Limitación conocida (F-12).** `maxNotionalCap` y `cooldownMinutes` no se leen (§4).
-> **Hasta que se corrija:** el freno es `maxPositionNotional`; no cuentes con espera entre ciclos.
-
-> ⚠️ **Limitación conocida (F-13).** La API acepta un «Margen bajo la media» **negativo**, que invierte la
-> condición: compraría solo **por encima** de la media. El formulario no lo permite.
-> **Hasta que se corrija:** configura desde la app.
-
-> ⚠️ **Limitación conocida (F-14).** En la vista previa los avisos comunes (apalancamiento, tope) salen
-> **duplicados**. Cosmético.
-
-> ⚠️ **Limitación conocida (F-94).** El intervalo se mide con el reloj del venue (hora de la ejecución)
-> frente al reloj del motor; con deriva de reloj se acorta o alarga unos segundos. El **funding** de una
-> posición de días no aparece en ninguna pantalla.
+> ⚠️ **Límite conocido (F-94, aceptado).** El intervalo se mide con el reloj del venue (hora de la
+> ejecución) frente al reloj del motor; con deriva de reloj se acorta o alarga unos segundos. El
+> **funding** de una posición de días no aparece en ninguna pantalla (riesgo §9).
 
 ---
 
@@ -329,7 +312,7 @@ aunque le quede cupo e intervalo cumplido. La orden de cierre sigue viva.
 
 #### Tope de exposición · `maxNotionalCap` · 🔥 en caliente · opcional
 
-> ⚠️ **Muerto en esta estrategia** (F-12). Configura «Notional máximo de la posición» y deja este vacío.
+Segundo tope junto a «Notional máximo de la posición»: manda el menor de los dos. Déjalo vacío si el propio te basta.
 
 #### Stop loss (%) · `stopLossPct` · 🔥 en caliente · 0,1–90 · ⚠️ campo de riesgo
 
@@ -350,8 +333,8 @@ A 1× no aplica.
 
 #### Espera entre ciclos (min) · `cooldownMinutes` · 🔥 en caliente · 0–10080 · por defecto **0**
 
-> ⚠️ **Muerto en esta estrategia** (F-12): tras cerrar un ciclo, la siguiente compra entra en la siguiente
-> revisión. El «intervalo» sí se respeta entre compras.
+Tras cerrar un ciclo, la siguiente compra espera estos minutos. El «intervalo» sigue mandando entre compras
+dentro del ciclo.
 
 ### 6.4 Exchange
 

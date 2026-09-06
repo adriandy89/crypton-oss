@@ -259,7 +259,7 @@ Tres campos comunes que salen en el formulario y **no hacen lo que esperarías**
 |---|---|
 | **Tope de exposición** (`maxNotionalCap`) | ⚠️ **Esta estrategia lo ignora.** Solo lo respetan Rejilla clásica, GridMart y Martingala. Aquí el tope real y único es **Valor máximo de la posición**. |
 | **Capital asignado** (`totalInvestment`) | No dimensiona órdenes. Aquí el tamaño lo mandan **Tamaño por compra/venta** y **Capas**. Sí se usa como denominador de la **Pérdida diaria máxima**. |
-| **Espera entre ciclos** (`cooldownMinutes`) | Pensado para estrategias con ciclos que abren y cierran. Un market maker cotiza de forma continua: usa **Espera tras un fill**. |
+| **Espera entre ciclos** (`cooldownMinutes`) | Pensado para estrategias con ciclos que abren y cierran. Un market maker cotiza de forma continua y **no cierra ciclo al quedar plano** (el ciclo dura lo que dura el bot): usa **Espera tras un fill**. |
 
 Sí funcionan con normalidad, aplicados por el motor: **Stop loss**, **Pérdida diaria máxima** y **Al acercarse la liquidación**. El stop loss se coloca como orden condicional **nativa en el exchange** (sigue vivo aunque la plataforma se caiga) y su dirección se calcula del **signo de la posición real**, no de la dirección declarada — que es lo correcto para un bot que cambia de lado solo.
 
@@ -291,7 +291,7 @@ Hacia qué lado se inclina la cotización. Aquí no describe una posición, sino
 Lo que se pone en **cada orden, en cada lado**. Con varias capas es el tamaño de la **primera**; las demás salen de multiplicarlo.
 
 - Subirlo hace que cada ejecución mueva más posición y llegues antes al tope.
-- **Consejo**: que supere el mínimo del par (~10 USDC). Cuidado con el perfil Conservador, que lo reduce al 70 %: 12 USDC se convierten en 8,4 y el exchange puede rechazar la orden.
+- **Consejo**: que supere el mínimo del par (~10 USDC). Cuidado con el perfil Conservador, que lo reduce al 70 %: 12 USDC se convierten en 8,4, por debajo del mínimo, y la vista previa marca la configuración como no válida.
 
 #### Valor máximo de la posición · `maxBotPositionValue` · 🔥 en caliente · mínimo 1 · ⚠️ campo de riesgo
 
@@ -401,7 +401,8 @@ Cada cuánto se rehace la cotización **aunque el precio no se haya movido**.
 
 Congela la cotización unos segundos después de una ejecución. Evita que el bot persiga al mercado que acaba de barrer su orden y se vuelva a poner justo delante del mismo movimiento.
 
-Durante la espera **tampoco caduca** ninguna orden: congelar significa congelar.
+Durante la espera **tampoco caduca** ninguna orden: congelar significa congelar. Rige también con **Precio
+de referencia** puesto.
 
 **Consejo**: 15–30 s en mercados con movimiento. Con 0 no hay pausa.
 
@@ -456,7 +457,9 @@ Es la última línea antes de que actúe la Acción al alcanzar el límite.
 
 Topes **específicos** por lado, en USDC. Permiten ser asimétrico: dejar que el bot acumule más en un sentido que en el otro sin tocar el tope general.
 
-Si los dejas vacíos, ambos lados usan el **Valor máximo de la posición**.
+Si los dejas vacíos (o a 0), ambos lados usan el **Valor máximo de la posición**. Un tope por lado alcanzado
+cuenta como tope: dispara la **Acción al alcanzar el límite** y la nota dice «Tope largo alcanzado» o «Tope
+corto alcanzado». Un tope tan pequeño que no cabe ni una cotización se rechaza al guardar.
 
 ### 5.6 Precio
 
@@ -464,7 +467,7 @@ Si los dejas vacíos, ambos lados usan el **Valor máximo de la posición**.
 
 **Ancla manual.** Con esto puesto, el bot cotiza alrededor de **este precio** y no del mercado.
 
-⚠️ Congela el centro donde tú digas. Si el mercado se aleja del ancla, el bot se queda cotizando al aire, sin órdenes cerca del precio real. **La app no te avisa** de esa deriva (no existe ese aviso; ver F-67 en §7): puede ser deliberado (esperar a que el precio vuelva), pero tienes que vigilarlo tú. Además, con el ancla puesta la **Espera tras un fill no actúa** (F-15).
+⚠️ Congela el centro donde tú digas. Si el mercado se aleja del ancla más del doble de la capa más lejana, el bot se queda cotizando al aire y **la nota lo dice** («Mercado a N bps del ancla: las cotizaciones quedan lejos del libro»); no hay evento aparte. Puede ser deliberado (esperar a que el precio vuelva), pero míralo. La **Espera tras un fill** sí actúa con el ancla puesta.
 
 **Consejo**: déjalo vacío salvo que sepas exactamente por qué lo quieres, y revísalo si el precio se mueve.
 
@@ -513,7 +516,7 @@ La cuenta con la que opera (real, pruebas o simulación). El simulador es algo o
 
 #### Par · `symbol` · ❄️ en frío
 
-Fija tick, paso y mínimo. Con el perfil Conservador el tamaño baja al 70 %: vigila el mínimo.
+Fija tick, paso y mínimo. Con el perfil Conservador el tamaño baja al 70 % y la vista previa ya lo enseña así: vigila el mínimo.
 
 #### Capital asignado · `totalInvestment` · 🌤️ en tibio · mínimo 10 · ⚠️ campo de riesgo
 
@@ -568,29 +571,10 @@ Solo avisar / Pausar el bot / Cerrar todo cuando la distancia a la liquidación 
 Confirmadas en `specs/001-revision-integral/findings.md`, abiertas a 2026-09-06. Cuando un hallazgo se
 cierre, su bloque desaparece de aquí.
 
-> ⚠️ **Limitación conocida (F-57).** La vista previa **no aplica el ×0,7 del perfil Conservador** al tamaño:
-> con un tamaño entre el mínimo del par y `mínimo / 0,7` (10 a 14,3 USDC), la vista previa dice «12 USDC» y
-> el bot manda 8,40: las dos caras se vetan y el bot no cotiza. **Hasta que se corrija:** tamaño por
-> compra/venta ≥ 15 USDC si el perfil es Conservador.
+> ⚠️ **Limitación conocida (F-54, Lighter).** Lighter no tiene stream de cuenta: las ejecuciones llegan por
+> sondeo cada 12 s, demasiado tarde para recotizar con criterio. **Hasta que se corrija:** no operes market
+> makers en Lighter.
 
-> ⚠️ **Limitación conocida (F-58).** **Cada par casado cierra un ciclo**: al ejecutarse compra y venta, el
-> bot cambia todos los identificadores, cancela y recoloca **todas** las capas (pierde prioridad en el
-> libro y gasta cupo), y olvida la cotización, la espera tras ejecución y las muestras. **Hasta que se
-> corrija:** cuenta con más churn del que sugiere el intervalo de actualización, sobre todo en Lighter.
-
-> ⚠️ **Limitación conocida (F-59).** Los **Límites de inventario largo / corto** frenan **sin avisar**: con
-> el tope de un lado alcanzado no hay órdenes de ese lado, pero ni acción al límite, ni modo defensivo, ni
-> nota. **Hasta que se corrija:** si un lado desaparece del libro, mira estos dos campos.
-
-> ⚠️ **Limitación conocida (F-15).** Con **Precio de referencia** puesto, la **Espera tras un fill** nunca
-> se aplica. **Hasta que se corrija:** sin ancla manual si quieres la espera.
-
-> ⚠️ **Limitación conocida (F-67).** «La app avisa» si el mercado se aleja del Precio de referencia: **no
-> hay tal aviso**. Vigílalo tú.
-
-> ⚠️ **Limitación conocida (F-55 / F-47, Lighter).** En Lighter, **Mantener órdenes de salida durante** no
-> funciona (la caducidad por edad nunca dispara) y las órdenes a mercado del cierre pueden no cruzar.
-> **Hasta que se corrija:** no operes market makers en Lighter.
-
-> ⚠️ **Limitación conocida (F-34).** **Modo de posición** no llega a aplicarse en ningún venue (el motor
-> lo intenta y el adaptador no lo expone). Déjalo en Automático.
+**Modo de posición** se aplica al arrancar el bot solo en Aster (Unidireccional; Cobertura está vetada
+allí porque cambiaría el modo de toda la cuenta). En Hyperliquid y Lighter el ajuste no existe: manda el
+modo de la cuenta y el bot lo anota con un aviso.

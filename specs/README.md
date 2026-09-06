@@ -123,4 +123,18 @@ ante un 429 se paran sin reintentar. A `findings.md` va solo la evidencia resumi
 | 008 | [Guía de uso: una guía por estrategia, riesgo, venues, simulación y comandos](008-guia-de-uso/spec.md) | cambio | en curso | `spec/008-guia-de-uso` |
 | 009 | [Protecciones y cierre](009-protecciones-y-cierre/spec.md) | cambio | hecho | `spec/009-protecciones-y-cierre` |
 | 010 | [Comandos y ciclo](010-comandos-y-ciclo/spec.md) | cambio | hecho | `spec/010-comandos-y-ciclo` |
-| 011 | [Margen y modo de posición](011-margen-y-modo-posicion/spec.md) | cambio | borrador | `spec/011-margen-y-modo-posicion` |
+| 011 | [Margen y modo de posición](011-margen-y-modo-posicion/spec.md) | cambio | hecho | `spec/011-margen-y-modo-posicion` |
+| 012 | [Aster: nonce y errores](012-aster-nonce-y-errores/spec.md) | cambio | hecho | `spec/012-aster-nonce-y-errores` |
+| 013 | [Lighter: mercado con holgura, cupo de órdenes y errores con nombre](013-lighter-mercado-y-cupo/spec.md) | cambio | hecho (F-54 abierto) | `spec/013-lighter-mercado-y-cupo` |
+| 014 | [Hyperliquid: el precio que se planifica es el que se envía, y la marca es la marca](014-hyperliquid-tick-y-marca/spec.md) | cambio | hecho | `spec/014-hyperliquid-tick-y-marca` |
+| 015 | [Liquidaciones y streams por venue](015-liquidaciones-y-streams-por-venue/spec.md) | cambio | hecho | `spec/015-liquidaciones-y-streams-por-venue` |
+| 016 | [Parciales y reconciliación](016-parciales-y-reconcile/spec.md) | cambio | hecho | `spec/016-parciales-y-reconcile` |
+| 017 | [Rejillas: dimensionado, vista previa y forma con inventario](017-grids-dimensionado-y-preview/spec.md) | cambio | hecho | `spec/017-grids-dimensionado-y-preview` |
+| 018 | [Market makers: ciclo continuo, topes, techo y vista previa](018-market-makers/spec.md) | cambio | hecho | `spec/018-market-makers` |
+| 019 | [Validación genérica, tasa de mantenimiento por mercado y parámetros muertos](019-validacion-y-parametros-muertos/spec.md) | cambio | hecho | `spec/019-validacion-y-parametros-muertos` |
+| 020 | [Caudal y presupuesto: escrituras con reserva, cupo de órdenes y realimentación](020-caudal-y-presupuesto/spec.md) | cambio | hecho | `spec/020-caudal-y-presupuesto` |
+| 021 | [Motor: errores que no se tragan, salud que dice la verdad y retención](021-motor-errores-y-salud/spec.md) | cambio | hecho | `spec/021-motor-errores-y-salud` |
+| 022 | [Simulador y backtest: los huecos de paridad, declarados y contados](022-simulador-y-backtest/spec.md) | cambio | hecho | `spec/022-simulador-y-backtest` |
+| 023 | [Limpieza: docs desfasadas, tests que faltaban y menores por venue y estrategia](023-limpieza-docs-y-tests/spec.md) | cambio | hecho | `spec/023-limpieza-docs-y-tests` |
+| 024 | [Mercados: los campos del venue llegan a la fila de `markets`](024-mercados-campos-del-venue/spec.md) | cambio | hecho | `spec/024-mercados-campos-del-venue` |
+| 025 | [Capital en las vistas de bots: cuánto dinero hay ahora, cuánto se puso y qué hay en juego](025-capital-en-las-vistas-de-bots/spec.md) | cambio | hecho | `spec/025-capital-en-las-vistas-de-bots` |

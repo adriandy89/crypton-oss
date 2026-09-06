@@ -20,9 +20,9 @@ Dos avisos que las guías repiten porque importan:
 
 - El **apalancamiento** es en tibio y no en caliente porque el venue puede rechazar el cambio con
   posición abierta y, aunque lo acepte, **mueve el precio de liquidación**.
-- Cambiar la **forma de una escalera con inventario** (rango, niveles, separaciones) recoloca las órdenes
-  sobre índices que ya no significan lo mismo: puede dejar una venta por debajo de su coste o un hueco.
-  Hazlo con la posición en cero ([F-90](#6-limitaciones-conocidas)).
+- Cambiar la **forma de una escalera con inventario** (rango, niveles, separaciones) se **rechaza** (409):
+  las salidas de lo comprado dejarían de corresponder a sus líneas. Hazlo con el ciclo limpio (posición en
+  cero); con inventario, la API te dice exactamente qué campos son los que redibujan.
 
 ---
 
@@ -114,7 +114,7 @@ a más viejo**. Cada evento tiene una severidad: **INFO** (sin borde), **WARN** 
 | `SAFETY_ADDED` · `ADD_SAFETY_SKIPPED` | Seguridad manual enviada / no aceptada | `SAFETY_ADDED` dice el estado del acuse (ejecutada, o enviada a la espera del `FILL`). `ADD_SAFETY_SKIPPED` en WARN: el exchange no la aceptó; el motivo está en el evento anterior. |
 | `GRID_REANCHORED` | Retícula recentrada | Solo en escaleras. El mensaje anota el margen que la escalera nueva compromete además de la posición abierta. |
 | `ORDERS_CANCELED` | Órdenes canceladas a petición | Nada. |
-| `MARGIN_ADJUSTED` | Margen ajustado | Hoy no llega a ocurrir (F-34). |
+| `MARGIN_ADJUSTED` | Margen ajustado | Trae la liquidación antes y después. Si pediste contar el aporte como capital, el capital asignado sube al llegar este acuse. |
 
 ### Órdenes con problema
 
@@ -188,16 +188,12 @@ bot). Es la frase que te dice en qué estado cree estar:
 
 ## 6. Limitaciones conocidas
 
-> ⚠️ **Limitación conocida (F-34, abierta a 2026-09-06).** «Aportar / retirar margen» **falla siempre**
-> en los tres venues (el adaptador no expone la operación), aunque la API actualiza el capital asignado
-> del bot. `positionMode` tampoco llega a aplicarse.
-> **Hasta que se corrija:** ajusta el margen desde la web del exchange; deja «Modo de posición» en
-> Automático. Estado: `specs/001-revision-integral/findings.md` § F-34.
-
 El spec `009-protecciones-y-cierre` (septiembre de 2026) corrigió el orden de «Parar y cerrar» (F-33) y
 dos fallos de contabilidad de órdenes: una orden aceptada por el venue ya no puede acabar marcada como
 rechazada porque falle la base (F-36), y una fila pendiente sin acuse **vence a los cinco minutos** y el
 nivel se vuelve a intentar con un aviso `ORDER_RETRY` (F-37). El spec `010-comandos-y-ciclo` dejó
 «Recentrar la retícula» solo en las escaleras y con confirmación, hizo que «Adelantar seguridad» salga al
-precio actual y anuncie según el acuse, y que «Espera entre ciclos» se pueda cambiar en caliente. F-34 va
-en `011-margen-y-modo-posicion`.
+precio actual y anuncie según el acuse, y que «Espera entre ciclos» se pueda cambiar en caliente. El spec
+`011-margen-y-modo-posicion` hizo que «Aportar margen» llegue de verdad al exchange, que el capital
+asignado suba solo con el acuse, que el modo cobertura quede vetado en Aster y que ningún comando que
+mueva dinero se ejecute dos veces.

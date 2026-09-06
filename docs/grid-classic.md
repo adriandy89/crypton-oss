@@ -102,9 +102,10 @@ la posición sin contrapartida, que es justo lo que arruina una rejilla. La nota
 
 ### Paso 6 — Tope de exposición
 
-Si rellenaste **Tope de exposición** y la posición actual ya lo alcanza, el bot deja de tender entradas
-nuevas («Tope de notional alcanzado: sin entradas nuevas.»). Ojo: actúa **sobre la posición ya abierta**,
-no sobre lo que está colgado en el libro (ver [F-87](#5-limitaciones-conocidas-hallazgos-abiertos)).
+Si rellenaste **Tope de exposición**, el bot solo tiende las compras que caben en él: suma la posición
+abierta y las compras vivas, de la línea más cercana al precio hacia fuera, y corta donde la siguiente ya
+no cabe («Tope de notional: 3 de 10 entradas tendidas.»; con la posición por encima del tope, «Tope de
+notional alcanzado: sin entradas nuevas.»).
 
 ### Paso 7 — Guardas
 
@@ -132,7 +133,7 @@ antes de planificar. Si una salta, el bot se pausa conservando el stop.
    Si no lo aceptas, pon stop-loss por debajo del precio inferior, o baja el capital.
 
 Y una sexta para Lighter: **no más de 30 líneas** (cuenta compras vivas + ventas vivas + stop). Lighter
-limita las órdenes activas por mercado y el exceso se rechaza en silencio ([F-50](#5-limitaciones-conocidas-hallazgos-abiertos)).
+limita a 30 las órdenes activas por mercado y la vista previa avisa si la rejilla tiende más.
 
 ### Configuración A — «Lateral amplio en BTC»
 
@@ -158,14 +159,9 @@ encima esperando a tener inventario. Cada línea mueve **60 USDC** (≈ 0,00076-
 completo entre dos líneas deja `0,00083 × 736,8 ≈ 0,61 USDC` brutos en la línea más baja y ≈ 0,56 en la
 más alta; menos dos comisiones de maker (≈ 0,024 USDC en Lighter): **≈ 0,55 USDC por vuelta**.
 
-**Peor caso.** Lo que enseña la vista previa y lo que es de verdad:
-
-| | Vista previa (líneas bajo el precio) | Real (todas las líneas) |
-|---|---|---|
-| Notional | 596,79 USDC | **1.191,72 USDC** |
-| Margen | 300,00 USDC | **595,86 USDC** |
-| Precio medio | 75.257,7 | ≈ 79.000 |
-| Liquidación estimada (2×, aislado) | 38.005 (−51,8 %) | ≈ 39.900 |
+**Peor caso (vista previa, todas las líneas).** Basta con que BTC suba por encima de 86.000 y recorra el
+rango entero hacia abajo para que las veinte líneas se compren: notional **1.191,72 USDC**, margen
+**600,00**, precio medio **78.765,5**, liquidación estimada a 2× aislado **41.351,9** (−47,6 %).
 
 Si BTC pierde los 72.000 te quedas con las veinte compras hechas: 1.200 USDC de posición larga y los 600
 USDC de margen comprometidos, esperando a que vuelva.
@@ -188,9 +184,9 @@ Cuando quieres acumular una moneda y cobrar el vaivén mientras tanto, sin liqui
 vivas entre 120 y 138,33. Cada línea mueve **20 USDC** (0,125-0,167 SOL: por encima del mínimo de 10 USDC
 y de la cantidad mínima de 0,1 SOL). Un ciclo deja ≈ 0,25-0,28 USDC brutos.
 
-**Peor caso.** Vista previa: 239,26 USDC de notional y 240,00 de margen (las doce líneas de abajo). Real:
-**498,33 USDC** en SOL comprado a una media cercana a 140. A 1× la liquidación estimada es 0,645 USDC: en
-la práctica, no existe. El peor caso es quedarte con 500 USDC de SOL.
+**Peor caso (vista previa, todas las líneas).** **498,32 USDC** de notional y 500,00 de margen: SOL
+comprado a una media de **138,96**. A 1× la liquidación estimada es 3,47 USDC: en la práctica, no existe.
+El peor caso es quedarte con 500 USDC de SOL.
 
 Son **25 líneas**: cabe en el límite de 30 órdenes de Lighter mientras no añadas stop y ventas a la vez
 (las ventas solo existen para las líneas con inventario, así que en la práctica nunca hay 25 órdenes vivas).
@@ -213,14 +209,12 @@ más abajo**. Gana mientras el par siga rebotando bajo un techo.
 **Qué hace esto.** Paso de **26,67 USDC** (1,07 %). Doce ventas vivas entre 2.506,7 y 2.800; cada línea
 mueve **75 USDC** (≈ 0,03 ETH). Un ciclo deja ≈ 0,80 USDC brutos.
 
-**Peor caso.** Vista previa: 898,40 USDC de notional, 300 de margen, media 2.650, liquidación estimada
-3.520 (**+40,6 %**). Real (todas las líneas): **1.198 USDC** de corto, 399 de margen, media ≈ 2.600 y
-liquidación ≈ 3.454. Si ETH rompe los 2.800, acumulas el corto entero y a 3× el margen de maniobra hasta
-la liquidación es de un tercio del precio.
+**Peor caso (vista previa, todas las líneas).** **1.197,99 USDC** de corto, 400,00 de margen, media
+**2.594,2** y liquidación estimada **3.407,0** (**+36,1 %**). Si ETH rompe los 2.800, acumulas el corto
+entero y a 3× el margen de maniobra hasta la liquidación es de poco más de un tercio del precio.
 
 > En la bitácora de un bot **corto** las entradas aparecen como `GRID_BUY` (lado SELL) y las salidas
-> como `GRID_SELL` (lado BUY): las etiquetas nombran el **papel** del nivel, no el lado de la orden
-> ([F-94](#5-limitaciones-conocidas-hallazgos-abiertos)).
+> como `GRID_SELL` (lado BUY): las etiquetas nombran el **papel** del nivel, no el lado de la orden.
 
 ### Checklist antes de arrancar
 
@@ -231,8 +225,9 @@ la liquidación es de un tercio del precio.
 - [ ] ¿Acepto el **peor caso real** (todas las líneas = capital × apalancamiento), o he puesto stop-loss bajo el rango?
 - [ ] ¿«Parar al salir del rango» activado?
 - [ ] ¿En Lighter, 30 líneas o menos?
-- [ ] ¿«Reparto del tamaño» en **Valor nocional**? (ver F-03)
-- [ ] ¿He mirado la vista previa **sabiendo que enseña la mitad del peor caso**?
+- [ ] ¿«Reparto del tamaño» decidido? (Valor nocional es lo habitual; Cantidad de moneda fija la cantidad
+      con el precio del primer plan de cada ciclo)
+- [ ] ¿He mirado el peor caso de la vista previa (todas las líneas compradas)?
 
 ### Señales de alarma cuando ya está funcionando
 
@@ -240,10 +235,9 @@ la liquidación es de un tercio del precio.
 |---|---|---|
 | `Precio fuera del rango: sin entradas nuevas, salidas activas.` y el precio por **debajo** | Tienes todas (o casi todas) las compras hechas | Decide: esperar el rebote (con stop), aportar margen si aislado, o cerrar |
 | Lo mismo con el precio por **encima** | En líquido; no pierdes | Espera, o crea otra rejilla más arriba |
-| `Tope de notional alcanzado` | La posición ya supera el tope | Nada que hacer: el tope no protege lo que ya está colgado (F-87) |
+| `Tope de notional: N de M entradas tendidas` | El tope no deja tender la rejilla entera | Es el freno actuando; si no lo esperabas, sube el tope o baja el capital |
 | Muchos `ORDER_UNVIABLE` | Líneas por debajo del mínimo del par al redondear | Menos niveles o más capital |
 | `ORDER_REJECTED` «Post-only rechazada: cruzaría el libro» justo tras una ejecución | Normal: el precio sigue encima de la línea que acaba de ejecutarse | Nada; vuelve solo |
-| La misma línea cancela y recoloca en cada revisión | Estás en **Reparto = Cantidad de moneda** (F-03) | Vuelve a Valor nocional (en tibio) |
 | Ciclos cerrados con PnL casi cero o negativo | El paso no paga las comisiones | Menos niveles o rango más ancho |
 
 ---
@@ -252,9 +246,9 @@ la liquidación es de un tercio del precio.
 
 | Campo | Realidad |
 |---|---|
-| **Espera entre ciclos** (`cooldownMinutes`) | ⚠️ **Muerto en esta estrategia.** Una rejilla no tiene «ciclos» que esperar: cada línea se recicla sola. El campo sale en el formulario y el motor no lo lee. |
+| **Espera entre ciclos** (`cooldownMinutes`) | **Sí.** El ciclo se cierra al vender todo el inventario; durante la espera no se tienden compras nuevas y las ventas siguen. |
 | **Precargar inventario** (`preloadInventory`) | ⚠️ **Muerto.** Solo produce un aviso en la revisión. El bot arranca siempre en líquido y solo vende lo que compró en alguna línea. |
-| **Tope de exposición** (`maxNotionalCap`) | **A medias.** Corta las entradas nuevas **cuando la posición ya lo ha alcanzado**; no recorta las compras que ya están colgadas ([F-87](#5-limitaciones-conocidas-hallazgos-abiertos)). |
+| **Tope de exposición** (`maxNotionalCap`) | **Sí.** Acota lo que se tiende: posición abierta más compras vivas, de la línea más cercana al precio hacia fuera. |
 | **Capital asignado** (`totalInvestment`) | **Sí** dimensiona: `capital × apalancamiento / niveles` es el tamaño de cada línea. |
 
 Sí funcionan con normalidad, aplicados por el motor: **Stop loss** (orden condicional nativa sobre el
@@ -267,39 +261,8 @@ precio medio), **Pérdida diaria máxima**, **Al acercarse la liquidación** y l
 Todo lo de esta sección está confirmado en `specs/001-revision-integral/findings.md` y abierto a
 2026-09-06. Cuando un hallazgo se cierre, su bloque desaparece de aquí.
 
-> ⚠️ **Limitación conocida (F-88).** La vista previa calcula el peor caso **solo con las líneas que
-> quedan bajo el precio actual**: enseña 596,79 / 300 en la configuración A cuando el peor caso real es
-> 1.191,72 / 595,86. La media y la liquidación estimadas salen del mismo subconjunto.
-> **Hasta que se corrija:** dimensiona con `capital × apalancamiento`, no con la vista previa.
-
-> ⚠️ **Limitación conocida (F-87).** «Tope de exposición» actúa **después** de superarse: con posición 0
-> y tope 100, una rejilla de 20 líneas × 60 USDC tiende igualmente 1.200 USDC de compras vivas. La ayuda
-> del formulario («tope duro… pase lo que pase») no es cierta aquí.
-> **Hasta que se corrija:** el tope de una rejilla es `capital × apalancamiento`; el campo solo frena
-> entradas nuevas una vez alcanzado.
-
-> ⚠️ **Limitación conocida (F-03).** Con «Reparto del tamaño» en **Cantidad de moneda**, la cantidad de
-> cada línea se calcula con el **precio actual** en el motor y con el precio de referencia en la vista
-> previa: la retícula entera se cancela y recoloca cada vez que el precio se mueve un ~0,8 % en BTC (o un
-> 0,09 % en DOGE), y la venta de un nivel puede salir con una cantidad distinta de la comprada.
-> **Hasta que se corrija:** usa **Valor nocional** (el valor por defecto).
-
-> ⚠️ **Limitación conocida (F-90).** Cambiar el rango, los niveles, el espaciado o el reparto (campos en
-> tibio) **con inventario** recoloca las órdenes sobre índices que ya no significan lo mismo: una venta
-> puede quedar por debajo de su coste, o una línea sin contrapartida.
-> **Hasta que se corrija:** cambia la forma de la rejilla solo con la posición en cero.
-
-> ⚠️ **Limitación conocida (F-83).** Una ejecución **parcial** marca la línea como comprada y el resto de
-> la orden se cancela: el escalón queda tomado a medias y no se repone hasta que su venta cierre.
-> **Hasta que se corrija:** tamaños por línea holgados sobre el mínimo, para que los parciales sean raros.
-
-> ⚠️ **Limitación conocida (F-50, solo Lighter).** Lighter admite como máximo **30 órdenes activas por
-> mercado** y el motor no lo modela: una rejilla con más líneas vivas nunca se completa y los rechazos se
-> clasifican como fatales. **Hasta que se corrija:** en Lighter, ≤ 30 líneas.
-
-> ⚠️ **Limitación conocida (F-12 / F-94).** `cooldownMinutes` y `preloadInventory` no hacen nada (§4).
-> En bots cortos las etiquetas `GRID_BUY`/`GRID_SELL` de la bitácora nombran el papel del nivel, no el
-> lado. El **funding** de mantener inventario en un perpetuo no se cuenta en ninguna pantalla.
+> ⚠️ **Limitación conocida (F-12, decide el usuario).** `preloadInventory` no hace nada (§4). El
+> **funding** de mantener inventario en un perpetuo no se cuenta en ninguna pantalla (riesgo §9).
 
 ---
 
@@ -362,7 +325,7 @@ siempre a partes iguales, así que subir niveles reduce el tamaño de cada orden
 
 - La app rechaza el bot si el paso es menor que **2 ticks** del venue, y avisa si es menor que 0,05 %.
 - **Consejo**: que `capital × apalancamiento / niveles` siga por encima de 20 USDC. En Lighter, 30 como
-  máximo (F-50).
+  máximo: la vista previa avisa si te pasas.
 
 #### Espaciado · `gridSpacing` · 🌤️ en tibio · por defecto **Aritmético**
 
@@ -380,8 +343,9 @@ inferior y el superior se diferencian mucho.
   precio medio mejora solo.
 - **Cantidad de moneda**: todas compran las mismas monedas; las de abajo comprometen menos dinero.
 
-**Consejo**: **Valor nocional**. Además de ser lo habitual, «Cantidad de moneda» hoy provoca churn de
-órdenes con cada movimiento del precio ([F-03](#5-limitaciones-conocidas-hallazgos-abiertos)).
+**Consejo**: **Valor nocional** es lo habitual. En «Cantidad de moneda» la cantidad por línea se fija con
+el precio del primer plan de cada ciclo, así que el motor y la vista previa (que usa el precio de creación)
+coinciden salvo por lo que el precio se haya movido hasta el arranque.
 
 ### 6.2 Comportamiento
 
@@ -406,11 +370,11 @@ líneas de arriba (como hacen los grids de los exchanges).
 
 #### Tope de exposición · `maxNotionalCap` · 🔥 en caliente · opcional
 
-Tope del valor de la posición. En esta estrategia **corta las entradas nuevas cuando la posición abierta
-ya lo alcanza**; no recorta las compras colgadas ([F-87](#5-limitaciones-conocidas-hallazgos-abiertos)).
+Tope del valor de la posición. Acota lo que se **tiende**: posición abierta más compras vivas, de la línea
+más cercana al precio hacia fuera; la primera que no cabe corta la rejilla ahí, sin huecos.
 
-**Consejo**: el freno real de una rejilla es `capital × apalancamiento`. Si quieres menos exposición,
-baja el capital o el apalancamiento; este campo, como mucho, evita que sigas comprando tras superarlo.
+**Consejo**: sin tope, el freno de una rejilla es `capital × apalancamiento`. Ponlo por debajo si quieres
+que la rejilla nunca comprometa más de una cifra, aunque el precio la recorra entera.
 
 #### Stop loss (%) · `stopLossPct` · 🔥 en caliente · 0,1–90 · ⚠️ campo de riesgo
 
@@ -438,7 +402,8 @@ inferior; si prefieres que el bot actúe solo, «Cerrar todo» duele menos que u
 
 #### Espera entre ciclos (min) · `cooldownMinutes` · 🔥 en caliente · 0–10080 · por defecto **0**
 
-> ⚠️ **Muerto en esta estrategia** (F-12): ningún ciclo de la rejilla lo consulta. Déjalo en 0.
+El ciclo se cierra al vender todo el inventario. Durante la espera no se tienden compras nuevas; las ventas
+del inventario que quede siguen vivas.
 
 ### 6.5 Exchange
 
@@ -467,7 +432,7 @@ una posición perdedora arrastra el saldo de los otros bots de la cuenta.
 | Modo de margen | Aislado | ✅ Déjalo |
 | Apalancamiento | 2× | 🟡 1× si vas a acumular |
 | Espaciado | Aritmético | ✅ Déjalo |
-| Reparto del tamaño | Valor nocional | ✅ Déjalo (F-03) |
+| Reparto del tamaño | Valor nocional | ✅ Déjalo |
 | Niveles | 20 | Según capital y rango (≥ 20 USDC por línea; ≤ 30 en Lighter) |
 | Precargar inventario | No | ✅ Déjalo (muerto) |
 | Parar al salir del rango | Sí | ✅ Déjalo |

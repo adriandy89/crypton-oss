@@ -27,9 +27,8 @@ Donde la martingala solo espera al objetivo final, GridMart **hace trabajar la p
 
 Heredas **el peor caso completo de la martingala**: si el par cae sin rebotar, la posición entera —capital
 por apalancamiento, concentrado en los últimos escalones— queda abierta en pérdidas. Y añades complejidad:
-conviven cuatro mecanismos a la vez (escalera, cierre del satélite, rejilla de ventas, recompras), y dos
-de ellos tienen hoy hallazgos abiertos que vacían la escalera o dejan el ciclo sin cerrar
-([F-82 y F-89](#5-limitaciones-conocidas-hallazgos-abiertos)).
+conviven cuatro mecanismos a la vez (escalera, cierre del satélite, rejilla de ventas, recompras), y
+cualquiera de ellos te sorprende si no lo has entendido antes de arrancar.
 
 ### Vocabulario mínimo
 
@@ -107,8 +106,7 @@ cierre manual). `Espera entre ciclos` y vuelta a la entrada base. La nota del bo
 
 Con **Modo clásico** activado desaparecen rejilla y recompras: queda **una única salida** sobre toda la
 posición al objetivo del **TP satélite**, exactamente como una martingala (nota: `GridMart Classic: TP
-satélite en 79.856,9.`). Es la forma de usar GridMart cuando quieres el comportamiento simple. No sufre
-F-82 ni F-89.
+satélite en 79.856,9.`). Es la forma de usar GridMart cuando quieres el comportamiento simple.
 
 ### Paso 7 — Guardas
 
@@ -132,11 +130,9 @@ descuento supera la separación del primer escalón.
    la última venta se recorta.
 4. **Cada venta de la rejilla ≥ 20 USDC.** El núcleo dividido entre las ventas tiene que dar órdenes por
    encima del mínimo del par; si no, `ORDER_UNVIABLE` en cada revisión.
-5. **Menos ventas que seguridades no te protege de F-82.** Mientras el hallazgo esté abierto, las
-   recompras de los escalones 1-3 borran las seguridades 1-3. Vigila la nota «seguridades pendientes» y
-   considera el **modo clásico**.
-6. **Cantidades que no dejen polvo.** Con `% del núcleo` que divida el núcleo en trozos exactos del paso de
-   cantidad del venue, evitas restos por debajo del mínimo que dejen el ciclo sin cerrar (F-89).
+5. **Cantidades por encima del paso.** El último escalón de la rejilla se lleva lo que quede del núcleo,
+   así que los porcentajes no tienen que sumar 100; lo que hace falta es que cada venta redondee a una
+   cantidad válida del venue y por encima de su mínimo.
 
 ### Configuración A — «GridMart completo sobre ETH»
 
@@ -169,7 +165,7 @@ frente a un 49,5 % de distancia a la liquidación a 2×), con tamaños 162,9 · 
 equilibrio.
 
 **Peor caso (vista previa).** Notional **1.599,40 USDC**, margen **800,00**, media **2.093,46**,
-liquidación estimada **1.057,20** (−57,8 %). La vista previa pinta la rejilla de ventas **sobre el
+liquidación estimada **1.099,07** (−56,1 %). La vista previa pinta la rejilla de ventas **sobre el
 equilibrio del peor caso** (2.114 · 2.140 · 2.170 · 2.206, de 0,191 ETH cada una): es por dónde saldría
 el bot si la escalera se llenara entera, no donde están las ventas hoy.
 
@@ -190,7 +186,7 @@ sobre la media, exactamente como una martingala. Seguridades en **76.937 · 74.2
 USDC (la escala 1,5 concentra el 35 % del capital en el último escalón).
 
 **Peor caso (vista previa).** Notional **1.197,06**, margen **600,00**, media **59.437**, take profit
-≈ **60.150**, liquidación estimada **30.016** (−62 %).
+≈ **60.150**, liquidación estimada **31.204** (−60,5 %).
 
 ### Configuración C — «SOL con rejilla ancha y recompras frecuentes»
 
@@ -221,16 +217,15 @@ estimada **57,44** (−58,5 %). Ventas del peor caso desde 115,45 (2,461 SOL cad
 - [ ] ¿Descuento de recompra **<** separación inicial de venta?
 - [ ] ¿`% del núcleo × ventas = 100`?
 - [ ] ¿Cada venta de rejilla ≥ 20 USDC? (núcleo × % ≥ mínimo del par)
-- [ ] ¿Sé que `Take profit (%)` y `Modo de take profit` de la escalera **no gobiernan ninguna orden** aquí? (F-12)
-- [ ] ¿He decidido si quiero **modo clásico** mientras F-82/F-89 estén abiertos?
+- [ ] ¿Sé que `Take profit (%)` y `Modo de take profit` de la escalera **no gobiernan ninguna orden** aquí? (la vista previa ya pinta el TP del satélite)
+- [ ] ¿He decidido si quiero **modo clásico** (una martingala con TP satélite, sin rejilla de ventas)?
 - [ ] ¿`Espera entre ciclos` (no «Espera tras ciclo completo», que está muerta) fijada al crear?
 
 ### Señales de alarma cuando ya está funcionando
 
 | Lo que ves | Qué significa | Qué hacer |
 |---|---|---|
-| La nota dice menos «seguridades pendientes» de las que deberían quedar, tras varias recompras | F-82: las recompras han borrado seguridades | Considera pasar a modo clásico en el siguiente ciclo |
-| `Núcleo 0,0003, satélite 0` durante días sin `CYCLE_CLOSED` | Polvo del núcleo por debajo del mínimo (F-89) | Ciérralo a mano en el exchange |
+| `Núcleo 0,0003, satélite 0` durante días sin `CYCLE_CLOSED` | Un resto por debajo del paso de cantidad del venue, que ninguna orden puede vender | Ciérralo a mano en el exchange |
 | `ORDER_UNVIABLE` en las ventas de rejilla | Núcleo / ventas por debajo del mínimo | Menos ventas o más capital |
 | Cada vuelta de la rejilla reduce el núcleo | Descuento > separación | Baja el descuento (en caliente) |
 | `ADD_SAFETY_SKIPPED` tras «Adelantar seguridad» | El exchange no aceptó la seguridad manual | Mira el evento anterior y repite si procede |
@@ -242,10 +237,10 @@ estimada **57,44** (−58,5 %). Ventas del peor caso desde 115,45 (2,461 SOL cad
 
 | Campo | Realidad |
 |---|---|
-| **Take profit (%)** (`takeProfitPct`, heredado de la escalera) | ⚠️ **No gobierna ninguna orden.** La salida cotidiana es el TP satélite y la rejilla. El campo sigue en la validación y **la vista previa pinta un TP con él** que el bot no colocará (F-12). |
+| **Take profit (%)** (`takeProfitPct`, heredado de la escalera) | ⚠️ **No gobierna ninguna orden.** La salida cotidiana es el TP satélite y la rejilla. El campo sigue en la validación; la vista previa pinta el TP del satélite, el único que existe (F-12). |
 | **Modo de take profit** (`tpMode`) | ⚠️ **Muerto**: las salidas de GridMart son siempre LIMIT. |
 | **Espera tras ciclo completo** (`fullCycleCooldownMinutes`) | ⚠️ **Muerto**: ningún código lo lee. La espera que se aplica es **Espera entre ciclos** (`cooldownMinutes`). |
-| **Espera entre ciclos** (`cooldownMinutes`) | ✅ Sí, y en caliente: el valor vigente se aplica al cerrar el siguiente ciclo. Ojo: los valores de fábrica de GridMart lo dejan en **0** mientras el campo muerto enseña 1 (F-94). |
+| **Espera entre ciclos** (`cooldownMinutes`) | ✅ Sí, y en caliente: el valor vigente se aplica al cerrar el siguiente ciclo. Ojo: los valores de fábrica de GridMart lo dejan en **0** mientras el campo muerto enseña 1 (cambiar un valor de fábrica es decisión del usuario; F-94). |
 | **Tope de exposición** (`maxNotionalCap`) | ✅ Sí: corta la escalera en el escalón en que el notional proyectado alcanza el tope; no toca la rejilla ni las recompras anotadas. |
 | **Capital asignado** | ✅ Techo real de la escalera. |
 
@@ -257,30 +252,10 @@ cuenta.
 ## 5. Limitaciones conocidas (hallazgos abiertos)
 
 Confirmadas en `specs/001-revision-integral/findings.md`, abiertas a 2026-09-06. Además de las de la
-[martingala](./martingale.md#5-limitaciones-conocidas-hallazgos-abiertos) (F-90, F-83, F-93 y F-47
-también aplican aquí):
+[martingala](./martingale.md#5-limitaciones-conocidas-hallazgos-abiertos):
 
-> ⚠️ **Limitación conocida (F-82).** Las recompras y las seguridades **comparten el espacio de índices**
-> de niveles ejecutados: cuando entra la recompra `GRID_BUY#j`, el motor marca el índice `j` como
-> ejecutado y la seguridad `SAFETY#j` **desaparece del plan** (y se cancela si estaba viva) durante el
-> resto del ciclo. Con los valores de fábrica (4 ventas, 6 seguridades), las recompras de los escalones
-> 1-3 dejan sin tender las **tres seguridades más cercanas**: la red de promediado se vacía sola.
-> **Hasta que se corrija:** vigila la nota «seguridades pendientes»; si la rejilla trabaja mucho, plantéate
-> el modo clásico.
-
-> ⚠️ **Limitación conocida (F-89).** Una venta ejecutada **en varios trozos** recompra solo el último
-> trozo (cada ejecución sobrescribe la recompra anotada). Y el reparto truncado del núcleo deja **polvo**
-> por debajo del paso de cantidad que ninguna orden desea: el ciclo puede **no cerrar nunca**, sin que
-> salte `POSITION_BELOW_MINIMUM`.
-> **Hasta que se corrija:** `% del núcleo × ventas = 100` con cantidades que no dejen resto; si ves un
-> núcleo residual sin salida, ciérralo a mano.
-
-> ⚠️ **Limitación conocida (F-12 / F-94).** `takeProfitPct`, `tpMode` y `fullCycleCooldownMinutes` no
-> gobiernan nada (§4); los valores de fábrica dejan `cooldownMinutes` a 0.
-
-> ⚠️ **Limitación conocida (F-13).** Sin «Multiplicador de distancia de venta» o «Multiplicador de
-> cantidad de venta» la API **revienta** (error 500) en la vista previa y en el plan; el formulario los
-> exige, la API no. **Hasta que se corrija:** configura desde la app.
+> ⚠️ **Limitación conocida (F-12 / F-94, decide el usuario).** `takeProfitPct`, `tpMode` y
+> `fullCycleCooldownMinutes` no gobiernan nada (§4); los valores de fábrica dejan `cooldownMinutes` a 0.
 
 ---
 
@@ -296,8 +271,8 @@ La cuenta con la que opera. **Consejo**: empieza en «Simulación», y no con es
 
 #### Par · `symbol` · ❄️ en frío
 
-Fija mínimo, paso de cantidad y apalancamiento máximo. Importa más que en otras: el núcleo dividido en
-ventas tiene que dar cantidades enteras del paso (F-89).
+Fija mínimo, paso de cantidad y apalancamiento máximo. Importa más que en otras: cada venta de la rejilla
+tiene que redondear a una cantidad válida y por encima del mínimo.
 
 #### Dirección · `direction` · ❄️ en frío · por defecto **Largo**
 
@@ -316,7 +291,7 @@ Apaga la rejilla de ventas y las recompras: queda una sola orden de cierre sobre
 objetivo del **TP satélite**, y todos los parámetros de rejilla y recompra dejan de tener efecto.
 
 **Consejo**: no se puede cambiar después. Es la forma de tener el comportamiento simple sin cambiar de
-estrategia, y hoy evita F-82 y F-89.
+estrategia.
 
 ### 6.2 La escalera (heredada de la martingala)
 
@@ -341,8 +316,8 @@ fijo. Igual que en la martingala.
 #### Take profit (%) · `takeProfitPct` · 🔥 en caliente · 0,05–50 · por defecto **1**
 
 Objetivo heredado de la escalera. ⚠️ **En GridMart no gobierna ninguna orden**: el satélite sale por el TP
-satélite y el núcleo por la rejilla. Sigue formando parte de la validación de la escalera y la vista
-previa pinta un TP con él (F-12).
+satélite y el núcleo por la rejilla. Sigue formando parte de la validación de la escalera; la vista previa
+pinta el TP del satélite (F-12).
 
 #### Tipo de orden base · `baseOrderType` · 🔥 en caliente · por defecto **A mercado**
 
@@ -450,7 +425,7 @@ liquidación. **Consejo**: a 2× cabe hasta un 50 % de caída; a 5×, solo un 20
 
 | Campo | Por defecto | ¿Lo cambio? |
 |---|---|---|
-| Modo clásico | No | 🟡 **Sí** mientras F-82/F-89 estén abiertos, si quieres simplicidad |
+| Modo clásico | No | 🟡 Sí, si quieres simplicidad |
 | Escalera (seguridades · sep. · dist. · vol.) | 6 · 1 % · 1,2 · 1,6 | Como en la martingala: cobertura 9,9 %, corta |
 | Take profit (%) / Modo de take profit | 1 % / Límite | Sin efecto aquí (F-12) |
 | Take profit satélite | 0,6 % | ✅ Déjalo, o 0,8 % |
@@ -474,7 +449,7 @@ liquidación. **Consejo**: a 2× cabe hasta un 50 % de caída; a 5×, solo un 20
 | Salida | Satélite por TP corto + núcleo por rejilla con recompras | Una, sobre el total | Una por línea comprada |
 | Mecanismos simultáneos | 4 | 2 | 1 |
 | Riesgo | Alto | Alto | Bajo |
-| Hallazgos abiertos propios | F-82, F-89 | F-90, F-83 | F-88, F-03 |
+| Hallazgos abiertos propios | F-12 / F-94 (campos sin efecto, decide el usuario) | — | F-12 (campos sin efecto) |
 
 **Elige GridMart si**: ya entiendes la martingala, esperas una caída seguida de un lateral, y quieres que
 la posición trabaje mientras espera. **Elige la martingala si**: quieres lo mismo sin la rejilla (o usa el

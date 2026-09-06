@@ -89,12 +89,7 @@ Si has puesto una **Condición de activación**, el bot **no coloca ni una orden
 
 > `Esperando a que el precio baje a 0.004.`
 
-**Una vez armado, se queda armado mientras dure el ciclo.** No vuelve a dormirse si el precio deshace el movimiento — sería apagar un bot que ya tiene inventario.
-
-> ⚠️ **Limitación conocida (F-62, abierta a 2026-09-06).** El armado se guarda en el ciclo, y **cada par
-> casado cierra un ciclo** (F-58): tras la primera vuelta completa, si el precio ha vuelto al otro lado
-> del disparador, el bot **se duerme otra vez**. **Hasta que se corrija:** usa la condición de activación
-> solo como arranque y quítala (en caliente) cuando el bot ya cotice. Ver §8.
+**Una vez armado, se queda armado mientras el bot viva** (un par casado no cierra el ciclo ni borra el armado). No vuelve a dormirse si el precio deshace el movimiento — sería apagar un bot que ya tiene inventario.
 
 ### Paso 3 — ¿Toca recotizar?
 
@@ -157,16 +152,15 @@ Esta es la parte característica. Con la configuración de fábrica y una volati
 | Coste ida y vuelta | comisión × 2 | +0,00 *(por defecto la comisión es 0)* |
 | Buffer de seguridad | fijo | +0,00 |
 | **Bruto** | | **48,50** |
-| Se aplica el techo (100) | mín(48,50 ; 100) | 48,50 |
-| Se aplica el suelo: máx(8 ; 0×2 + 8) = 8 | máx(8 ; 48,50) | **48,50 ← final** |
+| Se aplica el suelo: máx(8 ; 0×2 + 8) = 8 | máx(8 ; 48,50) | **48,50** |
 
-Y luego, **por capa**:
+Y luego, **por capa**, con el techo al final:
 
 ```
-distancia_capa = MAX( SUELO ,  diferencial × mult_distancia^capa × preset × modo_riesgo )
+distancia_capa = MAX( SUELO ,  MIN( TECHO ,  diferencial × mult_distancia^capa × preset × modo_riesgo ) )
 ```
 
-> ⚠️ **Detalle real del código**: el techo se aplica **antes** de los multiplicadores de capa y de preset. Así que la **capa 1 nunca supera el techo, pero las capas más profundas sí pueden superarlo**. Si necesitas una garantía dura de "nunca cotizo más ancho que X", usa **1 capa**.
+El techo (100 por defecto) se aplica **después** de los multiplicadores de capa, de preset y de modo de riesgo: ninguna capa cotiza más ancha que el techo, y el suelo por coste sigue mandando por debajo (la app rechaza un techo menor que el suelo). Con techo **0** no hay techo, y la app lo avisa.
 
 El **Comportamiento** (preset) multiplica igual que el perfil de la V1:
 
@@ -180,7 +174,7 @@ El **Comportamiento** (preset) multiplica igual que el perfil de la V1:
 
 Aquí la V2 es **más lista que la V1**. Antes de colocar cada capa mira cuánto hueco queda hasta el tope y:
 
-- **Usar tamaño normal hasta el máximo = No** (por defecto) → **recorta** la capa al hueco que quede.
+- **Usar tamaño normal hasta el máximo = No** (por defecto) → **recorta** la capa al hueco que quede. Si lo que queda no llega al mínimo del par, la capa no se coloca.
 - **Usar tamaño normal hasta el máximo = Sí** → **todo o nada**: o cabe entera, o no se coloca. Es lo que evita una última capa de 3 USDC que el exchange rechazaría por mínimo de orden.
 
 *(El recorte se hace sobre el **nocional en USDC**, no sobre el tamaño escrito. Con "Cantidad de moneda" el tamaño va en la base y el hueco en la quote: compararlos directamente dejaría el tope sin efecto.)*
@@ -306,7 +300,7 @@ Un bot preparado para arrancar solo cuando el precio llegue a donde tú quieres:
 | **Condición de activación** | **Cuando baje a** |
 | **Precio de disparo** | 2.600 (con ETH hoy a 3.000) |
 
-Hasta que ETH no toque 2.600, el bot no coloca ni una orden. En cuanto lo cruza, queda armado y empieza a cotizar (hoy, **hasta que cierre el primer ciclo**: F-62, §8).
+Hasta que ETH no toque 2.600, el bot no coloca ni una orden. En cuanto lo cruza, queda armado y empieza a cotizar, y sigue armado aunque ETH vuelva a 2.700.
 
 ### Checklist antes de arrancar
 
@@ -371,7 +365,7 @@ Sí funcionan, aplicados por el motor: **Stop loss** (orden condicional nativa e
 
 Ajusta distancia y tamaño a la vez: Conservador (×1,5 distancia, ×0,7 tamaño), Equilibrado (×1, ×1), Agresivo (×0,7, ×1,3).
 
-Se aplica **después** del techo del spread dinámico: un preset Conservador puede llevar la cotización por encima del techo que fijaste.
+El techo del spread dinámico se aplica **después** de este multiplicador: un preset Conservador nunca lleva la cotización por encima del techo que fijaste.
 
 #### Tamaño por compra/venta · `orderSizePerSide` · 🔥 en caliente · mínimo 1
 
@@ -413,7 +407,7 @@ El espejo. Simétricas si quieres neutralidad de verdad.
 
 Suelo duro absoluto. **Compite con el suelo calculado** (`comisión × 2 + margen mínimo`): **manda el más alto de los dos**.
 
-> ⚠️ A diferencia de la V1, aquí la app **no** comprueba que sea menor que tus distancias de compra y venta. Revísalo tú.
+> ℹ️ A diferencia de la V1, aquí no es un error que supere tus distancias de compra y venta: la app **avisa** de que las elevará hasta ahí, y de que la causa es esta distancia mínima (no la comisión ni el margen).
 
 #### Estimación de comisión · `feeEstimateBps` · 🔥 en caliente · 0–100 bps · por defecto **0**
 
@@ -423,7 +417,7 @@ Lo que te cobra el exchange **por lado**. Se cuenta **dos veces**, porque una vu
 
 Entra dos veces en la fórmula: **eleva el suelo** por debajo del cual el bot no cotiza, **y** se suma a la distancia final para que el coste ya esté cubierto.
 
-**Consejo**: ponla igual a tu **comisión real de maker** en ese exchange. Dejarla en 0 hace que el bot cotice como si operar fuese gratis, y desactiva de hecho la garantía de beneficio.
+**Consejo**: ponla igual a tu **comisión real de maker** en ese exchange. Dejarla en 0 hace que el bot cotice como si operar fuese gratis y desactiva de hecho la garantía de beneficio: la app lo **avisa** al validar (el valor de fábrica sigue siendo 0).
 
 #### Buffer de seguridad · `safetyBufferBps` · 🔥 en caliente · 0–200 bps · por defecto **0**
 
@@ -485,11 +479,11 @@ Margen fijo que se suma **siempre** a la parte dinámica, haya volatilidad o no.
 
 **Techo**: impide que un pico puntual mande la cotización tan lejos que deje de ejecutarse durante horas.
 
-Se aplica **al total**, no solo a la parte dinámica — capar solo un sumando no cumpliría la promesa de "nunca cotizo más ancho de X".
+Se aplica **al total y por capa**, después de los multiplicadores de nivel, de preset y de modo de riesgo: ninguna capa cotiza más ancha que esto. Capar solo un sumando, o solo la capa 1, no cumpliría la promesa de "nunca cotizo más ancho de X".
 
 > ⚠️ Dos matices reales del código:
-> 1. Se aplica **antes** de los multiplicadores de nivel y de preset, así que **los niveles profundos y los presets Conservador pueden superarlo**. Para una garantía dura, usa **1 nivel** y preset Equilibrado.
-> 2. **Tiene que quedar por encima del suelo calculado** (`comisión × 2 + margen mínimo`), o la app **rechaza** la configuración: el bot no podría cotizar con beneficio.
+> 1. **Tiene que quedar por encima del suelo calculado** (`comisión × 2 + margen mínimo`), o la app **rechaza** la configuración: el bot no podría cotizar con beneficio.
+> 2. Con **0** no hay techo; la app lo avisa al validar.
 
 ### 5.4 Tiempos
 
@@ -541,7 +535,7 @@ Cuánto crece cada nivel respecto del anterior. Por encima de 1 los lejanos muev
 
 Qué hacer con el último nivel cuando ya no cabe entero dentro del tope:
 
-- **No** (por defecto) → se **recorta** al hueco que quede.
+- **No** (por defecto) → se **recorta** al hueco que quede; si el recorte deja la capa por debajo del **mínimo del par**, no se coloca (antes salía y el exchange la rechazaba en cada recotización).
 - **Sí** → **todo o nada**: se coloca completo o no se coloca.
 
 **Consejo**: **actívalo** en pares con mínimos de orden altos, donde una capa recortada quedaría por debajo del mínimo y el exchange la rechazaría.
@@ -616,7 +610,7 @@ Por encima de este precio el bot **solo reduce, no abre**: desactiva el lado que
 
 **Sin condición** · **Cuando suba a** · **Cuando baje a**.
 
-Con una condición puesta, el bot **no coloca ni una orden** hasta que el precio cruce el disparador. Una vez armado se queda armado **mientras dure el ciclo**: hoy el armado se pierde al cerrarse un ciclo, y como cada par casado cierra uno, el bot puede volver a dormirse tras su primera vuelta si el precio ha retrocedido (F-62, §8).
+Con una condición puesta, el bot **no coloca ni una orden** hasta que el precio cruce el disparador. Una vez armado se queda armado **mientras el bot viva**: un par casado no cierra el ciclo ni borra el armado. Parar y volver a arrancar el bot sí vuelve a evaluar la condición.
 
 #### Precio de disparo · `activationPrice` · 🔥 en caliente · obligatorio si hay condición
 
@@ -650,7 +644,7 @@ La cuenta con la que opera (real, pruebas o simulación). El simulador es algo o
 
 #### Par · `symbol` · ❄️ en frío
 
-Fija tick, paso y mínimo. Con el preset Conservador el tamaño baja al 70 %: vigila el mínimo (F-57).
+Fija tick, paso y mínimo. Con el preset Conservador el tamaño baja al 70 % y la vista previa ya lo enseña así: si una capa cae por debajo del mínimo, la vista previa no es válida.
 
 #### Capital asignado · `totalInvestment` · 🌤️ en tibio · mínimo 10 · ⚠️ campo de riesgo
 
@@ -725,36 +719,6 @@ En una línea:
 
 ## 8. Limitaciones conocidas (hallazgos abiertos)
 
-Confirmadas en `specs/001-revision-integral/findings.md`, abiertas a 2026-09-06. Además de las que la V2
-comparte con la V1 ([F-57, F-58, F-34, F-55/F-47](./market-maker.md#7-limitaciones-conocidas-hallazgos-abiertos)):
+Confirmadas en `specs/001-revision-integral/findings.md`, abiertas a 2026-09-06. Además de la que la V2
+comparte con la V1 ([F-54](./market-maker.md#7-limitaciones-conocidas-hallazgos-abiertos)):
 
-> ⚠️ **Limitación conocida (F-60).** El **Spread dinámico máximo** se aplica al diferencial compuesto
-> **antes** de los multiplicadores de capa, de preset y de modo de riesgo (§2, paso 5): con techo 100 bps,
-> el preset Conservador cotiza a 150, el modo defensivo ×1,5, ambos 225, y tres niveles con multiplicador
-> 1,5 llegan a 337,5. Y `0` desactiva el techo en silencio. **Hasta que se corrija:** el techo solo es una
-> garantía dura con **1 nivel y preset Equilibrado**; no lo pongas a 0.
-
-> ⚠️ **Limitación conocida (F-15).** **Estimación de comisión** viene a **0** de fábrica: un bot creado a
-> mano cotiza «como si operar fuese gratis» y toda la garantía de beneficio queda en el Margen mínimo. El
-> asistente de creación sí pone 2 bps, así que un bot manual y uno del asistente no se comportan igual.
-> **Hasta que se corrija:** ponla siempre a tu comisión real.
-
-> ⚠️ **Limitación conocida (F-62).** El armado de la **Condición de activación** se pierde al cerrarse un
-> ciclo (cada par casado cierra uno): el bot puede dormirse tras su primera vuelta si el precio retrocedió.
-> **Hasta que se corrija:** quita la condición (en caliente) cuando el bot ya cotice.
-
-> ⚠️ **Limitación conocida (F-61).** La volatilidad se recalcula en cada revisión sobre la ventana podada
-> y **mueve los precios sin recotizar**: en las revisiones intermedias se cancelan y reponen todas las
-> capas; en tendencia, hasta el doble de churn del previsto.
-
-> ⚠️ **Limitación conocida (F-63).** Con **Usar tamaño normal hasta el máximo** desactivado (fábrica), el
-> recorte de la última capa al hueco disponible puede dejar restos por debajo del mínimo del par: un
-> `ORDER_UNVIABLE` cada 30 s y una capa que nunca sale. **Hasta que se corrija:** actívalo en pares con
-> mínimos altos.
-
-> ⚠️ **Limitación conocida (F-13).** «Distancia para reajustar precio» a 0 pasa la validación y recotiza
-> en cada revisión. **Hasta que se corrija:** no lo pongas a 0.
-
-> ⚠️ **Limitación conocida (F-64 / P-01).** Al copiar un bot del ranking a **otro par**, el «Símbolo de
-> origen alternativo» y los once campos de precio absoluto (piso, techo, disparo…) viajan intactos.
-> **Hasta que se corrija:** revísalos al copiar.

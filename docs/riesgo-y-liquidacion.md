@@ -27,29 +27,29 @@ Antes de que exista posición, la app y la API estiman la liquidación con la f�
 
 ```
 LARGO : liquidación ≈ precio_medio × (1 − 1/apalancamiento + 0,005)
-CORTO : liquidación ≈ precio_medio × (1 + 1/apalancamiento − 0,005)
+CORTO : liquidación ≈ precio_medio × (1 + 1/apalancamiento − mmr)
 
-distancia ≈ 1/apalancamiento − 0,005          (en fracción; × 100 para el %)
+distancia ≈ 1/apalancamiento − mmr          (en fracción; × 100 para el %)
 ```
 
-El `0,005` es la **tasa de margen de mantenimiento** (0,5 %), la habitual en los tramos bajos de los
-perpetuos que soportamos. Traducido a una tabla:
+`mmr` es la **tasa de margen de mantenimiento del mercado**: la mitad del margen inicial a su
+apalancamiento máximo (BTC a 40× en Hyperliquid → 1,25 %; ETH a 25× → 2 %; DOGE a 10× → 5 %). Lighter
+publica la suya y la ficha del mercado la trae. Traducido a una tabla, con BTC en Hyperliquid (1,25 %):
 
 | Apalancamiento | Distancia estimada a la liquidación | Lectura |
 |---|---|---|
-| 1× | ≈ 99,5 % | En la práctica, sin liquidación: el precio tendría que irse a cero |
-| 2× | ≈ 49,5 % | El precio tiene que moverse a la mitad |
-| 3× | ≈ 32,8 % | |
-| 5× | ≈ 19,5 % | Ya es una caída «normal» de una altcoin en una semana mala |
-| 10× | ≈ 9,5 % | Un día volátil |
-| 18× | ≈ 5,1 % | El **máximo que la API acepta** (ver §4) |
-| 20× | ≈ 4,5 % | La API lo rechaza |
+| 1× | ≈ 98,8 % | En la práctica, sin liquidación: el precio tendría que irse a cero |
+| 2× | ≈ 48,8 % | El precio tiene que moverse a la mitad |
+| 3× | ≈ 32,1 % | |
+| 5× | ≈ 18,8 % | Ya es una caída «normal» de una altcoin en una semana mala |
+| 10× | ≈ 8,8 % | Un día volátil |
+| 16× | ≈ 5,0 % | El **máximo que la API acepta en BTC** (ver §4) |
+| 17× | ≈ 4,6 % | La API lo rechaza |
 
-> ⚠️ **Es una estimación, y es optimista.** El exchange aplica una escala de margen de mantenimiento
-> **por tramos**: cuanto mayor es la posición, mayor la tasa, y en altcoins puede ser bastante más del
-> 0,5 %. Con DOGE a 5× en largo, la fórmula da −19,5 % y el venue puede liquidar sobre −15 %. Por eso
-> la app etiqueta el número como «estimación» y **en cuanto hay posición abierta manda el precio de
-> liquidación que devuelve el venue**, no este.
+> ⚠️ **Sigue siendo una estimación.** El exchange aplica una escala de margen de mantenimiento **por
+> tramos**: cuanto mayor es la posición, mayor la tasa; la ficha usa el tramo más bajo. Por eso la app
+> etiqueta el número como «estimación» y **en cuanto hay posición abierta manda el precio de liquidación
+> que devuelve el venue**, no este.
 
 Cuando el bot ya tiene posición, todas las pantallas enseñan la distancia calculada por la API una sola
 vez con el precio de liquidación **real** del exchange y el precio de marca del último snapshot.
@@ -64,14 +64,10 @@ vez con el precio de liquidación **real** del exchange y el precio de marca del
 | **Cruzado** (`CROSS`) | Toda la caja libre de la cuenta, repartida entre las posiciones abiertas en proporción a su notional | Llega **más lejos** | Una posición perdedora **arrastra el saldo de los demás bots de esa cuenta** |
 
 El modo es ❄️ **en frío**: no se puede cambiar con el bot creado. Ojo con los valores de fábrica:
-**Rejilla neutral, Market Maker y Market Maker V2 vienen en cruzado**; las otras cuatro en aislado.
-
-> ⚠️ **Limitación conocida (F-14, abierta a 2026-09-06).** La vista previa estima la liquidación
-> **siempre con la fórmula aislada y siempre para el caso largo**, aunque el bot sea cruzado o neutral.
-> Para un bot cruzado el número es conservador (la real queda más lejos); para uno neutral, solo ves la
-> liquidación del lado largo.
-> **Hasta que se corrija:** léelo como cota, y en un bot neutral piensa que el lado corto tiene su propia
-> liquidación simétrica. Estado: `specs/001-revision-integral/findings.md` § F-14.
+**Rejilla neutral, Market Maker y Market Maker V2 vienen en cruzado**; las otras cuatro en aislado. La vista
+previa te lo recuerda: en cruzado avisa de que la liquidación estimada es una **cota** (la real depende del
+saldo de toda la cuenta y de las demás posiciones), y en la rejilla neutral enseña la liquidación del lado
+largo y, en un aviso, la del lado corto.
 
 ---
 
@@ -91,10 +87,12 @@ La barra **satura al 40 %**: por encima de eso la distancia deja de ser informac
 **La regla del 5 %.** Al crear o editar un bot, la API calcula la distancia estimada con la fórmula de §2
 y **rechaza la configuración si queda por debajo del 5 %** ([`risk.service.ts:86-93`](../apps/api/src/modules/risk/risk.service.ts)):
 
-> «A 20× la liquidación llega con un movimiento adverso de solo 4,5 %. Baja el apalancamiento.»
+> «A 17× la liquidación estimada llega con menos del 5 % de movimiento adverso en BTC: el máximo aquí es 16×.»
 
-Con la tasa del 0,5 %, eso deja el **apalancamiento máximo real en 18×**, aunque el formulario admita
-hasta 50× y el par lo permita. No es un fallo del formulario: es la red de la cuenta.
+El tope depende de la tasa de mantenimiento del par: 16× en BTC de Hyperliquid (1,25 %), 14× en ETH
+(2 %), 10× en DOGE (5 %). El formulario aplica **la misma regla con la misma tasa** y te dice el tope de
+ese mercado antes de crear el bot; la API la repite al guardar. No es un fallo del formulario: es la red
+de la cuenta.
 
 **Recomendación de la casa:** 1× o 2× en todo lo que retenga inventario (rejillas, DCA, escaleras) y
 nunca por encima de 3× en las estrategias que promedian a la baja (la propia app avisa en el DCA
@@ -156,11 +154,11 @@ estas tres coletillas:
 
 Un bot pausado sigue latiendo: mira su posición y avisa de la liquidación, pero no toca el libro.
 
-> ⚠️ **Dos semánticas que conviene saber (F-11 y F-43, abiertas a 2026-09-06).** El «kill-switch por
-> caída» mide la **pérdida acumulada sobre el capital asignado**, no la caída desde el máximo del bot; y
-> la «pérdida diaria» de la cuenta y la del bot cortan el día en medianoches distintas (API y worker).
-> **Hasta que se corrija:** trátalos como topes de pérdida absoluta, no como *drawdown* clásico.
-> Estado: `specs/001-revision-integral/findings.md` § F-11, § F-43.
+> ⚠️ **Una semántica que conviene saber (F-11, abierta a 2026-09-06: decide el usuario).** El
+> «kill-switch por caída» mide la **pérdida acumulada sobre el capital asignado**, no la caída desde el
+> máximo del bot. La pérdida diaria de la cuenta y la del bot cortan el día a la misma medianoche, la de
+> tu zona horaria. **Hasta que se decida:** trátalo como tope de pérdida absoluta, no como *drawdown*
+> clásico. Estado: `specs/001-revision-integral/findings.md` § F-11.
 
 ---
 
@@ -204,7 +202,7 @@ Lo que la vista previa llama «peor caso» es **todos los niveles ejecutados**. 
 
 | Estrategia | Peor caso (notional) | Margen en el peor caso | Lo que hay que saber |
 |---|---|---|---|
-| Rejilla clásica | **capital × apalancamiento** (todas las líneas compradas) | capital | La vista previa cuenta solo las líneas **bajo el precio actual**: enseña **la mitad** ([F-88](./grid-classic.md#5-limitaciones-conocidas-hallazgos-abiertos)). El real es el doble. |
+| Rejilla clásica | **capital × apalancamiento** (todas las líneas compradas) | capital | La vista previa cuenta **todas** las líneas: basta con que el precio suba por encima del rango y lo recorra entero hacia abajo. |
 | Rejilla neutral | capital × apalancamiento en **un** lado (largo si cae, corto si sube) | capital | `Exposición máxima` es el freno que corta antes. |
 | DCA temporizado | `importe × compras máximas × apalancamiento` | `importe × compras máximas` (≤ capital, la app lo exige) | Un DCA que dura días paga **funding** todo ese tiempo (§9). |
 | Martingala | Σ de los escalones = **capital × apalancamiento** | capital | `Tope de exposición` corta la escalera en el escalón en que se alcanza. El último escalón suele ser el mayor de todos. |
@@ -223,7 +221,7 @@ con inventario— puede ser el mayor componente del resultado.
 
 **Hasta que se modele:** mira la tasa de financiación del par en la web del exchange antes de dejar un
 bot con inventario varios días, y cuenta con ella al fijar el take profit.
-Estado: `specs/001-revision-integral/findings.md` § F-94.
+Estado: sin spec que lo modele; anotado en `specs/001-revision-integral/findings.md` § F-94.
 
 ---
 
@@ -231,11 +229,11 @@ Estado: `specs/001-revision-integral/findings.md` § F-94.
 
 | Id | Qué | Hasta que se corrija |
 |---|---|---|
-| F-93 | Tasa de mantenimiento plana del 0,5 % en la estimación: 4-5 puntos optimista en altcoins | Resta cinco puntos a la distancia estimada en altcoins |
-| F-14 | Preview siempre aislado y siempre largo | Léelo como cota; el venue manda con posición |
-| F-11 / F-43 | Kill-switch = pérdida acumulada, no caída desde máximo; medianoches distintas | Trátalos como topes absolutos |
-| F-05 / F-70 | En Lighter y Aster una **liquidación del exchange** puede entrar como una ejecución normal o descartarse: el bot cree seguir en posición | Si el semáforo llegó al rojo, comprueba la posición en el venue |
+| F-11 | Kill-switch = pérdida acumulada, no caída desde máximo (decisión de producto pendiente) | Trátalo como tope absoluto |
 
 El spec `009-protecciones-y-cierre` (septiembre de 2026) corrigió el orden de «Parar y cerrar» (F-33),
 la recolocación del stop (F-35), el mínimo al disparo (F-91), la acotación de `stopLossPct` y
-`maxDailyLossPct` en la API (parte de F-13) y dos fallos de contabilidad de órdenes (F-36, F-37).
+`maxDailyLossPct` en la API (parte de F-13) y dos fallos de contabilidad de órdenes (F-36, F-37). El spec
+`019-validacion-y-parametros-muertos` cerró el resto de F-13 (la API acota lo que el formulario acota), la
+tasa de mantenimiento por mercado (F-93), el tope de apalancamiento explicado (F-44), el doble cómputo del
+propio bot al editarlo (F-42) y la medianoche de la pérdida diaria (F-43).

@@ -129,13 +129,14 @@ Los nueve avisos que acompañan **siempre** al resultado, y que hay que leer ant
 Y lo que queda fuera a propósito por diseño: la persistencia, los leases, los comandos manuales, el
 cortacircuitos por colocaciones fallidas y las guardas que dependen de otras posiciones.
 
-> ⚠️ **Limitación conocida (F-65, abierta a 2026-09-06).** El replay planifica **una vez por vela** y el
-> precio de referencia es la propia serie. Para los **market makers** eso deja sin sentido el refresco, la
-> espera tras ejecución y la ventana de volatilidad (una V2 «de fábrica» en velas de 5 minutos cotiza en
-> vela alterna y sin volatilidad medida), y para la **rejilla neutral** no reproduce la banda muerta
-> ([F-81](./neutral-grid.md#5-limitaciones-conocidas-hallazgos-abiertos)) y **sobreestima** las
-> ejecuciones. Para rejilla clásica, DCA, martingala y GridMart la reconstrucción es fiel a la mecánica.
-> **Hasta que se corrija:** no dimensiones un market maker ni una rejilla neutral con el backtest.
+> ℹ️ **Lo que el replay no reproduce de un market maker, y sus avisos lo dicen.** Se recotiza **una vez por
+> vela**: el intervalo de actualización, la espera tras ejecución y la ventana de volatilidad no se
+> reproducen, y el precio de referencia externo es la propia serie. Si «Actualizar órdenes después de» es
+> menor que la vela (la V2 de fábrica, 120 s, en velas de 5 minutos), las cotizaciones caducan en cada vela y
+> el bot cotiza en vela alterna; el aviso lo cuenta con los números de tu configuración. Para las dos
+> rejillas, DCA, martingala y GridMart la reconstrucción es fiel a la mecánica (en la neutral, una vela solo
+> puede cruzar cada línea una vez). Los rechazos del simulador al colocar una orden se **cuentan** y salen en
+> los avisos con su motivo. No dimensiones un market maker con el backtest.
 
 > ⚠️ **Nota histórica.** Hasta la corrección de F-45 (spec 004, septiembre de 2026) el simulador y el
 > backtest ejecutaban el stop-loss **en el acto** al colocarlo: cualquier backtest anterior con

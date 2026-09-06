@@ -25,10 +25,9 @@ corto si sube— y **no vuelve sola**. Sin **Exposición máxima** crece hasta a
 bot deja vivas solo las órdenes que la reducen y espera. A diferencia de la rejilla clásica, aquí también
 puedes acabar **corto** sin haberlo decidido: las ventas de arriba abren cortos cuando el precio sube.
 
-Y un segundo riesgo, menos evidente, que hoy es un hallazgo abierto: por la **banda muerta** que rodea al
-precio, una línea **se cancela justo antes de que el precio llegue a ella** si se acerca despacio
-([F-81](#5-limitaciones-conocidas-hallazgos-abiertos)). En movimientos graduales esta rejilla **apenas
-ejecuta**.
+Y un segundo riesgo, menos evidente: la línea que el precio acaba de cruzar se queda **sin orden hasta que
+el precio se aleja medio escalón** (es lo que evita recomprar encima de lo que acaba de ejecutarse). En un
+lateral muy estrecho, pegado a una sola línea, la rejilla ejecuta poco.
 
 ### Vocabulario mínimo
 
@@ -116,15 +115,14 @@ Exposición máxima.
    asignado: en una ruptura, la posición neta no puede pasar de ahí.
 2. **Pocos niveles y un rango razonable.** Cada línea tiene que superar el mínimo del par **también en el
    centro**, que es donde menos pesa con multiplicador > 1. La app rechaza el bot si alguna no cumple.
-3. **Cuenta con la banda muerta.** Con `p` de paso medio, solo se ejecutan movimientos mayores que `p/2`
-   **dentro de una revisión (15 s)** ([F-81](#5-limitaciones-conocidas-hallazgos-abiertos)). Rangos
-   estrechos con muchos niveles hacen la banda pequeña y la rejilla más viva; rangos anchos con pocos
-   niveles la hacen casi inerte.
+3. **Cuenta con la histéresis.** Una línea tendida sigue viva hasta que el precio la cruza; después queda
+   sin orden hasta que el precio se aleja `p/2` (medio paso medio) y vuelve con el lado que toque. Pasos
+   estrechos rearman antes la línea cruzada; pasos anchos tardan más en volver a cotizarla.
 4. **1× o 2×, y sabe que viene en cruzado.** El valor de fábrica es margen **cruzado**: la liquidación queda
    más lejos pero una ruptura arrastra el saldo de los otros bots de la cuenta. Aislado si quieres
    compartimentar.
-5. **No te fíes de su backtest.** El replay planifica una vez por vela y no reproduce la banda muerta: el
-   backtest de esta estrategia **sobreestima** las ejecuciones (F-65).
+5. **Su backtest es orientativo.** El replay planifica una vez por vela: dentro de una vela cada línea solo
+   puede cruzarse una vez, y el recorrido intra-vela es una hipótesis (apertura → extremos → cierre).
 
 ### Configuración A — «Neutral alrededor de un ancla clara en ETH»
 
@@ -152,8 +150,10 @@ acumulado un largo, pero el tope de **700 USDC** corta las compras antes de comp
 permitiría el apalancamiento.
 
 **Peor caso (vista previa).** La vista previa suma **los dos lados** como entradas: notional **1.596,89
-USDC**, margen **800,00**, media **2.475,42**, liquidación estimada **1.250,09** (−50 %). El peor caso real
-en una dirección son las líneas de ese lado (≈ 800 USDC de notional en largo) y, antes, el tope de 700.
+USDC**, margen **800,00**, media **2.475,42**. La liquidación estimada es la del lado largo con todas las
+compras hechas, **1.229,05** (−50,9 %), y un aviso da la del lado corto con todas las ventas hechas,
+**3.916,95** (+56,5 %). El peor caso real en una dirección son las líneas de ese lado (≈ 800 USDC de
+notional en largo) y, antes, el tope de 700.
 
 ### Configuración B — «BTC con el tope de exposición como freno principal»
 
@@ -176,7 +176,7 @@ ejecuciones del mismo lado) solo deja vivas las órdenes que la reducen. Es la f
 ancha sin que una ruptura la convierta en una posición direccional grande.
 
 **Peor caso (vista previa).** Notional **1.992,41**, margen **1.000,00**, media **78.782**, liquidación
-estimada **39.785** (−49,6 %).
+estimada del lado largo **40.026** (−49,3 %); la del lado corto, **120.215** (+52,3 %).
 
 ### Configuración C — «SOL cargando los extremos»
 
@@ -204,7 +204,7 @@ centro y quieres reservar la munición para los extremos. A cambio, con doce niv
 | Notional (USDC) | 263 | 175 | 117 | 78 | 52 | 35 | 23 | 35 | 52 | 78 | 117 | 175 |
 
 **Peor caso (vista previa).** Notional **1.199,18**, margen **600,00**, media **132,83**, liquidación
-estimada **67,08** (−51,5 %).
+estimada del lado largo **63,19** (−54,4 %); la del lado corto, **232,01** (+67,6 %).
 
 > La guía in-app propone este ejemplo con 20 niveles y multiplicador 1,8. **No es válido**: las líneas
 > centrales caen a 0,8 USDC, por debajo del mínimo de 10 USDC y de la cantidad mínima de 0,1 SOL, y la
@@ -227,7 +227,6 @@ estimada **67,08** (−51,5 %).
 |---|---|---|
 | `Tope de exposición alcanzado: solo órdenes que reducen posición.` | Ruptura hacia un lado; el freno ha actuado | Decide: esperar el retorno, recentrar (editando el ancla), o cerrar |
 | `Desvío del ancla 11,2 %: procede recentrar.` | El precio se ha ido del centro | Edita **Precio ancla** (en tibio): es la forma de recentrar; el menú ya no ofrece «Recentrar» aquí |
-| Muchos `CANCELED` de la misma línea y pocos `FILL` con el precio bajando despacio | La banda muerta cancela la línea antes de que se toque (F-81) | Menos niveles no ayudan; rango más estrecho sí (banda más pequeña) |
 | `CYCLE_CLOSED` frecuentes con recolocación de toda la retícula | La posición cruza el cero a menudo | Normal; en Lighter cuenta el cupo de peticiones |
 | `ORDER_UNVIABLE` en las líneas del centro | Con multiplicador > 1 el centro pesa poco | Baja el multiplicador o sube capital |
 
@@ -237,9 +236,9 @@ estimada **67,08** (−51,5 %).
 
 | Campo | Realidad |
 |---|---|
-| **Dirección** (`direction`) | ⚠️ **No se lee al planificar.** Largo, corto o neutral, la retícula es la misma: compras bajo el ancla y ventas encima. Solo afecta a cómo la vista previa estima la liquidación. La guía in-app promete un sesgo que no existe. |
-| **Tope de exposición** (`maxNotionalCap`) | ⚠️ **Muerto.** El freno que el motor consulta es **Exposición máxima**. |
-| **Espera entre ciclos** (`cooldownMinutes`) | ⚠️ **Muerto.** |
+| **Dirección** (`direction`) | ⚠️ **No se lee.** Largo, corto o neutral, la retícula es la misma: compras bajo el ancla y ventas encima, y la vista previa enseña las dos liquidaciones. La guía in-app promete un sesgo que no existe. |
+| **Tope de exposición** (`maxNotionalCap`) | **Sí**, como segundo tope junto a **Exposición máxima**: manda el menor de los dos. |
+| **Espera entre ciclos** (`cooldownMinutes`) | **Sí.** Al cruzar el cero se cierra el ciclo y, si hay espera, la retícula no vuelve a tenderse hasta que pase. |
 | **Recentrar si se aleja** / **Umbral para recentrar** | Solo añaden el aviso a la nota. No mueven el ancla. |
 | **Capital asignado** | ✅ Sí: es la suma de los márgenes de todas las líneas. |
 
@@ -252,33 +251,13 @@ Sí funcionan, aplicados por el motor: **Stop loss** (sobre la media y con la di
 
 Confirmadas en `specs/001-revision-integral/findings.md`, abiertas a 2026-09-06.
 
-> ⚠️ **Limitación conocida (F-81).** La banda muerta **cancela la línea justo antes de que pueda
-> ejecutarse**: una compra en 95 con paso 5 solo vive mientras el precio esté por encima de 97,5. Si el
-> precio baja gradualmente de 98 a 95, la orden desaparece en 97,5 y no vuelve hasta que el precio se aleje.
-> Solo se cobran saltos mayores que medio escalón **dentro de una revisión (~15 s)**: en la configuración
-> A, movimientos de más del 0,52 %; en la C, de más del 1,6 %. El backtest, que planifica una vez por vela,
-> **no lo reproduce y sobreestima** las ejecuciones (F-65).
-> **Hasta que se corrija:** úsala en pares y rangos donde los saltos superen la banda; no dimensiones con
-> el backtest.
+> ⚠️ **Limitación conocida (F-12, decide el usuario).** `reanchorOnDrift` solo avisa en la nota (§4):
+> recentrar sigue siendo editar el ancla. `direction` no sesga la retícula, y la app lo avisa si lo cambias.
 
-> ⚠️ **Limitación conocida (F-12).** `direction`, `maxNotionalCap` y `cooldownMinutes` no se leen;
-> `reanchorOnDrift` solo avisa (§4). **Hasta que se corrija:** el freno es `maxExposure`.
-
-> ⚠️ **Limitación conocida (F-14).** La vista previa estima la liquidación con la fórmula **aislada** aunque
-> el modo de fábrica sea **cruzado**, y solo para el lado largo aunque el bot sea neutral.
-> **Hasta que se corrija:** léela como cota; con posición manda el precio del venue.
-
-> ⚠️ **Limitación conocida (F-83).** Una ejecución **parcial** de una línea hace que el resto se cancele y
-> la línea **se recoloque entera**: hasta 1,3 veces la cantidad en esa línea.
-> **Hasta que se corrija:** líneas holgadas sobre el mínimo.
-
-> ⚠️ **Limitación conocida (F-50, solo Lighter).** Máximo 30 órdenes activas por mercado; el exceso se
-> rechaza en silencio. **Hasta que se corrija:** ≤ 30 líneas en Lighter (y cuenta el churn del cruce por
-> cero contra el cupo de 60 peticiones/min).
-
-> ⚠️ **Limitación conocida (F-94).** Al cruzar el cero cambia todo el ciclo y la retícula entera se
-> recoloca; con 200 niveles en un rango del 5 % el paso queda por debajo de una ida y vuelta maker+maker y
-> la estrategia no avisa (la clásica sí). El funding del inventario no se muestra.
+> ⚠️ **Límite conocido (F-94, aceptado).** Al cruzar el cero se cierra el ciclo y la retícula entera se
+> recoloca con ids nuevos (es el diseño: el ciclo de la neutral es una posición); con 200 niveles en un
+> rango del 5 % el paso queda por debajo de una ida y vuelta maker+maker y la estrategia no avisa (la
+> clásica sí). El funding del inventario no se muestra (riesgo §9).
 
 ---
 
@@ -301,8 +280,8 @@ del mínimo.
 
 #### Dirección · `direction` · ❄️ en frío · por defecto **Neutral**
 
-Neutral / Largo / Corto. ⚠️ **`plan()` no lo lee**: la retícula es idéntica en los tres casos. Solo cambia
-la dirección con la que la vista previa estima la liquidación. Déjalo en Neutral.
+Neutral / Largo / Corto. ⚠️ **`plan()` no lo lee**: la retícula es idéntica en los tres casos, y la vista
+previa enseña las dos liquidaciones sea cual sea el valor. Déjalo en Neutral.
 
 #### Capital asignado · `totalInvestment` · 🌤️ en tibio · mínimo 10 · ⚠️ campo de riesgo
 
@@ -372,7 +351,7 @@ A qué porcentaje de distancia del ancla aparece el aviso anterior. No cambia ni
 
 #### Tope de exposición · `maxNotionalCap` · 🔥 en caliente · opcional
 
-> ⚠️ **Muerto en esta estrategia** (F-12). Configura **Exposición máxima** y deja este vacío.
+Segundo tope junto a **Exposición máxima**: manda el menor de los dos. Déjalo vacío si el propio te basta.
 
 #### Stop loss (%) · `stopLossPct` · 🔥 en caliente · 0,1–90 · ⚠️ campo de riesgo
 
@@ -392,7 +371,7 @@ Solo avisar / Pausar el bot / Cerrar todo. En cruzado la liquidación del venue 
 
 #### Espera entre ciclos (min) · `cooldownMinutes` · 🔥 en caliente · 0–10080 · por defecto **0**
 
-> ⚠️ **Muerto en esta estrategia** (F-12). Al cruzar el cero la retícula se recoloca en la siguiente revisión.
+Al cruzar el cero se cierra el ciclo y, si hay espera, la retícula no vuelve a tenderse hasta que pase.
 
 ### 6.4 Exchange
 
@@ -433,8 +412,8 @@ esta rejilla no toque a los demás. No se puede cambiar después.
 | Precios | Fijos en líneas | Fijos en líneas | Siguen al precio (recotiza) |
 | Puede acabar corto sin querer | **Sí** | No (en largo) | Sí, acotado por el tope |
 | Freno | `maxExposure` | Rango + `stopOnRangeExit` | Modos defensivo/alto riesgo |
-| Reacciona a movimientos lentos | **Mal** (banda muerta, F-81) | Bien | Bien (recotiza cada 30 s) |
-| Hallazgos abiertos propios | F-81 | F-88, F-03 | F-57 |
+| Reacciona a movimientos lentos | Bien (la línea vive hasta que se cruza) | Bien | Bien (recotiza cada 30 s) |
+| Hallazgos abiertos propios | F-12 (campos sin efecto) | F-12 (campos sin efecto) | F-54 (Lighter) |
 
 **Elige la neutral si**: no quieres sesgo y el par da saltos claros alrededor de un precio reconocible.
 **Elige la clásica si**: quieres acumular o es tu primer bot. **Elige un market maker si**: el par oscila

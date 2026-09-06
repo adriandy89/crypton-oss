@@ -106,9 +106,9 @@ escala de volumen pasa de 2,5.
    es grave. Si su tamaño te asusta, baja la escala de volumen, no el número de seguridades.
 2. **1× o 2×.** A 2× cabe una escalera de hasta un 50 % de caída; a 5× solo un 20 %. Baja el
    apalancamiento antes que acortar la escalera.
-3. **Cobertura con holgura frente a la liquidación.** La app compara la cobertura con `100 / apalancamiento`
-   sin tasa de mantenimiento ([F-93](#5-limitaciones-conocidas-hallazgos-abiertos)); deja al menos cinco
-   puntos de margen: a 2×, cobertura ≤ 45 %.
+3. **Cobertura con holgura frente a la liquidación.** La app compara la cobertura con la distancia a la
+   liquidación **del mercado** (`100 / apalancamiento − mantenimiento`); deja igualmente unos puntos de
+   holgura: a 2× en BTC, cobertura ≤ 45 %.
 4. **Take profit «Límite», salvo que quieras garantizar el cierre.** «A mercado» espera al objetivo como
    orden condicional y cruza el libro al tocarlo: cierra seguro, pero paga taker y algo de deslizamiento.
 5. **El take profit tiene que pagar la ida y vuelta.** Entrada a mercado (taker) + salida maker: por debajo
@@ -145,13 +145,13 @@ Precios del 24-08-2026 (`venue-markets.ts`), Lighter, ETH a **2.503,35 USDC**.
 | S5 | 1.824,20 | 27,1 % | 194,64 | 97,32 |
 | S6 | 1.545,36 | **38,3 %** | 311,54 | 155,77 |
 
-La escalera cubre un **38,3 %** de caída; a 2× la liquidación estimada llega sobre el 49,5 %, así que se
+La escalera cubre un **38,3 %** de caída; a 2× la liquidación estimada llega sobre el 47,5 %, así que se
 agota antes de que el exchange cierre. La base mueve 18,5 USDC y el último escalón **311,5**: diecisiete
 veces más. Si ETH cae a 1.900 (cinco seguridades dentro) la media ronda 2.010 y basta un rebote del 1,2 %
 sobre ella para cerrar el ciclo completo.
 
 **Peor caso (vista previa).** Notional **799,62 USDC**, margen **400,00**, media **1.807,05**, take profit
-en **1.828,73**, liquidación estimada **912,56** (−63,5 % desde el precio actual; −49,5 % desde la media).
+en **1.828,73**, liquidación estimada **948,70** (−62,1 % desde el precio actual; −47,5 % desde la media).
 
 ### Configuración B — «BTC conservador, escalera corta»
 
@@ -178,7 +178,7 @@ crear: «El tope (2400.00) es menor que el notional del bot (2700.00): no llegar
 completa». Es deliberado: el tope recorta el escalón que más asusta.
 
 **Peor caso (vista previa, sin contar el tope).** Notional **2.696,73**, margen **900,00**, media
-**67.350,9**, take profit **68.024,4**, liquidación estimada **45.237** (−42,7 %). Con el tope, el máximo
+**67.350,9**, take profit **68.024,4**, liquidación estimada **46.584** (−41,0 %). Con el tope, el máximo
 real son ≈ 1.845 USDC de notional y 615 de margen.
 
 ### Configuración C — «DOGE agresivo, al filo de la escalera»
@@ -201,7 +201,7 @@ mueve 313 DOGE (28,8 USDT) y el último escalón 4.345 DOGE (**219 USDT**): más
 vive en ese único nivel. En Aster el paso de cantidad es 1 DOGE y el mínimo 5 USDT.
 
 **Peor caso (vista previa).** Notional **599,80**, margen **300,00**, media **0,06268**, take profit
-**0,06456**, liquidación estimada **0,03165** (−65,6 %).
+**0,06456**, liquidación estimada **0,03197** (−65,3 %).
 
 ### Checklist antes de arrancar
 
@@ -213,7 +213,7 @@ vive en ese único nivel. En Aster el paso de cantidad es 1 DOGE y el mínimo 5 
 - [ ] ¿La entrada base y la primera seguridad superan 20 USDC?
 - [ ] ¿Stop loss por debajo del último escalón (o peor caso aceptado)?
 - [ ] ¿`Espera entre ciclos` con algún minuto, para no reentrar en el mismo impulso?
-- [ ] ¿No es Lighter? (o acepto [F-47](#5-limitaciones-conocidas-hallazgos-abiertos))
+- [ ] ¿No es Lighter? (o acepto que sus ejecuciones lleguen por sondeo, hasta 12 s tarde)
 
 ### Señales de alarma cuando ya está funcionando
 
@@ -221,7 +221,7 @@ vive en ese único nivel. En Aster el paso de cantidad es 1 DOGE y el mínimo 5 
 |---|---|---|
 | `Ciclo abierto: 0 seguridades pendientes` y el precio sigue bajando | Escalera agotada | Decide: esperar (con stop), aportar margen, cerrar |
 | Muchos `CYCLE_CLOSED` con PnL ≈ 0 en pocos minutos | El take profit no cubre comisiones | Súbelo |
-| `Abriendo ciclo.` durante mucho rato sin `FILL` | La base es «Límite» y el precio se ha ido; se recoloca cada cinco minutos (o Lighter no la ejecuta, F-47) | Espera, pon «A mercado» o revisa el venue |
+| `Abriendo ciclo.` durante mucho rato sin `FILL` | La base es «Límite» y el precio se ha ido; se recoloca cada cinco minutos | Espera, pon «A mercado» o revisa el venue |
 | `ADD_SAFETY_SKIPPED` tras «Adelantar seguridad» | El exchange no aceptó la seguridad manual | Mira el evento anterior y repite si procede |
 | `ORDER_UNVIABLE` en las primeras seguridades | Tamaños por debajo del mínimo del par | Más capital o menos seguridades |
 | `LIQUIDATION_NEAR` | Vas apalancado y la caída es grande | Aporta margen o cierra parte |
@@ -246,23 +246,9 @@ liquidación**, guardas de la cuenta.
 
 Confirmadas en `specs/001-revision-integral/findings.md`, abiertas a 2026-09-06.
 
-> ⚠️ **Limitación conocida (F-90).** Cambiar el número de seguridades, la separación o las escalas (en
-> tibio) **con posición** recoloca la escalera sobre índices que ya no significan lo mismo.
-> **Hasta que se corrija:** cambia la forma solo con la posición en cero.
-
-> ⚠️ **Limitación conocida (F-83).** Una **ejecución parcial** de una seguridad marca el escalón como
-> tomado; el resto se cancela y no se repone. **Hasta que se corrija:** tamaños holgados sobre el mínimo.
-
-> ⚠️ **Limitación conocida (F-93).** La validación compara la cobertura con `100 / apalancamiento` **sin
-> tasa de mantenimiento**: los últimos escalones pueden quedar más allá de la liquidación real.
-> **Hasta que se corrija:** deja cinco puntos de holgura.
-
-> ⚠️ **Limitación conocida (F-47, solo Lighter).** La entrada base a mercado puede **no cruzar** y quedar
-> como «ejecutada» en la base. **Hasta que se corrija:** prefiere Hyperliquid o Aster.
-
-> ⚠️ **Limitación conocida (F-94).** La guía in-app mezcla margen y notional en su ejemplo (esta guía
-> imprime ambos); el mínimo de `takeProfitPct` (0,05 %) está por debajo de una ida y vuelta; el
-> **funding** de una escalera agotada esperando días no aparece en ninguna pantalla.
+> ⚠️ **Limitación conocida (F-94, decide el usuario).** El mínimo de `takeProfitPct` (0,05 %) está por
+> debajo de una ida y vuelta maker+taker; el **funding** de una escalera agotada esperando días no aparece
+> en ninguna pantalla (riesgo §9).
 
 ---
 

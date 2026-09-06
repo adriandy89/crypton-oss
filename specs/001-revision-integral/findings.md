@@ -112,7 +112,7 @@ Ordenada por severidad (Crítica → Alta → Media → Baja) y, dentro de cada 
 | F-48 | Lighter: un 429/405 en una escritura se pierde. La tupla del SDK solo trae el mensaje, «Too Many Requests!» cae en RETRYABLE y `withWriteRetry` insiste tres veces sin enfriamiento, que es justo lo que escala el corte del WAF a toda la IP | Lighter | Alta | **confirmado** (`classify-check.out.txt`, código) | `signer.js:751-755`; `lighter.ts:493-499,1104-1181`; `errors.ts:50,164-167`; `rate-limit.ts:108-113` | S |
 | F-49 | Lighter: el token de autenticación solo se escribe en las cabeceras del SDK desde `publicGet` (velas). Un adaptador de bot manda `account`, `orderBookDetails` y `orderBookOrders` **sin firmar** durante toda su vida y consume el cupo de **IP** (60/min) que el presupuesto cree repartir por cuenta; `accountActiveOrders`/`trades` llevan el token como `?auth=` cuando la doc exige la cabecera `authorization` | Lighter | Alta (por confirmar el trato del venue) | **confirmado** en código; doc citada | `lighter.ts:983-988,1011,1025,352,389-392,695-700,725-734`; `api.js:2583-2588` | S |
 | F-50 | Lighter Standard limita a **30 órdenes activas y 10 pendientes por mercado** (250/50 por cuenta); nadie lo modela y los rechazos 21717-21720 se clasifican FATAL: una retícula de más de 30 niveles nunca se completa en Lighter y el usuario opera con una escalera recortada sin saberlo | Lighter | Alta | **confirmado** (doc `rate-limits`, 2026-08-30) | `errors.ts:23-52`; `lighter.ts` (sin tope en `MarketSpec`); `grid-classic.ts:52-121` | M |
-| F-57 | Market makers: `preview()` omite `profile.size` (×0,7 en CONSERVATIVE). Una configuración válida y previsualizada puede no colocar **nada**: con tamaño en `[minNotional, minNotional/0,7)` el bot manda 8,40 por 12 previsualizados y `revisarOrden` veta las dos caras. El asistente puede generarla (150 USDC, 1×) | MM v1/v2 | Alta | **confirmado** (sonda local sobre `dist`, `informes/A-market-makers.md` §1 A-9) | `market-maker.ts:587,728`; `market-maker-v2.ts:905,1071`; `order-gate.ts:56-63`; `build.ts:441,471-473` | S |
+| F-57 | Market makers: `preview()` omite `profile.size` (×0,7 en CONSERVATIVE). Una configuración válida y previsualizada puede no colocar **nada**: con tamaño en `[minNotional, minNotional/0,7)` el bot manda 8,40 por 12 previsualizados y `revisarOrden` veta las dos caras. El asistente puede generarla (150 USDC, 1×) | MM v1/v2 | Alta | **hecho** (2026-09-06, spec 018), antes **confirmado** (sonda local sobre `dist`, `informes/A-market-makers.md` §1 A-9) | `market-maker.ts:587,728`; `market-maker-v2.ts:905,1071`; `order-gate.ts:56-63`; `build.ts:441,471-473` | S |
 | F-69 | Aster: la API crea un adaptador nuevo por petición y firma con el **mismo `signer`** que el worker; el nonce es `floor(now/1000)·10⁶ + contador por instancia`, así que las primeras peticiones de ambos procesos en el mismo segundo llevan el **mismo nonce** y el venue rechaza la segunda (`-4225`), que cae en FATAL → cuarentena por forma; si era el stop, posición sin stop hasta que cambie la forma (F-32) | Aster | Alta, candidata a Crítica (depende de F-32; la confirmación final exige una llamada firmada) | **confirmado el mecanismo** (TEST local `aster-nonce.js`: nonces idénticos en dos instancias) + DOC («already been used → rejected as a duplicate request») | `aster.ts:165-167,211-220`; `exchange-accounts.service.ts:388-450`; `bots.service.ts:466-495`; `bot-runner.ts:896-899,955-971` | S (mitigación) / M (fuente de nonce compartida) |
 | F-70 | Aster: la detección de liquidaciones busca `LIQUIDATION` en el tipo de orden, pero la doc las marca con el id `autoclose-…`/`adl_autoclose`, `x: CALCULATED` y `X: NEW_INSURANCE`/`NEW_ADL`, y su ejemplo de liquidación es `type: LIMIT`. El fill llega sin marca y con un coid ajeno, y **se descarta en silencio**: el bot cree que sigue en posición | Aster | Alta | **confirmado** (DOC L5315-5318, L3845-3859 + traza `recordFill` → `bot-runner.ts:1031`) | `aster.ts:976-999,1055-1073`; `bot-store.ts:429-441`; `bot-runner.ts:1006-1031` | S |
 | F-71 | Aster en modo cobertura (Hedge): el adaptador nunca manda `positionSide` y siempre manda `reduceOnly` en las salidas, cuando la doc exige lo primero y prohíbe lo segundo en Hedge; `positionMode: HEDGE` (opción del bot) cambia el modo de **toda la cuenta** y a partir de ahí toda orden recibe `-4061` → FATAL. Una cuenta ya en Hedge con un bot `AUTO` tampoco puede operar | Aster | Alta | **confirmado** (DOC L2471, L2475, L2295, L6056-6058; TEST classify `-4061` → FATAL) | `aster.ts:587-607,739-743,766-775,410-433`; `bot-runner.ts:438-457` | S (vetar HEDGE y forzar ONE_WAY) / M (implementar `positionSide`) |
@@ -144,14 +144,14 @@ Ordenada por severidad (Crítica → Alta → Media → Baja) y, dentro de cada 
 | F-54 | Lighter no tiene stream de cuenta: fills y órdenes se sondean cada 12 s por símbolo (`trades` pesa 600), lo que fija la capacidad real en **≈ 1 bot por IP y red** con cuenta Standard y da hasta 12 s de retraso a cada fill; el funding no se contabiliza | Lighter | Media | **confirmado** (aritmética en `informes/C-lighter.md` § C-6) | `lighter.ts:224,333-339,1370-1458`; `venue-budget.ts:84-86` | L |
 | F-55 | Lighter: mapeos que se apartan de la API: `venueOrderId` del acuse es el índice de cliente; `Order.status` (17 valores) se ignora y `type` colapsa las condicionales a `LIMIT`; `createdAt = Date.now()` (la caducidad por edad de los market makers nunca dispara); `Position.markPrice` es `last_trade_price` del catálogo (≤ 5 min); `leverage` se deriva de `initial_margin_fraction` cuyo ejemplo oficial es `"20.00"` | Lighter | Media (por confirmar unidad) | **confirmado** en código | `lighter.ts:1122,1174,1902-1922,653-662,1994-1998`; `api.d.ts:453-516` | M |
 | F-56 | Lighter: en cada reconexión `onOpen` reenvía todos los canales de golpe; el adaptador de datos de mercado con muchos gráficos supera «200 mensajes por minuto» → 30009 → desconexión → bucle | Lighter | Media (por confirmar umbral) | **confirmado** en código | `lighter.ts:1648-1652`; `market-data.service.ts:347` | S |
-| F-58 | Market makers: **cada par casado cierra el ciclo** (`cycleAfterFill` declara plana la posición): sube `cycleSeq`, cambian los `2·layers` ids, el reconciliador cancela y repone todas las capas, y se borra `quotedMid`, `lastEntryAt`, `volSamples` y `armedAt` | MM v1/v2 | Media, candidata a Alta por caudal | **confirmado** (sonda: `toCancel 6 / toPlace 6` por vuelta) | `cycle-accounting.ts:153,186-213`; `bot-store.ts:683,692`; `reconcile.ts:102-111` | M |
-| F-59 | MM v1: los topes por lado (`maxLong/ShortPosition`) son un freno mudo: `atCap`, régimen y sesgo miran solo `maxBotPositionValue`; con el tope por lado alcanzado no hay compras, ni `limitAction`, ni nota | MM v1 | Media | **confirmado** (sonda) | `market-maker.ts:703-704,710,774,809` | S |
-| F-60 | MM v2: el techo `maxDynamicSpreadBps` se aplica **antes** de capa, preset y régimen (CONSERVATIVE cotiza a 150 bps con techo 100; DEFENSIVE ×1,5; ambos 225), y `'0'` lo desactiva en silencio; la guía dice «techo duro» | MM v2 | Media | **confirmado** (sonda) | `market-maker-v2.ts:686-689,1096-1099`; guía v2 `:208`; `docs/market-maker-v2.md:164` vs `:369,486` | S |
-| F-61 | MM v2: `volBps` se recalcula en cada tick sobre el anillo podado y mueve los precios **sin recotizar**: en ticks intermedios se cancelan y reponen todas las capas (en tendencia, hasta el doble de churn); contradice su propio comentario | MM v2 | Media | **confirmado** (sonda: bid 99,0 → 99,6 sin recotizar) | `market-maker-v2.ts:1034,1045-1051,1065-1066,1100`; `mm-shared.ts:296-304` | S |
-| F-62 | MM v2: `armedAt` se pierde al cerrar ciclo: con `activationMode` el bot **se duerme tras su primera vuelta** si el precio retrocede, contra «una vez armado se queda armado para siempre» | MM v2 | Media | **confirmado** (sonda) | `mm-shared.ts:353,367`; `bot-store.ts:692`; `docs:92` | S |
-| F-63 | MM v2: `fitToRoom` (defecto `useFullSizeUntilMax: false`) deja un resto por debajo de `minNotional` que `revisarOrden` rechaza en **cada** recotización: un WARN cada 30 s y una capa prometida que nunca sale | MM v2 | Media | **confirmado** (sonda) | `market-maker-v2.ts:1109-1114,1229-1239`; `order-gate.ts:56-63` | S |
-| F-64 | Copy-trading: `toFixed(2)` produce `'0.40'`/`'0.00'` en `maxLong/ShortPosition`, que nadie valida: `longCap = 0,4` → **una cara muerta para siempre sin aviso**; y `sourceSymbolOverride` (texto) viaja tal cual: el copiador ancla su par al símbolo del autor, y con `postOnly: false` vende como taker en bucle | Copy-trading | Media (Alta con `postOnly: false`) | **confirmado** (sonda) | `share-codec.ts:75,92-97`; `market-maker.ts:703-704,774`; `market-maker-v2.ts:576-584`; `bot-runner.ts:1775-1780` | S |
-| F-65 | Backtest: huecos de paridad no declarados para los market makers: `fairPrice` es la propia serie; **un `plan()` por vela** deja sin sentido refresco, espera tras fill y ventana de volatilidad; `orderMaxAgeSeconds: 120` (defecto V2) con velas de 5 m cotiza en **vela alterna**; el encabezado promete guardas por bot que no existen; los rechazos del simulador se tragan | Backtest | Media | **confirmado** | `backtest/engine.ts:39,326-329,349-354,433`; `warnings.ts:48-49` | M |
+| F-58 | Market makers: **cada par casado cierra el ciclo** (`cycleAfterFill` declara plana la posición): sube `cycleSeq`, cambian los `2·layers` ids, el reconciliador cancela y repone todas las capas, y se borra `quotedMid`, `lastEntryAt`, `volSamples` y `armedAt` | MM v1/v2 | Media, candidata a Alta por caudal | **hecho** (2026-09-06, spec 018), antes **confirmado** (sonda: `toCancel 6 / toPlace 6` por vuelta) | `cycle-accounting.ts:153,186-213`; `bot-store.ts:683,692`; `reconcile.ts:102-111` | M |
+| F-59 | MM v1: los topes por lado (`maxLong/ShortPosition`) son un freno mudo: `atCap`, régimen y sesgo miran solo `maxBotPositionValue`; con el tope por lado alcanzado no hay compras, ni `limitAction`, ni nota | MM v1 | Media | **hecho** (2026-09-06, spec 018), antes **confirmado** (sonda) | `market-maker.ts:703-704,710,774,809` | S |
+| F-60 | MM v2: el techo `maxDynamicSpreadBps` se aplica **antes** de capa, preset y régimen (CONSERVATIVE cotiza a 150 bps con techo 100; DEFENSIVE ×1,5; ambos 225), y `'0'` lo desactiva en silencio; la guía dice «techo duro» | MM v2 | Media | **hecho** (2026-09-06, spec 018), antes **confirmado** (sonda) | `market-maker-v2.ts:686-689,1096-1099`; guía v2 `:208`; `docs/market-maker-v2.md:164` vs `:369,486` | S |
+| F-61 | MM v2: `volBps` se recalcula en cada tick sobre el anillo podado y mueve los precios **sin recotizar**: en ticks intermedios se cancelan y reponen todas las capas (en tendencia, hasta el doble de churn); contradice su propio comentario | MM v2 | Media | **hecho** (2026-09-06, spec 018), antes **confirmado** (sonda: bid 99,0 → 99,6 sin recotizar) | `market-maker-v2.ts:1034,1045-1051,1065-1066,1100`; `mm-shared.ts:296-304` | S |
+| F-62 | MM v2: `armedAt` se pierde al cerrar ciclo: con `activationMode` el bot **se duerme tras su primera vuelta** si el precio retrocede, contra «una vez armado se queda armado para siempre» | MM v2 | Media | **hecho** (2026-09-06, spec 018), antes **confirmado** (sonda) | `mm-shared.ts:353,367`; `bot-store.ts:692`; `docs:92` | S |
+| F-63 | MM v2: `fitToRoom` (defecto `useFullSizeUntilMax: false`) deja un resto por debajo de `minNotional` que `revisarOrden` rechaza en **cada** recotización: un WARN cada 30 s y una capa prometida que nunca sale | MM v2 | Media | **hecho** (2026-09-06, spec 018), antes **confirmado** (sonda) | `market-maker-v2.ts:1109-1114,1229-1239`; `order-gate.ts:56-63` | S |
+| F-64 | Copy-trading: `toFixed(2)` produce `'0.40'`/`'0.00'` en `maxLong/ShortPosition`, que nadie valida: `longCap = 0,4` → **una cara muerta para siempre sin aviso**; y `sourceSymbolOverride` (texto) viaja tal cual: el copiador ancla su par al símbolo del autor, y con `postOnly: false` vende como taker en bucle | Copy-trading | Media (Alta con `postOnly: false`) | **hecho** (2026-09-06, spec 018), antes **confirmado** (sonda) | `share-codec.ts:75,92-97`; `market-maker.ts:703-704,774`; `market-maker-v2.ts:576-584`; `bot-runner.ts:1775-1780` | S |
+| F-65 | Backtest: huecos de paridad no declarados para los market makers: `fairPrice` es la propia serie; **un `plan()` por vela** deja sin sentido refresco, espera tras fill y ventana de volatilidad; `orderMaxAgeSeconds: 120` (defecto V2) con velas de 5 m cotiza en **vela alterna**; el encabezado promete guardas por bot que no existen; los rechazos del simulador se tragan | Backtest | Media | **hecho** (2026-09-06, spec 022: avisos propios del market maker, guardas sin promesas, rechazos contados; la cadencia real queda fuera con razón anotada), antes **confirmado** | `backtest/engine.ts:39,326-329,349-354,433`; `warnings.ts:48-49` | M |
 | F-72 | Aster: el ticker por WebSocket pone `mark = mid` del `bookTicker` aunque el venue publica `<symbol>@markPrice@1s`; entre ticks y en los cierres de pánico las guardas ven el punto medio (hermano de F-25; el REST sí trae la marca) | Aster | Media | **confirmado** (DOC L1821-1843) | `aster.ts:807-815`; `bot-runner.ts:476-480,1052,1958-1962,2067` | S |
 | F-73 | Aster: el evento `listenKeyExpired` se ignora: el socket queda abierto y mudo hasta el corte de 24 h, `fillsHealthy` no cambia y solo el barrido REST recoge fills | Aster | Media | **confirmado** (DOC L5175-5181) | `aster.ts:940-947,957`; `bot-runner.ts:1194-1200` | S |
 | F-74 | Aster: `userTrades` se pide con `startTime` sin `endTime`; la doc limita la ventana a 7 días (`-1127`). Un bot sin ejecución propia en 7 días deja el barrido REST (la red cuando cae el stream) devolviendo error o una ventana vacía, con un WARN como único aviso | Aster | Media (Alta si el servidor rechaza) | por confirmar con llamada firmada (DOC L3685-3686, L5754-5757) | `aster.ts:554-559`; `bot-runner.ts:463,1003-1005,1163-1177` | S |
@@ -175,10 +175,11 @@ Ordenada por severidad (Crítica → Alta → Media → Baja) y, dentro de cada 
 | F-40 | Un fallo de Redis al cachear cuenta como fallo de la fuente de precio externa | Motor | Baja | confirmado | `price-source.service.ts:289-296` | S |
 | F-41 | `AUDIT_LOG_ENABLE` vale `false` en el compose y `true` en `.env.example`: en el despliegue por defecto, «se sueltan todos los bots» solo existe en stdout | Despliegue | Baja | confirmado | `docker-compose.yml:261`; `apps/worker/.env.example:95`; `lease.service.ts:227-233` | S |
 | F-43 | La pérdida diaria que la API comprueba al arrancar corta el día a la medianoche **del servidor**, mientras el worker la corta a la del usuario: dos límites «diarios» con dos días distintos | API | Baja | **confirmado** | `risk.service.ts:161-170`; `bot-store.ts:78-115` | S |
-| F-66 | La app previsualiza con `ticker.last` y la API con `ticker.mark` (en Lighter son precios distintos): cerca del mínimo con `sizingMode: BASE` el panel y el servidor pueden discrepar; `PreviewBotDto` admite `refPrice` y la app no lo manda | App / API | Baja | **confirmado** | `bot-create.page.ts:345-350,1082-1092`; `bots.service.ts:165-166,1396-1424` | S |
-| F-67 | Market makers, textos y menores: `referencePrice` «la app avisa» (no hay aviso), `direction` «deshace la contraria» (no lo hace), `VENUE_MARK ≡ VENUE_MID` en Hyperliquid, aviso de suelo con causa equivocada, `share-codec.spec.ts` no barre `MARKET_MAKER_V2`, `venue-markets` (fixtures) exportado al bundle del navegador | MM / docs | Baja | confirmado | `informes/A-market-makers.md` MM-12, MM-13, MM-16, P-03, P-07 | S |
+| F-66 | La app previsualiza con `ticker.last` y la API con `ticker.mark` (en Lighter son precios distintos): cerca del mínimo con `sizingMode: BASE` el panel y el servidor pueden discrepar; `PreviewBotDto` admite `refPrice` y la app no lo manda | App / API | Baja | **hecho** (2026-09-06, spec 023, commit `5c6b6ba`: la app manda `refPrice` con el precio con el que pintó la escalera; no recibe la marca en lote, y al crear el bot el servidor sigue usando la marca), antes **confirmado** | `bot-create.page.ts:345-350,1082-1092`; `bots.service.ts:165-166,1396-1424` | S |
+| F-67 | Market makers, textos y menores: `referencePrice` «la app avisa» (no hay aviso), `direction` «deshace la contraria» (no lo hace), `VENUE_MARK ≡ VENUE_MID` en Hyperliquid, aviso de suelo con causa equivocada, `share-codec.spec.ts` no barre `MARKET_MAKER_V2`, `venue-markets` (fixtures) exportado al bundle del navegador | MM / docs | Baja | **hecho** (2026-09-06, spec 018), antes **confirmado** | `informes/A-market-makers.md` MM-12, MM-13, MM-16, P-03, P-07 | S |
 | F-79 | Aster, menores: `ASSUMED_MAX_LEVERAGE = 50` (F-09); respaldo `/fapi/v1/klines` no documentado y disparado por cualquier error no reintentable; `price ''` descartado en silencio; `-4047/-4048` en `marginType` abortan también `leverage`; comentario «solo modificar en lote» falso (`PUT /fapi/v3/order` existe); `EXPIRED_IN_MATCH` sobrante; `Ticker.last` = mid; `used` incluye `crossUnPnl`; `ACCOUNT_UPDATE` y `MARGIN_CALL` ignorados | Aster | Baja | confirmado | `aster.ts:82,517-535,597,702-720`; `informes/C-aster.md` AS-12…AS-15, AS-18 | S |
 | F-94 | Grids, menores: etiquetas `GRID_BUY/GRID_SELL` invertidas en SHORT (Grid Classic, GridMart); banda aritmética con espaciado GEOMETRIC y recolocación entera al pasar exactamente por cero (Neutral Grid); la guía de Martingale mezcla margen y notional; cobertura frente a liquidación sin MMR; `defaults()` de GridMart deja `cooldownMinutes` a 0 con el campo muerto a 1; TDCA compara `lastEntryAt` del venue con `ctx.now`; `targetLeverage` sin consumidor; `QTY_EPSILON` y `MAX_LEVEL_INDEX` documentales; `testing.ts:15-19` desfasado; mínimos de `takeProfitPct` por debajo de una ida y vuelta; funding ausente en toda la documentación | Grids / docs | Baja | confirmado | `informes/A-grids.md` §9 «Bajas» | S |
+| F-95 | La fila de `markets` no guardaba los campos del venue que `MarketSpec` ganó en los specs 013, 014, 019 y 023 (`maxActiveOrders`, `maxSignificantDigits`, `maintenanceMarginRate`, `maxMarketQty`): la API, el motor y la app construyen el mercado desde esa fila, así que las cuatro correcciones se quedaban en el adaptador (F-04 seguía vivo en el motor para Hyperliquid) | Mercados | Alta | **hecho** (2026-09-06, spec 024, commit `6199b8e`), hallado en el spec 023 | `markets.service.ts`, `bot-store.ts:marketSpec`, `market-spec.ts` | S |
 
 Semillas menores que se revisan dentro de sus ítems A/B/C sin ficha propia hasta que se confirmen:
 `QTY_EPSILON` absoluto (`cycle-accounting.ts:42`); `MAX_LEVEL_INDEX = 512` frente a 500 compras de
@@ -221,7 +222,7 @@ cada máquina (aquí `true`) pese a que `.editorconfig` pide LF.
 - **Impacto**: cancelar y recolocar la retícula entera con cada movimiento apreciable del precio: pérdida de prioridad en el libro, consumo de caudal y de cupo de órdenes, y una escalera que no es la que se enseñó. Solo en modo BASE (el defecto es QUOTE).
 - **Reproducción / test**: `strategies.spec.ts`: dos `plan()` con marks distintos y `sizingMode = BASE` deben producir las mismas cantidades. Hoy falla.
 - **Propuesta**: anclar el denominador BASE a un precio fijo del ciclo (`cycle.anchorPrice`, o el `refPrice` de la revisión de configuración) y usar el mismo en preview.
-- **Decisión**: pendiente (cambia cantidades de bots BASE en marcha: exige aviso al usuario).
+- **Decisión**: hecha (2026-09-06, spec 017, `3433c39`). El denominador BASE se fija en el primer plan del ciclo (`scratch.sizingRef`) y la vista previa sigue usando el precio de creación. Cambia las cantidades de los bots BASE en marcha: en el primer plan tras desplegar se fija el mark de ese momento y desde ahí no varía en el ciclo; la guía lo explica. Test «en Cantidad de moneda la cantidad no cambia con el precio».
 
 ### F-04 — El tick de Hyperliquid se calcula sobre el mid del catálogo, y por encima del siguiente salto de década el precio enviado deja de ser el planificado
 
@@ -240,13 +241,13 @@ cada máquina (aquí `true`) pese a que `.editorconfig` pide LF.
 - **Impacto**: (1) la orden se cancela y se recoloca en cada tick, así que **nunca conserva su sitio en la cola** y se pierde el fill cuando el precio pasa por encima entre la cancelación y la recolocación; (2) consumo permanente de cupo de caudal y de órdenes; (3) el precio real es ligeramente peor que el planificado. **El caso que puede ser Crítico**: el stop-loss de una posición SHORT se coloca *por encima* del precio, o sea justo en la zona divergente; entonces se cancela y se vuelve a colocar en cada tick, y cada reemplazo es «cancelar y luego colocar» sin atomicidad (`bot-runner.ts:751-762`), con un `safely()` que se traga el fallo de la recolocación (F-06). Ahí la posición se queda sin stop y nadie se entera.
 - **Reproducción / test**: `packages/exchange-core/src/exchange-core.spec.ts` — mercado con `midPx = 0.94583` y `szDecimals = 1` (AXS real): `formatPrice` de una compra a `1.00001` debe devolver exactamente `1.00001` o, si el venue no lo admite, el adaptador debe declarar un tick coherente con ese precio; hoy devuelve `1`. Y en `reconcile.spec.ts`: una orden viva a `1` frente a un plan a `1.00001` con `tickSize = 0.00001` no debe reemplazarse indefinidamente.
 - **Propuesta**: el arreglo correcto es que el precio deseado y el enviado se calculen con la misma regla, y eso no cabe en un `tickSize` único por mercado: exige que el reconciliador normalice el precio deseado con la regla del venue (o que `MarketSpec` lleve la regla y no solo el tick). Es un cambio M/L, así que por el protocolo va a spec propio. **Mitigación posible dentro de 001** (S): aplicar el recorte de cifras significativas en la dirección segura del lado (`ROUND_DOWN` en compra, `ROUND_UP` en venta) y emitir un evento WARN cuando el precio enviado difiera del pedido, para que la divergencia deje de ser silenciosa.
-- **Decisión**: pendiente.
+- **Decisión**: corregido en el spec 014 (2026-09-06, commits `2088961`, `491103a` y 82c4918): la regla de cinco cifras significativas (con los enteros siempre válidos, como manda el venue) vive en la puerta única de redondeo (`roundPriceForSide`, `MarketSpec.maxSignificantDigits`) y la aplican tanto `px()` como `formatPrice` del adaptador, hacia el lado seguro; desired y enviado coinciden y el reconciliador deja de reemplazar. Se optó por «MarketSpec lleva la regla» en vez de la mitigación (WARN por divergencia).
 
 ### F-04b — `modifyOrder` de Hyperliquid no formatea el precio y fuerza `Gtc`
 
 - **Evidencia**: `hyperliquid.ts:697-710` envía `p: req.price ?? existing.price` sin pasar por `formatPrice` y con `t: { limit: { tif: 'Gtc' } }` fijo.
 - **Impacto**: un precio sin recortar a 5 cifras sería rechazado por el venue, y una orden `Alo` (post-only) se convertiría en `Gtc` al modificarla, con lo que puede cruzar el libro y pagar comisión de taker. Hoy el motor no llama a `modifyOrder` (reemplaza cancelando y colocando), así que el camino está muerto; por eso va aparte de F-04.
-- **Decisión**: pendiente.
+- **Decisión**: corregido en el spec 014 (2026-09-06, commit `225ea46`): `modifyOrder` formatea el precio por la misma puerta que `placeOrder` y conserva el post-only (Alo) de la orden existente.
 
 ### F-05 — Lighter ignora `Trade.type` y nunca marca `Fill.liquidation`
 
@@ -255,7 +256,7 @@ cada máquina (aquí `true`) pese a que `.editorconfig` pide LF.
 - **Impacto**: el motor no cancela, no pausa ni avisa tras una liquidación en Lighter; el ledger la contabiliza como ejecución propia. Falta contrastar con la doc de Lighter y un ejemplo real del endpoint `trades`.
 - **Reproducción / test**: test de `getRecentFills` con un `Trade` de `type: 'liquidation'` esperando `liquidation: true`.
 - **Propuesta**: mapear `type` a `Fill.liquidation` (y decidir qué hacer con `deleverage`).
-- **Decisión**: pendiente.
+- **Decisión**: corregido en el spec 015 (2026-09-06, commit 70be23f): todo `Trade.type` distinto de `trade` (`liquidation`, `deleverage`, `market-settlement`) se entrega con `liquidation: true`; son cierres forzados por el venue y el motor los trata como liquidación.
 
 ### F-06 — `safely()` se traga `AUTH` y `THROTTLED` en el camino de reemplazo
 
@@ -264,7 +265,7 @@ cada máquina (aquí `true`) pese a que `.editorconfig` pide LF.
 - **Impacto**: un market maker (que reemplaza continuamente) con la clave revocada parece vivo; con THROTTLED, se sigue insistiendo durante el castigo.
 - **Reproducción / test**: `bot-runner.spec.ts`: adaptador que lance `AUTH` en `placeOrder` durante un reemplazo → se espera detach y estado `ERROR`.
 - **Propuesta**: que `safely()` relance `AUTH` y `THROTTLED` (o que el reemplazo no pase por `safely()` en la parte de `place()`).
-- **Decisión**: pendiente.
+- **Decisión**: hecha (2026-09-06, spec 021). `safely()` relanza `AUTH` y `THROTTLED` antes de mirar el mensaje: llegan a `onTickError` como desde `toPlace` (estado `ERROR`, `AUTH_ERROR`, desenganche; o dejar de insistir durante el castigo). Tests «relanza AUTH/THROTTLED en vez de convertirlo en un aviso» y «un AUTH durante un reemplazo para el bot en ese mismo tick».
 
 ### F-07 — Promesas sin `catch` que pueden tumbar el worker entero
 
@@ -273,7 +274,7 @@ cada máquina (aquí `true`) pese a que `.editorconfig` pide LF.
 - **Impacto**: reinicio del worker entero; los leases caducan y otro worker adopta, pero hay un hueco de hasta un TTL sin nadie atendiendo a los bots.
 - **Reproducción / test**: test de `acquireFairPrice` con `store.event` rechazando; comprobar que no hay rechazo sin manejar.
 - **Propuesta**: `.catch(() => undefined)` con log en esos tres puntos, como ya hace `onTickError`.
-- **Decisión**: pendiente.
+- **Decisión**: hecha (2026-09-06, spec 021). `acquireFairPrice` (`void this.event(...).catch(() => undefined)`), la suscripción del notificador (`onEvent(...).catch(warn)`) y `applyDetachments` (`.catch(error)`) llevan `catch` con registro. Test «un fallo al registrar el aviso de la fuente de precio no queda sin manejar» (escucha `unhandledRejection`).
 
 ### F-08 — `recoverStale` desreclama comandos de cualquier worker y `ADJUST_MARGIN` no es idempotente
 
@@ -282,7 +283,7 @@ cada máquina (aquí `true`) pese a que `.editorconfig` pide LF.
 - **Impacto**: transferencia de margen doble en un caso raro (venue lento o en cooldown de 60-120 s). El resto de comandos se autoprotegen por `findOrderByCoid`.
 - **Reproducción / test**: test de `recoverStale` con un comando reclamado por otro worker hace 3 minutos y aún en ejecución.
 - **Propuesta**: filtrar por worker muerto (sin lease) o marcar `executed_at` antes de acciones no idempotentes; a decidir en spec propio.
-- **Decisión**: pendiente.
+- **Decisión**: corregido en el spec 011 (2026-09-06, commit `7d3a702`): `recoverStale` consulta quién tiene el lease del bot (`LeaseService.holder`) y no desreclama los comandos de un worker vivo; la bandeja cierra `ADJUST_MARGIN` antes de correrlo (como mucho una vez). `ADD_SAFETY_NOW` se autoprotege por su `clientOrderId` y no hizo falta tocarlo.
 
 ### F-09 — Aster: transporte, pesos y keepalive verificados OK; queda `ASSUMED_MAX_LEVERAGE`
 
@@ -296,35 +297,35 @@ cada máquina (aquí `true`) pese a que `.editorconfig` pide LF.
 - **Medido con la sonda** (2026-09-05): Lighter tiene **216 mercados perp activos en mainnet** y 176 en testnet, así que un solo `getOpenOrders()` sin símbolo son 216 peticiones firmadas contra un cupo Standard de **60 por minuto**. Es decir, más de tres minutos de cupo de toda la IP en una sola llamada.
 - **Impacto**: un PANIC compite por el cupo con las lecturas de los demás bots; en Lighter cada escritura son al menos dos peticiones y solo una se cuenta; `getOpenOrders()` sin símbolo agota el cupo de varios minutos de golpe y dispara el CAPTCHA del cortafuegos.
 - **Propuesta**: prioridad `write` en cancelaciones y leverage; contar las peticiones del `SignerClient`; prohibir `getOpenOrders()` sin símbolo en Lighter o paginar.
-- **Decisión**: pendiente.
+- **Decisión**: hecha (2026-09-06, spec 020). Cancelar (una, las propias, todas), modificar, fijar el apalancamiento y el modo de posición toman presupuesto con prioridad `write` en los tres adaptadores (`call`/`signedRequest` reciben la prioridad). Lighter: `getOpenOrders()` sin símbolo se rechaza con un error claro (ningún consumidor lo usaba así) y la relectura del nonce (`hard_refresh_nonce` → `nextNonce`) descuenta su petición; cada escritura ya descontaba la suya (`sendTx`) antes de firmar. Tests en `aster.spec.ts`, `hyperliquid.spec.ts` y `lighter-transport.spec.ts`.
 
 ### F-11 — `drawdownPct` es pérdida acumulada, no caída desde máximo
 
 - **Evidencia**: `bot-store.ts:885-890` devuelve 0 si el equity es ≥ 0 y `|equity| / totalInvestment` si no.
 - **Impacto**: `killSwitchDrawdownPct` solo dispara cuando el resultado acumulado es negativo más allá del umbral; un bot que sube un 50 % y baja al 5 % nunca lo dispara. Puede ser lo pretendido.
 - **Preguntas**: ¿qué significa «drawdown» para el usuario? Si es caída desde máximo, hace falta guardar el pico (hay `peak_*` en `bot_mm_stats` solo para market makers).
-- **Decisión**: pendiente del usuario.
+- **Decisión**: pendiente del usuario (revisada en el spec 019, 2026-09-06). Opciones: (a) dejarlo como pérdida acumulada sobre el capital asignado y renombrar la etiqueta («pérdida máxima»); (b) caída desde el máximo del equity del bot, que exige guardar el pico (hoy solo `bot_mm_stats` lo tiene para market makers). Sin decisión no se toca: hay bots en marcha con el umbral configurado.
 
 ### F-12 — Parámetros muertos o a medias
 
 - **Evidencia** (línea A, `informes/A-grids.md` §7): `preloadInventory` solo avisa en `validate` (`grid-classic.ts:239-243`); `reanchorOnDrift`/`reanchorThresholdPct` solo añaden texto a `note` (`neutral-grid.ts:366-371`) y el comando manual que la guía ofrece como alternativa es un no-op en esa estrategia (F-84); `fullCycleCooldownMinutes` sin lector (`gridmart.ts:159-169,245`); `takeProfitPct` y `tpMode` no se leen en `plan()` de GridMart (`LIMIT` fijo, `:454,475`) aunque el preview pinte un TP con `takeProfitPct` (`:356`); `cooldownMinutes`: ningún `plan()` de Grid Classic, Neutral Grid ni TDCA mira `cooldownUntil`, y en Martingale y GridMart el valor está congelado (F-86); `maxNotionalCap`: Neutral Grid y TDCA no lo leen mientras la ayuda común promete «tope duro … pase lo que pase» (`field-labels.ts:29`), y Grid Classic lo aplica como puerta binaria a posteriori (F-87); `direction`: `plan()` de Neutral Grid no lo lee y la guía promete un sesgo (`neutral-grid.guide.ts:138`); `targetLeverage` de `DesiredState` sin consumidor en worker ni backtest. Asistente: `build.ts:250,316,331-332` los rellena.
 - **Impacto**: el usuario configura lo que no ocurre; el asistente lo recomienda; la ayuda promete un tope que no existe.
 - **Propuesta**: implementar o retirar del formulario, campo a campo, en spec propio (`012-validacion-y-parametros-muertos`); `cooldownMinutes` y `maxNotionalCap` merecen implementarse (son de riesgo), el resto retirarse o documentarse.
-- **Decisión**: pendiente.
+- **Decisión**: **parcial** (2026-09-06, spec 019). Hecho: `cooldownMinutes` frena las entradas de Grid Classic, Neutral Grid y TDCA mientras dure `cooldownUntil`; `maxNotionalCap` es un segundo tope en Neutral Grid (con `maxExposure`) y en TDCA (con `maxPositionNotional`); la vista previa de GridMart pinta el TP del satélite; Neutral Grid avisa si `direction` no es neutral; el aviso de `preloadInventory` dice que no está implementado. **Pendiente del usuario** (semántica o retirada del formulario): `preloadInventory` (comprar inventario a mercado al arrancar), `fullCycleCooldownMinutes` (sin semántica definida), `reanchorOnDrift` (recentrado automático) y `targetLeverage` (contrato sin consumidor; el motor sincroniza `config.leverage`).
 
 ### F-13 — `validate()` no acota campos que `meta.fields` sí limita
 
 - **Evidencia**: ni la API (`PreviewBotDto.config: Record<string, unknown>`, `bots/dtos/index.ts:36,72,90`) ni `validateCommon` (`common.ts:191-240`) recorren `min/max/step/options`: solo la UI los aplica. Enumeración completa por estrategia en `informes/A-grids.md` §7 F-13 y `informes/A-market-makers.md` §1-2 A-10. Casos con efecto: `stopLossPct ≥ 100` pasa y el disparo queda ≤ 0 → `revisarOrden` `IMPOSIBLE` → **sin stop** y un WARN; `maxDailyLossPct < 0` → la guarda dispara desde el primer tick (`bot-runner.ts:1642-1653`); `liquidationAction` desconocido → PAUSE; `leverage` no entero llega a `setLeverage`; `direction: NEUTRAL` en un grid direccional → LONG en silencio; GridMart sin `gridSellDistanceMultiplier`/`gridSellQtyMultiplier` → `separation.mul(undefined)` → `DecimalError` en `preview()` y en `plan()` (`gridmart.ts:204,212`); `gridRebuyDiscountPct ≥ 100` → recompra a precio ≤ 0 → `ENTRADA_INVALIDA` cada tick; `sizeMultiplier ≤ 0` en Neutral Grid → retícula vacía en silencio; `marginBelowAveragePct < 0` en TDCA compra solo por **encima** de la media; `maxBuysPerCycle > 500` sin tope.
 - **Impacto**: cualquier cliente de la API que salte el formulario (o el asistente) manda valores fuera de rango que la API acepta; dos de ellos dejan una posición sin stop o un 500.
 - **Propuesta**: un validador genérico sobre `meta.fields` (min, max, step, options) delante de la validación específica, en la API y en `validateCommon`; y un test por estrategia de que `validate` rechaza cada límite declarado.
-- **Decisión**: **parcialmente corregido en el spec 009** (2026-09-06): `validateCommon` rechaza `stopLossPct` ∉ (0, 100) y `maxDailyLossPct` ≤ 0 en las siete. El validador genérico y el resto de campos siguen abiertos (spec `019-validacion-y-parametros-muertos`).
+- **Decisión**: **hecha** (2026-09-06, spec 019; la parte de `stopLossPct`/`maxDailyLossPct` ya en el 009). `validateMeta(config, fields)` en `strategy-core` rechaza valores fuera de `min`/`max`, no enteros en campos `integer`, fuera de `options` y obligatorios sin valor por defecto ausentes; el registro (`getStrategy`) lo aplica a `validate()` y `preview()` de las siete sin duplicar un error que la estrategia ya dé para el mismo campo. GridMart valida además sus dos multiplicadores (antes `DecimalError` en la vista previa). Los DTO siguen recibiendo `config` libre: la validación de la estrategia es la puerta.
 
 ### F-14 — Preview frente a plan
 
 - **Evidencia**: `common.ts:342` (`buildPreview` usa siempre la fórmula aislada aunque `marginMode` sea CROSS, defecto de Neutral Grid `:235` y de los market makers); `neutral-grid.ts:302` (NEUTRAL → LONG: la liquidación del caso corto no se enseña nunca); `tdca.ts:203` (`validateCommon(...).concat(this.validate(...).issues)` con un `validate` que ya incluye `validateCommon`, `:152`: todo aviso común sale dos veces). Ejemplo (`informes/A-grids.md` §6 A-18): Neutral Grid 2×, medio 100, cuenta de 1 000 USDC con una sola posición de 200 de notional → preview 50,5; `liquidationOfPosition` → «no se liquida». Añadido: el peor caso de Grid Classic a la mitad (F-88).
 - **Impacto**: distancia a liquidación falsa (conservadora, pero contradice la etiqueta «Estimación con la fórmula del venue», `bot.ts:208`); UI ruidosa en TDCA.
 - **Propuesta**: `buildPreview` con `marginMode`; NEUTRAL con las dos liquidaciones; quitar la doble llamada en TDCA (test «no repite los avisos comunes»).
-- **Decisión**: pendiente.
+- **Decisión**: hecha (2026-09-06, spec 017, `4bb2353`). `buildPreview` recibe `marginMode` y avisa en cruzado de que la estimación aislada es una cota; con `neutral` la liquidación enseñada es la del lado largo y un aviso da la del lado corto; TDCA usa solo `validate()`. La liquidación cruzada real (depende del saldo de toda la cuenta) queda fuera de alcance. Tests «TDCA no repite los avisos comunes» y «en cruzado y neutral la vista previa avisa…».
 
 ### F-15 — Grid Classic emite `cycleSeq = 0` cuando el ciclo no tiene id; incoherencias de los market makers
 
@@ -333,42 +334,42 @@ cada máquina (aquí `true`) pese a que `.editorconfig` pide LF.
 - **Reproducción / test**: `packages/strategy-core/src/strategies.spec.ts` «el id de nivel lleva el mismo cycleSeq que el motor aunque el ciclo no tenga id» — **falla hoy**: con `cycleId: null` y `scratch.cycleSeq: 3` el plan emite `1a2b3c4d00000000.0.GB0` donde el motor espera `.3.GB0`. La cadena del motor (ajenas y doble compra) está confirmada por lectura; test de motor propuesto para después de la corrección: `bot-runner.spec.ts`, Grid Classic en HL con filas `.0.GB3` de `cycle_seq = 2`, ciclo actual 4 con id → el tick no debe colocar `.4.GB3` mientras `.0.GB3` viva. El backtest no reproduce el fallo (`ownIds` exacto por `emitted`).
 - **Contrato de arreglo** (Crítica; protocolo de `specs/README.md`): `grid-classic.ts:291` → `const seq = Number(ctx.cycle.scratch['cycleSeq'] ?? 0);`, igual que las otras seis. Una línea. Radio: `plan()` de Grid Classic en worker, backtest y app (cliente). **Efecto en bots en marcha**: los Grid Classic que ya pasaron por un cierre renumeran sus ids una sola vez en el primer tick tras el despliegue: el reconciliador cancela las `.0.` que siguen dentro de la ventana `ownIds` (son propias) y recoloca `.N.`; las de hace más de dos ciclos ya eran ajenas hoy y siguen siéndolo hasta un REPAIR o `cancelOwnOrders` (ambos van por estado en base, `bot-store.ts:223-233`). Los backtests guardados de Grid Classic cambian de ids, no de resultado. Pregunta abierta anotada.
 - **Market makers** (Media, confirmado con sondas, `informes/A-market-makers.md` MM-01/02/10): `fillCooldownSeconds` inerte con `referencePrice` (`market-maker.ts:667,695-698`); `refreshMs` mínimo 5 (`:651`) frente a validación ≥ 15; `feeEstimateBps` por defecto 0 (`market-maker-v2.ts:784`; el asistente pone 2). Spec `011-market-makers`.
-- **Decisión**: **corregida la parte Crítica** (`77651ab`, 2026-09-06): `grid-classic.ts` usa `scratch.cycleSeq` siempre, como las otras seis. Pregunta abierta resuelta: se acepta la renumeración única de los Grid Classic en marcha que ya pasaron por un cierre (el reconciliador cancela las `.0.` propias y recoloca `.N.`; las de hace más de dos ciclos siguen ajenas hasta un REPAIR). El test de motor propuesto («no coloca `.4.GB3` mientras `.0.GB3` viva») queda para el spec `011-market-makers` junto con la parte Media, porque exige una fixture de venue con ids opacos que hoy no existe en `bot-runner.spec.ts`.
+- **Decisión**: **corregida la parte Crítica** (`77651ab`, 2026-09-06): `grid-classic.ts` usa `scratch.cycleSeq` siempre, como las otras seis. Pregunta abierta resuelta: se acepta la renumeración única de los Grid Classic en marcha que ya pasaron por un cierre (el reconciliador cancela las `.0.` propias y recoloca `.N.`; las de hace más de dos ciclos siguen ajenas hasta un REPAIR). El test de motor propuesto («no coloca `.4.GB3` mientras `.0.GB3` viva») queda para el spec `011-market-makers` junto con la parte Media, porque exige una fixture de venue con ids opacos que hoy no existe en `bot-runner.spec.ts`. **Parte de los market makers hecha** (2026-09-06, spec 018): la espera tras un fill rige con precio de referencia, `refreshMs` con suelo 15 y aviso al validar con `feeEstimateBps` a 0 (el valor de fábrica sigue siendo 0: cambiarlo es decisión del usuario).
 
 ### F-16 — `timeInForce` ignorado, MARKET dependiente de `price`, builder sin tope, reenvío de MARKET en Lighter
 
 - **Evidencia**: `hyperliquid.ts:575-581` y `lighter.ts:1132-1135` derivan el tif solo del tipo de orden; `hyperliquid.ts:555` y `lighter.ts:1094` usan `req.price ?? 0` en MARKET; `hyperliquid.ts:1023-1029` no acota `builderFeeTenthBps`; `hyperliquid.ts:609` accede a `statuses[0]` sin guardas; `lighter.ts:1204` (`findPlaced` trata un fallo de `getRecentFills` como «no llegó» y **reenvía** la MARKET: posición doblada si el fallo era transitorio).
 - **Impacto**: el reenvío de MARKET es el punto grave; el resto es deuda de contrato.
-- **Decisión**: pendiente.
+- **Decisión**: parte Lighter corregida en el spec 013 (2026-09-06, commit `4fafcea`): `timeInForce: IOC` de la petición se respeta y la MARKET lleva holgura; el reenvío de `findPlaced` ya lo cubría F-68. Parte Hyperliquid corregida en el spec 014 (commit 82c4918): `builderFeeTenthBps` fuera de (0, 100] se omite (0,1 % es el tope del venue en perps) y un acuse sin `statuses` es RETRYABLE en vez de un TypeError. Cerrado.
 
 ### F-17 — `syncOrderState` y `recordFill` discrepan en `filled_qty`; `onFill` con contexto degradado
 
 - **Evidencia**: `bot-store.ts:389-405` escribe el `filledQty` absoluto del venue por `venue_client_id`; `:467` incrementa; `:341` reinicia `filled_qty` a 0 al reencarnar un coid reutilizado. `bot-runner.ts:1054` construye el contexto de `onFill` con `position = null`, sin órdenes y saldo 0.
-- **Decisión**: pendiente.
+- **Decisión**: corregido en el spec 016 (2026-09-06, commit b575a62): `recordFill` escribe como acumulado la suma de las ejecuciones del ledger (idempotente frente al absoluto que escribe `syncOrderState`) y el contexto de `onFill` lleva la posición real.
 
 ### F-18 — Escrituras best-effort sin alerta, `claimForBots` tragado, `/health` con cero runners, `exit(0)`
 
 - **Evidencia**: `bot-store.ts:264,362,385,404`; `command-inbox.service.ts:87,102,116`; `engine.service.ts:269-271` (`.catch(() => new Map())`: con la BD caída un PANIC parece «sin comandos»); `engine.service.ts:610` (`healthy` si `runners.size === 0`); `main.ts:76` (`process.exit(0)` también en fatales).
-- **Decisión**: pendiente.
+- **Decisión**: hecha (2026-09-06, spec 021). Las escrituras best-effort de `BotStore` (`mudo(que)`) y de `CommandInbox` registran un WARN al fallar; `drainCommands` registra un ERROR cuando el reclamo falla («los comandos esperan»); `/health` usa `evaluarSalud` (función pura con test): 503 sin Redis (`LeaseService.redisReady()`) o con todos los runners atascados, y la respuesta trae `redis`; `main.ts` sale con código 1 en `unhandledRejection`/`uncaughtException` y 0 en una señal. Reiniciar desde el healthcheck queda en el orquestador.
 
 ### F-19 — Mid de Binance calculado con `Number`
 
 - **Evidencia**: `apps/worker/src/marketdata/price-source.service.ts:391-394`.
 - **Impacto**: único float en un camino de precio; el market maker v2 ancla a ese valor, que luego se redondea al tick. Riesgo práctico bajo; contradice el invariante 1.
 - **Propuesta**: `D(bid).plus(ask).div(2).toFixed()`.
-- **Decisión**: pendiente.
+- **Decisión**: corregido en el spec 023 (2026-09-06, commit `78ac4be`): el mid se calcula con `Decimal` y viaja como cadena exacta; lo que no es un número finito se descarta como antes.
 
 ### F-20 — `Resume.MD` y un comentario de `venue-weights.ts` desfasados
 
 - **Evidencia**: `Resume.MD:253,269,1218` citan `apps/worker/src/engine/reconciler.ts` y `reconciler.spec.ts` (hoy `packages/strategy-core/src/reconcile.ts` y `apps/worker/src/engine/reconcile.spec.ts`); `:258` describe columnas `lease_owner`/`lease_expires_at` que ya no existen (el lease vive en Redis, `schema.prisma:332-336`); `:740` cita `stopRequested()` (hoy `reconcileRunners()`); `:754` apunta al tick en `bot-runner.ts#L156` (está en `:557`); `:786` cuenta 12 comandos y falta `ADJUST_MARGIN`; `:918` cuenta 18 tablas y hay 21 modelos; `:890` omite `GET /bots/capital`, `GET /bots/:id/mm-stats`, `POST /exchange-accounts/:id/paper-reset` y los módulos `backtests`, `activity`, `advisor`, `market-data`; `:815` dice que `maxLeverage` solo se comprueba al crear (el worker lo comprueba cada tick) y omite `maxDailyLossPct` y `liquidationAction`. `venue-weights.ts:23` cita `LIGHTER_REST_QUOTA_PER_MINUTE`, que no existe.
 - **Propuesta**: lote de documentación en spec propio.
-- **Decisión**: pendiente.
+- **Decisión**: corregido en el spec 023 (2026-09-06, commit `2b8621a`): `Resume.MD` cita `reconcile.ts`/`reconcile.spec.ts`, el lease en Redis, `reconcileRunners()`, el tick en su línea, los trece controles con `ADJUST_MARGIN`, la tabla de límites con `maxLeverage` en cada tick y las guardas del bot, el mapa de la API completo (market-data, backtests, advisor, portfolio, activity y las rutas que faltaban) y las 24 tablas; el comentario de `venue-weights.ts` ya no cita una variable inexistente; CLAUDE.md deja de remitir aquí.
 
 ### F-21 — Sin tests del cuerpo de `placeOrder`, de la firma de Aster ni del nonce de Lighter
 
 - **Evidencia**: en `packages/exchange-core/src/*.spec.ts` no hay ningún test que construya la petición de `placeOrder` de ningún adaptador ni que ejercite `signedQuery` (Aster) o `signedWrite` (Lighter). `shared/money.ts`, `precision.ts` y `liquidation.ts` solo se cubren desde `ladder.spec.ts`.
 - **Propuesta**: los tests de confirmación de F-01, F-02, F-04 y F-09 son el principio de esa cobertura.
-- **Decisión**: pendiente.
+- **Decisión**: hecho en el spec 023 (2026-09-06, commit `911294c`): cinco tests del cuerpo de `placeOrder` —Hyperliquid: límite Gtc, post-only Alo, mercado Ioc con el 5 %, stop con disparador y sentido; Aster: parámetros firmados con nonce, user y signer, GTX y TAKE_PROFIT_MARKET sin precio—. La firma y el nonce de Lighter ya tenían `lighter-signer.spec.ts` (spec 013).
 
 ### F-22 — Aster: se ignora `MARKET_LOT_SIZE`, más estrecho que `LOT_SIZE` en los 572 símbolos
 
@@ -377,14 +378,14 @@ cada máquina (aquí `true`) pese a que `.editorconfig` pide LF.
 - **Impacto**: un cierre a mercado (`STOP_AND_CLOSE`, `CLOSE_NOW`, `PANIC`, liquidación forzada por guarda) de una posición mayor que el tope de mercado es rechazado por el venue, y el motor lo trata como un fallo de acción cualquiera. Solo alcanzable con posiciones muy grandes (120 BTC son varios millones de dólares), de ahí la severidad Media.
 - **Reproducción / test**: `venue-gate.spec.ts` con un mercado que declare `MARKET_LOT_SIZE`, comprobando que una orden a mercado por encima de ese tope se detecta antes de enviarla.
 - **Propuesta**: leer también `MARKET_LOT_SIZE` y llevarlo a `MarketSpec` como tope específico de mercado, o trocear el cierre.
-- **Decisión**: pendiente.
+- **Decisión**: corregido en el spec 023 (2026-09-06, commit `da174bb`): `MarketSpec.maxMarketQty` (Aster: `MARKET_LOT_SIZE.maxQty`); el cierre a mercado del motor trocea una posición mayor que el tope en órdenes de como mucho ese tamaño (índices 999, 998, …) y devuelve `false` si algún trozo no salió. El campo llega al motor por la fila de `markets` en el spec 024.
 
 ### F-23 — Aster: `MAX_NUM_ORDERS` es 200 por símbolo y no se modela
 
 - **Evidencia**: la sonda da `MAX_NUM_ORDERS: 200` en **todos** los símbolos de mainnet y testnet, más `MAX_NUM_ALGO_ORDERS: 10` (que acota las condicionales, es decir los stop-loss). El adaptador no lee ninguno de los dos (`aster.ts:344-382`) y `MarketSpec` no tiene dónde guardarlos. `grid-classic.ts:52-121` admite `gridLevels` hasta 200, y a esas líneas hay que sumarles el take profit y el stop.
 - **Impacto**: una retícula de 200 niveles en Aster agota el cupo del símbolo y las últimas órdenes se rechazan una a una; el bot funciona a medias sin que el motivo sea evidente. El tope de 10 órdenes algorítmicas es más estrecho todavía si alguna vez se emiten varias condicionales por bot.
 - **Propuesta**: llevar ambos límites a `MarketSpec` y validarlos en `validate()` al crear el bot, que es donde el usuario puede corregirlo.
-- **Decisión**: pendiente.
+- **Decisión**: cerrado en el spec 023 (2026-09-06): el tope de 200 ya vive en `MarketSpec.maxActiveOrders` (spec 013, F-50) y la vista previa avisa cuando la retícula lo supera (la fila de `markets` lo guarda a partir del spec 024); las 10 órdenes algorítmicas son una por bot (el stop-loss) y no se alcanzan. El bloque de la guía de venues se retira y la guía dice que en Aster hay que quedarse por debajo de 200 líneas contando TP y stop.
 
 ### F-24 — Aster: los límites de número de órdenes no se modelan en el presupuesto de caudal
 
@@ -392,7 +393,7 @@ cada máquina (aquí `true`) pese a que `.editorconfig` pide LF.
 - **Impacto**: un market maker con varias capas recotizando cada pocos segundos, o varios bots de la misma cuenta, pueden pasarse de 300 órdenes en 10 segundos sin que el presupuesto lo note; la respuesta del venue es 429 y, si se insiste, 418 con baneo de IP «from 2 minutes to 3 days». Es el mismo tipo de incidente que ya obligó a compartir el presupuesto por IP con Lighter.
 - **Nota**: en testnet los dos primeros límites vienen como `-2`, así que ese entorno no sirve para calibrarlos.
 - **Propuesta**: contar órdenes además de peso, con dos ventanas (minuto y diez segundos).
-- **Decisión**: pendiente.
+- **Decisión**: hecha (2026-09-06, spec 020). `ASTER_ORDER_QUOTA` (1200/min y 300/10 s) y `VenueBudget.takeOrders`: un segundo depósito derivado de los dos límites con el margen de seguridad (17 órdenes por segundo; capacidad 85, para que ninguna ventana de diez segundos pase de 255), en memoria y en Redis. Colocar una orden en Aster lo consume; en los demás venues es un no-op. Se cuenta por IP (más conservador que por cuenta). Test «las órdenes de Aster tienen su propio cupo».
 
 ### F-25 — En Hyperliquid, `Ticker.mark` es el punto medio del libro y no el precio de marca
 
@@ -401,7 +402,7 @@ cada máquina (aquí `true`) pese a que `.editorconfig` pide LF.
 - **Impacto**: lo consumen el tope de notional por bot (`bot-runner.ts:1558`), la distancia a liquidación que dispara `liquidationAction` incluido `CLOSE_ALL` (`:1580`), el equity que alimenta el kill-switch por drawdown (`:2056`) y el ancla del market maker. Los tres venues dicen medir lo mismo y uno mide otra cosa.
 - **Reproducción / test**: `exchange-core.spec.ts` — con un `l2Book` cuyo mid difiera del `markPx` del contexto, `getTicker` debe devolver `markPx` en `mark` y el mid en `last`.
 - **Propuesta**: llevar `markPx` a `Ticker.mark` (memoizando `metaAndAssetCtxs`, que ya se pide) y dejar el mid en `last`.
-- **Decisión**: pendiente.
+- **Decisión**: corregido en el spec 014 (2026-09-06, commit 82c4918): `getTicker` lleva en `mark` el `markPx` de `metaAndAssetCtxs` (memoizado dos segundos) y el mid en `last`; `streamTicker` suscribe además `activeAssetCtx` y cada bbo lleva la última marca.
 
 ### F-26 — En Hyperliquid, con un lado del libro vacío el precio queda a la mitad
 
@@ -409,26 +410,26 @@ cada máquina (aquí `true`) pese a que `.editorconfig` pide LF.
 - **Impacto**: un precio falso pero verosímil entra en las guardas de riesgo y en las estrategias. Puede disparar `liquidationAction: CLOSE_ALL` —cerrar la posición a mercado— o desactivar el tope de exposición, según de qué lado caiga. Poco frecuente, pero el sistema actúa con convicción sobre un dato inventado.
 - **Reproducción / test**: `exchange-core.spec.ts` — `l2Book` con `levels[0] = []` no debe producir `ask/2`.
 - **Propuesta**: si falta un lado, devolver el mark del venue (ver F-25) o lanzar `RETRYABLE`, que el motor ya sabe tratar.
-- **Decisión**: pendiente.
+- **Decisión**: corregido en el spec 014 (2026-09-06, commit 82c4918): con un lado vacío manda la marca del venue y, sin ella, RETRYABLE; nunca la mitad del otro lado.
 
 ### F-27 — Hyperliquid: un WebSocket por cuenta frente a diez conexiones por IP
 
 - **Evidencia**: `hyperliquid.ts:166-175` crea un `WebSocketTransport` por instancia de adaptador y `account-hub.service.ts:185` crea un adaptador por cuenta de exchange. Documentación oficial: «Maximum of 10 websocket connections», «Maximum of 30 new websocket connections per minute», «Maximum of 10 unique users across user-specific websocket subscriptions». El propio comentario del código ya cita el límite (`:145-150`).
 - **Impacto**: a partir de la undécima cuenta de Hyperliquid en la misma IP de salida, las conexiones nuevas se rechazan. Los bots no mueren —el tick por REST cada 15 s los hace converger— pero pierden los fills en tiempo real y la recotización rápida, que es justo lo que necesita un market maker. Nada cuenta las conexiones ni avisa, y `WORKER_MAX_BOTS` está en 250. Además el reintento cada 5 s (`:981-984`) choca con el límite de 30 conexiones nuevas por minuto.
 - **Propuesta**: contar las cuentas de Hyperliquid por proceso y avisar al acercarse al límite; a medio plazo, compartir un transporte entre cuentas (el SDK admite varias suscripciones de usuario por conexión, aunque el tope de diez usuarios distintos sigue en pie).
-- **Decisión**: pendiente.
+- **Decisión**: mitigado en el spec 014 (2026-09-06, commit `733ac67`): `AccountHub` avisa en el log al abrir la décima cuenta real de Hyperliquid del proceso. Compartir el transporte entre cuentas (la solución de fondo) queda como mejora aparte.
 
 ### F-28 — Hyperliquid es el único venue sin enfriamiento local tras un throttle
 
 - **Evidencia**: `VenueCooldown` (`cooldown.ts`) está cableado en Lighter (`lighter.ts:511,533`) y en Aster (`aster.ts:268,334`), y no en Hyperliquid. Tras un 429, `withRetry` reintenta hasta cuatro veces y el resto de bots de la cuenta siguen llamando.
 - **Impacto**: alargar el castigo. La documentación dice que al superar el límite por dirección el usuario queda en «one request every 10 seconds», así que insistir es contraproducente.
-- **Decisión**: pendiente.
+- **Decisión**: corregido en el spec 014 (2026-09-06, commit 82c4918): `VenueCooldown` cableado en `call()` y `callWrite()` como en Lighter y Aster.
 
 ### F-29 — `VenueOrder` no distingue una orden condicional de una límite
 
 - **Evidencia**: `shared/orders.ts:57` no tiene `triggerPrice` ni marca de condicional. `hyperliquid.ts:414-415` mapea todo lo que no sea `Market` a `LIMIT` y toma `limitPx` como precio, ignorando `triggerPx`/`isTrigger`; `:934` fuerza `type: 'LIMIT'` y `:940` fuerza `reduceOnly: false` en las actualizaciones por WebSocket.
 - **Impacto**: para el reconciliador, un stop-loss y una orden límite al mismo precio son la misma cosa; y la fila de `bot_orders` guarda `reduceOnly: false` para órdenes que sí lo son. No he encontrado hoy un camino donde eso cambie una decisión, de ahí Media, pero es información perdida justo en la frontera con el venue.
-- **Decisión**: pendiente.
+- **Decisión**: corregido en el spec 023 (2026-09-06, commit `e7034d9`): `VenueOrder.triggerPrice` (opcional); Hyperliquid mapea el tipo real de `frontendOpenOrders` (un «Stop Market» es una MARKET con disparador) y `triggerPx`; el evento del WebSocket, que trae la orden básica, conserva el reduce-only y anota que el tipo real lo trae el barrido REST. Es información: el reconciliador sigue emparejando por `clientOrderId`.
 
 ### F-31 — `void pending.finally(...)` al abrir una cuenta deja un rechazo sin manejar que tumba el worker
 
@@ -461,7 +462,7 @@ cada máquina (aquí `true`) pese a que `.editorconfig` pide LF.
 - **Impacto**: el margen nunca llega a la posición; el capital asignado sube igual, y de ese denominador sale `drawdownPct` para el kill-switch. `positionMode` de ambos market makers es un parámetro muerto.
 - **Reproducción / test**: `paper-accounts.spec.ts`, «el handle de la cuenta expone el ajuste de margen y el modo de posición del adaptador»: abrir un handle sobre un adaptador falso que declare ambos y comprobar `typeof handle.adjustIsolatedMargin === 'function'`. Hoy falla.
 - **Propuesta**: reexponer los dos métodos en `AccountHandle` (con `finally { invalidate }` como el resto de escrituras). Al hacerlo se reactiva el riesgo de transferencia doble de F-08: corregir los dos juntos.
-- **Decisión**: pendiente.
+- **Decisión**: corregido en el spec 011 (2026-09-06, commits `ba9873a` y `c0a65ca`): `AccountHandle` reexpone `adjustIsolatedMargin` y `setPositionMode` solo si el adaptador los tiene, invalidando la caché tras escribir; y la API ya no sube `totalInvestment` al encolar: lo sube al recibir `MARGIN_ADJUSTED` (con el id del comando en el acuse y un update condicional sobre la bandera para que varias réplicas no sumen dos veces).
 
 ### F-35 — El reemplazo del stop no es atómico y un `RETRYABLE` en la recolocación se registra en INFO
 
@@ -488,17 +489,17 @@ cada máquina (aquí `true`) pese a que `.editorconfig` pide LF.
 - **Evidencia**: `aster.ts:211-219` construye el nonce como `floor(Date.now()/1000) × 1e6 + contador`, reiniciando el contador al cambiar de segundo. La doc exige una ventana de ±60 s frente al reloj del **servidor**, y el adaptador nunca lee `/fapi/v3/time` (la sonda muestra que devuelve `serverTime`). Un paso de NTP hacia atrás devuelve a un segundo ya usado con el contador a cero → nonce duplicado → rechazo. En el motor, `currentTicker` compara `Date.now()` con el `ts` del venue (`bot-runner.ts:1958-1961`, 10 s) y `buildContext` con `FAIR_PRICE_STALE_MS` (`:1696`); una deriva del venue hacia adelante hace pasar por fresco un precio viejo, y un cierre a mercado en Hyperliquid es una IOC a `precio × 1,05`.
 - **Reproducción / test**: `packages/exchange-core`, «el nonce de Aster es estrictamente creciente aunque el reloj retroceda»: `jest.spyOn(Date,'now')` devolviendo 1000, 1000, 999, 999 y comprobar cuatro nonces distintos y crecientes. Hoy falla.
 - **Propuesta**: nonce monótono (`max(anterior + 1, ahora)`) y una comprobación de deriva contra `serverTime` al arrancar el adaptador de Aster.
-- **Decisión**: pendiente.
+- **Decisión**: corregido en el spec 012 (2026-09-06, commits `0846b1d` y e9475d4): nonce monótono compartido por proceso y `verify()` compara el reloj local con `/fapi/v3/time`, rechazando la credencial con el motivo si el desvío pasa de veinte segundos. La guarda de frescura del ticker en el motor no se toca (spec 021).
 
 ### F-39 — `bot_commands` y `bot_config_revisions` sin retención
 
 - **Evidencia**: `retention.service.ts:63-67` purga `bot_snapshots`, `bot_events` y `activity_log`; el comentario de `:28-31` explica por qué no se tocan `bot_orders`, `bot_fills` ni `bot_cycles`, y no dice nada de `bot_commands`, que crece con cada comando de usuario para siempre.
-- **Decisión**: pendiente (Baja).
+- **Decisión**: hecha (2026-09-06, spec 021). `RETENTION_COMMAND_DAYS` (90; `.env.example` y compose) purga por lotes los comandos **ejecutados** más antiguos; los pendientes o reclamados no se tocan. `bot_config_revisions` se conserva a propósito (historial de configuración; `bot.config_version` apunta a una fila) y el comentario de `RetentionService` lo dice. Test `retention.service.spec.ts`.
 
 ### F-40 — Un fallo de Redis cuenta como fallo de la fuente de precio externa
 
 - **Evidencia**: `price-source.service.ts:296` escribe en Redis **dentro** del `try` de `poll`, así que un fallo de Redis incrementa `feed.failures` y fija `feed.cause` aunque el precio se haya obtenido bien (`feed.last` ya se asignó en `:289`). Cosmético, pero contamina `status()` y el aviso al usuario.
-- **Decisión**: pendiente (Baja).
+- **Decisión**: hecha (2026-09-06, spec 021). `cacheSet` va con su propio `catch` fuera del camino de fallo del feed: un Redis caído se anota en el log y el precio sigue valiendo. Test «un fallo al cachear no cuenta como fallo del feed».
 
 ### F-42 — `updateConfig` suma el propio bot dos veces contra el tope de notional total
 
@@ -506,21 +507,21 @@ cada máquina (aquí `true`) pese a que `.editorconfig` pide LF.
 - **Impacto**: con `max_total_notional` fijado y los bots vivos cerca del tope, **cualquier** cambio de configuración de un bot vivo devuelve 403 «Sumando este bot llegarías a …», incluidos los cambios HOT que reducen riesgo (apretar `stopLossPct`, bajar `maxNotionalCap`). En `create()` el cálculo es correcto porque el bot aún no existe. Agravante de orden: `ADJUST_MARGIN` con `countAsBotCapital` encola primero el comando (`bots.service.ts:979-1004`) y **después** llama a `raiseAssignedCapital` → `updateConfig` (`:1130-1147`); si este 403 salta, el usuario recibe un error con el comando ya en la bandeja.
 - **Reproducción / test**: `apps/api/src/modules/risk/risk.spec.ts`: usuario con `max_total_notional = 1000`, un bot vivo de 1000 de notional, `updateConfig` del mismo bot con el mismo `totalInvestment` → hoy 403; debe pasar.
 - **Propuesta**: `assertWithinLimits(userId, config, market, { excludeBotId })` y excluirlo del agregado en `updateConfig`.
-- **Decisión**: pendiente.
+- **Decisión**: hecha (2026-09-06, spec 019). `assertWithinLimits(userId, config, market, { excludeBotId })` y `currentTotalNotional(userId, excludeBotId)`: `updateConfig` excluye al propio bot del agregado. Test «al editar un bot no lo suma dos veces contra el tope total».
 
 ### F-43 — La API y el worker cortan el «día» de la pérdida diaria en medianoches distintas
 
 - **Evidencia**: `risk.service.ts:161-170` (`todayRealizedPnl` de la API) hace `new Date().setHours(0,0,0,0)` sobre el reloj del contenedor; `bot-store.ts:78-115` (la del worker) corta en la medianoche de la zona horaria del usuario, y su comentario explica que se cambió justo por eso. La misma guarda (`max_daily_loss`) se evalúa con dos ventanas diferentes según quién la mire.
 - **Impacto**: para un usuario fuera de UTC, la API puede permitir arrancar un bot que el worker pausará en el primer tick por pérdida diaria, o al revés. Confuso más que peligroso.
 - **Propuesta**: un solo cálculo compartido, en `shared`, con la zona del usuario.
-- **Decisión**: pendiente.
+- **Decisión**: hecha (2026-09-06, spec 019). `startOfDay(timezone, now)` vive en `packages/shared/src/time.ts` con test; el worker lo importa y la API lo usa con la zona del usuario en `todayRealizedPnl`.
 
 ### F-44 — El tope real de apalancamiento es 19× y no lo dice ningún formulario
 
 - **Evidencia**: `risk.service.ts:83-94` estima la liquidación con `estimateLiquidationPrice(1, leverage, direction)` —MMR plano 0,5 % (`liquidation.ts:11`), sin modo de margen— y rechaza con 403 si la distancia es menor del 5 %. Con esa fórmula, `1/lev − 0,005 < 0,05` para `lev ≥ 19`: ningún bot puede crearse con 19× o más, sea cual sea `max_leverage` (que el DTO admite hasta 50) o `market.maxLeverage` (hasta 50 en Hyperliquid). El formulario (`common.ts:78`) ofrece hasta 50× y `validateCommon` (`:199-209`) solo avisa por encima de 10×.
 - **Impacto**: el usuario ve un aviso amarillo a 12× y un 403 con otro mensaje a 19×, sin que ninguna pantalla le diga dónde está el límite de verdad. Además la regla ignora el margen aislado frente al cruzado y el MMR real del venue (Lighter publica `maintenance_margin_fraction`; Hyperliquid, `marginTables`).
 - **Propuesta**: exponer el tope efectivo en `meta.fields` o calcularlo con el MMR del mercado; decisión de producto sobre si el 5 % es el umbral deseado.
-- **Decisión**: pendiente.
+- **Decisión**: hecha (2026-09-06, spec 019). `MIN_LIQUIDATION_DISTANCE_PCT = 5` y `maxLeverageWithinDistance(mmr)` en `shared`: `validateCommon` da ERROR con el tope exacto del mercado («el máximo aquí es 16x»), `RiskService` rechaza con el mismo mensaje y el asistente filtra con la misma cuenta. El 5 % se mantiene (no hubo decisión del usuario en contra); con la tasa por mercado el tope pasa a depender del par (BTC 16×, ETH 14×, DOGE 10× en Hyperliquid).
 
 ### F-45 — El simulador ejecuta el stop-loss en el acto: no modela las órdenes condicionales
 
@@ -546,27 +547,27 @@ cada máquina (aquí `true`) pese a que `.editorconfig` pide LF.
 - **Impacto**: una venta con tope = mark no cruza si el bid está por debajo del mark, que es lo normal con un diferencial no nulo: el secuenciador la cancela y `confirmOrder` marca la fila `FILLED`. La entrada de TDCA no se reintenta (una inmediata con fila FILLED se veta siempre); un **PANIC o STOP_AND_CLOSE** puede no cerrar, con el stop ya cancelado (F-33) y el bot en `STOPPED` diciendo «posición cerrada». La frecuencia depende del signo de `mark − mid` en cada momento; hay una pregunta abierta sobre si el secuenciador ejecuta parcialmente o cancela.
 - **Reproducción / test**: en el mismo fichero: un 200 de `sendTx` en una MARKET no debe devolver `FILLED` (pendiente hasta que `trades` lo confirme); y la petición debe llevar holgura o declarar que no la lleva.
 - **Propuesta**: holgura configurable en el adaptador (como el 5 % de Hyperliquid) o `create_market_order_limited_slippage`, y acuse `PENDING` hasta ver la ejecución. Qué holgura es decisión del usuario (principio 6): cambia la conducta de bots en marcha.
-- **Decisión**: pendiente.
+- **Decisión**: corregido en el spec 013 (2026-09-06, commit `4fafcea`): la MARKET sin disparador sale con un 5 % de holgura en contra (la misma que Hyperliquid y que ya llevaban los disparadores) y su acuse es `PENDING` hasta que el sondeo de `trades` la vea; si el secuenciador la cancela, la fila vence a los cinco minutos (F-37) y el nivel se recoloca. La holgura se tomó igual a la de Hyperliquid sin pregunta al usuario: es la conducta que la ayuda de la app ya describía.
 
 ### F-48 — Lighter: un throttle en una escritura se reintenta tres veces sin enfriamiento
 
 - **Evidencia**: el SDK devuelve los errores como tupla con solo `response.data.message` (`signer.js:751-755`); «Too Many Requests!» sin estado HTTP cae en RETRYABLE (`errors.ts:50`), y `withWriteRetry` (`rate-limit.ts:108-113`) reintenta. El camino `signedWrite → limiter.run` no registra en `cooldown` (`lighter.ts:1104-1181`). La doc: «To avoid this, please ensure your clients are implementing proper backoff and retry strategies»; el cortafuegos corta 60 s a toda la IP.
 - **Propuesta**: que `unwrap` reconozca 23000 y las páginas WAF como THROTTLED y registre el enfriamiento.
-- **Decisión**: pendiente.
+- **Decisión**: corregido en el spec 013 (2026-09-06, commit `4fafcea`): `unwrap` convierte «Too Many Requests!» y las páginas del cortafuegos en THROTTLED y registra el enfriamiento; `withWriteRetry` ya no lo reintenta.
 
 ### F-49 — Lighter: las lecturas de cuenta de los bots van sin firmar y gastan el cupo de IP
 
 - **Evidencia**: `authHeaderToken()` solo se llama desde `restHeaders()` (`lighter.ts:983-988`), que solo usa `publicGet` (`:1025`, velas); `sdkHeaders.authorization` se escribe únicamente en `:1011`. Un adaptador de bot nunca pide velas, así que `account` (una por tick y bot), `orderBookDetails` y `orderBookOrders` salen sin `authorization` y cuentan contra el cupo de IP: «To bypass IP-based rate limits, clients can authenticate each request so that only L1-based rate limits apply». `accountActiveOrders` y `trades` llevan el token como cuarto argumento = query `auth` (`api.js:2583-2588`), mientras la doc marca la cabecera `authorization` como `required: true`. En el adaptador de datos de mercado el token cacheado puede quedar caducado entre renovaciones.
 - **Impacto**: el presupuesto cree repartir por cuenta lo que el venue cuenta por IP; con varios bots, CAPTCHA del WAF para todos. Si el venue deja de aceptar `auth` en la query, ningún bot ve sus órdenes ni sus fills.
 - **Propuesta**: poner la cabecera en todas las llamadas del SDK (interceptor de axios o `baseOptions` renovadas) y usar la cabecera, no la query.
-- **Decisión**: pendiente.
+- **Decisión**: corregido en el spec 013 (2026-09-06, commit `93c5a8b`): el SDK copia las cabeceras al construir su configuración, así que se guarda esa copia viva y se renueva el token antes de cada llamada (`call`, `pollCall`); las lecturas de cuenta salen con `authorization`. El argumento `auth` en la query se mantiene además de la cabecera.
 
 ### F-50 — Lighter Standard: 30 órdenes activas por mercado
 
 - **Evidencia**: doc `rate-limits` (2026-08-30): «Active Orders — Standard: Per Account 250, Per Market 30»; «Pending Orders … Standard: 50 / 10». `MarketSpec` no lo lleva, `validate()` no lo comprueba y los rechazos 21717-21720 se clasifican FATAL (`classify-check.out.txt`).
 - **Impacto**: cualquier retícula de más de 30 niveles en Lighter queda recortada en silencio (un `ERROR` por nivel sobrante, cuarentena por forma); las condicionales pendientes (stops, TP) están limitadas a 10 por mercado.
 - **Propuesta**: llevar el tope a `MarketSpec` (junto con F-23 de Aster) y validarlo al crear el bot.
-- **Decisión**: pendiente.
+- **Decisión**: corregido en el spec 013 (2026-09-06, commits `2758f1e` y `720031c`): `MarketSpec.maxActiveOrders` (Lighter 30, Aster 200), `buildPreview` avisa (WARN, no veto: el tier no se conoce) y los rechazos 21717-21720 son RULES.
 
 ### F-51 a F-56 — Lighter, resto
 
@@ -576,12 +577,12 @@ cada máquina (aquí `true`) pese a que `.editorconfig` pide LF.
 - **F-54** sin stream de cuenta (`account_all/*` documentado y no usado): sondeo cada 12 s por símbolo con `trades` de peso 600; con cuenta Standard cabe ≈ 1 bot por IP y red; el funding no se contabiliza.
 - **F-55** mapeos: `venueOrderId` = índice de cliente; `Order.status` y `type` ignorados (gemelo de F-29); `createdAt = Date.now()` en cada sondeo, así que `orderMaxAgeSeconds` de los market makers nunca dispara en Lighter; `Position.markPrice` = `last_trade_price` del catálogo; unidad de `initial_margin_fraction` por confirmar.
 - **F-56** resuscripción en ráfaga tras reconectar frente a «200 mensajes por minuto».
-- Detalle completo, citas y tests propuestos en `informes/C-lighter.md` § 4. **Decisión**: pendiente.
+- Detalle completo, citas y tests propuestos en `informes/C-lighter.md` § 4. **Decisión**: spec 013 (2026-09-06): F-51 `safely()` reconoce el vocabulario de Lighter (`94a3316`); F-52 clasificación con los mensajes literales y 21728 devuelve la orden que ya está (`720031c`, `93c5a8b`); F-53 un contador a cero tras `initialize()` se vuelve a cargar en la siguiente escritura (`93c5a8b`); F-55 `createdAt` sale de la marca del venue (`1e3c9a3`), `markPrice = last_trade_price` y `type` de las condicionales quedan anotados; F-56 resuscripción en lotes espaciados (`1e3c9a3`). **F-54** (stream de cuenta) sigue abierto como fase aparte: exige confirmar la forma de `account_all/*` con una conexión autenticada.
 
 ### F-41 — `AUDIT_LOG_ENABLE` difiere entre el compose y `.env.example`
 
 - **Evidencia**: `docker-compose.yml:261` lo pone a `false`; `apps/worker/.env.example:95` a `true`. El incidente más grave del motor —soltar todos los bots por Redis inalcanzable, `lease.service.ts:227-233`— se registra solo en `activity_log`, así que en el despliegue por defecto existe únicamente en stdout.
-- **Decisión**: pendiente (Baja).
+- **Decisión**: hecha (2026-09-06, spec 021). `AUDIT_LOG_ENABLE` por defecto `true` en el compose (API y worker), como en los `.env.example`; el comentario del compose explica por qué.
 
 ### F-68 — `withWriteRetry` reenvía cuando `verify()` lanza: estado desconocido tratado como «no entró»
 
@@ -599,7 +600,7 @@ cada máquina (aquí `true`) pese a que `.editorconfig` pide LF.
 - **Reproducción / test**: TEST local `aster-nonce.js` (dos instancias → `1788618164000000` en ambas). Tests propuestos en el repo: `aster.spec.ts` «dos adaptadores con el mismo signer no generan el mismo nonce en el mismo segundo» (hoy falla) y `errors.spec.ts` «`Nonce Expired` → RETRYABLE» (hoy falla). La confirmación final (rechazo real del venue) exige una llamada firmada, prohibida en este spec.
 - **Severidad**: Alta, candidata a Crítica; depende de F-32 (con el stop reintentado y avisado se degrada a transitorio).
 - **Propuesta**: mitigación en `002-aster-nonce`: nonce en microsegundos reales más un desplazamiento aleatorio por proceso dentro del milisegundo, generado al enviar (F-75), `-4225` reintentable; solución completa: una fuente de nonce compartida por `signer` (Redis) o que la API no firme nunca con el `signer` del worker.
-- **Decisión**: pendiente.
+- **Decisión**: mitigado en el spec 012 (2026-09-06, commit `0846b1d`): generador de nonce compartido por proceso (milisegundos × 1000 más un desplazamiento aleatorio por proceso), monótono y calculado al enviar; `-4225` → RETRYABLE (`62024a9`). La colisión entre procesos pasa a ser improbable (mismo milisegundo y mismo desplazamiento), no imposible: la fuente compartida por `signer` queda como mejora futura.
 
 ### F-70 — Aster: las liquidaciones no se reconocen (busca `LIQUIDATION`; la doc marca `autoclose-`, `CALCULATED`, `NEW_INSURANCE`/`NEW_ADL`)
 
@@ -607,67 +608,68 @@ cada máquina (aquí `true`) pese a que `.editorconfig` pide LF.
 - **Impacto**: la posición desaparece del venue y el bot cree que la tiene (B-9): coloca salidas reduce-only que el venue rechaza (`-2022`), no pausa, no avisa; `afterLiquidation` y `liquidationAction` nunca corren en Aster. Hermano de F-05 (Lighter).
 - **Test propuesto**: `streams.spec.ts` «un `ORDER_TRADE_UPDATE` con `c` que empieza por `autoclose-` (o `X` `NEW_INSURANCE`/`NEW_ADL`, o `x` `CALCULATED`) emite un fill con `liquidation: true`» (hoy falla).
 - **Propuesta**: spec `003-liquidaciones-por-venue` con F-05.
-- **Decisión**: pendiente.
+- **Decisión**: corregido en el spec 015 (2026-09-06, commit cfa50ac): la liquidación se reconoce por el tipo `LIQUIDATION`, el id de cliente `autoclose-`/`adl_autoclose`, la ejecución `x: CALCULATED` o el estado `NEW_INSURANCE`/`NEW_ADL`, y la ejecución `CALCULATED` emite su fill. Por REST (`userTrades`) sigue sin poder marcarse: no trae `clientOrderId` ni tipo.
 
 ### F-71 — Aster en modo cobertura: sin `positionSide`, con `reduceOnly`; la opción `HEDGE` no puede funcionar
 
 - **Evidencia**: `aster.ts:587-607` (sin `positionSide`, `reduceOnly: 'true'` en salidas), `:739-743` (asume unidireccional), `:766-775` (`setPositionMode` sí acepta `HEDGE`), `:410-433` (en Hedge, `positionRisk` devuelve dos filas por símbolo que no se distinguen); `bot-runner.ts:438-457` (con `AUTO` o ausente no se toca la cuenta). DOC: `positionSide` «It must be sent in Hedge Mode»; `reduceOnly` «Cannot be sent in Hedge Mode»; cambiar el modo afecta a «EVERY symbol»; `-4061 Order's position side does not match user's setting.`
 - **Impacto**: (a) cuenta en Hedge + bot `AUTO` → toda orden `-4061` → FATAL → cuarentena, bot inútil sin explicación; (b) bot con `positionMode: HEDGE` → cambia el modo de **toda la cuenta** (rompe los demás bots de la cuenta) y a partir de ahí todas sus órdenes fallan.
 - **Propuesta**: decisión de producto: vetar `HEDGE` en Aster en `validate()` y asegurar `ONE_WAY` antes de operar (`POST /fapi/v3/positionSide/dual` pesa 1 y responde `-4059` si ya está), o implementar `positionSide` sin `reduceOnly`. Spec `006-aster-modo-posicion-y-errores`.
-- **Decisión**: pendiente.
+- **Decisión**: corregido en el spec 011 (2026-09-06, commit `0a90bd2`) con la opción (a): `validateCommon` rechaza `positionMode: HEDGE` cuando el mercado es de Aster y el runner no lo aplica aunque un bot lo tuviera guardado (avisa con `POSITION_MODE_SKIPPED`). `positionSide` no se implementa: nadie lo ha pedido y exigiría una sonda firmada.
 
 ### F-72 — Aster: `mark = mid` en el ticker por WebSocket
 
 - **Evidencia**: `aster.ts:807-815` (`mark: bid.plus(ask).div(2)`); DOC `<symbol>@markPrice@1s` («pushed every 3 seconds or every second»); flujos combinados `/stream?streams=<a>/<b>`. Consumidores: `bot-runner.ts:476-480` (`lastTicker`), `:1052` (`onFill`), `:1958-1962` (`currentTicker`, < 10 s), `:2067`.
 - **Impacto**: entre ticks y en los cierres de pánico las guardas y la contabilidad ven el mid del libro; en pares ilíquidos o picos la diferencia es real. Hermano de F-25 (en Hyperliquid también el REST está mal).
 - **Propuesta**: abrir `/stream?streams=<s>@bookTicker/<s>@markPrice@1s` y fusionar. Spec `007-aster-streams`.
-- **Decisión**: pendiente.
+- **Decisión**: corregido en el spec 015 (2026-09-06, commit cfa50ac): el ticker abre el flujo combinado `bookTicker` + `markPrice@1s` y lleva la última marca en `mark` (el mid hasta que llega la primera).
 
 ### F-73 — Aster: `listenKeyExpired` se ignora
 
 - **Evidencia**: `aster.ts:957` (`if (ev.e !== 'ORDER_TRADE_UPDATE' || !ev.o) return;`), `:940-947` (un `PUT` fallido emite `DOWN` pero no reconecta; uno que vuelva a funcionar no emite `UP`); `bot-runner.ts:1194-1200`. DOC: «No more user data event will be updated after this event received until a new valid listenKey used»; «This event is not related to the websocket disconnection».
 - **Impacto**: si el keepalive falla más de 60 min (veto 418 largo, `-4225` sostenido, red) el socket sigue abierto y mudo hasta el corte de 24 h; solo el barrido REST (cada 4 ticks) recoge fills y `fillsHealthy` queda en el último estado emitido.
 - **Propuesta**: al recibir `listenKeyExpired`, cerrar el `ws` para que `ReconnectingSocket` reabra con clave nueva. Test: `streams.spec.ts` «un `listenKeyExpired` cierra el socket y la reconexión pide un listenKey nuevo». Spec `007-aster-streams`.
-- **Decisión**: pendiente.
+- **Decisión**: corregido en el spec 015 (2026-09-06, commit cfa50ac): `listenKeyExpired` fuerza la reconexión del socket de usuario (`ReconnectingSocket.reconnect`), que pide un `listenKey` nuevo.
 
 ### F-74 — Aster: `userTrades` con `startTime` sin `endTime` ni tope de 7 días
 
 - **Evidencia**: `aster.ts:554-559`; `bot-runner.ts:463` (`lastFillTs = now − 10 min` al adoptar), `:1003-1005` (solo avanza con fills propios), `:1163-1177` (un fallo del barrido es un WARN). DOC: «The time between startTime and endTime cannot be longer than 7 days»; `-1127 MORE_THAN_XX_HOURS`.
 - **Impacto**: un bot sin ejecución propia en 7 días (retícula lejos del precio, TDCA espaciado) manda `startTime` de hace más de 7 días; si el servidor responde `-1127` o acota la ventana, la red de seguridad del stream deja de devolver fills recientes con un `warn` como único aviso.
 - **Test propuesto**: `aster.spec.ts` «`getRecentFills` acota `startTime` a ahora − 7 d y manda `endTime`». Confirmación definitiva: lectura firmada (fuera de este spec).
-- **Decisión**: pendiente.
+- **Decisión**: corregido en el spec 015 (2026-09-06, commit cfa50ac): `getRecentFills` acota `startTime` a ahora − 7 días y manda `endTime`. La confirmación del `-1127` real sigue fuera del alcance del agente.
 
 ### F-75 — Aster: el nonce se genera al firmar, antes de la cola, y `-4225` es FATAL
 
 - **Evidencia**: `aster.ts:251-252,265-271` (`signedQuery` y después `call()` → `budget.take` → `limiter.run`); `rate-limit.ts:17-41` (cola FIFO a 8/s por cuenta); `venue-budget.ts:135-143` (espera sin tope; `take` es un bucle con `sleep`, no una cola: dos peticiones firmadas en orden A<B pueden salir B<A). `errors.ts:23-52`: ningún patrón casa «Nonce Expired» → FATAL (TEST `aster-classify.js`). DOC: ventana de 10 s; nonce menor que el mínimo de la lista → expirado; `-4225` «Please retry».
 - **Impacto**: con ~80 peticiones firmadas encoladas en la misma cuenta (adopción simultánea de varios bots: `marginType`, `leverage`, tres lecturas y colocaciones por bot) la última supera la ventana y llega `-4225` → FATAL → cuarentena y ticks fallidos, en vez de un reintento con nonce nuevo.
 - **Propuesta**: calcular el nonce dentro de `limiter.run`, justo antes de enviar; `-4225` → RETRYABLE (una línea en `PATTERNS`; `withRetry`/`withWriteRetry` ya llaman de nuevo a `signedQuery`). Spec `002-aster-nonce` con F-38 y F-69.
-- **Decisión**: pendiente.
+- **Decisión**: corregido en el spec 012 (2026-09-06, commits `0846b1d` y `62024a9`): la firma ocurre dentro del limitador y después del presupuesto, cada reintento vuelve a firmar, y «Nonce Expired» es RETRYABLE.
 
 ### F-76 — Aster: cabeceras `X-MBX-USED-WEIGHT-*` y `X-MBX-ORDER-COUNT-*` ignoradas
 
 - **Evidencia**: `aster.ts:291-320` (`http()` solo lee `res.status` y el cuerpo); las sondas traen `x-mbx-used-weight-1m` en cada respuesta (41 → 42 → 43 → 44). DOC: «Every request will contain X-MBX-USED-WEIGHT-…»; «Every order response will contain a X-MBX-ORDER-COUNT-… The order rate limit is counted against each account».
 - **Impacto**: el presupuesto local no se realimenta (compartido por IP con la API y cualquier otro cliente) y el cupo `ORDERS` por cuenta (F-24) no puede vigilarse.
 - **Propuesta**: entregar la cabecera al presupuesto; con F-24 en `014-caudal-y-presupuesto`.
-- **Decisión**: pendiente.
+- **Decisión**: hecha (2026-09-06, spec 020). `http()` de Aster lee `X-MBX-USED-WEIGHT-1M`, `X-MBX-ORDER-COUNT-1M` y `-10S` de cada respuesta y las entrega a `VenueBudget.observe`, que recorta los depósitos (peso y órdenes) a la fracción que el venue dice que queda; nunca los amplía. En Redis el recorte es un script propio (`CLAMP_SCRIPT`) sin esperar la respuesta. Tests «las cabeceras del venue realimentan el presupuesto» y «lo que el venue dice haber contado recorta el depósito».
 
 ### F-77 — Clasificación de errores de Aster: `-1022` no es AUTH y los rechazos por filtro no son RULES
 
 - **Evidencia**: `errors.ts:26` (`invalid.?(api|key|signature)` exige «invalid» pegado a la palabra); TEST `aster-classify.js`: `-1022 Signature for this request is not valid.` → FATAL, `-2015` → AUTH; `-2021 Order would immediately trigger.`, `-2024 Position is not sufficient.`, `-2025 Reach max open order limit.`, `-2027 Exceeded the maximum allowable position at current leverage.`, `-4004 Quantity less than min quantity.`, `-4005`, `-4013 Price less than min price.`, `-4016 Price is higher than mark price multiplier cap.` → FATAL. `errors.spec.ts:30-32` solo prueba los textos de Binance «Filter failure: …», que no existen en el capítulo de errores de Aster. Reacciones: `bot-runner.ts:2093-2110` (solo AUTH suelta el bot y avisa CRITICAL).
 - **Impacto**: una credencial con `signer` y clave que no se corresponden produce ticks FATAL hasta el cortacircuitos en vez de `AUTH_ERROR` y detach (F-06). Los rechazos por filtro producen ERROR y Telegram en vez de WARN; `-2021` (stop cuyo disparo ya está superado por un hueco de precio) deja `stopLossVivo` en falso y la forma en cuarentena cuando el motor debería cerrar a mercado (B-21); `-2025` es el rechazo de F-23.
 - **Propuesta**: filas nuevas en `errors.spec.ts` con los textos reales de Aster (`-1022` → AUTH; los ocho → RULES); confirmación firmada del código ante un agente revocado. Spec `006-aster-modo-posicion-y-errores`.
-- **Decisión**: pendiente.
+- **Decisión**: corregido en el spec 012 (2026-09-06, commit `62024a9`): `-1022` → AUTH y los rechazos por filtro → RULES, con los textos del capítulo de errores V3 en `errors.spec.ts`. La confirmación firmada ante un agente revocado sigue fuera del alcance del agente.
 
 ### F-78 — Aster: signo de la comisión sin definir (por confirmar)
 
 - **Evidencia**: `aster.ts:576` (`fee: commission` tal cual), `:994` (`fee: n`); `cycle-accounting.ts:123` (`realized = prev − fee`: positivo = pagado). DOC: el ejemplo de `userTrades` trae `"commission": "-0.07819010"` en un trade con `"maker": false`; `"n":"0", // Commission, will not push if no commission`; el signo no se define.
 - **Impacto**: si Aster expresa la comisión pagada en negativo, el motor la **suma** al realizado; si es un rebate de maker en negativo (convención Binance), acierta.
 - **Confirmación**: una lectura firmada de un `userTrades` real (fuera de este spec).
-- **Decisión**: pendiente.
+- **Decisión**: mitigado en el spec 012 (2026-09-06, commit a8c37c1): la comisión se contabiliza en valor absoluto (coste) en REST y WebSocket. Si Aster pagara rebates, se contarían como coste: error conservador. Sigue **por confirmar** con una lectura firmada.
 
 ### F-79 — Aster, menores
 
 `ASSUMED_MAX_LEVERAGE = 50` frente a 1-125 y `leverageBracket` (F-09, AS-12); el respaldo `/fapi/v1/klines` no está documentado y se dispara con cualquier error no reintentable, fijándose para siempre si v1 responde (`aster.ts:517-535`); `params.price = req.price ?? ''` descarta el precio en silencio (`:597,234`; inalcanzable desde el motor); un `-4047`/`-4048` en `marginType` aborta también el `POST /leverage` (`:711-720`; WARN en cada readopción con posición); el comentario `:702-706` («solo permite modificar en lote») es falso, `PUT /fapi/v3/order` existe; `mapStatus` acepta `EXPIRED_IN_MATCH`, que no está en el enum; `Ticker.last` es el mid (no se usa `ticker/price`); `getBalances().used` incluye `crossUnPnl`; `ACCOUNT_UPDATE` y `MARGIN_CALL` se ignoran (el funding y el aviso de riesgo del venue no llegan al motor). Detalle en `informes/C-aster.md` AS-12…AS-15 y AS-18. Lote de limpieza.
+- **Decisión**: corregido en parte en el spec 023 (2026-09-06, commit `404948d`): una orden que no es a mercado y llega sin precio se rechaza como RULES antes de firmar; `-4047`/`-4048` al fijar el modo de margen no abortan el apalancamiento; el comentario de `modifyOrder` dice que `PUT /fapi/v3/order` existe y se deja sin implementar a propósito. Aceptados: `ASSUMED_MAX_LEVERAGE = 50` (el real exige `leverageBracket` firmado), `Ticker.last` como mid (evita una petición por ticker), `used` con `crossUnPnl`, `EXPIRED_IN_MATCH` sobrante, `ACCOUNT_UPDATE`/`MARGIN_CALL` sin consumir; el respaldo `/fapi/v1/klines` ya estaba documentado en el adaptador.
 
 ### F-80 — Martingale con `tpMode: MARKET`: salida a mercado sin disparador
 
@@ -683,7 +685,7 @@ cada máquina (aquí `true`) pese a que `.editorconfig` pide LF.
 - **Impacto**: una compra en 95 (paso 5, banda 2,5) solo vive mientras el mark > 97,5: en cualquier bajada gradual se cancela en el primer latido por debajo de 97,5 y no vuelve hasta que el mark supere 107,5, ya como venta. Con los ejemplos de la guía (ETH 2 200–2 800/24 → banda 0,52 %; BTC 74 000–84 000/20 → 0,33 %; SOL 115–165/20 → 0,95 %) solo se ejecutan saltos de ese tamaño dentro de un latido. El «vaivén» prometido no se cobra. El backtest planifica una vez por vela (`backtest/engine.ts:349-354`) y **sobreestima** las ejecuciones justo aquí (F-65).
 - **Test propuesto**: `strategies.spec.ts` «una compra sigue viva mientras el precio se le acerca desde arriba» (a 96, la compra de 95 debe seguir deseada; hoy no) y un backtest a cadencia real.
 - **Propuesta**: banda solo para *no recolocar* (histéresis sobre el lado ya elegido), nunca para cancelar una línea del lado correcto. Spec `009`.
-- **Decisión**: pendiente.
+- **Decisión**: hecha (2026-09-06, spec 017, `bac95d6`). Histéresis por línea memorizada en el scratch del ciclo (`lineSides`, por precio): una línea del lado correcto vive hasta que el precio la cruza; la cruzada queda sin orden medio escalón y vuelve con el lado que toque. `onFill` la marca cruzada al ejecutarse para que, con la reutilización de ids, el motor no recoloque la misma compra encima de la que acaba de ejecutarse. Test «una compra sigue viva mientras el precio se le acerca desde arriba». Cambia la conducta de las neutrales en marcha: ejecutan en movimientos graduales, que es lo que la guía prometía.
 
 ### F-82 — GridMart: la recompra `GRID_BUY#j` borra `SAFETY#j` para el resto del ciclo
 
@@ -691,7 +693,7 @@ cada máquina (aquí `true`) pese a que `.editorconfig` pide LF.
 - **Impacto**: con los valores por defecto (4 ventas, 6 seguridades) las recompras de los escalones 1, 2 y 3 dejan sin tender las tres seguridades **más cercanas** al precio, y si estaban vivas el reconciliador las cancela. La red de promediado se vacía en silencio a medida que la rejilla trabaja.
 - **Test propuesto**: `strategies.spec.ts` «la recompra de un escalón no borra la seguridad del mismo índice» (tras `cycleAfterFill` con un fill `GRID_BUY#1`, `SAFETY#1` debe seguir en el plan; hoy falta).
 - **Propuesta**: índices de recompra en un espacio propio (`scratch.rebuys` ya los lleva) o un `onFill` que no marque `filledLevelIndexes` para `GRID_BUY`. Spec `009`.
-- **Decisión**: pendiente.
+- **Decisión**: hecha (2026-09-06, spec 017, `539d3c3`). `Strategy.rebuysOffLevelIndexes` (GridMart lo declara) y `CycleFillOptions.rebuysOffLevelIndexes`: las recompras `GRID_BUY` no marcan `filledLevelIndexes`; `applyFillToCycle`, `repairCycleFromVenue` y el backtest pasan la bandera. Sin espacio de índices nuevo: el formato del `clientOrderId` no cambia. Test «con las recompras fuera del espacio de índices, GRID_BUY no marca el escalón».
 
 ### F-83 — El contrato del parcial no está definido entre `plan()` y `reconcile()`
 
@@ -699,7 +701,7 @@ cada máquina (aquí `true`) pese a que `.editorconfig` pide LF.
 - **Impacto**: sobreexposición por línea (un 30 % más margen del diseñado en el ejemplo) o escalones a medias; las ejecuciones por tramos son la norma en libros finos.
 - **Test propuesto**: `apps/worker/src/engine/reconcile.spec.ts` «una línea de tamaño fijo con ejecución parcial no se recoloca completa» (`toReplace` vacío; hoy 1,0).
 - **Propuesta**: definir el contrato (dejar el resto en el libro, reponer exactamente el resto, o dar la línea por tomada) y aplicarlo en `reconcile` con `filledQty`. Pregunta abierta. Spec `010-parciales-y-reconcile` con F-91.
-- **Decisión**: pendiente.
+- **Decisión**: corregido en el spec 016 (2026-09-06, commits 81fe4ab y b575a62) con este contrato: una orden viva coincide con la deseada si la cantidad pedida es igual a lo que queda vivo o a la original (`reconcile`), y un escalón se marca como tomado solo cuando su orden se completa (`cycleAfterFill` con `levelComplete`, que el store calcula con `filled_qty ≥ qty`). El resto de un parcial se queda en el libro.
 
 ### F-84 — `REANCHOR_GRID` («Recentrar la retícula») hace daño o nada según la estrategia
 
@@ -731,21 +733,21 @@ cada máquina (aquí `true`) pese a que `.editorconfig` pide LF.
 - **Impacto**: con posición 0 y tope 100, un grid de 20 líneas × 60 USDC tiende las 20 (1 200 USDC de compras vivas); el tope actúa después de superarse.
 - **Test propuesto**: «el tope de notional acota lo que se TIENDE, no solo lo ya abierto» (con `maxNotionalCap: '30'` lo tendido ≤ 30; hoy 40).
 - **Propuesta**: recorte por notional proyectado como en las escaleras. Spec `009`.
-- **Decisión**: pendiente.
+- **Decisión**: hecha (2026-09-06, spec 017, `3433c39`). Recorte por notional proyectado (posición abierta más compras vivas) de la línea más cercana hacia fuera y sin huecos; la nota dice «Tope de notional: N de M entradas tendidas». Test «el tope de exposición acota lo que se TIENDE, no solo lo ya abierto».
 
 ### F-88 — Grid Classic: el preview cuenta solo las líneas de debajo del precio como peor caso
 
 - **Evidencia**: `grid-classic.ts:262-271` (`isEntry` = líneas del lado de entrada en el momento del preview), `common.ts:317-321,341-342` (peor caso, media y liquidación sobre ese subconjunto); `:158-163` (`sellPriceFor` de la última línea → `upper + (upper − prev)`, fuera del rango que la guía declara sin líneas).
 - **Impacto**: ejemplo de la guía (72 000–86 000, 20 niveles, 600 USDC, 2×, precio 78 910): preview 600/300 donde el peor caso real —que la guía sí cuenta— es 1 200/600. En BASE además cambia la cantidad (F-03).
 - **Test propuesto**: «el peor caso del preview cuenta TODAS las líneas» (`worstCaseNotional ≈ 100`; hoy 40).
-- **Decisión**: pendiente.
+- **Decisión**: hecha (2026-09-06, spec 017, `3433c39`). Todas las líneas cuentan como entrada en la vista previa: notional, margen, media y liquidación del peor caso completo. Los números de las guías se regeneraron con `verificar-ejemplos` (configuración A: 1.191,72 / 600). Test «la vista previa cuenta TODAS las líneas como peor caso».
 
 ### F-89 — GridMart: los trozos de una venta sobrescriben la recompra; polvo del núcleo
 
 - **Evidencia**: `gridmart.ts:547-553` (`rebuys[j] = { price, qty: fill.qty }` **reemplaza** la entrada previa del mismo `j`); `:199-212` (reparto del núcleo truncado por escalón: núcleo 0,00196 BTC y tres ventas al 33,33 % → 3 × 0,00065 = 0,00195 → 0,00001 BTC que ninguna orden desea, por debajo de `minQty`).
 - **Impacto**: una venta ejecutada en varios eventos (norma en libros finos) recompra solo el último trozo: el núcleo vendido no vuelve. El polvo deja el ciclo sin cerrar nunca y `RESTO_INCERRABLE` no salta porque no hay orden que revisar.
 - **Test propuesto**: «una venta ejecutada en dos trozos recompra la suma, no el último trozo» (`rebuys[0].qty === '0.05000'`; hoy `'0.03000'`); «tres ventas al 33 % no dejan polvo».
-- **Decisión**: pendiente.
+- **Decisión**: hecha (2026-09-06, spec 017, `539d3c3`). `onFill` suma los trozos de una venta en la recompra del escalón; `gridSellLevels` entrega el resto del núcleo al último escalón (lo que el step del venue no deje vender sigue siendo polvo, y la guía lo dice así). Tests «los trozos de una venta de rejilla suman en la recompra» y «el reparto del núcleo entrega el resto al último escalón».
 
 ### F-90 — Revisión WARM de la forma de la escalera con inventario: `filledLevelIndexes` sin remapear
 
@@ -753,7 +755,7 @@ cada máquina (aquí `true`) pese a que `.editorconfig` pide LF.
 - **Impacto**: Grid Classic con la línea 3 comprada a 95 y un rango nuevo desplazado hacia abajo: la venta de la línea 3 se coloca en la nueva línea 4, que puede quedar **por debajo** de 95 (reduce-only a pérdida), y la compra de la 3 no se tiende; `sizingMode` WARM recalcula en BASE la venta de un nivel comprado en QUOTE; Martingale: el índice 1 ejecutado a −3 % pasa a significar −1 %, hueco en la escalera.
 - **Test propuesto**: `bot-runner.spec.ts` reload WARM con `filledLevelIndexes` no vacío.
 - **Propuesta**: remapear (o rechazar la revisión con inventario) para esos campos. Spec `009`.
-- **Decisión**: pendiente.
+- **Decisión**: hecha (2026-09-06, spec 017, `77cca8a`). Opción «rechazar»: `FieldMeta.reshapes` en los campos de forma (Grid Classic, Neutral Grid, escaleras y rejilla de ventas de GridMart) y `updateConfig` responde 409 `RESHAPE_WITH_INVENTORY` mientras el ciclo abierto tenga `filled_level_indexes`; con el ciclo limpio sigue siendo WARM con confirmación. Remapear queda descartado: habría que decidir qué venta corresponde a cada compra tras mover las líneas. Test `bots-reshape.spec.ts`.
 
 ### F-91 — El stop se revisa en `order-gate` al precio de disparo
 
@@ -774,11 +776,19 @@ cada máquina (aquí `true`) pese a que `.editorconfig` pide LF.
 - **Evidencia**: `liquidation.ts:11,23-37` («Es OPTIMISTA», `:5-10`); la fórmula LONG `entry × (1 − 1/lev + mmr)` frente a la aislada exacta `entry × (1 − 1/lev)/(1 − mmr)` (error pequeño); el dominante es el MMR: Hyperliquid publica el mantenimiento como la mitad del margen inicial al apalancamiento máximo (BTC 40× → 1,25 %; ETH 25× → 2 %; DOGE/kPEPE 10× → 5 %; por confirmar), Aster por `leverageBracket`, Lighter por mercado. Consumidores: `common.ts:342` (preview), `risk.service.ts:86-95` (F-44), `dry-run.ts:706-713`; **la guarda viva usa el `liquidationPrice` del venue** (`bot-runner.ts:1579-1580`).
 - **Impacto**: distancias de liquidación en el preview 4-5 puntos mejores de lo real en alts (DOGE 5× LONG: −19,5 % frente a −15 %). Nunca decide una acción en producción.
 - **Propuesta**: MMR por mercado en `MarketSpec` (Hyperliquid `maxLeverage`, Aster `leverageBracket`, Lighter `min_initial_margin_fraction`). Spec `012`.
-- **Decisión**: pendiente.
+- **Decisión**: hecha (2026-09-06, spec 019). `MarketSpec.maintenanceMarginRate` (Hyperliquid: la mitad del margen inicial al apalancamiento máximo; Lighter: `maintenance_margin_fraction`) y `maintenanceMarginRateOf(market)` con esa regla como respaldo cuando la ficha no lo trae (Aster, y las fichas leídas de la base, que no lo guardan). La usan la vista previa, la puerta del 5 % de la API, el asistente y la cobertura de la escalera. El simulador sigue con la tasa plana (una opción por adaptador, no por mercado). Los números de las guías se regeneraron.
 
 ### F-94 — Grids, Martingale y TDCA: menores
 
 Etiquetas `GRID_BUY`/`GRID_SELL` invertidas en SHORT (Grid Classic `:317,331`, GridMart; contabilidad correcta porque `GRID_BUY` ∈ `ENTRY_KINDS`); Grid Classic avisa de paso < 0,05 % como umbral de comisiones (mínimo aceptable) y no menciona funding en ninguna parte; Neutral Grid usa banda aritmética con espaciado GEOMETRIC (`:318-323`; dos vecinas pueden caer en la banda) y recoloca la retícula entera al pasar exactamente por cero (cierre de ciclo → todos los ids cambian); la guía de Martingale mezcla margen y notional en el ejemplo (`martingale.guide.ts`), `validateLadderConfig` compara la cobertura con `100/lev` sin MMR (`:183`) y `takeProfitPct.min = 0,05` está por debajo de una ida y vuelta (HL 0,06 %); `defaults()` de GridMart deja `cooldownMinutes` a 0 mientras el campo muerto enseña 1; TDCA compara `lastEntryAt` del venue con `ctx.now` del motor (B-22) y sus comandos `ADD_SAFETY_NOW`/`REANCHOR_GRID` son inertes en la app; `targetLeverage` del contrato sin consumidor; `QTY_EPSILON = 1e-8` y `MAX_LEVEL_INDEX = 512` refutados como riesgo (documentales); `testing.ts:15-19` desfasado («el worker los usa también»: ningún importador fuera de los specs); `liquidationDistancePct` sin signo; el mensaje de `order-gate` ante `maxQty` habla de «mínimo». Detalle en `informes/A-grids.md` §9 «Bajas». Lote de limpieza.
+- **Decisión**: corregido en parte en el spec 023 (2026-09-06, commit `19f47f5`): la banda de rearme de Neutral Grid es la mitad del paso LOCAL de cada línea (con espaciado geométrico el paso no es uniforme); la guía in-app de Martingala distingue margen y notional y cita la liquidación con el margen de mantenimiento; el comentario de `testing.ts` no promete un uso del worker que no existe. La cobertura frente a la liquidación con MMR se corrigió en el spec 019 (F-44/F-93). Aceptados o del usuario: las etiquetas `GRID_BUY`/`GRID_SELL` en corto (nombran el papel del nivel; documentado), la recolocación de la neutral al cruzar cero (cierre de ciclo por diseño), el mínimo de `takeProfitPct` y los valores de fábrica de GridMart (decisión del usuario), el reloj del venue en TDCA (B-22), `targetLeverage` (F-12), el funding sin modelar (documentado en riesgo §9).
+
+### F-95 — La fila de `markets` no guardaba los campos del venue
+
+- **Síntoma**: los specs 013 (`maxActiveOrders`), 014 (`maxSignificantDigits`), 019 (`maintenanceMarginRate`) y 023 (`maxMarketQty`) añadieron campos a `MarketSpec` y los adaptadores los rellenan, pero el catálogo (`markets.service.ts`: `upsertAll`, `getSpec`, `list`), el motor (`bot-store.ts`: `marketSpec`) y la app (`market-spec.ts`: `toMarketSpec`) construyen el mercado desde la fila de `markets`, que solo tenía las columnas de siempre.
+- **Impacto**: en Hyperliquid la estrategia redondeaba al tick sin la regla de cinco cifras y el adaptador sí la aplicaba (`formatPrice`, `maxSignificantDigits ?? 5`): 79 583,5 frente a 79 584, y el reconciliador recolocaba la orden en cada tick (F-04 seguía vivo en producción). El WARN de la vista previa por retícula mayor que el tope de órdenes (F-50, F-23) no se emitía nunca desde la API ni desde la app. La tasa de mantenimiento real de Lighter se perdía (la regla por apalancamiento máximo la sustituía; para Hyperliquid coincide). El cierre troceado de Aster (F-22) no conocía su tope.
+- **Hallado**: 2026-09-06, durante el spec 023, al seguir el camino de `maxMarketQty` hasta el motor.
+- **Decisión**: corregido en el spec 024 (2026-09-06, commit `6199b8e`): cuatro columnas opcionales en `markets` (migración aditiva), la sincronización las escribe, `getSpec`/`marketSpec`/`list` las devuelven y la app las lleva a su `MarketSpec`. Hasta la primera sincronización tras desplegar, todo se comporta como antes.
 
 ## Verificado OK
 
@@ -847,16 +857,17 @@ reparto está en `specs/008-guia-de-uso/informes/revision-estrategias.md`.
 |---|---|---|---|---|
 | 009 | `protecciones-y-cierre` | F-33, F-02, F-35 (mitigado), F-36, F-37, F-91 (mitigación), F-13 (solo `stopLossPct` ∈ (0,100) y `maxDailyLossPct` > 0) | Alta | hecho (2026-09-06) |
 | 010 | `comandos-y-ciclo` | F-80, F-84, F-85, F-86, F-92 | Alta | hecho (2026-09-06) |
-| 011 | `margen-y-modo-posicion` | F-34, F-08, F-71 (juntos: reexponer `AccountHandle` sin vetar `HEDGE` destaparía el cambio de modo de toda la cuenta en Aster) | Alta | borrador |
-| 012 | `aster-nonce-y-errores` | F-69, F-75, F-38, F-77, F-78 | Alta | propuesto |
-| 013 | `lighter-mercado-y-cupo` | F-47, F-48, F-49, F-50, F-51, F-52, F-53, F-55, F-56, F-16 (Lighter); F-54 como fase aparte | Alta | propuesto |
-| 014 | `hyperliquid-tick-y-marca` | F-04, F-04b, F-25, F-26, F-27, F-28, F-16 (Hyperliquid) | Alta | propuesto |
-| 015 | `liquidaciones-y-streams-por-venue` | F-05, F-70, F-72, F-73, F-74 | Alta | propuesto |
-| 016 | `parciales-y-reconcile` | F-83, F-17 | Alta | propuesto |
-| 017 | `grids-dimensionado-y-preview` | F-81, F-82, F-89, F-03, F-87, F-88, F-90, F-14 | Alta | propuesto |
-| 018 | `market-makers` | F-57, F-58, F-59, F-60, F-61, F-62, F-63, F-15 (parte MM), F-64, F-67 | Alta | propuesto |
-| 019 | `validacion-y-parametros-muertos` | F-12, resto de F-13, F-93, F-42, F-44, F-11, F-43 | Media | propuesto |
-| 020 | `caudal-y-presupuesto` | F-10, F-24, F-76 | Media | propuesto |
-| 021 | `motor-errores-y-salud` | F-06, F-07, F-18, F-40, F-41, F-39 | Media | propuesto |
-| 022 | `simulador-y-backtest` | F-65 (y backtest a cadencia real para medir F-81) | Media | propuesto |
-| 023 | `limpieza-docs-y-tests` | F-19, F-20, F-21, F-22, F-23, F-29, F-66, F-79, F-94 | Baja | propuesto |
+| 011 | `margen-y-modo-posicion` | F-34, F-08, F-71 (juntos: reexponer `AccountHandle` sin vetar `HEDGE` destaparía el cambio de modo de toda la cuenta en Aster) | Alta | hecho (2026-09-06) |
+| 012 | `aster-nonce-y-errores` | F-69, F-75, F-38, F-77, F-78 | Alta | hecho (2026-09-06; F-69 y F-78 mitigados) |
+| 013 | `lighter-mercado-y-cupo` | F-47, F-48, F-49, F-50, F-51, F-52, F-53, F-55, F-56, F-16 (Lighter); F-54 como fase aparte | Alta | hecho (2026-09-06; F-54 abierto) |
+| 014 | `hyperliquid-tick-y-marca` | F-04, F-04b, F-25, F-26, F-27, F-28, F-16 (Hyperliquid) | Alta | hecho (2026-09-06; F-27 mitigado) |
+| 015 | `liquidaciones-y-streams-por-venue` | F-05, F-70, F-72, F-73, F-74 | Alta | hecho (2026-09-06) |
+| 016 | `parciales-y-reconcile` | F-83, F-17 | Alta | hecho (2026-09-06) |
+| 017 | `grids-dimensionado-y-preview` | F-81, F-82, F-89, F-03, F-87, F-88, F-90, F-14 | Alta | hecho (2026-09-06) |
+| 018 | `market-makers` | F-57, F-58, F-59, F-60, F-61, F-62, F-63, F-15 (parte MM), F-64, F-67 | Alta | hecho (2026-09-06) |
+| 019 | `validacion-y-parametros-muertos` | F-12, resto de F-13, F-93, F-42, F-44, F-11, F-43 | Media | hecho (2026-09-06; F-11 y parte de F-12 quedan para el usuario) |
+| 020 | `caudal-y-presupuesto` | F-10, F-24, F-76 | Media | hecho (2026-09-06) |
+| 021 | `motor-errores-y-salud` | F-06, F-07, F-18, F-40, F-41, F-39 | Media | hecho (2026-09-06) |
+| 022 | `simulador-y-backtest` | F-65 (y backtest a cadencia real para medir F-81) | Media | hecho (2026-09-06) |
+| 023 | `limpieza-docs-y-tests` | F-19, F-20, F-21, F-22, F-23, F-29, F-66, F-79, F-94 | Baja | hecho (2026-09-06) |
+| 024 | `mercados-campos-del-venue` | F-95 (hallado en el 023) | Alta | hecho (2026-09-06) |

@@ -16,9 +16,8 @@
 - **Martingala y GridMart con apalancamiento tienen riesgo de ruina real**: el peor caso es la suma de
   todos los niveles multiplicada por el apalancamiento, y aparece en la vista previa **antes** de crear el
   bot. Léelo.
-- **La vista previa no es una promesa.** Es la escalera que se tendería y el peor caso si se llenara. En
-  dos casos hoy enseña menos de lo real: la rejilla clásica cuenta la mitad de las líneas (F-88) y los
-  market makers no aplican el ×0,7 del perfil conservador al tamaño (F-57).
+- **La vista previa no es una promesa.** Es la escalera que se tendería y el peor caso si se llenara, con
+  los tamaños que de verdad se mandan.
 
 ---
 
@@ -86,7 +85,8 @@ que no cumple.
 
 - El semáforo de la app: **verde ≥ 25 %, ámbar entre 10 y 25 %, rojo < 10 %**. La API rechaza cualquier
   bot cuya liquidación estimada quede a **menos del 5 %**.
-- La estimación usa una tasa de mantenimiento del 0,5 %, **optimista** en altcoins: resta cinco puntos.
+- La estimación usa la tasa de mantenimiento del mercado (la mitad del margen inicial a su apalancamiento
+  máximo): en una altcoin de 10× hay cinco puntos menos de distancia que en BTC con el mismo apalancamiento.
 - **Recomendación**: 1× o 2× en todo lo que retenga inventario; nunca más de 3× en las que promedian a la
   baja. Un market maker gana céntimos muchas veces: multiplicar el riesgo por diez para ganar los mismos
   céntimos no compensa.
@@ -140,8 +140,8 @@ del exchange antes de dejar un bot con inventario varios días, y cuenta con ell
   comisiones**. Un ciclo maker+maker cuesta ≈ 0,04 %; uno taker+maker ≈ 0,07 %. La app avisa por debajo
   de 0,05 % de paso, pero eso es el mínimo aceptable, no un buen valor: pasos del 0,5 % al 1,5 % y take
   profits ≥ 0,5 % es lo razonable.
-- En el **Market Maker V2**, «Estimación de comisión» viene a **0** de fábrica: ponla, o el suelo de
-  beneficio no cubre nada (F-15).
+- En el **Market Maker V2**, «Estimación de comisión» viene a **0** de fábrica: ponla (la app avisa si la
+  dejas a 0), o el suelo de beneficio no cubre nada.
 - Una operación **en rojo** en el historial del exchange tras un par compra-venta cerrado **es normal**:
   el exchange calcula el PnL contra el precio medio de toda la posición, no por nivel. Lo que importa es
   el `CYCLE_CLOSED` del bot y su PnL.
@@ -153,12 +153,12 @@ del exchange antes de dejar un bot con inventario varios días, y cuenta con ell
 | Bot | No lo uses si… |
 |---|---|
 | [Rejilla clásica](./grid-classic.md) | el par está en tendencia clara, el paso no cubre comisiones, o el par apenas se mueve |
-| [Rejilla neutral](./neutral-grid.md) | el precio se mueve **despacio** (la banda muerta cancela las líneas antes de tocarlas, F-81), o no vas a poner Exposición máxima |
+| [Rejilla neutral](./neutral-grid.md) | el par está en tendencia y no vuelve al ancla, o no vas a poner Exposición máxima |
 | [DCA temporizado](./tdca.md) | buscas operaciones rápidas, el par está en caída libre, o piensas apalancarte por encima de 3× |
 | [Martingala](./martingale.md) | el par cae y no vuelve, usas apalancamiento alto, o no has mirado el tamaño del último escalón |
 | [GridMart](./gridmart.md) | es tu primer bot, quieres algo predecible, o vas a operarlo en Lighter |
-| [Market Maker V1](./market-maker.md) | el par es ilíquido, quieres ir «largo» (Intención Long solo pone compras), o combinas stop loss con acción al límite distinta de pausar (F-02) |
-| [Market Maker V2](./market-maker-v2.md) | no vas a poner tu comisión real, o esperas que el «techo» del spread sea un techo con varias capas (F-60) |
+| [Market Maker V1](./market-maker.md) | el par es ilíquido, quieres ir «largo» (Intención Long solo pone compras), o vas a operarlo en Lighter (F-54) |
+| [Market Maker V2](./market-maker-v2.md) | no vas a poner tu comisión real, o vas a operarlo en Lighter (F-54) |
 
 Y para **todas**: no operes a mano ni con otro bot **el mismo par en la misma cuenta**: el exchange
 combina las posiciones y el bot deja de reconocer la suya. No dejes una rejilla con el precio muy fuera de
@@ -173,7 +173,7 @@ Se lee de más nuevo a más viejo. Lo **ámbar** (WARN) y lo **rojo** (CRITICAL)
 | Si ves… | Haz… |
 |---|---|
 | `RISK_GUARD_TRIPPED` | Lee cuál saltó y la coletilla del stop. El bot está pausado con la posición abierta: decide tú. |
-| `LIQUIDATION_NEAR` | Aporta margen (desde el exchange, F-34), cierra parte o cierra todo. Ya. |
+| `LIQUIDATION_NEAR` | Aporta margen («Aportar margen» en el menú del bot, o desde el exchange), cierra parte o cierra todo. Ya. |
 | `AUTH_ERROR` | La credencial no vale: revísala. El bot no puede operar. |
 | `ORDER_UNVIABLE` repetido | Un nivel no llega al mínimo: menos niveles o más capital. |
 | `POSITION_BELOW_MINIMUM` | Un resto que ninguna orden puede cerrar: ciérralo a mano en el exchange. |
@@ -188,14 +188,16 @@ La lista completa con su significado, en [comandos, guardas y eventos](./comando
 ## 10. Cambiar cosas con el bot en marcha
 
 - 🔥 **En caliente**: se aplica en la siguiente revisión sin tocar órdenes ni posición.
-- 🌤️ **En tibio**: cancela y recoloca las órdenes; la posición sigue; pide confirmación. **No cambies la
-  forma de una escalera o rejilla con inventario** (rango, niveles, escalas): las órdenes se recolocan
-  sobre índices que ya no significan lo mismo (F-90). Con la posición en cero, sin problema.
+- 🌤️ **En tibio**: cancela y recoloca las órdenes; la posición sigue; pide confirmación. La **forma** de
+  una escalera o rejilla (rango, niveles, escalas) **no se puede cambiar con escalones ejecutados** en el
+  ciclo: la API lo rechaza y te dice que cierres la posición o esperes al fin del ciclo. Con el ciclo
+  limpio, sin problema.
 - ❄️ **En frío**: hay que crear otro bot.
 - «Recentrar la retícula» solo existe en las escaleras (Martingala y GridMart) y pide confirmación: vuelve a
   tender la escalera entera bajo el precio actual con la posición abierta. En las demás estrategias el menú
-  no lo ofrece y el motor lo rechaza diciendo el motivo. «Aportar margen» **falla siempre** (F-34): hazlo
-  desde el exchange.
+  no lo ofrece y el motor lo rechaza diciendo el motivo. «Aportar margen» mueve colateral a la posición
+  aislada y, si marcaste contarlo como capital, el capital asignado sube cuando el exchange confirma la
+  transferencia, no antes.
 
 ---
 
@@ -204,13 +206,10 @@ La lista completa con su significado, en [comandos, guardas y eventos](./comando
 - **60 peticiones por minuto por IP** en la cuenta Standard; al pasarse, una página CAPTCHA durante 60 s.
   El motor gasta un 15 % menos del cupo publicado y reserva un 20 % para escrituras (cancelaciones), pero
   con varios bots en Lighter desde la misma IP el cupo se nota.
-- **30 órdenes activas por mercado** (y 10 condicionales pendientes): una rejilla de más de 30 líneas nunca
-  se completa y el exceso se rechaza en silencio (F-50).
-- Las **órdenes a mercado** se mandan con el precio de marca como tope, sin holgura: una compra o un cierre
-  pueden no cruzar y quedar como «ejecutados» en la base sin serlo (F-47). Afecta al DCA, a la entrada base
-  de las escaleras y a «Parar y cerrar».
-- Las **caducidades por edad** de los market makers (`orderMaxAgeSeconds`, `exitOrderTtlSeconds`) no
-  funcionan en Lighter (F-55).
+- **30 órdenes activas por mercado** (y 10 condicionales pendientes): la vista previa avisa si la rejilla
+  tiende más; el exceso lo rechaza el venue orden a orden.
+- Las **órdenes a mercado** salen con un 5 % de holgura y quedan pendientes hasta que el sondeo de
+  ejecuciones (cada 12 s) las confirma; sin stream de cuenta (F-54), todo lo que ejecuta se ve con retraso.
 
 Mientras esos hallazgos estén abiertos: rejillas pequeñas, sin market makers, y comprobar los cierres en la
 web del exchange. Detalle en [venues y mínimos](./venues-y-minimos.md).

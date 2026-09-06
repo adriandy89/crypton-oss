@@ -1,6 +1,6 @@
 # 011 — Margen y modo de posición: «Aportar margen» funciona y la cobertura de Aster no rompe la cuenta
 
-Estado: `borrador` · Tipo: `cambio` · Rama: `spec/011-margen-y-modo-posicion`
+Estado: `hecho` (2026-09-06) · Tipo: `cambio` · Rama: `spec/011-margen-y-modo-posicion`
 
 ## Objetivo
 
@@ -37,13 +37,17 @@ F-71 en producción.
 - **R-1** `AccountHandle` expone `adjustIsolatedMargin` y `setPositionMode`; `paper-accounts.spec.ts` «el
   handle expone adjustIsolatedMargin» pasa; `ADJUST_MARGIN` mueve margen en el simulador y en los tres
   adaptadores.
-- **R-2** La API solo actualiza `total_investment` tras el acuse del worker (o lo revierte si el comando
-  falla), y el evento `MARGIN_ADJUSTED` lleva el importe real.
-- **R-3** Decisión del usuario: (a) vetar `HEDGE` en Aster en `validate()` y asegurar `ONE_WAY` antes de
-  operar, o (b) implementar `positionSide` en el adaptador de Aster. Recomendación: (a) ahora, (b) si
-  alguien lo pide.
-- **R-4** `ADJUST_MARGIN` y `ADD_SAFETY_NOW` marcan el comando como en ejecución **antes** de tocar el
-  venue, y `recoverStale` no desreclama comandos vivos.
+- **R-2** La API solo actualiza `total_investment` al recibir el acuse `MARGIN_ADJUSTED` del worker, que
+  lleva el id del comando; la intención (`countAsBotCapital`) viaja en la fila del comando y un update
+  condicional sobre esa bandera impide que varias réplicas de la API sumen dos veces. Si el comando falla,
+  no hay nada que revertir porque nada se subió.
+- **R-3** Se toma la opción (a): `validateCommon` rechaza `positionMode: HEDGE` cuando el mercado es de
+  Aster y el runner no lo aplica aunque un bot lo tuviera guardado (avisa con `POSITION_MODE_SKIPPED`).
+  `ONE_WAY` sí se aplica al arrancar en Aster (el adaptador ya trata «no need to change» como éxito). La
+  opción (b), `positionSide` en el adaptador, queda para cuando alguien la pida: exige sonda firmada.
+- **R-4** `ADJUST_MARGIN` se cierra en la bandeja **antes** de tocar el venue (como mucho una vez) y
+  `recoverStale` no desreclama comandos cuyo worker sigue teniendo el lease del bot. `ADD_SAFETY_NOW` no
+  hizo falta: su orden lleva `clientOrderId` y una repetición choca con la fila ya ejecutada.
 
 ## Criterios de aceptación
 

@@ -77,12 +77,15 @@ venue y red que comparten todos los bots de la misma máquina (o de la misma IP,
 |---|---|---|---|---|
 | Hyperliquid | 1.200 / min | peso (las lecturas normales pesan 2; las velas, 20 + n/60) | 85 % del cupo (≈ 17/s) | Rechazos temporales |
 | **Lighter** (Standard) | **60 / min** | **peticiones** (no peso) | 85 % (≈ 0,85/s) | **CAPTCHA durante 60 s** |
-| Aster | 2.400 / min | peso (1 con símbolo; hasta 40 sin símbolo) | 85 % (≈ 34/s) | **Veto de IP de hasta tres días** |
+| Aster | 2.400 / min de peso **y** 1.200 órdenes / min (300 cada 10 s) | peso (1 con símbolo; hasta 40 sin símbolo) y órdenes | 85 % (≈ 34/s de peso; 17 órdenes/s) | **Veto de IP de hasta tres días** |
 
-Dos detalles de diseño que te afectan:
+Cuatro detalles de diseño que te afectan:
 
-- El **20 % del depósito está reservado a escrituras** (colocar y cancelar): una avalancha de lecturas no
-  puede dejar sin caudal a la cancelación de un pánico.
+- El **20 % del depósito está reservado a escrituras**: colocar, modificar, cancelar, fijar el apalancamiento
+  y ajustar margen. Una avalancha de lecturas no puede dejar sin caudal a la cancelación de un pánico.
+- En Aster el presupuesto cuenta además las **órdenes** colocadas (sus dos límites, con margen) y se
+  **realimenta** con las cabeceras `X-MBX-USED-WEIGHT` y `X-MBX-ORDER-COUNT` de cada respuesta: si otro
+  cliente de la misma IP gasta cupo, el motor lo ve y frena.
 - Testnet y mainnet **no comparten** presupuesto.
 - El simulador y el backtest **no consumen cupo**.
 
@@ -95,33 +98,26 @@ despliegue.
 
 ## 4. Límites que el motor todavía no modela
 
-> ⚠️ **Limitación conocida (F-50, Lighter, abierta a 2026-09-06).** Lighter Standard admite **30 órdenes
-> activas por mercado** (250 por cuenta) y **10 condicionales pendientes** por mercado. El motor no lo sabe:
-> una rejilla de más de 30 líneas nunca se completa, el exceso se rechaza en silencio (un error por nivel
-> sobrante, en cuarentena) y los rechazos se clasifican como fatales.
-> **Hasta que se corrija:** en Lighter, ≤ 30 líneas vivas contando compras, ventas, TP y stop.
+**Órdenes activas por mercado.** Lighter Standard admite **30** (250 por cuenta) y **10 condicionales
+pendientes** por mercado; Aster, **200** por símbolo y **10 algorítmicas** (condicionales: el stop-loss es
+una por bot, así que ese segundo tope no se alcanza). La vista previa avisa cuando la configuración tiende
+más niveles que el tope (es un aviso, no un veto: el tope depende del tier de la cuenta, que la app no
+conoce), y si el venue rechaza el exceso, el rechazo se clasifica como regla del mercado, no como avería. En
+Lighter, cuenta compras, ventas, TP y stop: ≤ 30 líneas vivas. En Aster, una retícula de 200 niveles más su
+take profit y su stop supera el cupo: quédate por debajo.
 
-> ⚠️ **Limitación conocida (F-23, Aster, abierta a 2026-09-06).** Aster admite **200 órdenes por símbolo**
-> y **10 órdenes algorítmicas** (condicionales: stops). Una retícula de 200 niveles agota el cupo y las
-> últimas órdenes se rechazan una a una. **Hasta que se corrija:** bastante menos de 200 líneas en Aster.
+**Órdenes a mercado en Lighter.** Salen con un **5 % de holgura** en contra (la misma que Hyperliquid) y su
+acuse queda **pendiente** hasta que el sondeo de ejecuciones (cada 12 s) las confirma; si el secuenciador
+las cancela, la fila vence a los cinco minutos y el nivel se recoloca. La hora de creación de las órdenes
+vivas es la del venue, así que las caducidades por edad de los market makers también funcionan aquí.
 
-> ⚠️ **Limitación conocida (F-47, Lighter).** Las órdenes **a mercado** se mandan con el precio de marca
-> como tope y sin holgura; si el mejor precio contrario está peor que el mark (lo normal con un
-> diferencial no nulo), el secuenciador **cancela la orden** y el motor la marca **ejecutada** sin serlo.
-> Afecta a la entrada del DCA, a la base de las escaleras, a «Adelantar seguridad», a «Cerrar ahora» y a
-> «Parar y cerrar». **Hasta que se corrija:** en Lighter, comprueba en la web del exchange que las órdenes
-> a mercado se ejecutaron; prefiere Hyperliquid o Aster para DCA y escaleras.
+**Liquidaciones.** En los tres venues una liquidación del exchange llega marcada como tal: el bot la
+reconoce, pausa y avisa en vez de contarla como una ejecución propia (en Lighter por el tipo de la
+ejecución; en Aster por el id `autoclose-`, la ejecución `CALCULATED` o el estado `NEW_INSURANCE`/`NEW_ADL`;
+en Hyperliquid por `dir`). Aun así, si el semáforo llegó al rojo, comprueba la posición en el venue.
 
-> ⚠️ **Limitación conocida (F-55, Lighter).** La hora de creación de las órdenes se toma del reloj local al
-> leerlas, así que las **caducidades por edad** de los market makers (`orderMaxAgeSeconds`, 120 s por
-> defecto en la V2, y `exitOrderTtlSeconds`) **nunca disparan** en Lighter.
-
-> ⚠️ **Limitación conocida (F-05 / F-70, Lighter y Aster).** Una **liquidación del exchange** puede entrar
-> como una ejecución normal (Lighter) o descartarse (Aster): el bot cree seguir en posición y no pausa.
-> **Hasta que se corrija:** si el semáforo llegó al rojo, comprueba la posición en el venue.
-
-> ⚠️ **Limitación conocida (F-71, Aster).** «Modo de posición = Cobertura» **no puede funcionar** en Aster:
-> cambia el modo de toda la cuenta y a partir de ahí toda orden se rechaza. Déjalo en Automático.
+**Modo cobertura en Aster**: el formulario lo rechaza. Cambiaría el modo de toda la cuenta (afecta a todos
+tus bots en Aster) y el bot no podría operar; usa Automático o Unidireccional.
 
 ---
 
@@ -143,8 +139,8 @@ despliegue.
 |---|---|---|---|
 | Mínimo por orden | 10 USDC | 10 USDC | 5 USDT |
 | Cupo | Holgado | **Muy estrecho** (60/min) | Holgado, castigo severo |
-| Órdenes activas por mercado | (sin límite conocido que afecte) | **30** (F-50) | 200 (F-23) |
-| Órdenes a mercado | Con holgura del adaptador | **Sin holgura** (F-47) | Con holgura |
-| Caducidad por edad (MM) | ✅ | ❌ (F-55) | ✅ |
-| Modo cobertura | — | — | ❌ No usar (F-71) |
-| Recomendación hoy | Todo | Rejillas pequeñas y DCA con vigilancia; sin market makers | Todo salvo cobertura; menos de 200 líneas |
+| Órdenes activas por mercado | (sin límite conocido que afecte) | **30** (la vista previa avisa) | 200 (la vista previa avisa) |
+| Órdenes a mercado | Con holgura del adaptador (5 %) | Con holgura (5 %), acuse pendiente hasta el sondeo | Con holgura |
+| Caducidad por edad (MM) | ✅ | ✅ | ✅ |
+| Modo cobertura | — | — | ❌ Rechazado por el formulario |
+| Recomendación hoy | Todo | Rejillas pequeñas y DCA; sin market makers (las ejecuciones llegan por sondeo, F-54) | Todo salvo cobertura; menos de 200 líneas |

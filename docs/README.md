@@ -47,12 +47,12 @@ poco riesgo (configuraciones A/B/C con sus números, checklist, señales de alar
   órdenes; la posición sigue) · ❄️ en frío (hay que crear otro bot).
 - **Los números de los ejemplos** salen de ejecutar `validate()` y `preview()` del propio código sobre las
   fichas de mercado de [`venue-markets.ts`](../packages/strategy-core/src/venue-markets.ts) (precios del
-  **24-08-2026**). Son los que enseña la vista previa de la app, con dos salvedades documentadas (F-88 y
-  F-14). Si un precio ha cambiado mucho, las cantidades cambian; las proporciones no.
+  **24-08-2026**). Son los que enseña la vista previa de la app. Si un precio ha cambiado mucho, las
+  cantidades cambian; las proporciones no.
 - **Limitaciones conocidas.** Cada guía lleva bloques como este:
 
-  > ⚠️ **Limitación conocida (F-88, abierta a 2026-09-06).** …
-  > **Hasta que se corrija:** … Estado: `specs/001-revision-integral/findings.md` § F-88.
+  > ⚠️ **Limitación conocida (F-NN, abierta a AAAA-MM-DD).** …
+  > **Hasta que se corrija:** … Estado: `specs/001-revision-integral/findings.md` § F-NN.
 
   El identificador `F-NN` es el del hallazgo en la revisión integral
   ([`specs/001-revision-integral/findings.md`](../specs/001-revision-integral/findings.md)). Cuando el
