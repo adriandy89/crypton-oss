@@ -11,9 +11,9 @@ de caducidad de la API wallet esté delante del usuario antes de que se le apagu
 ## Contexto
 
 El 2026-09-06 un usuario conectó su cuenta de Hyperliquid y la app le dijo «activa · Verificada ·
-**0,00 USDC disponibles**» teniendo 112,15 USDC en el exchange. Lo que había pegado en «Dirección
-de tu cuenta» era la dirección de la **API wallet** (`0x35c308…208624`, la que la propia página de
-Hyperliquid muestra al crear el *agent*), no la de su cuenta.
+**0,00 USDC disponibles**» teniendo algo más de cien USDC en el exchange. Lo que había pegado en
+«Dirección de tu cuenta» era la dirección de la **API wallet** —la que la propia página de
+Hyperliquid muestra al crear el *agent*—, no la de su cuenta.
 
 El error es fácil de cometer —las dos cosas son direcciones `0x…` y se crean en la misma pantalla—
 pero lo que lo convirtió en un incidente es que **CRYPTON lo dio por bueno**:
