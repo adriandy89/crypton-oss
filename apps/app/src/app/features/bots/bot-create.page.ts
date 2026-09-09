@@ -34,7 +34,7 @@ import {
   warningOutline,
 } from 'ionicons/icons';
 import type { BotConfig, FieldMeta, PreviewResult } from '@crypton/shared';
-import { getStrategy } from '@crypton/strategy-core';
+import { camposEfectivos, getStrategy } from '@crypton/strategy-core';
 import {
   AdvisorService,
   BotsService,
@@ -424,7 +424,13 @@ export class BotCreatePage implements OnInit, OnDestroy {
   private capFields(fields: FieldMeta[]): FieldMeta[] {
     const market = this.market();
     if (!market) return fields;
-    return fields.map((f) =>
+    // `camposEfectivos` vive en `strategy-core` y es la MISMA que aplica la
+    // validacion: con «cantidad de moneda», el tamaño por orden deja de ser un
+    // nocional en USDC y pasa a medirse en la moneda del par, con el minimo del
+    // mercado. Tenerla aqui y no reimplementarla es lo que impide que el
+    // formulario y el servidor vuelvan a contradecirse (030/F-01, F-02).
+    const ajustados = camposEfectivos(fields, this.config(), toMarketSpec(market));
+    return ajustados.map((f) =>
       f.key === 'leverage'
         ? { ...f, max: Math.min(f.max ?? market.max_leverage, market.max_leverage) }
         : f,
@@ -453,7 +459,35 @@ export class BotCreatePage implements OnInit, OnDestroy {
     return !!kind && isMarketMaker(kind);
   });
 
-  private groupsOf(advanced: boolean): { key: string; title: string; fields: FieldMeta[] }[] {
+  /**
+   * ¿Este grupo está apagado por su propio interruptor?
+   *
+   * El Market Maker V2 declara treinta y ocho parámetros y en una configuración
+   * dada la mitad no interviene: con el diferencial dinámico apagado, su sección
+   * entera es decorativa. Atenuarla —sin ocultar nada ni mover campos de sitio—
+   * es lo que separa «no aplica ahora» de «no lo has configurado» (030/F-06).
+   *
+   * La validación ya avisa campo a campo (030/F-04); esto es la misma verdad,
+   * dicha antes de leer el aviso.
+   */
+  private grupoInerte(key: string): boolean {
+    const c = this.config();
+    if (key === 'dynamicSpread') return c['dynamicSpread'] === false;
+    if (key === 'activation') return c['activationMode'] == null || c['activationMode'] === 'NONE';
+    // La fuente externa no manda si el ancla es el libro del propio venue.
+    if (key === 'priceSource') {
+      const origen = c['fairPriceOrigin'] ?? 'SOURCE_GLOBAL';
+      return c['priceSource'] === 'EXCHANGE' || origen !== 'SOURCE_GLOBAL';
+    }
+    return false;
+  }
+
+  private groupsOf(advanced: boolean): {
+    key: string;
+    title: string;
+    fields: FieldMeta[];
+    inerte: boolean;
+  }[] {
     const wanted = this.fields().filter((f) => (f.advanced ?? false) === advanced);
     const order = [
       'core',
@@ -487,7 +521,12 @@ export class BotCreatePage implements OnInit, OnDestroy {
         const ib = order.indexOf(b[0]);
         return (ia < 0 ? order.length : ia) - (ib < 0 ? order.length : ib);
       })
-      .map(([key, fields]) => ({ key, title: groupLabel(key), fields }));
+      .map(([key, fields]) => ({
+        key,
+        title: groupLabel(key),
+        fields,
+        inerte: this.grupoInerte(key),
+      }));
   }
 
   groupTitle(key: string): string {

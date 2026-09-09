@@ -32,7 +32,7 @@ import type { DryRunState } from '@crypton/exchange-core';
  * existe.
  */
 type PaperPosition = DryRunState['positions'][number];
-import { diffConfig, getStrategy } from '@crypton/strategy-core';
+import { camposEfectivos, diffConfig, getStrategy } from '@crypton/strategy-core';
 import { BotStatus, MarginMode, StrategyKind, Venue } from '@crypton/db';
 import {
   BUS_CHANNELS,
@@ -706,6 +706,17 @@ export class BotsService implements OnModuleInit {
     const marks = await this.liveMarks([
       { venue: bot.venue, symbol: bot.symbol, testnet: red.testnet },
     ]);
+    // El descriptor, ajustado a la configuración de ESTE bot y a su mercado:
+    // con «cantidad de moneda» el tamaño por orden no se mide en USDC ni tiene
+    // un mínimo de 1 (030/F-01, F-02). La pantalla de ajustes es donde se toca
+    // un bot EN MARCHA, así que aquí la unidad equivocada es peor que al
+    // crearlo. La misma función que aplican `validate()` y el formulario.
+    // Tolerante a propósito: un par retirado del catálogo no puede impedir que
+    // el usuario ABRA su bot y lo pare. Sin mercado se sirve el descriptor tal
+    // cual, que es lo que se servía antes de este ajuste.
+    const marketSpec = await Promise.resolve()
+      .then(() => this.markets.getSpec(bot.venue, bot.symbol, red.testnet))
+      .catch(() => null);
     return {
       ...bot,
       // Las MISMAS métricas calculadas que devuelve el listado. Si el detalle
@@ -723,7 +734,13 @@ export class BotsService implements OnModuleInit {
       initialInvestment: inicialDe(primera?.config, bot.total_investment.toString()),
       // Se envían los descriptores junto al bot para que la pantalla de ajustes
       // sepa qué puede cambiarse en caliente sin una segunda petición.
-      fields: strategy.meta.fields,
+      fields: marketSpec
+        ? camposEfectivos(
+            strategy.meta.fields,
+            (revision?.config ?? {}) as Record<string, unknown>,
+            marketSpec,
+          )
+        : strategy.meta.fields,
       cycle,
       snapshot,
       // `openOrdersList` y no `openOrders`: en el listado ese nombre es un

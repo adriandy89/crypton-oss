@@ -54,6 +54,80 @@ export function bookSpreadBps(ticker: Ticker): Decimal {
   return mid.gt(0) ? ask.minus(bid).div(mid).mul(BPS) : D(0);
 }
 
+/** El venue publica los dos lados. Sin esto no hay libro contra el que cotizar. */
+export function hayLibro(ticker: Ticker): boolean {
+  return D(ticker.bid).gt(0) && D(ticker.ask).gt(0);
+}
+
+/**
+ * La última palabra sobre el precio de una cotización: nunca cruza el libro.
+ *
+ * `minAllowedDistanceBps` no servía de red porque es una distancia mínima
+ * respecto al centro YA desplazado, no respecto al mid. Esta sí lo es.
+ *
+ * Va ANTES de `px()` a propósito: el redondeo conservador por lado (compra
+ * abajo, venta arriba) aleja del toque, así que aplicarlo después solo puede
+ * mejorar el resultado, nunca devolverlo al cruce.
+ *
+ * Una venta se queda como mucho en el mejor bid más un tick, y una compra en
+ * el mejor ask menos uno: el bot sigue cotizando, pegado al toque cuando hace
+ * falta, pero SIEMPRE como maker.
+ */
+export function sinCruzarLibro(
+  price: Decimal,
+  side: 'BUY' | 'SELL',
+  ticker: Ticker,
+  tickSize: Numeric,
+): Decimal {
+  if (!hayLibro(ticker)) return price;
+  const tick = D(tickSize);
+  if (side === 'SELL') {
+    const suelo = D(ticker.bid).plus(tick);
+    return price.lt(suelo) ? suelo : price;
+  }
+  // Un techo que no es positivo no es un techo: dejaría la compra en cero o en
+  // negativo, que `revisarOrden` rechazaría como orden imposible.
+  const techo = D(ticker.ask).minus(tick);
+  if (!techo.gt(0)) return price;
+  return price.gt(techo) ? techo : price;
+}
+
+/**
+ * Fracción de su propia distancia que una capa puede desviarse sin recolocarse.
+ *
+ * Recotizar movía SIEMPRE las 2·N capas: cuatro peticiones por capa (cancelar y
+ * colocar) cada vez que el centro se desplazaba lo justo para disparar el
+ * refresco. En Lighter, con sesenta peticiones por minuto y por IP, un solo bot
+ * de tres capas ya se comía la cuota entera (spec 031).
+ *
+ * La capa que está a 45 bps del centro no gana nada moviéndose 5: no va a
+ * ejecutarse ni antes ni después, y perder su sitio en la cola sí cuesta. La
+ * que está a 20 bps sí lo nota, y por eso la tolerancia es proporcional a la
+ * distancia de cada capa en vez de un número fijo.
+ */
+const TOLERANCIA_DE_CAPA = D('0.25');
+
+/**
+ * El precio que se va a desear para una capa, conservando el de la orden que ya
+ * está viva cuando la diferencia no compensa recolocarla.
+ *
+ * Devolver el precio VIEJO es lo que hace que `reconcile` dé la orden por buena
+ * y no la reemplace. Se conserva antes de dimensionar a propósito: la cantidad
+ * se calcula dividiendo por el precio, así que con el precio viejo sale también
+ * la cantidad vieja y la orden coincide entera.
+ */
+export function precioEstable(
+  deseado: Decimal,
+  bps: Decimal,
+  viva: VenueOrder | undefined,
+): Decimal {
+  if (!viva || !deseado.gt(0)) return deseado;
+  const actual = D(viva.price);
+  if (!actual.gt(0)) return deseado;
+  const desvioBps = actual.minus(deseado).abs().div(deseado).mul(BPS);
+  return desvioBps.lte(bps.mul(TOLERANCIA_DE_CAPA)) ? actual : deseado;
+}
+
 // ── Inventario ────────────────────────────────────────────────────────────
 
 export interface Inventory {

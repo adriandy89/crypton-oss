@@ -42,6 +42,7 @@ import {
   BPS,
   bookMid,
   expiredQuotes,
+  hayLibro,
   inventoryOf,
   limitBreach,
   orderAges,
@@ -51,6 +52,7 @@ import {
   riskRegime,
   sampleVolatility,
   sideRoles,
+  sinCruzarLibro,
   sizeToQty,
 } from './mm-shared';
 
@@ -933,6 +935,37 @@ export const marketMakerV2: Strategy<MarketMakerV2Config> = {
       }
     }
 
+    // No se pone un stop POR DEFECTO a propósito: al dispararse cierra la
+    // posición pero el bot sigue vivo y vuelve a cotizar, así que un stop
+    // estrecho en un market maker es una máquina de vender en el mínimo y
+    // recomprar. Su red natural es el tope de posición y la acción al
+    // alcanzarlo. Pero que no lo lleve tiene que decirse, y decirse AL CREARLO
+    // —`protectionNote` solo se pega a los avisos de pausa y parada, que en
+    // este escenario no llegan a ocurrir— (spec 031).
+    if (!cfg.stopLossPct || D(cfg.stopLossPct).lte(0)) {
+      issues.push(
+        warn(
+          'stopLossPct',
+          'Sin stop loss: la red de este bot es el tope de posición y la acción al alcanzarlo. ' +
+            'Un stop cierra la posición pero NO para el bot, que volverá a cotizar; ponlo holgado ' +
+            'si lo quieres como corte ante un movimiento brusco.',
+        ),
+      );
+    }
+    // 030/F-04: con el diferencial dinámico apagado, lo que lo alimenta no se
+    // usa. El techo SÍ sigue aplicándose, así que queda fuera del aviso.
+    if (cfg.dynamicSpread === false) {
+      const inertes = (
+        [
+          ['orderBookMarginBps', cfg.orderBookMarginBps],
+          ['volatilityMultiplier', cfg.volatilityMultiplier],
+        ] as const
+      ).filter(([, v]) => D(v ?? 0).gt(0));
+      for (const [campo] of inertes) {
+        issues.push(warn(campo, 'El diferencial dinámico está desactivado: este valor no se usa.'));
+      }
+    }
+
     return toResult(issues);
   },
 
@@ -1124,8 +1157,10 @@ export const marketMakerV2: Strategy<MarketMakerV2Config> = {
     const size = D(cfg.orderSizePerSide ?? 0).mul(profile.size);
 
     const dir = cfg.direction ?? 'NEUTRAL';
-    const quoteBids = dir === 'NEUTRAL' || dir === 'LONG';
-    const quoteAsks = dir === 'NEUTRAL' || dir === 'SHORT';
+    // Sin los dos lados del libro no hay toque contra el que medir (spec 029).
+    const libro = hayLibro(ctx.ticker);
+    const quoteBids = libro && (dir === 'NEUTRAL' || dir === 'LONG');
+    const quoteAsks = libro && (dir === 'NEUTRAL' || dir === 'SHORT');
     const orderType = cfg.postOnly === false ? 'LIMIT' : 'POST_ONLY';
 
     const buyRole = roles.buy;
@@ -1148,7 +1183,14 @@ export const marketMakerV2: Strategy<MarketMakerV2Config> = {
         !(buyRole === 'adding' && (band.blockBuy || breach.pauseEntries))
       ) {
         const bps = conTecho(buy, buy.bps.mul(distWeights[l]).mul(profile.distance).mul(buyMul));
-        const price = mid.mul(D(1).minus(bps.div(BPS)));
+        // Acotado ANTES de dimensionar: la cantidad se calcula dividiendo por
+        // el precio, así que hacerlo después dejaría el nocional descuadrado.
+        const price = sinCruzarLibro(
+          mid.mul(D(1).minus(bps.div(BPS))),
+          'BUY',
+          ctx.ticker,
+          ctx.market.tickSize,
+        );
         const coid = makeCoid(ctx.botId, seq, LevelKind.QUOTE_BID, l);
         const reduceOnly = buyRole === 'reducing' && regime === 'HIGH_RISK';
 
@@ -1187,7 +1229,12 @@ export const marketMakerV2: Strategy<MarketMakerV2Config> = {
         !(sellRole === 'adding' && (band.blockSell || breach.pauseEntries))
       ) {
         const bps = conTecho(sell, sell.bps.mul(distWeights[l]).mul(profile.distance).mul(sellMul));
-        const price = mid.mul(D(1).plus(bps.div(BPS)));
+        const price = sinCruzarLibro(
+          mid.mul(D(1).plus(bps.div(BPS))),
+          'SELL',
+          ctx.ticker,
+          ctx.market.tickSize,
+        );
         const coid = makeCoid(ctx.botId, seq, LevelKind.QUOTE_ASK, l);
         const reduceOnly = sellRole === 'reducing' && regime === 'HIGH_RISK';
 
@@ -1241,22 +1288,26 @@ export const marketMakerV2: Strategy<MarketMakerV2Config> = {
       if (breach.shutdown) scratchPatch['requestStop'] = 'STOP_KEEP_POSITION';
     }
 
+    // Un bot que no cotiza tiene que decir por qué: «0 cotizaciones» a secas
+    // se lee como una avería del motor (spec 029).
     const note =
       breach.note ??
-      'Diferencial ' +
-        buy.bps.toFixed(1) +
-        '/' +
-        sell.bps.toFixed(1) +
-        ' bps (vol ' +
-        volBps.toFixed(1) +
-        '), inventario ' +
-        inv.loadPct.toFixed(0) +
-        ' % del tope, ' +
-        orders.length +
-        ' cotizaciones' +
-        (cooling ? ', espera tras ejecución' : '') +
-        (regime === 'NORMAL' ? '' : '. Modo ' + regime.toLowerCase()) +
-        '.';
+      (!libro
+        ? 'Sin libro del venue (no publica los dos lados): no se cotiza.'
+        : 'Diferencial ' +
+          buy.bps.toFixed(1) +
+          '/' +
+          sell.bps.toFixed(1) +
+          ' bps (vol ' +
+          volBps.toFixed(1) +
+          '), inventario ' +
+          inv.loadPct.toFixed(0) +
+          ' % del tope, ' +
+          orders.length +
+          ' cotizaciones' +
+          (cooling ? ', espera tras ejecución' : '') +
+          (regime === 'NORMAL' ? '' : '. Modo ' + regime.toLowerCase()) +
+          '.');
 
     return {
       orders,

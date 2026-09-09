@@ -170,7 +170,9 @@ export const EVENT_LABELS: Record<string, string> = {
   LIQUIDATED: 'Posicion liquidada',
   PANIC: 'Panico: todo cancelado y cerrado',
   TICK_ERROR: 'Error en un ciclo del motor',
+  TICK_SLOW: 'El bot no mantiene su ritmo',
   STREAM_ERROR: 'Error en la conexion en vivo',
+  STREAM_RECOVERED: 'Conexion en vivo restablecida',
   AUTH_ERROR: 'Credencial rechazada por el exchange',
   ACTION_FAILED: 'Accion fallida',
 };

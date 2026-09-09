@@ -54,6 +54,7 @@ const TDCA_FIELDS: readonly FieldMeta[] = [
     helpKey: 'strategy.tdca.amountPerBuyHelp',
     min: 1,
     required: true,
+    unit: 'USDC',
   },
   {
     key: 'intervalMinutes',
@@ -120,6 +121,7 @@ const TDCA_FIELDS: readonly FieldMeta[] = [
     min: 0,
     required: false,
     risky: true,
+    unit: 'USDC',
   },
 ] as const;
 
@@ -196,6 +198,17 @@ export const tdca: Strategy<TdcaConfig> = {
         ),
       );
     }
+    // 030/F-04: el margen solo se mira dentro de «solo si mejora el precio
+    // medio»; sin esa casilla es un número que no hace nada.
+    if (cfg.buyOnlyIfImprovesAverage === false && D(cfg.marginBelowAveragePct ?? 0).gt(0)) {
+      issues.push(
+        warn(
+          'marginBelowAveragePct',
+          '«Solo si mejora el precio medio» está desactivado: el margen exigido no se usa.',
+        ),
+      );
+    }
+
     return toResult(issues);
   },
 

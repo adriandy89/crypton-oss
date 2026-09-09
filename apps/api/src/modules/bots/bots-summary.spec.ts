@@ -71,9 +71,27 @@ function build() {
   };
   // Sin tickers en caché: las cifras salen del precio del snapshot.
   const cache = { get: jest.fn().mockResolvedValue(null), set: jest.fn() };
+  // El detalle ajusta los descriptores al mercado del bot (030/F-02): con
+  // «cantidad de moneda» el tamaño por orden no se mide en USDC.
+  const markets = {
+    getSpec: jest.fn().mockResolvedValue({
+      venue: 'HYPERLIQUID',
+      symbol: 'BTC',
+      base: 'BTC',
+      quote: 'USDC',
+      tickSize: '0.1',
+      stepSize: '0.0001',
+      minQty: '0.0001',
+      minNotional: '10',
+      priceDecimals: 1,
+      qtyDecimals: 4,
+      maxLeverage: 40,
+      active: true,
+    }),
+  };
   const service = new BotsService(
     db as never,
-    {} as never,
+    markets as never,
     {} as never,
     {} as never,
     {} as never,

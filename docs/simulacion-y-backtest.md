@@ -25,13 +25,20 @@ construye en modo `dryRun` sobre los datos públicos del venue, así que **ni si
 que se le pudiera escapar una orden**. Los precios son los **reales de mainnet**: para que la simulación
 enseñe algo, el libro tiene que ser el de verdad.
 
+Como el libro es el de verdad, un bot simulado usa la **conexión en vivo real** del venue: por eso puede
+avisarte de que «el stream de ticker se ha caído». No es un fallo de la simulación, es el mismo socket
+público que usan los bots reales.
+
 - Puedes cambiar el **saldo simulado** (simular con 10.000 cuando piensas invertir 500 no enseña nada) y
   **reiniciar** el estado simulado: la API vuelve al saldo inicial y borra posiciones y órdenes fingidas.
 - Un bot decide **al crearse** si es simulado o real (`dry_run`) y **no puede cambiar**: mezclar simulado y
   real en el mismo bot haría que su histórico no significara nada. Para pasar a real, creas otro bot.
 - Puedes tener **varios bots simulados sobre el mismo par**; la regla «un solo bot real por par y cuenta»
   no aplica a los simulados.
-- La curva de la cartera, el ranking y el copy-trading **excluyen** los bots simulados.
+- La curva de la cartera, el ranking, el copy-trading y el **resumen diario de Telegram** excluyen los
+  bots simulados: su resultado es dinero que no existe y no se suma nunca al de verdad. En el resumen
+  salen en una línea aparte, marcada, para que un simulado que trabaja no parezca parado.
+- Los avisos de Telegram de un bot simulado van **marcados**: «m v1 (LIT) · simulado».
 
 ### Qué hace el simulador, exactamente
 
@@ -39,6 +46,7 @@ enseñe algo, el libro tiene que ser el de verdad.
 |---|---|---|
 | Orden limit / post-only colgada | Se ejecuta **entera y a su propio precio** en cuanto el mejor precio contrario la toca (`ask ≤ compra`, `bid ≥ venta`) | Puede ejecutarse parcialmente y hay cola de prioridad |
 | Post-only que cruzaría el libro | **Rechazada**: «Post-only rechazada: cruzaría el libro» | Igual |
+| Libro sin los dos lados | El market maker **no cotiza** ese ciclo y lo dice en la nota | Igual |
 | Orden a mercado | Se ejecuta al mejor precio contrario **con un deslizamiento del 0,05 %** en contra, como taker | Depende de la profundidad |
 | Comisiones | **0,02 % maker · 0,05 % taker**, descontadas del PnL realizado | Las del venue (y las del builder, si las hay) |
 | Stop-loss / take profit condicionales | Orden **en reposo** que se dispara con el precio de marca y se ejecuta al precio del disparador con deslizamiento (corregido en el spec 004; antes cerraba en el acto) | Igual, condicional nativa |

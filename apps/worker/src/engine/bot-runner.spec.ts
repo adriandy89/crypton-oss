@@ -564,6 +564,83 @@ describe('BotRunner', () => {
     });
   });
 
+  describe('el latido que se estira (spec 031)', () => {
+    /**
+     * El presupuesto del venue no rechaza cuando se agota: duerme. El tick no
+     * falla, el cortacircuitos no salta y el bot aparece «operando» con el
+     * latido estirado. Antes eso no se veía en ninguna parte.
+     */
+    const avisar = (runner: BotRunner, ms: number) =>
+      (
+        runner as unknown as { avisarSiElLatidoSeEstira(ms: number): Promise<void> }
+      ).avisarSiElLatidoSeEstira(ms);
+
+    it('avisa cuando la revisión tarda más que el intervalo, y solo una vez', async () => {
+      const { runner, store } = build({ orders: [], immediate: [] });
+      await runner.start();
+
+      // El harness usa un intervalo de 600 s.
+      await avisar(runner, 300_000);
+      expect(store.events).not.toContain('TICK_SLOW');
+
+      await avisar(runner, 700_000);
+      await avisar(runner, 700_000);
+      expect(store.events.filter((e) => e === 'TICK_SLOW')).toHaveLength(1);
+
+      await runner.dispose();
+    });
+  });
+
+  describe('salud de los streams', () => {
+    /**
+     * `ws.ts` emite un DOWN por cada `close` y otro por cada `error`, y el flujo
+     * de salud es compartido por todos los bots de la cuenta: una caída larga
+     * producía un aviso por bot y por intento de reconexión, sin enfriamiento y
+     * sin decir nunca que el stream había vuelto (spec 029).
+     */
+    const esperar = () => new Promise((r) => setTimeout(r, 20));
+
+    it('una caída se anuncia una vez, no en cada reintento', async () => {
+      const { runner, adapter, store } = build({ orders: [], immediate: [] });
+      await runner.start();
+
+      adapter.health$.next({ stream: 'ticker', status: 'DOWN', detail: 'socket cerrado' });
+      adapter.health$.next({ stream: 'ticker', status: 'DOWN', detail: 'socket cerrado' });
+      adapter.health$.next({ stream: 'ticker', status: 'DOWN', detail: 'error' });
+      await esperar();
+
+      expect(store.events.filter((e) => e === 'STREAM_ERROR')).toHaveLength(1);
+
+      await runner.dispose();
+    });
+
+    it('avisa cuando el stream vuelve', async () => {
+      const { runner, adapter, store } = build({ orders: [], immediate: [] });
+      await runner.start();
+
+      adapter.health$.next({ stream: 'ticker', status: 'DOWN', detail: 'socket cerrado' });
+      await esperar();
+      adapter.health$.next({ stream: 'ticker', status: 'UP' });
+      await esperar();
+
+      expect(store.events).toContain('STREAM_RECOVERED');
+
+      await runner.dispose();
+    });
+
+    it('no anuncia la vuelta de algo que nadie sabía roto', async () => {
+      const { runner, adapter, store } = build({ orders: [], immediate: [] });
+      await runner.start();
+
+      adapter.health$.next({ stream: 'ticker', status: 'UP' });
+      await esperar();
+
+      expect(store.events).not.toContain('STREAM_RECOVERED');
+
+      await runner.dispose();
+    });
+  });
+
   describe('cuarentena de niveles rechazados', () => {
     /**
      * Un nivel por debajo del mínimo del venue se reintentaba en CADA tick
@@ -585,6 +662,57 @@ describe('BotRunner', () => {
       expect(primeros).toBe(1);
       expect(total).toBe(1);
       expect(store.events.filter((e) => e === 'ORDER_REJECTED')).toHaveLength(1);
+
+      await runner.dispose();
+    });
+
+    /**
+     * La cuarentena guardaba la forma como `lado:tipo:precio:cantidad`, y una
+     * MISMA capa cambia de papel: rechazada como entrada, el bot vuelve a
+     * pedirla —ya en alto riesgo— como la orden que REDUCE el inventario. Con
+     * el precio y la cantidad iguales quedaba bloqueada en silencio, sin
+     * evento, justo cuando era la única salida (spec 029).
+     */
+    it('una orden que pasa a reducir no hereda la cuarentena de su entrada', async () => {
+      const { runner, adapter } = build({ orders: [level(0)], immediate: [] });
+      adapter.placeError = new ExchangeError('RULES', 'min notional', Venue.HYPERLIQUID);
+
+      await runner.start();
+      expect(adapter.calls.filter((c) => c.startsWith('place:'))).toHaveLength(1);
+
+      // Misma capa, mismo precio y misma cantidad, pero ahora REDUCE.
+      (runner as unknown as { strategy: { plan: () => DesiredState } }).strategy.plan = () => ({
+        orders: [level(0, { reduceOnly: true })],
+        immediate: [],
+      });
+      await runner.handleCommand('RESUME');
+      await new Promise((r) => setTimeout(r, 30));
+
+      expect(adapter.calls.filter((c) => c.startsWith('place:')).length).toBeGreaterThan(1);
+
+      await runner.dispose();
+    });
+
+    /**
+     * `placeFailures` sólo cuenta los fallos pasajeros, así que un bot al que
+     * el venue le rechaza TODO por reglas no disparaba ningún cortacircuitos:
+     * se quedaba sin órdenes en el libro y lo único visible era un WARN por
+     * rechazo, indistinguible del rechazo corriente (spec 029).
+     */
+    it('muchos rechazos por reglas seguidos avisan en CRITICAL', async () => {
+      const niveles = Array.from({ length: 21 }, (_, i) => level(i, { price: `9${i % 10}.5` }));
+      const { runner, store, adapter } = build({ orders: niveles, immediate: [] });
+      adapter.placeError = new ExchangeError('RULES', 'min notional', Venue.HYPERLIQUID);
+
+      await runner.start();
+
+      expect(store.events.filter((e) => e === 'ORDER_REJECTED').length).toBeGreaterThan(20);
+      // El tipo de `event` en el store falso pierde la firma de jest al salir
+      // del objeto; el cast es de test y no cruza ninguna frontera de dominio.
+      const llamadas = (store.event as unknown as jest.Mock).mock.calls as unknown[][];
+      const criticos = llamadas.filter((c) => c[2] === 'CRITICAL');
+      expect(criticos).toHaveLength(1);
+      expect(String(criticos[0][3])).toMatch(/no está consiguiendo colocar/);
 
       await runner.dispose();
     });

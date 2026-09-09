@@ -13,6 +13,7 @@ export {
   liquidationDistancePct,
 } from '@crypton/shared';
 export {
+  camposEfectivos,
   COMMON_FIELDS,
   commonFieldsWith,
   buildPreview,

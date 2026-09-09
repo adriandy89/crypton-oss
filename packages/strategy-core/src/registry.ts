@@ -5,7 +5,7 @@ import {
   type StrategyMeta,
   type ValidationIssue,
 } from '@crypton/shared';
-import { invalidPreview, toResult, validateMeta } from './common';
+import { camposEfectivos, invalidPreview, toResult, validateMeta } from './common';
 import type { Strategy } from './types';
 import { gridClassic } from './strategies/grid-classic';
 import { gridmart } from './strategies/gridmart';
@@ -45,10 +45,12 @@ function conValidacionGenerica(s: Strategy<any>): Strategy<any> {
     ...s,
     validate(cfg: BotConfig, market: MarketSpec) {
       const propia = s.validate.call(envuelta, cfg, market);
-      return toResult(fusionar(propia.issues, validateMeta(cfg, s.meta.fields)));
+      return toResult(
+        fusionar(propia.issues, validateMeta(cfg, camposEfectivos(s.meta.fields, cfg, market))),
+      );
     },
     preview(cfg: BotConfig, market: MarketSpec, refPrice: string) {
-      const meta = validateMeta(cfg, s.meta.fields);
+      const meta = validateMeta(cfg, camposEfectivos(s.meta.fields, cfg, market));
       if (meta.length === 0) return s.preview.call(envuelta, cfg, market, refPrice);
       let propios: ValidationIssue[] = [];
       try {

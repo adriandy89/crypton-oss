@@ -256,9 +256,14 @@
 
       @for (g of basicGroups(); track g.key) {
         @if (basicGroups().length > 1) {
-          <h3 class="section">{{ g.title }}</h3>
+          <h3 class="section">
+            {{ g.title }}
+            @if (g.inerte) {
+              <span class="inerte">no aplica ahora</span>
+            }
+          </h3>
         }
-        <ui-card flush class="fields">
+        <ui-card flush class="fields" [class.inerte]="g.inerte">
           @for (f of g.fields; track f.key) {
             <!-- El capital se pinta con su propio control: es el unico campo
                  que se dimensiona contra el saldo de la cuenta. -->
@@ -303,16 +308,23 @@
             [startOpen]="advancedHasProblem()"
           >
             @for (g of advancedGroups(); track g.key) {
-              <h4 class="subsection">{{ g.title }}</h4>
-              @for (f of g.fields; track f.key) {
-                <ui-field
-                  [field]="f"
-                  [value]="value(f.key)"
-                  [error]="errorFor(f.key)"
-                  [showMutability]="true"
-                  (valueChange)="setValue(f.key, $event)"
-                />
-              }
+              <h4 class="subsection">
+                {{ g.title }}
+                @if (g.inerte) {
+                  <span class="inerte">no aplica ahora</span>
+                }
+              </h4>
+              <div [class.inerte]="g.inerte">
+                @for (f of g.fields; track f.key) {
+                  <ui-field
+                    [field]="f"
+                    [value]="value(f.key)"
+                    [error]="errorFor(f.key)"
+                    [showMutability]="true"
+                    (valueChange)="setValue(f.key, $event)"
+                  />
+                }
+              </div>
             }
           </ui-collapsible>
         </ui-card>

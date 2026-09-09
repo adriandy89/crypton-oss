@@ -334,6 +334,17 @@ export const gridmart: Strategy<GridMartConfig> = {
         issues.push(err(key, 'Hace falta un multiplicador mayor que cero.'));
       }
     }
+    // 030/F-04: en modo Classic no hay rejilla de ventas, así que sus cinco
+    // parámetros no intervienen. Se avisa una vez, no cinco.
+    if (cfg.classicMode) {
+      issues.push(
+        warn(
+          'classicMode',
+          'En modo Classic no hay rejilla de ventas: sus cinco parámetros no se usan.',
+        ),
+      );
+    }
+
     return toResult(issues);
   },
 

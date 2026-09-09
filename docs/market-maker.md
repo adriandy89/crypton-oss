@@ -136,6 +136,15 @@ Antes de colocar cada capa comprueba que **cabe** dentro del tope. En la V1 es *
 
 - **Piso / techo de precio**: fuera de la banda el bot **solo bloquea el lado que abre posición**. El lado que reduce sigue vivo, para que nunca te quedes atrapado sin nadie que deshaga.
 - **Tope alcanzado** → se ejecuta la **Acción al alcanzar el límite**: pausar entradas, cerrar todo a mercado, o cerrar y apagar.
+- **Nunca cruza el libro.** El precio de cada capa se calcula desde el centro, y el centro se mueve
+  (sesgo por inventario, congelación entre recotizaciones, ancla manual). Si de ahí sale una venta en
+  el mejor comprador o por debajo —o una compra en el mejor vendedor o por encima—, el bot la **pega
+  al toque**: la venta se queda un tick por encima del mejor comprador, y la compra un tick por
+  debajo del mejor vendedor. Nunca empeora tu precio: una compra pegada compra más barato de lo que
+  pedías y una venta vende más cara.
+- **Sin libro no cotiza.** Si el exchange no publica los dos lados, el bot no tiene contra qué medir
+  el toque y **no coloca nada** ese ciclo; la nota lo dice. Antes cotizaba alrededor del precio de
+  marca —un oráculo, no el libro—, que es de donde salían las órdenes rechazadas una y otra vez.
 
 ---
 
@@ -317,6 +326,17 @@ Equilibrado deja tus números tal cual. Los otros dos mueven el comportamiento e
 
 - **Valor nocional**: escribes 50 USDC y el bot calcula la cantidad al precio de cada momento.
 - **Cantidad de moneda**: escribes 0,001 BTC y el valor en USDC varía con el precio.
+> El campo **cambia de unidad contigo**: con «valor nocional» se rotula `USDC` y su mínimo es 1; con
+> «cantidad de moneda» se rotula con la moneda del par y su mínimo pasa a ser el del mercado (el
+> `minQty` del venue, o su paso de cantidad). Hasta el spec 030 el campo decía `USDC` en los dos
+> modos y exigía un mínimo de 1, así que «cantidad de moneda» no se podía usar en un par caro: 1 BTC
+> por capa y por lado.
+
+**Ojo con el tope**: el tope de posición y los topes por lado siguen siendo **nocional en los dos
+modos**, porque miden el valor de lo que tienes, no su cantidad. En modo «cantidad de moneda» los
+avisos de que las capas no caben en el tope los da la **vista previa**, que es la que conoce el
+precio.
+
 
 **Consejo**: valor nocional. Es directamente el dinero en juego y se compara sin cuentas contra el tope.
 

@@ -120,7 +120,8 @@ a más viejo**. Cada evento tiene una severidad: **INFO** (sin borde), **WARN** 
 
 | Evento | Etiqueta | Qué significa | Qué hacer |
 |---|---|---|---|
-| `ORDER_REJECTED` (WARN) | Orden rechazada por el exchange | El venue no aceptó la orden por sus reglas. El motor la deja en **cuarentena** por forma (precio + cantidad): no insiste cada revisión, la reintenta cuando la estrategia recotice o cambie la cantidad. | Lee el motivo. Un caso **normal** en cotización post-only: «Post-only rechazada: cruzaría el libro» justo después de una ejecución, porque la estrategia re-quiere el mismo nivel mientras el precio sigue encima. Vuelve solo en 30-35 s. |
+| `ORDER_REJECTED` (WARN) | Orden rechazada por el exchange | El venue no aceptó la orden por sus reglas. El motor la deja en **cuarentena** por forma (tipo de nivel, lado, precio, cantidad y si reduce): no insiste cada revisión, la reintenta cuando la estrategia recotice, cambie la cantidad o la orden cambie de papel. | Lee el motivo. En cotización post-only («cruzaría el libro») es **normal** y desde el spec 029 se queda en la bitácora sin avisarte: los market makers ya no cotizan cruzando, así que si aparece es un caso aislado. |
+| `ORDER_REJECTED` (CRITICAL) | El bot no consigue colocar **nada** | Veinte rechazos por reglas seguidos sin una sola orden aceptada. El bot se ha quedado sin órdenes en el libro; si tiene posición, no la está pudiendo reducir. | **Míralo.** El texto trae el último motivo y si la posición tiene stop. Revisa mínimos del par, capital asignado y que el símbolo siga operativo. |
 | `ORDER_UNVIABLE` (WARN) | Orden inviable en este mercado | Un nivel de **entrada** por debajo del mínimo del par o del paso de cantidad. Se descarta y el resto de la escalera sigue. | Sube capital o baja niveles. |
 | `EXIT_PENDING_MIN_SIZE` (INFO) | Salida pendiente: tamaño mínimo | La salida es aún demasiado pequeña **y quedan entradas vivas**: se colocará en cuanto entren más ejecuciones. | Nada: no es una avería. |
 | `POSITION_BELOW_MINIMUM` (WARN) | Resto por debajo del mínimo del venue | Hay posición pero es tan pequeña que **ninguna orden puede cerrarla**, y no quedan entradas que la hagan crecer. Tu TP (o el stop) **no está puesto**. | Ciérralo a mano en el exchange o añade posición. |
@@ -151,7 +152,8 @@ a más viejo**. Cada evento tiene una severidad: **INFO** (sin borde), **WARN** 
 | Evento | Qué hacer |
 |---|---|
 | `TICK_ERROR` (WARN) | Error en una revisión. Aislado no importa; 5 seguidos pausan el bot. Mira la consola del worker. |
-| `STREAM_ERROR` | La conexión en vivo con el venue se cortó; el bot rebarre por REST mientras tanto. Si persiste, revisa red o límites de peticiones (Lighter: 60/min por IP). |
+| `STREAM_ERROR` | La conexión en vivo con el venue se cortó; el bot rebarre por REST mientras tanto. Se avisa **una vez cada cinco minutos** por stream, no en cada reintento. Si persiste, revisa red o límites de peticiones (Lighter: 60/min por IP). |
+| `STREAM_RECOVERED` (INFO) | La conexión volvió. Solo se anuncia si su caída llegó a anunciarse. Nada que hacer. |
 | `AUTH_ERROR` (CRITICAL) | El exchange rechazó la credencial. El bot no puede operar: revisa la clave en Cuenta → conexiones. |
 | `ACTION_FAILED` | Un comando no pudo ejecutarse. Lee el motivo. |
 

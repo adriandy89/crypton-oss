@@ -136,7 +136,7 @@ export const MARKET_MAKER_V2_GUIDE: StrategyGuide<MarketMakerV2Config> = {
     postOnly: {
       what: 'Intenta colocar órdenes que no tomen liquidez de inmediato, para pagar siempre comisión de maker.',
       affects:
-        'Activado, el exchange rechaza la orden en vez de cruzarla si fuese a ejecutarse al instante, y el bot la recoloca. Desactivado, puedes pagar comisión de taker.',
+        'Activado, el exchange rechaza la orden en vez de cruzarla si fuese a ejecutarse al instante, y el bot la recoloca. Desactivado, puedes pagar comisión de taker. En cualquier caso el bot ya no manda órdenes que crucen el libro: si el precio calculado saldría en el toque contrario, la orden se pega al toque. Importa con el precio anclado a otro exchange, que puede separarse del libro donde se firma la orden.',
       tip: 'Déjalo activado: toda la fórmula de coste asume que operas como maker.',
     },
     defensiveThresholdPct: {

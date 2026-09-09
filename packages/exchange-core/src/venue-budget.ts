@@ -25,9 +25,29 @@ import { ASTER_ORDER_QUOTA, QUOTA_HEADROOM, VENUE_QUOTA_PER_MINUTE } from './ven
  *   —cientos de bots latiendo a la vez— podía dejar sin presupuesto justo a la
  *   cancelación de un pánico. Las lecturas se pueden posponer; cerrar una
  *   posición, no.
+ *
+ * · Y una reserva para las CRITICAS dentro de las escrituras. Un stop-loss
+ *   competía de igual a igual con una recotización de un market maker, que
+ *   manda 4 peticiones por capa y por tick: la orden que sostiene la posición
+ *   perdía por volumen contra la que solo mejora el precio (spec 029).
  */
 
-export type BudgetPriority = 'read' | 'write';
+/**
+ * `critical` es lo que no puede esperar: el stop-loss, los cierres y el pánico.
+ * `write` es todo lo demás que escribe —cotizar, reponer una linea—, y `read`
+ * lo que se puede posponer sin consecuencias.
+ */
+export type BudgetPriority = 'read' | 'write' | 'critical';
+
+/**
+ * La prioridad que le corresponde a una orden.
+ *
+ * Lleva disparador = sostiene la posición: el stop-loss y las condicionales de
+ * cierre. Compiten con las recotizaciones de un market maker, que mandan cuatro
+ * peticiones por capa y por tick, y perdían por volumen (spec 029).
+ */
+export const prioridadDeOrden = (req: { triggerPrice?: string }): BudgetPriority =>
+  req.triggerPrice ? 'critical' : 'write';
 
 /**
  * Lo que el venue dice haber contado de nosotros (y de cualquier otro cliente
@@ -82,6 +102,8 @@ export interface VenueBudgetOptions {
   burstSeconds?: number;
   /** Fracción del presupuesto reservada a escrituras (0 a 1). */
   writeReserve?: number;
+  /** Parte del depósito que solo pueden gastar las peticiones críticas. */
+  criticalReserve?: number;
 }
 
 /**
@@ -151,11 +173,13 @@ export class MemoryVenueBudget implements VenueBudget {
   private readonly rate: Record<Venue, number>;
   private readonly burstSeconds: number;
   private readonly writeReserve: number;
+  private readonly criticalReserve: number;
 
   constructor(opts: VenueBudgetOptions = {}) {
     this.rate = { ...DEFAULT_RATE, ...(opts.ratePerSecond ?? {}) };
     this.burstSeconds = opts.burstSeconds ?? 2;
     this.writeReserve = opts.writeReserve ?? 0.2;
+    this.criticalReserve = opts.criticalReserve ?? 0.1;
   }
 
   async take(
@@ -168,7 +192,15 @@ export class MemoryVenueBudget implements VenueBudget {
     const capacity = rate * this.burstSeconds;
     // Una lectura no puede vaciar el depósito: se le corta antes, en el borde
     // de la reserva. Una escritura sí puede llegar hasta el fondo.
-    const floor = priority === 'write' ? 0 : capacity * this.writeReserve;
+    // Cada prioridad se corta en un borde distinto: la lectura, la primera;
+    // la escritura corriente, dejando intacta la reserva de las críticas; y la
+    // crítica llega hasta el fondo del depósito.
+    const floor =
+      priority === 'critical'
+        ? 0
+        : priority === 'write'
+          ? capacity * this.criticalReserve
+          : capacity * this.writeReserve;
     const bucketKey = venueKey(venue, testnet);
 
     // El umbral de concesión se recorta a la capacidad del depósito: una
@@ -327,6 +359,7 @@ export class RedisVenueBudget implements VenueBudget {
   private readonly rate: Record<Venue, number>;
   private readonly burstSeconds: number;
   private readonly writeReserve: number;
+  private readonly criticalReserve: number;
   private readonly fallback: MemoryVenueBudget;
 
   constructor(
@@ -341,6 +374,7 @@ export class RedisVenueBudget implements VenueBudget {
     this.rate = { ...DEFAULT_RATE, ...(opts.ratePerSecond ?? {}) };
     this.burstSeconds = opts.burstSeconds ?? 2;
     this.writeReserve = opts.writeReserve ?? 0.2;
+    this.criticalReserve = opts.criticalReserve ?? 0.1;
     this.fallback = new MemoryVenueBudget(opts);
   }
 
@@ -352,7 +386,15 @@ export class RedisVenueBudget implements VenueBudget {
   ): Promise<void> {
     const rate = this.rate[venue] ?? 10;
     const capacity = rate * this.burstSeconds;
-    const floor = priority === 'write' ? 0 : capacity * this.writeReserve;
+    // Cada prioridad se corta en un borde distinto: la lectura, la primera;
+    // la escritura corriente, dejando intacta la reserva de las críticas; y la
+    // crítica llega hasta el fondo del depósito.
+    const floor =
+      priority === 'critical'
+        ? 0
+        : priority === 'write'
+          ? capacity * this.criticalReserve
+          : capacity * this.writeReserve;
     // `venueKey` no pone sufijo en mainnet, así que la clave de mainnet sigue
     // siendo la de siempre: al desplegar no se pierde el saldo acumulado ni se
     // abre una ventana en la que nadie está limitando.

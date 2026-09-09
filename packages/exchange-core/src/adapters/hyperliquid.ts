@@ -35,7 +35,12 @@ import { VenueCooldown } from '../cooldown';
 import { toExchangeError } from '../errors';
 import { MarketSpecCache, canonicalSymbol } from '../market-cache';
 import { RateLimiter, withRetry, withWriteRetry } from '../rate-limit';
-import { NO_BUDGET, type BudgetPriority, type VenueBudget } from '../venue-budget';
+import {
+  NO_BUDGET,
+  prioridadDeOrden,
+  type BudgetPriority,
+  type VenueBudget,
+} from '../venue-budget';
 import { hyperliquidWeight } from '../venue-weights';
 import type {
   AdapterOptions,
@@ -784,22 +789,24 @@ export class HyperliquidAdapter implements ExchangeAdapter {
     // reenvía. Reenviar sin comprobar dejaba filas REJECTED con la orden viva.
     return withWriteRetry(
       async () => {
-        const result = await this.callWrite(() =>
-          this.exchange.order({
-            orders: [
-              {
-                a: asset,
-                b: isBuy,
-                p: formattedPrice,
-                s: req.qty,
-                r: req.reduceOnly === true,
-                t: orderType,
-                c: cloid,
-              },
-            ],
-            grouping: 'na',
-            ...(builder ? { builder } : {}),
-          }),
+        const result = await this.callWrite(
+          () =>
+            this.exchange.order({
+              orders: [
+                {
+                  a: asset,
+                  b: isBuy,
+                  p: formattedPrice,
+                  s: req.qty,
+                  r: req.reduceOnly === true,
+                  t: orderType,
+                  c: cloid,
+                },
+              ],
+              grouping: 'na',
+              ...(builder ? { builder } : {}),
+            }),
+          prioridadDeOrden(req),
         );
         const status = result.response.data.statuses?.[0];
         if (status === undefined) {
@@ -1329,9 +1336,9 @@ export class HyperliquidAdapter implements ExchangeAdapter {
    * reservada una parte del presupuesto. Una avalancha de lecturas no puede
    * dejar sin caudal a la cancelación de un pánico.
    */
-  private async callWrite<T>(fn: () => Promise<T>): Promise<T> {
+  private async callWrite<T>(fn: () => Promise<T>, priority: BudgetPriority = 'write'): Promise<T> {
     this.cooldown.comprobar();
-    await this.budget.take(this.venue, 1, 'write', this.isTestnet);
+    await this.budget.take(this.venue, 1, priority, this.isTestnet);
     return this.limiter.run(fn).catch((e) => {
       this.cooldown.registrar(e);
       throw e;

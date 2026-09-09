@@ -116,6 +116,7 @@ const NEUTRAL_FIELDS: readonly FieldMeta[] = [
     min: 0,
     required: false,
     risky: true,
+    unit: 'USDC',
   },
   // `reanchorOnDrift` y `reanchorThresholdPct` estuvieron aquí y solo añadían
   // un aviso a la nota cuando el precio se alejaba del ancla: recentrar siempre

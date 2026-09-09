@@ -50,6 +50,18 @@ const EVENT_PREF: Record<string, keyof TelegramPrefs> = {
   // el canal justo antes del aviso que sí había que leer.
 };
 
+/**
+ * Severidad mínima para entregar un tipo que TIENE preferencia propia.
+ *
+ * La vía con preferencia no mira la severidad, así que un evento informativo se
+ * entregaba igual que uno grave. Un market maker rechazado por post-only —su
+ * conducta normal— mandaba un aviso por tick hasta que el usuario silenciaba el
+ * canal entero, y con él los avisos que sí importaban (spec 029).
+ */
+const MIN_SEVERITY: Record<string, string[]> = {
+  ORDER_REJECTED: ['WARN', 'ERROR', 'CRITICAL'],
+};
+
 const ICON: Record<string, string> = {
   FILL: '•',
   CYCLE_CLOSED: '✓',
@@ -109,6 +121,13 @@ export class NotifierService implements OnModuleInit, OnModuleDestroy {
     string,
     { chatId: string; prefs: TelegramPrefs; at: number }
   >();
+  /**
+   * Un minuto, y es lo que gobierna también la propagación entre procesos: las
+   * preferencias se cambian en la API, que corre aparte, así que aquí llegan
+   * cuando caduca la entrada. Había un `invalidate()` para acortarlo que no
+   * llamaba nadie y que no podía funcionar —está en otro proceso—; se quitó en
+   * vez de dejarlo aparentando una inmediatez que no existía (spec 029).
+   */
   private static readonly LINK_TTL_MS = 60_000;
 
   constructor(
@@ -173,6 +192,8 @@ export class NotifierService implements OnModuleInit, OnModuleDestroy {
       ? link.prefs[prefKey]
       : link.prefs.errors && ['WARN', 'ERROR', 'CRITICAL'].includes(severity);
     if (!allowed) return;
+    const minima = MIN_SEVERITY[message.type];
+    if (minima && !minima.includes(severity)) return;
 
     const bot = await this.botLabel(message.botId);
     const icon = ICON[message.type] ?? (severity === 'CRITICAL' ? '🔥' : '·');
@@ -236,16 +257,16 @@ export class NotifierService implements OnModuleInit, OnModuleDestroy {
 
     const bot = await this.db.bot.findUnique({
       where: { id: botId },
-      select: { name: true, symbol: true },
+      select: { name: true, symbol: true, dry_run: true },
     });
-    const label = bot ? `${bot.name} (${bot.symbol})` : botId.slice(0, 8);
+    // Marcado el simulado: un aviso de un bot de pruebas era indistinguible del
+    // de uno con dinero dentro, y el usuario no puede decidir si le importa sin
+    // saber cuál de los dos es (spec 029).
+    const label = bot
+      ? `${bot.name} (${bot.symbol})${bot.dry_run ? ' · simulado' : ''}`
+      : botId.slice(0, 8);
     this.botNames.set(botId, { label, at: Date.now() });
     return label;
-  }
-
-  /** Invalida la cache cuando el usuario cambia sus preferencias. */
-  invalidate(userId: string): void {
-    this.linkCache.delete(userId);
   }
 
   // ═══════════════════════════════════════════════════════════════
@@ -279,20 +300,30 @@ export class NotifierService implements OnModuleInit, OnModuleDestroy {
       if (!prefs.daily || !link.chat_id) continue;
 
       try {
-        const [cycles, bots] = await Promise.all([
+        // El `dry_run` de cada fila, para separar las dos cuentas. La regla de
+        // la casa está escrita en `portfolio-aggregate.ts`: «el resultado de un
+        // simulado es dinero que no existe y no se suma nunca al de verdad». La
+        // cartera, los snapshots y el ranking la respetaban; este resumen no, y
+        // le daba al usuario una cifra de ganancias que mezclaba las dos
+        // (spec 029).
+        const [todosCycles, todosBots] = await Promise.all([
           this.db.botCycle.findMany({
             where: { bot: { user_id: link.user_id }, closed_at: { gte: midnight } },
-            select: { realized_pnl: true, fees: true },
+            select: { realized_pnl: true, fees: true, bot: { select: { dry_run: true } } },
           }),
           this.db.bot.findMany({
             where: { user_id: link.user_id, status: { in: ['RUNNING', 'PAUSED', 'ERROR'] } },
-            select: { status: true },
+            select: { status: true, dry_run: true },
           }),
         ]);
+        const cycles = todosCycles.filter((c) => !c.bot.dry_run);
+        const bots = todosBots.filter((b) => !b.dry_run);
+        const simCycles = todosCycles.filter((c) => c.bot.dry_run);
+        const simBots = todosBots.filter((b) => b.dry_run);
 
         // Sin actividad y sin bots vivos no hay nada que contar: un mensaje
         // diario vacío solo entrena al usuario a ignorarlos.
-        if (cycles.length === 0 && bots.length === 0) continue;
+        if (todosCycles.length === 0 && todosBots.length === 0) continue;
 
         const pnl = cycles.reduce((a, c) => a.plus(c.realized_pnl.toString()), D(0));
         const fees = cycles.reduce((a, c) => a.plus(c.fees.toString()), D(0));
@@ -308,6 +339,19 @@ export class NotifierService implements OnModuleInit, OnModuleDestroy {
           `Bots: ${running} operando · ${paused} pausados${errored ? ` · ${errored} en error` : ''}`,
         ];
         if (errored > 0) lines.push('⚠ Revisa los bots en error.');
+
+        // Los simulados no desaparecen del resumen, van aparte: uno que ha
+        // estado trabajando todo el día y no sale por ningún lado se lee como
+        // un bot parado.
+        if (simCycles.length > 0 || simBots.length > 0) {
+          const simPnl = simCycles.reduce((a, c) => a.plus(c.realized_pnl.toString()), D(0));
+          const simSign = simPnl.gte(0) ? '+' : '';
+          const simVivos = simBots.filter((b) => b.status === 'RUNNING').length;
+          lines.push(
+            `<i>Simulado (no cuenta): ${simSign}${simPnl.toFixed(2)} en ` +
+              `${simCycles.length} ciclo(s) · ${simVivos} operando</i>`,
+          );
+        }
 
         await this.client.sendMessage(link.chat_id, lines.join('\n'));
         // Telegram corta a unos 30 mensajes por segundo por bot. Sin pausa, un

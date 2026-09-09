@@ -130,6 +130,8 @@ export interface MakeContextOptions {
   openOrders?: VenueOrder[];
   /** Precio de una fuente externa; null = pedida pero no disponible. */
   fairPrice?: string | null;
+  /** Sobrescribe el libro: sirve para un venue que no publica BBO. */
+  ticker?: Partial<Ticker>;
 }
 
 export function makeContext(opts: MakeContextOptions): BotContext {
@@ -140,7 +142,7 @@ export function makeContext(opts: MakeContextOptions): BotContext {
     strategy: opts.strategy,
     config: opts.config,
     market: makeMarket(opts.market),
-    ticker: makeTicker(price),
+    ticker: { ...makeTicker(price), ...(opts.ticker ?? {}) },
     position: opts.position ?? null,
     openOrders: opts.openOrders ?? [],
     cycle: makeCycle(opts.cycle),

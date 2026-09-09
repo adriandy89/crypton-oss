@@ -160,7 +160,7 @@ export const MARKET_MAKER_GUIDE: StrategyGuide<MarketMakerConfig> = {
     postOnly: {
       what: 'Intenta colocar órdenes que no tomen liquidez de inmediato, para pagar siempre comisión de maker.',
       affects:
-        'Activado, si una orden fuese a ejecutarse al instante el exchange la rechaza en vez de cruzarla, y el bot la recoloca. Desactivado, puedes acabar pagando comisión de taker, que es la que se come el diferencial.',
+        'Activado, si una orden fuese a ejecutarse al instante el exchange la rechaza en vez de cruzarla, y el bot la recoloca. Desactivado, puedes acabar pagando comisión de taker, que es la que se come el diferencial. En cualquier caso el bot ya no manda órdenes que crucen el libro: si el precio calculado saldría en el toque contrario, la orden se pega al toque, que nunca empeora tu precio.',
       tip: 'Déjalo activado. El negocio de un market maker es cobrar el diferencial, no pagarlo.',
     },
     refreshSeconds: {

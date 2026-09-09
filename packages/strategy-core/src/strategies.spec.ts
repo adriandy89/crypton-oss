@@ -9,7 +9,7 @@ import {
   Venue,
   type BotConfig,
 } from '@crypton/shared';
-import { px } from './common';
+import { camposEfectivos, px } from './common';
 import { makeCoid } from './client-order-id';
 import { gridSellLevels } from './strategies/gridmart';
 import { BASE_LIMIT_TTL_MS } from './ladder';
@@ -1893,10 +1893,21 @@ describe('marketMaker.plan — guardas nuevas', () => {
 
   it('el precio de referencia sustituye al mercado como ancla', () => {
     const { orders, scratchPatch } = plan({ referencePrice: '200' });
-    // 20 bps por debajo de 200, no de 100.
-    expect(byKind(orders, LevelKind.QUOTE_BID)[0].price).toBe('199.6');
+    // 20 bps por encima de 200, no de 100. Se mira la VENTA porque con el libro
+    // en 99,95/100,05 es el lado que el ancla deja fuera del toque sin cruzar.
+    expect(byKind(orders, LevelKind.QUOTE_ASK)[0].price).toBe('200.4');
     // Con ancla manual no hay nada que recordar entre ticks.
     expect(scratchPatch).toBeUndefined();
+  });
+
+  it('un ancla lejos del libro ya no manda una compra cruzada (spec 029)', () => {
+    // El ancla pedía comprar a 199,6 con el libro en 99,95/100,05: el venue la
+    // rechazaba por post-only tick tras tick, y sin post-only habría comprado
+    // en taker al doble de precio. Pegada al toque compra MÁS BARATO de lo que
+    // el ancla pedía, así que el clamp nunca empeora la ejecución.
+    const { orders } = plan({ referencePrice: '200' });
+    const bid = byKind(orders, LevelKind.QUOTE_BID)[0];
+    expect(Number(bid.price)).toBeLessThan(100.05);
   });
 
   it('con tamaños en moneda la cantidad NO se divide por el precio', () => {
@@ -1965,6 +1976,371 @@ describe('marketMaker.plan — guardas nuevas', () => {
 
     expect(byKind(vivo.orders, LevelKind.QUOTE_ASK)).toHaveLength(1);
     expect(byKind(caducado.orders, LevelKind.QUOTE_ASK)).toHaveLength(0);
+  });
+  // ── Anti-cruce: el precio se acota al libro (spec 029) ──────────────────
+  //
+  // El sesgo por inventario hundía el centro sin ningún tope relativo al
+  // libro, así que con la posición al tope TODAS las ventas salían por debajo
+  // del mejor bid. Con post-only el venue las rechazaba (el bot dejaba de
+  // cotizar y no podía reducir inventario); sin él, vendia en taker.
+  //
+  // Tick fino a propósito: con el de 0,1 del mercado por defecto el redondeo
+  // conservador de `px` disimula el cruce y el test no probaría nada.
+  const fino = { market: { tickSize: '0.01', priceDecimals: 2 } };
+  const cargado = {
+    riskProfile: 'AGGRESSIVE',
+    inventoryPriceAdjustment: true,
+    inventorySkewFactor: '1',
+    dynamicSpread: true,
+    defensiveThresholdPct: '70',
+    highRiskThresholdPct: '90',
+  };
+
+  it('ninguna venta queda en el mejor bid o por debajo, con el inventario al tope', () => {
+    const { orders } = plan(cargado, {
+      ...fino,
+      position: makePosition('10', '100'), // 1000 = 100 % del tope
+    });
+    const asks = byKind(orders, LevelKind.QUOTE_ASK);
+    expect(asks.length).toBeGreaterThan(0);
+    // El libro de `makeTicker('100')`: bid 99,95 / ask 100,05.
+    for (const a of asks) {
+      expect(a.side).toBe('SELL');
+      expect(Number(a.price)).toBeGreaterThan(99.95);
+    }
+  });
+
+  it('tampoco con el sesgo por inventario al máximo', () => {
+    const { orders } = plan(
+      { ...cargado, inventorySkewFactor: '3' },
+      { ...fino, position: makePosition('10', '100') },
+    );
+    for (const a of byKind(orders, LevelKind.QUOTE_ASK)) {
+      expect(Number(a.price)).toBeGreaterThan(99.95);
+    }
+  });
+
+  it('ninguna compra queda en el mejor ask o por encima, con la posición corta al tope', () => {
+    const { orders } = plan(cargado, {
+      ...fino,
+      position: makePosition('-10', '100'), // corto al tope: la compra es la salida
+    });
+    const bids = byKind(orders, LevelKind.QUOTE_BID);
+    expect(bids.length).toBeGreaterThan(0);
+    for (const b of bids) {
+      expect(b.side).toBe('BUY');
+      expect(Number(b.price)).toBeLessThan(100.05);
+    }
+  });
+
+  it('sin libro no cotiza: un centro de oráculo no dice donde está el toque', () => {
+    const { orders, note } = plan({}, { ticker: { bid: '0', ask: '0' } });
+    expect(byKind(orders, LevelKind.QUOTE_BID)).toHaveLength(0);
+    expect(byKind(orders, LevelKind.QUOTE_ASK)).toHaveLength(0);
+    expect(note).toMatch(/libro/i);
+  });
+
+  it('la nota dice cuántas cotizaciones hay de verdad en el libro (spec 029)', () => {
+    // Contaba las DESEADAS: un bot al que el venue rechazaba todas decía
+    // «2 cotizaciones» con el libro vacío.
+    const sinLibro = plan({}, {});
+    expect(sinLibro.note).toMatch(/cotizaciones \(0 en el libro\)/);
+
+    // Con las dos colocadas, no se repite el número.
+    const conLibro = plan(
+      {},
+      {
+        openOrders: [
+          makeVenueOrder('1a2b3c4d00000000.1.QB0', '99.8', 'BUY'),
+          makeVenueOrder('1a2b3c4d00000000.1.QA0', '100.2', 'SELL'),
+        ],
+      },
+    );
+    expect(conLibro.note).toMatch(/2 cotizaciones\./);
+    expect(conLibro.note).not.toMatch(/en el libro/);
+  });
+
+  // ── Recotizado por capa (spec 031) ────────────────────────────────────
+  //
+  // Recotizar movía SIEMPRE las 2·N capas, a cuatro peticiones por capa. En
+  // Lighter (60/min por IP) un solo bot de tres capas se comía la cuota. La
+  // capa lejana no gana nada moviéndose unos bps, y perder su sitio en la cola
+  // sí cuesta.
+  const fino2 = { market: { tickSize: '0.01', priceDecimals: 2 } };
+
+  it('una capa que apenas se ha movido conserva su sitio', () => {
+    // Deseado 99,80 (20 bps bajo 100). La viva está en 99,83: 3 bps de desvío,
+    // por debajo de la tolerancia de 5 (20 × 0,25).
+    const { orders } = plan(
+      {},
+      {
+        ...fino2,
+        openOrders: [makeVenueOrder('1a2b3c4d00000000.1.QB0', '99.83', 'BUY')],
+      },
+    );
+    expect(byKind(orders, LevelKind.QUOTE_BID)[0].price).toBe('99.83');
+  });
+
+  it('pero una que se ha ido de verdad se recoloca', () => {
+    const { orders } = plan(
+      {},
+      {
+        ...fino2,
+        openOrders: [makeVenueOrder('1a2b3c4d00000000.1.QB0', '99.50', 'BUY')],
+      },
+    );
+    expect(byKind(orders, LevelKind.QUOTE_BID)[0].price).toBe('99.80');
+  });
+
+  it('la tolerancia es proporcional: la capa lejana aguanta más', () => {
+    // Capa 1 a 30 bps (multiplicador 1,5): tolera 7,5 bps. La misma desviación
+    // de 6 bps mueve la capa 0 (tolera 5) y no mueve la 1.
+    const ctxExtra = {
+      ...fino2,
+      openOrders: [
+        makeVenueOrder('1a2b3c4d00000000.1.QB0', '99.74', 'BUY'),
+        makeVenueOrder('1a2b3c4d00000000.1.QB1', '99.64', 'BUY'),
+      ],
+    };
+    const { orders } = plan({ layers: 2, layerDistanceMultiplier: '1.5' }, ctxExtra);
+    const bids = byKind(orders, LevelKind.QUOTE_BID);
+    // La capa 0 desea 99,80 y la viva está a 6 bps: se recoloca.
+    expect(bids[0].price).toBe('99.80');
+    // La capa 1 desea 99,70 y la viva está a 6 bps: se queda.
+    expect(bids[1].price).toBe('99.64');
+  });
+
+  it('«ajustar distancia» no recotiza por su cuenta entre refrescos (spec 029)', () => {
+    // Se leía el libro en vivo fuera de la puerta de recotizado, así que con
+    // esta opción los precios cambiaban en cada tick aunque el centro estuviera
+    // congelado: 2·N capas canceladas y repuestas cada quince segundos.
+    const congelado = {
+      now: 1_000_000,
+      cycle: {
+        scratch: {
+          cycleSeq: 1,
+          quotedMid: '100',
+          quotedAt: 1_000_000 - 1000,
+          quotedAutoBps: '30.0000',
+        },
+      },
+    };
+    // El libro se ensancha (spread 2 sobre 100 = 200 bps) pero no toca recotizar.
+    const p = plan(
+      { autoAdjustDistance: true },
+      { ...congelado, ticker: { bid: '99', ask: '101' } },
+    );
+    // 30 bps guardados sobre el centro congelado de 100.
+    expect(byKind(p.orders, LevelKind.QUOTE_BID)[0].price).toBe('99.7');
+    expect(p.scratchPatch?.quotedAutoBps).toBeUndefined();
+  });
+
+  it('el clamp no altera el orden de las capas', () => {
+    const { orders } = plan(
+      { ...cargado, layers: 3, layerDistanceMultiplier: '1.5' },
+      { ...fino, position: makePosition('10', '100') },
+    );
+    const asks = byKind(orders, LevelKind.QUOTE_ASK);
+    for (let i = 1; i < asks.length; i++) {
+      expect(Number(asks[i].price)).toBeGreaterThanOrEqual(Number(asks[i - 1].price));
+    }
+  });
+});
+
+describe('en modo moneda el preview suple los avisos de tope (spec 030)', () => {
+  // `validate()` no tiene precio, asi que no puede comparar una cantidad de
+  // moneda con un tope en nocional y se saltaba las dos comprobaciones. El
+  // preview si lo tiene.
+  const previewCon = (extra: Record<string, unknown>) =>
+    getStrategy(StrategyKind.MARKET_MAKER).preview(
+      cfg({
+        ...(getStrategy(StrategyKind.MARKET_MAKER).defaults() as object),
+        totalInvestment: '5000',
+        maxBotPositionValue: '20000',
+        sizingMode: 'BASE',
+        orderSizePerSide: '1',
+        ...extra,
+      }),
+      makeMarket({ minQty: '0.0001' }),
+      '100',
+    );
+
+  it('avisa de que las capas no caben en el tope', () => {
+    // 3 capas de 1 unidad a 100 = 300 de nocional por lado, con tope 200.
+    const p = previewCon({ maxBotPositionValue: '200' });
+    expect(p.issues.some((i) => i.field === 'layers')).toBe(true);
+  });
+
+  it('avisa del tope por lado que mata una cara del bot (001/F-64)', () => {
+    const p = previewCon({ maxLongPosition: '10' });
+    expect(p.issues.some((i) => i.field === 'maxLongPosition')).toBe(true);
+  });
+
+  it('en modo nocional no duplica el aviso', () => {
+    const p = getStrategy(StrategyKind.MARKET_MAKER).preview(
+      cfg({
+        ...(getStrategy(StrategyKind.MARKET_MAKER).defaults() as object),
+        totalInvestment: '5000',
+        maxBotPositionValue: '200',
+        sizingMode: 'QUOTE',
+        orderSizePerSide: '100',
+      }),
+      makeMarket(),
+      '100',
+    );
+    expect(p.issues.filter((i) => i.field === 'layers').length).toBeLessThanOrEqual(1);
+  });
+});
+
+describe('un market maker sin stop lo dice al crearlo (spec 031)', () => {
+  // No se pone un stop por defecto a propósito: cierra la posición pero NO para
+  // el bot, que vuelve a cotizar, así que uno estrecho sería una máquina de
+  // vender en el mínimo y recomprar. Lo que faltaba era decirlo al crearlo.
+  const valida = (kind: StrategyKind, extra: Record<string, unknown>) =>
+    getStrategy(kind).validate(
+      cfg({
+        ...(getStrategy(kind).defaults() as object),
+        totalInvestment: '5000',
+        maxBotPositionValue: '20000',
+        ...extra,
+      }),
+      makeMarket(),
+    );
+
+  for (const kind of [StrategyKind.MARKET_MAKER, StrategyKind.MARKET_MAKER_V2]) {
+    it(`avisa cuando ${kind} no lleva stop`, () => {
+      const sin = valida(kind, {});
+      expect(sin.issues.some((i) => i.field === 'stopLossPct')).toBe(true);
+
+      const con = valida(kind, { stopLossPct: '15' });
+      expect(con.issues.some((i) => i.field === 'stopLossPct')).toBe(false);
+    });
+  }
+
+  it('y no se ha cambiado el valor de fábrica: sigue sin stop', () => {
+    for (const kind of [StrategyKind.MARKET_MAKER, StrategyKind.MARKET_MAKER_V2]) {
+      expect(getStrategy(kind).defaults().stopLossPct).toBeUndefined();
+    }
+  });
+});
+
+describe('un parámetro que otro deja inerte lo dice (spec 030)', () => {
+  // El patrón ya existía en Neutral Grid («la dirección no sesga la retícula»)
+  // y en la V2 («la fuente externa no se usará»). Faltaba en cuatro parejas.
+  const avisa = (kind: StrategyKind, extra: Record<string, unknown>, campo: string) => {
+    const base = getStrategy(kind).defaults() as object;
+    const r = getStrategy(kind).validate(
+      cfg({ ...base, totalInvestment: '5000', maxBotPositionValue: '20000', ...extra }),
+      makeMarket(),
+    );
+    return r.issues.some((i) => i.field === campo && i.severity === 'WARNING');
+  };
+
+  it('el factor de sesgo con el ajuste por inventario apagado', () => {
+    expect(
+      avisa(
+        StrategyKind.MARKET_MAKER,
+        { inventoryPriceAdjustment: false, inventorySkewFactor: '1' },
+        'inventorySkewFactor',
+      ),
+    ).toBe(true);
+    expect(
+      avisa(
+        StrategyKind.MARKET_MAKER,
+        { inventoryPriceAdjustment: true, inventorySkewFactor: '1' },
+        'inventorySkewFactor',
+      ),
+    ).toBe(false);
+  });
+
+  it('el margen del TDCA sin «solo si mejora el precio medio»', () => {
+    expect(
+      avisa(
+        StrategyKind.TDCA,
+        { buyOnlyIfImprovesAverage: false, marginBelowAveragePct: '0.5' },
+        'marginBelowAveragePct',
+      ),
+    ).toBe(true);
+  });
+
+  it('lo que alimenta al diferencial dinámico cuando está apagado', () => {
+    expect(
+      avisa(
+        StrategyKind.MARKET_MAKER_V2,
+        { dynamicSpread: false, volatilityMultiplier: '1' },
+        'volatilityMultiplier',
+      ),
+    ).toBe(true);
+  });
+
+  it('la rejilla de ventas de GridMart en modo Classic', () => {
+    expect(avisa(StrategyKind.GRIDMART, { classicMode: true }, 'classicMode')).toBe(true);
+    expect(avisa(StrategyKind.GRIDMART, { classicMode: false }, 'classicMode')).toBe(false);
+  });
+});
+
+describe('el tamaño en moneda no se mide en USDC (spec 030)', () => {
+  // `sizingMode` cambia la NATURALEZA del número: con BASE el usuario teclea
+  // cantidad de la moneda, no USDC. El descriptor declaraba `min: 1` y
+  // `unit: 'USDC'` fijos, así que el modo era inutilizable —1 BTC por capa y
+  // lado— y el campo mentía sobre lo que se estaba tecleando.
+  const mmCfg = (extra: Record<string, unknown>) =>
+    cfg({
+      ...(getStrategy(StrategyKind.MARKET_MAKER).defaults() as object),
+      totalInvestment: '5000',
+      maxBotPositionValue: '20000',
+      ...extra,
+    });
+
+  it('con BASE admite menos de 1 unidad si el mercado lo admite', () => {
+    const market = makeMarket({ minQty: '0.0001', base: 'BTC' });
+    const r = getStrategy(StrategyKind.MARKET_MAKER).validate(
+      mmCfg({ sizingMode: 'BASE', orderSizePerSide: '0.05' }),
+      market,
+    );
+    expect(r.issues.filter((i) => i.field === 'orderSizePerSide')).toHaveLength(0);
+  });
+
+  it('con BASE sigue rechazando por debajo del mínimo del mercado', () => {
+    const market = makeMarket({ minQty: '0.01', base: 'BTC' });
+    const r = getStrategy(StrategyKind.MARKET_MAKER).validate(
+      mmCfg({ sizingMode: 'BASE', orderSizePerSide: '0.001' }),
+      market,
+    );
+    expect(r.issues.some((i) => i.field === 'orderSizePerSide')).toBe(true);
+  });
+
+  it('con QUOTE el mínimo sigue siendo 1 USDC', () => {
+    const market = makeMarket({ minQty: '0.0001', base: 'BTC' });
+    const r = getStrategy(StrategyKind.MARKET_MAKER).validate(
+      mmCfg({ sizingMode: 'QUOTE', orderSizePerSide: '0.5' }),
+      market,
+    );
+    expect(r.issues.some((i) => i.field === 'orderSizePerSide')).toBe(true);
+  });
+
+  it('la unidad del campo es la que el usuario teclea', () => {
+    const market = makeMarket({ minQty: '0.0001', base: 'BTC' });
+    const fields = getStrategy(StrategyKind.MARKET_MAKER).meta.fields;
+    const enMoneda = camposEfectivos(fields, { sizingMode: 'BASE' }, market).find(
+      (x) => x.key === 'orderSizePerSide',
+    );
+    const enNocional = camposEfectivos(fields, { sizingMode: 'QUOTE' }, market).find(
+      (x) => x.key === 'orderSizePerSide',
+    );
+    expect(enMoneda?.unit).toBe('BTC');
+    expect(enMoneda?.min).toBe(0.0001);
+    expect(enNocional?.unit).toBe('USDC');
+    expect(enNocional?.min).toBe(1);
+  });
+
+  it('los topes siguen siendo nocional en los dos modos', () => {
+    const market = makeMarket({ minQty: '0.0001', base: 'BTC' });
+    const fields = getStrategy(StrategyKind.MARKET_MAKER).meta.fields;
+    const tope = camposEfectivos(fields, { sizingMode: 'BASE' }, market).find(
+      (x) => x.key === 'maxBotPositionValue',
+    );
+    expect(tope?.unit).toBe('USDC');
   });
 });
 
@@ -2235,8 +2611,27 @@ describe('marketMakerV2.plan', () => {
   });
 
   it('con precio de la fuente externa cotiza alrededor de ÉL, no del venue', () => {
-    const { orders } = plan({ priceSource: 'BINANCE' }, { fairPrice: '200' });
+    // El libro del venue va por encima de la fuente (200,5 / 200,6) a propósito:
+    // si el bot cotizara sobre el mid del venue el bid saldría cerca de 199,75,
+    // y sobre la fuente sale en 199,2. Antes bastaba con dejar el libro en 100,
+    // pero ese bid habría cruzado el ask y hoy se pega al toque (spec 029).
+    const { orders } = plan(
+      { priceSource: 'BINANCE' },
+      { fairPrice: '200', ticker: { bid: '200.5', ask: '200.6' } },
+    );
     expect(byKind(orders, LevelKind.QUOTE_BID)[0].price).toBe('199.2');
+  });
+
+  it('una fuente externa que se aleja del libro no manda órdenes cruzadas (spec 029)', () => {
+    // Símbolo de origen equivocado o mercado local sin liquidez: el centro
+    // externo no tiene por qué parecerse al libro donde se firma la orden.
+    const { orders } = plan({ priceSource: 'BINANCE' }, { fairPrice: '200' });
+    for (const b of byKind(orders, LevelKind.QUOTE_BID)) {
+      expect(Number(b.price)).toBeLessThan(100.05);
+    }
+    for (const a of byKind(orders, LevelKind.QUOTE_ASK)) {
+      expect(Number(a.price)).toBeGreaterThan(99.95);
+    }
   });
 
   it('el tope de posición también frena con los tamaños en moneda', () => {
@@ -2278,6 +2673,29 @@ describe('marketMakerV2.plan', () => {
     });
     const strategy = getStrategy(StrategyKind.MARKET_MAKER_V2);
     expect(strategy.plan(ctx)).toEqual(strategy.plan(ctx));
+  });
+  it('sin libro no cotiza (spec 029)', () => {
+    const { orders, note } = plan({}, { ticker: { bid: '0', ask: '0' } });
+    expect(byKind(orders, LevelKind.QUOTE_BID)).toHaveLength(0);
+    expect(byKind(orders, LevelKind.QUOTE_ASK)).toHaveLength(0);
+    expect(note).toMatch(/libro/i);
+  });
+
+  it('el centro congelado no manda una venta por debajo del mejor bid (spec 029)', () => {
+    // El mid se congela entre recotizaciones a propósito, para no perseguir al
+    // precio. Si el mercado sube dentro de esa ventana, la venta repuesta al
+    // precio viejo quedaba bajo el bid nuevo y el venue la rechazaba.
+    const { orders } = plan(
+      {},
+      {
+        price: '110',
+        now: 1_000_000,
+        cycle: { scratch: { cycleSeq: 1, quotedMid: '100', quotedAt: 1_000_000 - 1000 } },
+      },
+    );
+    for (const a of byKind(orders, LevelKind.QUOTE_ASK)) {
+      expect(Number(a.price)).toBeGreaterThan(109.95);
+    }
   });
 });
 

@@ -476,3 +476,13 @@
     grid-template-columns: repeat(3, minmax(0, 1fr));
   }
 }
+
+// Un grupo cuyo interruptor esta apagado: sus campos no intervienen en esta
+// configuracion. Se atenua en vez de ocultarse para que no desaparezca lo que
+// el usuario ya habia escrito ni se muevan de sitio los demas (030/F-06).
+//
+// Con `//` y no con `/* */`: los de bloque viajan al CSS compilado, y este
+// fichero se pasaba del presupuesto de 6 kB por 141 bytes justo por eso.
+.inerte {
+  opacity: 0.55;
+}

@@ -45,6 +45,9 @@
     "testRegex": "\\.spec\\.ts$",
     "moduleNameMapper": {
       "^@crypton/shared$": "<rootDir>/../../shared/src/index.ts"
-    }
+    },
+    "setupFilesAfterEnv": [
+      "<rootDir>/jest.setup.ts"
+    ]
   }
 }

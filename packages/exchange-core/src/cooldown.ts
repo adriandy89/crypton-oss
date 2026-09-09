@@ -18,19 +18,44 @@ import { classify } from './errors';
  * hasta que pase el enfriamiento. Fallar rápido y sin red es además mejor para
  * quien llama: la respuesta es inmediata y dice cuánto queda.
  *
- * El ámbito es el ADAPTADOR, que es el mismo que el de la conexión: la API y el
- * worker mantienen uno por venue, así que todo lo que sale de ese proceso hacia
- * ese venue comparte el enfriamiento.
+ * El ámbito es el VENUE dentro del proceso, y no el adaptador. Cada adaptador
+ * declaraba el suyo como campo de instancia, y hay un adaptador POR CUENTA de
+ * exchange: con varias cuentas del mismo venue en el mismo worker, la primera
+ * se llevaba el CAPTCHA y las demás seguían llamando hasta llevarse el suyo,
+ * encadenando cortes de sesenta segundos mucho más allá de lo documentado. El
+ * cortafuegos corta por IP; el enfriamiento tiene que ser al menos tan ancho
+ * como el castigo (spec 031).
+ *
+ * Testnet y mainnet lo comparten a propósito: son hosts distintos, así que es
+ * conservador, y esperar de más sesenta segundos es infinitamente más barato
+ * que ganarse un veto de IP de días.
  */
-export class VenueCooldown {
-  private hasta = 0;
-  private ultimoMotivo = '';
+const CORTES = new Map<string, { hasta: number; motivo: string }>();
 
+export class VenueCooldown {
   constructor(private readonly venue: Venue) {}
+
+  private get estado(): { hasta: number; motivo: string } {
+    const previo = CORTES.get(this.venue);
+    if (previo) return previo;
+    const nuevo = { hasta: 0, motivo: '' };
+    CORTES.set(this.venue, nuevo);
+    return nuevo;
+  }
+
+  /**
+   * Olvida los enfriamientos en curso.
+   *
+   * Solo para los tests: como el estado es de proceso, sin esto un caso que
+   * inicia un corte se lo pasaría al siguiente.
+   */
+  static reset(): void {
+    CORTES.clear();
+  }
 
   /** Milisegundos que quedan de enfriamiento. 0 si se puede llamar. */
   restanteMs(): number {
-    return Math.max(0, this.hasta - Date.now());
+    return Math.max(0, this.estado.hasta - Date.now());
   }
 
   /**
@@ -38,8 +63,9 @@ export class VenueCooldown {
    * largo: dos cortes seguidos no pueden acortar el castigo.
    */
   iniciar(ms: number, motivo: string): void {
-    this.hasta = Math.max(this.hasta, Date.now() + ms);
-    this.ultimoMotivo = motivo;
+    const estado = this.estado;
+    estado.hasta = Math.max(estado.hasta, Date.now() + ms);
+    estado.motivo = motivo;
   }
 
   /**
@@ -56,7 +82,7 @@ export class VenueCooldown {
       `${this.venue} nos tiene limitados; quedan ${Math.ceil(restante / 1000)} s. ` +
         `No se manda la petición para no alargar el corte.`,
       this.venue,
-      this.ultimoMotivo,
+      this.estado.motivo,
     );
   }
 

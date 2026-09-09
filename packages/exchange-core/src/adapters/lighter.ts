@@ -40,7 +40,12 @@ import { endpointsFor } from '../endpoints';
 import { isThrottled, messageOf, shortMessage, toExchangeError } from '../errors';
 import { MarketSpecCache, canonicalSymbol } from '../market-cache';
 import { RateLimiter, withRetry, withWriteRetry } from '../rate-limit';
-import { NO_BUDGET, type BudgetPriority, type VenueBudget } from '../venue-budget';
+import {
+  NO_BUDGET,
+  prioridadDeOrden,
+  type BudgetPriority,
+  type VenueBudget,
+} from '../venue-budget';
 import { lighterCost } from '../venue-weights';
 import { VenueCooldown } from '../cooldown';
 import { ReconnectingSocket, sharedStream } from '../ws';
@@ -1196,7 +1201,7 @@ export class LighterAdapter implements ExchangeAdapter {
       // protección puede no aplicar.
       return withWriteRetry(
         async () => {
-          await this.budget.take(this.venue, 1, 'write', this.testnet);
+          await this.budget.take(this.venue, 1, prioridadDeOrden(req), this.testnet);
           const result = await this.signedWrite((signer) =>
             this.limiter.run(() =>
               signer.create_market_order(
@@ -1274,7 +1279,7 @@ export class LighterAdapter implements ExchangeAdapter {
 
     return withWriteRetry(
       async () => {
-        await this.budget.take(this.venue, 1, 'write', this.testnet);
+        await this.budget.take(this.venue, 1, prioridadDeOrden(req), this.testnet);
         const result = await this.signedWrite((signer) =>
           this.limiter.run(() =>
             signer.create_order(

@@ -297,6 +297,45 @@ export function validateCommon(config: CommonBotConfig, market: MarketSpec): Val
 }
 
 /**
+ * El descriptor, ajustado a lo que el usuario ya ha elegido y al mercado.
+ *
+ * `sizingMode` no es un parámetro más: cambia la NATURALEZA del número que se
+ * teclea en `orderSizePerSide`. Con `QUOTE` es un nocional en la moneda de
+ * cotización; con `BASE`, una cantidad de la moneda del par. El descriptor era
+ * estático —`unit: 'USDC'`, `min: 1`— y eso dejaba dos daños:
+ *
+ * · El modo `BASE` era INUTILIZABLE fuera de las monedas baratas. La validación
+ *   genérica aplica `min` a rajatabla, así que pedir 0,05 BTC por capa fallaba
+ *   con «no puede ser menor que 1»: en BTC, cien mil dólares por capa y lado.
+ * · Y mientras tanto el campo decía `USDC`, así que quien elegía «cantidad de
+ *   moneda» tecleaba 50 creyendo dólares y colocaba 50 monedas.
+ *
+ * Vive aquí, y no en el formulario, porque la regla tiene que ser la MISMA en
+ * los tres sitios que la miran: el formulario, `validate()` y la API. Un
+ * mínimo que solo conociera la app volvería a ser un mínimo que el servidor
+ * contradice (001/F-13, que es justo lo que arregló el spec 019).
+ *
+ * Los topes (`maxBotPositionValue`, `maxLongPosition`, `maxShortPosition`) NO
+ * cambian: son nocional en los dos modos, porque el inventario se mide contra
+ * el valor de la posición y no contra su cantidad.
+ */
+export function camposEfectivos(
+  fields: readonly FieldMeta[],
+  config: Record<string, unknown>,
+  market: MarketSpec,
+): FieldMeta[] {
+  if (config['sizingMode'] !== 'BASE') return [...fields];
+  // Sin `minQty` declarada manda el paso de cantidad, que es la granularidad
+  // más pequeña que el venue acepta de todas formas.
+  const suelo = [market.minQty, market.stepSize]
+    .map((v) => Number(v ?? 0))
+    .find((n) => Number.isFinite(n) && n > 0);
+  return fields.map((f) =>
+    f.key === 'orderSizePerSide' ? { ...f, unit: market.base, min: suelo } : f,
+  );
+}
+
+/**
  * Lo que `meta.fields` declara y solo el formulario aplicaba: minimos, maximos,
  * opciones de las enumeraciones y enteros. La API recibe `config` como objeto
  * libre, asi que un cliente que saltara el formulario (o el asistente) colaba

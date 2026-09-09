@@ -35,7 +35,12 @@ import { endpointsFor } from '../endpoints';
 import { isRetryable, messageOf, toExchangeError } from '../errors';
 import { MarketSpecCache, canonicalSymbol, decimalsOf } from '../market-cache';
 import { RateLimiter, withRetry, withWriteRetry } from '../rate-limit';
-import { NO_BUDGET, type BudgetPriority, type VenueBudget } from '../venue-budget';
+import {
+  NO_BUDGET,
+  prioridadDeOrden,
+  type BudgetPriority,
+  type VenueBudget,
+} from '../venue-budget';
 import { asterWeight } from '../venue-weights';
 import { VenueCooldown } from '../cooldown';
 import { ReconnectingSocket, sharedStream } from '../ws';
@@ -285,12 +290,13 @@ export class AsterAdapter implements ExchangeAdapter {
     method: 'GET' | 'POST' | 'PUT' | 'DELETE',
     path: string,
     params: Record<string, string | number | boolean> = {},
+    priority: BudgetPriority = 'write',
   ): Promise<T> {
     // Reserva de escritura: una avalancha de lecturas no puede dejar sin caudal
     // a la cancelación de un pánico. Y se firma dentro de la cola, como en
     // `signedRequest`: el nonce nace al enviar.
     this.cooldown.comprobar();
-    await this.budget.take(this.venue, 1, 'write', this.testnet);
+    await this.budget.take(this.venue, 1, priority, this.testnet);
     // Colocar una orden consume además el cupo de ÓRDENES (1200/min y 300/10 s),
     // que el peso no modela (001/F-24). Solo las órdenes: el margen y el
     // apalancamiento cuentan peso, no órdenes.
@@ -715,7 +721,12 @@ export class AsterAdapter implements ExchangeAdapter {
     const venueCoid = asterCodec.encode(req.clientOrderId);
     return withWriteRetry(
       async () => {
-        const ack = await this.signedRequestOnce<AsterOrder>('POST', '/fapi/v3/order', params);
+        const ack = await this.signedRequestOnce<AsterOrder>(
+          'POST',
+          '/fapi/v3/order',
+          params,
+          prioridadDeOrden(req),
+        );
         return {
           clientOrderId: req.clientOrderId,
           venueOrderId: String(ack.orderId),

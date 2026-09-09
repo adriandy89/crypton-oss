@@ -124,6 +124,13 @@ const MAX_CONSECUTIVE_TICK_ERRORS = 5;
  * niveles gasta siete en un solo tick, así que veinte son unos tres ticks de
  * fallo total. Menos convertiría un hipo del venue en una pausa.
  */
+/**
+ * Rechazos por reglas seguidos tras los cuales se avisa, si hay posición.
+ *
+ * Con el tick de 15 s son unos cinco minutos sin conseguir colocar nada.
+ */
+const MAX_RULES_REJECTIONS = 20;
+
 const MAX_PLACE_FAILURES = 20;
 
 /**
@@ -135,6 +142,27 @@ const MAX_PLACE_FAILURES = 20;
  * se lleva el diferencial entero. Mejor no cotizar.
  */
 const FAIR_PRICE_STALE_MS = 15_000;
+
+/**
+ * Cada cuánto se puede repetir el aviso de un stream caído.
+ *
+ * No tenía ninguno: `ws.ts` emite un DOWN por cada `close` y otro por cada
+ * `error`, y el flujo de salud es compartido, así que una caída larga producía
+ * un aviso por bot y por intento de reconexión. Quien recibe eso silencia el
+ * canal, y con él los avisos que sí hay que leer (spec 029).
+ */
+const STREAM_ALERT_COOLDOWN_MS = 5 * 60_000;
+
+/**
+ * Cada cuánto se puede repetir el aviso de latido estirado.
+ *
+ * El presupuesto del venue no rechaza cuando se agota: DUERME hasta que hay
+ * ficha. Eso es correcto —rendirse convertiría una espera en un fallo falso—
+ * pero deja una degradación invisible: el tick no falla, el cortacircuitos no
+ * salta, y el bot aparece «operando» con el latido estirado de quince segundos
+ * a un minuto. La única señal era mirar el reloj (spec 031).
+ */
+const SLOW_TICK_ALERT_COOLDOWN_MS = 15 * 60_000;
 
 /** Cada cuánto se puede repetir el aviso de precio externo caducado. */
 const FAIR_PRICE_ALERT_COOLDOWN_MS = 5 * 60_000;
@@ -404,6 +432,25 @@ export class BotRunner {
   private placeFailures = 0;
 
   /**
+   * Rechazos por REGLAS seguidos, sin una sola colocación aceptada entre medias.
+   *
+   * `placeFailures` sólo cuenta los fallos pasajeros, asi que un bot al que el
+   * venue le rechaza TODAS las órdenes por sus reglas no disparaba ningún
+   * cortacircuitos: se quedaba sin órdenes en el libro, con la posición abierta,
+   * y lo único que se veía era un WARN por rechazo (spec 029).
+   */
+  private rulesRejections = 0;
+
+  /** Streams anunciados como caídos, con el momento en que se puede repetir. */
+  private readonly streamsCaidos = new Map<string, number>();
+
+  /** El aviso de arriba se da una vez, no en cada tick. */
+  private rulesAlertado = false;
+
+  /** Momento a partir del cual se puede repetir el aviso de latido estirado. */
+  private slowTickAlertUntil = 0;
+
+  /**
    * ¿Confirmó el venue la ÚLTIMA colocación del stop loss?
    *
    * `protectionNote` solo miraba si el usuario había CONFIGURADO uno, y decía
@@ -610,6 +657,7 @@ export class BotRunner {
   private async tick(): Promise<void> {
     if (this.stopped) return;
     this.ticks++;
+    const empezado = Date.now();
 
     try {
       const { adapter, bot, store } = this.deps;
@@ -743,7 +791,34 @@ export class BotRunner {
       this.markTickOk();
     } catch (e) {
       await this.onTickError(e);
+    } finally {
+      await this.avisarSiElLatidoSeEstira(Date.now() - empezado);
     }
+  }
+
+  /**
+   * El aviso de que el bot ya no mantiene su ritmo.
+   *
+   * Un tick que tarda MÁS que el propio intervalo de reconciliación significa
+   * que el bot no llega: o el venue va lento, o el presupuesto de caudal está
+   * agotado y `budget.take()` está durmiendo. Ninguna de las dos cosas produce
+   * un error, así que hasta ahora no se veía en ninguna parte (spec 031).
+   *
+   * Se mide el tick entero y no solo la espera del presupuesto a propósito: al
+   * usuario le importa que su bot llegue tarde, no por cuál de las razones.
+   */
+  private async avisarSiElLatidoSeEstira(duracionMs: number): Promise<void> {
+    if (this.stopped || duracionMs <= this.deps.reconcileIntervalMs) return;
+    const ahora = Date.now();
+    if (ahora < this.slowTickAlertUntil) return;
+    this.slowTickAlertUntil = ahora + SLOW_TICK_ALERT_COOLDOWN_MS;
+    await this.event(
+      'TICK_SLOW',
+      'WARN',
+      `La revisión ha tardado ${Math.round(duracionMs / 1000)} s, más que el intervalo de ` +
+        `${Math.round(this.deps.reconcileIntervalMs / 1000)} s: el bot no está manteniendo su ritmo. ` +
+        'Suele ser el cupo de peticiones del venue, que hace esperar en vez de fallar.',
+    ).catch(() => undefined);
   }
 
   /**
@@ -831,7 +906,10 @@ export class BotRunner {
     // una compra a mercado cuyo fill aún no se ha asimilado al ciclo.
     for (const order of desired.immediate) {
       if (this.halted()) return;
-      await this.place(order, 'inmediata');
+      // Una inmediata que REDUCE es un cierre —el aplanado por limite, el del
+      // stop—, y un cierre no puede quedarse en cuarentena por haber sido
+      // rechazado una vez: es justo la orden que no puede faltar (spec 029).
+      await this.place(order, 'inmediata', false, order.reduceOnly === true);
     }
   }
 
@@ -991,7 +1069,7 @@ export class BotRunner {
       // el bot sigue con el resto de la escalera.
       if (err.kind === 'RULES') {
         this.cuarentena(order, shape);
-        const severidad = this.severidadDeRechazo(order, shape, 'WARN');
+        const severidad = this.severidadDeRechazo(order, shape, 'WARN', err.message);
         if (severidad) {
           await this.event(
             'ORDER_REJECTED',
@@ -1002,6 +1080,7 @@ export class BotRunner {
             { clientOrderId: order.clientOrderId },
           );
         }
+        await this.avisarSiNoColoca(order, err.message);
         return null;
       }
       if (err.kind === 'INSUFFICIENT_FUNDS') {
@@ -1101,6 +1180,8 @@ export class BotRunner {
     await this.anotarAcuse(order, ack);
     this.quarantine.delete(order.clientOrderId);
     this.placeFailures = 0;
+    this.rulesRejections = 0;
+    this.rulesAlertado = false;
     if (order.levelKind === 'STOP_LOSS') {
       this.stopLossVivo = true;
       // Colocado: el siguiente rechazo, si lo hay, vuelve a merecer su aviso.
@@ -1154,7 +1235,15 @@ export class BotRunner {
 
   /** Identidad de una orden a efectos de cuarentena: si cambia, se reintenta. */
   private shapeOf(order: DesiredOrder): string {
-    return `${order.side}:${order.type}:${order.price}:${order.qty}`;
+    // `levelKind` y `reduceOnly` entran en la forma porque una MISMA capa
+    // cambia de papel: `QUOTE_ASK#0` rechazada como entrada volvía a pedirse,
+    // ya en alto riesgo, como la orden que REDUCE el inventario. Si el precio y
+    // la cantidad coincidían —y coinciden a menudo: dos distancias distintas
+    // redondean al mismo tick—, la cuarentena la bloqueaba en silencio y el bot
+    // se quedaba sin su única salida (spec 029).
+    return `${order.levelKind}:${order.side}:${order.type}:${order.price}:${order.qty}:${
+      order.reduceOnly === true ? 'ro' : '-'
+    }`;
   }
 
   /**
@@ -1181,11 +1270,48 @@ export class BotRunner {
     order: DesiredOrder,
     shape: string,
     severidad: 'INFO' | 'WARN' | 'ERROR' | 'CRITICAL',
+    mensaje?: string,
   ): 'INFO' | 'WARN' | 'ERROR' | 'CRITICAL' | null {
+    // Una cotización rechazada por post-only es la conducta NORMAL de un market
+    // maker: la estrategia vuelve a querer el nivel mientras el precio sigue
+    // encima. Queda en la bitácora, que es donde el manual dice que se mire,
+    // pero deja de despertar el móvil cada quince segundos (spec 029). Lo que
+    // sí avisa es no conseguir colocar nada: eso es `avisarSiNoColoca`.
+    if (
+      (order.levelKind === 'QUOTE_BID' || order.levelKind === 'QUOTE_ASK') &&
+      /post.?only/i.test(mensaje ?? '')
+    ) {
+      return 'INFO';
+    }
     if (order.levelKind !== 'STOP_LOSS') return severidad;
     if (this.stopRechazoAvisado === shape) return null;
     this.stopRechazoAvisado = shape;
     return 'CRITICAL';
+  }
+
+  /**
+   * El aviso de que el bot no está consiguiendo colocar NADA.
+   *
+   * Un rechazo por reglas no incrementaba ningún contador: `placeFailures` sólo
+   * cuenta los fallos pasajeros. Un bot cuyas órdenes rechaza el venue una tras
+   * otra se quedaba sin nada en el libro —con la posición abierta y, si iba
+   * cargado, sin poder reducirla— y lo único que se veía era un WARN por cada
+   * rechazo, indistinguible del rechazo normal y corriente (spec 029).
+   *
+   * El stop queda fuera de la cuenta: tiene su propio aviso, y siempre crítico.
+   */
+  private async avisarSiNoColoca(order: DesiredOrder, motivo: string): Promise<void> {
+    if (order.levelKind === 'STOP_LOSS') return;
+    this.rulesRejections++;
+    if (this.rulesRejections < MAX_RULES_REJECTIONS || this.rulesAlertado) return;
+    this.rulesAlertado = true;
+    await this.event(
+      'ORDER_REJECTED',
+      'CRITICAL',
+      `${this.rulesRejections} rechazos por reglas seguidos sin una sola orden aceptada: ` +
+        `el bot no está consiguiendo colocar en el venue (último: ${motivo}).` +
+        this.protectionNote,
+    ).catch(() => undefined);
   }
 
   // ═══════════════════════════════════════════════════════════════
@@ -1419,7 +1545,25 @@ export class BotRunner {
   }): Promise<void> {
     if (this.stopped) return;
     if (h.stream === 'fills') this.fillsHealthy = h.status === 'UP';
-    if (h.status === 'UP') return;
+
+    if (h.status === 'UP') {
+      // La vuelta solo se anuncia si se anunció la caída. Avisar de que algo
+      // que nadie sabía roto ya funciona es ruido, y este canal vive de que el
+      // usuario siga leyéndolo.
+      if (!this.streamsCaidos.delete(h.stream)) return;
+      await this.event('STREAM_RECOVERED', 'INFO', `Stream de ${h.stream} restablecido.`).catch(
+        () => undefined,
+      );
+      return;
+    }
+
+    // Un stream ya anunciado como caído no se vuelve a anunciar hasta que pase
+    // el enfriamiento; si sigue roto entonces, se repite, porque ya no es la
+    // misma noticia.
+    const ahora = Date.now();
+    const hasta = this.streamsCaidos.get(h.stream);
+    if (hasta !== undefined && ahora < hasta) return;
+    this.streamsCaidos.set(h.stream, ahora + STREAM_ALERT_COOLDOWN_MS);
 
     await this.event(
       'STREAM_ERROR',

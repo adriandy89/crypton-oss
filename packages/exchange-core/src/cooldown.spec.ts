@@ -55,12 +55,40 @@ describe('enfriamiento tras un corte del venue', () => {
   it('un veto de IP espera mas que un corte normal', () => {
     const corte = new VenueCooldown(Venue.ASTER);
     corte.registrar(toExchangeError('slow down', Venue.ASTER, 429));
+    const tras429 = corte.restanteMs();
+
+    // El enfriamiento es de proceso (spec 031), asi que los dos casos no pueden
+    // convivir: se olvida el primero antes de medir el segundo.
+    VenueCooldown.reset();
 
     const veto = new VenueCooldown(Venue.ASTER);
     veto.registrar(toExchangeError('banned', Venue.ASTER, 418));
 
-    expect(veto.restanteMs()).toBeGreaterThan(corte.restanteMs());
+    expect(veto.restanteMs()).toBeGreaterThan(tras429);
     expect(veto.restanteMs()).toBeGreaterThan(110_000);
+  });
+
+  /**
+   * El cortafuegos corta por IP, pero cada adaptador declaraba su propio
+   * enfriamiento y hay un adaptador POR CUENTA: la primera cuenta se llevaba el
+   * CAPTCHA y las demas seguian llamando hasta llevarse el suyo, encadenando
+   * cortes mucho mas alla del minuto documentado (spec 031).
+   */
+  it('dos cuentas del mismo venue comparten el corte', () => {
+    const cuentaA = new VenueCooldown(Venue.LIGHTER);
+    const cuentaB = new VenueCooldown(Venue.LIGHTER);
+
+    cuentaA.registrar(toExchangeError('Human Verification', Venue.LIGHTER, 403));
+
+    expect(cuentaB.restanteMs()).toBeGreaterThan(0);
+    expect(() => cuentaB.comprobar()).toThrow(/limitados/);
+  });
+
+  it('pero un venue no arrastra a otro', () => {
+    new VenueCooldown(Venue.LIGHTER).registrar(
+      toExchangeError('Human Verification', Venue.LIGHTER, 403),
+    );
+    expect(new VenueCooldown(Venue.ASTER).restanteMs()).toBe(0);
   });
 
   /**

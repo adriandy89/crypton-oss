@@ -1185,6 +1185,39 @@ describe('MemoryVenueBudget', () => {
   });
 
   /**
+   * Spec 029. Un stop-loss competía de igual a igual con una recotización de un
+   * market maker, que manda cuatro peticiones por capa y por tick: la orden que
+   * sostiene la posición perdía por volumen contra la que solo mejora el precio.
+   * La reserva de críticas es lo que le guarda sitio.
+   */
+  it('una orden crítica pasa cuando el depósito ya no da para una escritura normal', async () => {
+    const budget = new MemoryVenueBudget({
+      ratePerSecond: { [Venue.HYPERLIQUID]: 10 },
+      burstSeconds: 1,
+      criticalReserve: 0.5,
+    });
+
+    // Se vacía el depósito hasta dejarlo por debajo de la reserva de críticas.
+    await budget.take(Venue.HYPERLIQUID, 6, 'critical', false);
+
+    // Una escritura corriente ya no cabe: tiene que esperar.
+    const antesWrite = Date.now();
+    await budget.take(Venue.HYPERLIQUID, 1, 'write', false);
+    expect(Date.now() - antesWrite).toBeGreaterThanOrEqual(20);
+
+    // Y la crítica, con el depósito igual de seco, entra sin esperar.
+    const budget2 = new MemoryVenueBudget({
+      ratePerSecond: { [Venue.HYPERLIQUID]: 10 },
+      burstSeconds: 1,
+      criticalReserve: 0.5,
+    });
+    await budget2.take(Venue.HYPERLIQUID, 6, 'critical', false);
+    const antesCrit = Date.now();
+    await budget2.take(Venue.HYPERLIQUID, 1, 'critical', false);
+    expect(Date.now() - antesCrit).toBeLessThan(20);
+  });
+
+  /**
    * Spec 001, F-24. Aster limita también las ÓRDENES (1200/min y 300/10 s) y el
    * presupuesto solo contaba peso: un market maker de varias capas podía pasarse
    * sin que nadie lo notara. El depósito de órdenes admite 85 de golpe (lo que

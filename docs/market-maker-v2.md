@@ -183,6 +183,12 @@ Aquí la V2 es **más lista que la V1**. Antes de colocar cada capa mira cuánto
 
 Idénticas a la V1: piso/techo de precio (cortan **solo el lado que abre**) y **Acción al alcanzar el límite**.
 
+También como en la V1: el bot **nunca cruza el libro** —si el precio calculado saldría en el toque
+contrario o más allá, la orden se pega al toque, que nunca empeora tu precio— y **sin libro no cotiza**.
+Esto último importa especialmente aquí: la V2 puede anclarse a un **precio externo** (Binance), y ese
+precio no tiene por qué coincidir con el libro del exchange donde se firma la orden. Si se separan, las
+cotizaciones se quedan pegadas al toque en vez de salir cruzadas.
+
 ---
 
 ## 3. Cómo configurarlo con poco riesgo
@@ -384,6 +390,14 @@ Lo que se pone en cada orden, en cada lado. Con varios niveles, el tamaño del *
 #### Introducir tamaños en · `sizingMode` · 🌤️ en tibio · por defecto **Valor nocional**
 
 Valor nocional (USDC) o Cantidad de moneda. **Consejo**: valor nocional, se compara sin cuentas contra el tope.
+
+> El campo **cambia de unidad contigo**: con «valor nocional» se rotula `USDC` y su mínimo es 1; con
+> «cantidad de moneda» se rotula con la moneda del par y su mínimo pasa a ser el del mercado. Hasta
+> el spec 030 decía `USDC` en los dos modos y exigía un mínimo de 1, así que «cantidad de moneda» no
+> se podía usar en un par caro.
+
+El tope de posición sigue siendo **nocional en los dos modos**: mide el valor de lo que tienes, no su
+cantidad.
 
 #### Acción al alcanzar el límite · `limitAction` · 🔥 en caliente · ⚠️ campo de riesgo
 

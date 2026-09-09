@@ -1,6 +1,7 @@
 import { Observable, Subject } from 'rxjs';
 import {
   D,
+  StrategyKind,
   Venue,
   type Balance,
   type Decimal,
@@ -19,7 +20,7 @@ import {
   type ExchangeAdapter,
   type StreamHealth,
 } from '@crypton/exchange-core';
-import { parseCoid } from '@crypton/strategy-core';
+import { getStrategy, parseCoid } from '@crypton/strategy-core';
 import { BotRunner, type FairFeedRequest, type PriceSourceLike } from './bot-runner';
 import type { BotRecord, BotStore } from './bot-store';
 
@@ -57,6 +58,10 @@ const MARKET: MarketSpec = {
 class PriceSource implements ExchangeAdapter {
   readonly venue = Venue.HYPERLIQUID;
   readonly ticker$ = new Subject<Ticker>();
+  /** Salud del stream: el simulador la delega tal cual en su fuente. */
+  readonly health$ = new Subject<StreamHealth>();
+  /** Media horquilla del libro. Un par caro necesita una mayor que 0,05. */
+  spread = D('0.05');
   current: Ticker = this.at('100');
 
   private at(price: string): Ticker {
@@ -65,8 +70,8 @@ class PriceSource implements ExchangeAdapter {
       venue: Venue.HYPERLIQUID,
       symbol: 'BTC',
       last: price,
-      bid: p.minus('0.05').toFixed(),
-      ask: p.plus('0.05').toFixed(),
+      bid: p.minus(this.spread).toFixed(),
+      ask: p.plus(this.spread).toFixed(),
       mark: price,
       ts: Date.now(),
     };
@@ -95,7 +100,7 @@ class PriceSource implements ExchangeAdapter {
   streamOrders = (): Observable<OrderUpdate> => new Subject<OrderUpdate>().asObservable();
   streamFills = (): Observable<Fill> => new Subject<Fill>().asObservable();
   streamTicker = (): Observable<Ticker> => this.ticker$.asObservable();
-  streamHealth = (): Observable<StreamHealth> => new Subject<StreamHealth>().asObservable();
+  streamHealth = (): Observable<StreamHealth> => this.health$.asObservable();
   close = async () => undefined;
 }
 
@@ -120,6 +125,8 @@ class MemoryStore {
   readonly rows = new Map<string, Row>();
   readonly fills = new Set<string>();
   readonly events: string[] = [];
+  /** El evento entero: hace falta para mirar el motivo, no solo el tipo. */
+  readonly eventLog: { type: string; severity: string; message: string }[] = [];
   cycle: CycleState = {
     cycleId: 'c1',
     startedAt: Date.now(),
@@ -136,8 +143,9 @@ class MemoryStore {
 
   setStatus = async () => undefined;
   touchTick = async () => undefined;
-  event = async (_b: unknown, type: string) => {
+  event = async (_b: unknown, type: string, severity?: string, message?: string) => {
     this.events.push(type);
+    this.eventLog.push({ type, severity: severity ?? '', message: message ?? '' });
   };
   saveSnapshot = async () => undefined;
   /** Marcas de agua de market making. Se guardan para poder comprobarlas. */
@@ -314,9 +322,12 @@ interface Harness {
 function harness(
   strategy: string,
   config: Record<string, unknown>,
-  opts: { withFairFeed?: boolean } = {},
+  opts: { withFairFeed?: boolean; market?: MarketSpec; price?: string; spread?: string } = {},
 ): Harness {
   const source = new PriceSource();
+  if (opts.spread) source.spread = D(opts.spread);
+  if (opts.price) source.move(opts.price);
+  const market = opts.market ?? MARKET;
   const fairFeed = new FakeFairFeed();
   // Sin comisiones ni deslizamiento: precios exactos, para poder razonar.
   const sim = new DryRunAdapter(source, {
@@ -345,7 +356,7 @@ function harness(
     bot,
     adapter: sim,
     testnet: false,
-    market: MARKET,
+    market,
     config: {
       exchangeAccountId: 'acc-1',
       symbol: 'BTC',
@@ -795,8 +806,11 @@ describe('Market Maker V2 en el simulador', () => {
 
     expect(D(await positionQty(h.sim)).gt(0)).toBe(true);
     const after = (await book(h.sim)).find((o) => o.kind === 'QUOTE_BID');
-    // La compra que quede tiene que ser la MISMA: el ancla no se ha movido.
-    if (after) expect(after.price).toBe(bid.price);
+    // El ancla no se ha movido, así que la compra NO persigue al precio hacia
+    // arriba. Puede quedar por debajo: el mercado bajó y reponerla en 99,6
+    // habría cruzado el libro, que es lo que el venue rechazaba por post-only
+    // (spec 029). Comprar más abajo nunca empeora la ejecución.
+    if (after) expect(D(after.price).lte(bid.price)).toBe(true);
 
     await h.runner.dispose();
   });
@@ -962,3 +976,206 @@ function trackCanonicals(store: MemoryStore): void {
     return original(input);
   };
 }
+
+describe('Lo que antes había que comprobar a mano (spec 031)', () => {
+  /**
+   * El incidente que abrió el spec 029: un market maker con inventario cargado
+   * cotizaba desde un centro desplazado por el sesgo, la venta salía por debajo
+   * del mejor comprador y el venue la rechazaba tick tras tick. Aquí se fuerza
+   * ese escenario contra el simulador, que rechaza el post-only que cruza
+   * exactamente como el venue.
+   */
+  const CARGADO = {
+    direction: 'NEUTRAL',
+    orderSizePerSide: '100',
+    maxBotPositionValue: '400',
+    buyDistanceBps: '20',
+    sellDistanceBps: '20',
+    minAllowedDistanceBps: '8',
+    refreshSeconds: 15,
+    layers: 1,
+    layerDistanceMultiplier: '1',
+    layerSizeMultiplier: '1',
+    // Perfil agresivo + sesgo al máximo: la combinación que hundía el centro.
+    riskProfile: 'AGGRESSIVE',
+    dynamicSpread: true,
+    inventoryPriceAdjustment: true,
+    inventorySkewFactor: '3',
+    defensiveThresholdPct: '70',
+    highRiskThresholdPct: '90',
+    totalInvestment: '1000',
+  };
+
+  it('un market maker cargado opera sin rechazos y sin cruzar el libro', async () => {
+    const h = harness('MARKET_MAKER', CARGADO);
+    trackCanonicals(h.store);
+
+    await h.runner.start();
+    await settle();
+
+    // Se le hace acumular inventario. El precio SOLO baja: si subiera, sus
+    // ventas entrarían y el inventario no llegaría al tope, que es justo el
+    // estado que hunde el centro.
+    for (const p of ['99.6', '99.2', '98.8', '98.4', '98.0']) {
+      h.source.move(p);
+      await settle(120);
+    }
+
+    // El escenario tiene que haberse cumplido: sin bot cargado, este test no
+    // probaría nada. Se comprueba en voz alta.
+    const qty = D(await positionQty(h.sim));
+    const expuesto = qty.mul('98');
+    expect(expuesto.gte(D('400').mul('0.9'))).toBe(true);
+
+    // Y ahora unos cuantos ticks con el bot YA cargado, moviendo poco para
+    // forzar la recotización sin deshacer el inventario.
+    for (const p of ['97.95', '97.9', '97.95', '97.85', '97.9']) {
+      h.source.move(p);
+      await settle(120);
+    }
+
+    const rechazos = h.store.eventLog.filter(
+      (e) => e.type === 'ORDER_REJECTED' && /post.?only/i.test(e.message),
+    );
+    expect(rechazos).toHaveLength(0);
+
+    // Y lo que de verdad importa: ninguna orden viva cruza el libro.
+    const ticker = await h.sim.getTicker('BTC');
+    for (const o of await book(h.sim)) {
+      if (o.side === 'SELL') expect(D(o.price).gt(D(ticker.bid))).toBe(true);
+      else expect(D(o.price).lt(D(ticker.ask))).toBe(true);
+    }
+
+    await h.runner.dispose();
+  });
+
+  /**
+   * El vector determinista del cruce, y el que documenta 029/F-02: un ancla
+   * manual —o una fuente externa— que se separa del libro donde se firma la
+   * orden. Sin el clamp, la venta sale muy por debajo del mejor comprador y el
+   * simulador la rechaza por post-only exactamente como el venue.
+   *
+   * Este test FALLA sin `sinCruzarLibro`: es el que prueba el arreglo.
+   */
+  it('un ancla por debajo del libro no manda ventas cruzadas', async () => {
+    const h = harness('MARKET_MAKER', {
+      direction: 'NEUTRAL',
+      // Ancla 5 % por debajo del mercado: la venta saldría en ~95,2 con el
+      // libro en 99,95/100,05.
+      referencePrice: '95',
+      orderSizePerSide: '100',
+      maxBotPositionValue: '1000',
+      buyDistanceBps: '20',
+      sellDistanceBps: '20',
+      minAllowedDistanceBps: '8',
+      refreshSeconds: 30,
+      layers: 1,
+      layerDistanceMultiplier: '1',
+      layerSizeMultiplier: '1',
+      riskProfile: 'BALANCED',
+      dynamicSpread: false,
+      inventoryPriceAdjustment: false,
+      totalInvestment: '1000',
+    });
+    trackCanonicals(h.store);
+
+    await h.runner.start();
+    await settle(120);
+
+    const rechazos = h.store.eventLog.filter(
+      (e) => e.type === 'ORDER_REJECTED' && /post.?only/i.test(e.message),
+    );
+    expect(rechazos).toHaveLength(0);
+
+    // La venta existe y está por encima del mejor comprador: pegada al toque,
+    // pero maker. Antes ni siquiera llegaba a colocarse.
+    const ticker = await h.sim.getTicker('BTC');
+    const ventas = (await book(h.sim)).filter((o) => o.side === 'SELL');
+    expect(ventas).toHaveLength(1);
+    expect(D(ventas[0].price).gt(D(ticker.bid))).toBe(true);
+
+    await h.runner.dispose();
+  });
+
+  it('una caída del stream se anuncia una vez y su vuelta también', async () => {
+    const h = harness('MARKET_MAKER', CARGADO);
+    await h.runner.start();
+    await settle();
+
+    // `ws.ts` emite un DOWN por cada `close` y otro por cada `error`.
+    h.source.health$.next({ stream: 'ticker', status: 'DOWN', detail: 'socket cerrado' });
+    h.source.health$.next({ stream: 'ticker', status: 'DOWN', detail: 'socket cerrado' });
+    h.source.health$.next({ stream: 'ticker', status: 'DOWN', detail: 'error' });
+    await settle(80);
+
+    expect(h.store.events.filter((e) => e === 'STREAM_ERROR')).toHaveLength(1);
+
+    h.source.health$.next({ stream: 'ticker', status: 'UP' });
+    await settle(80);
+
+    expect(h.store.events.filter((e) => e === 'STREAM_RECOVERED')).toHaveLength(1);
+
+    await h.runner.dispose();
+  });
+
+  /**
+   * 030/F-01: con «cantidad de moneda» el mínimo del campo era 1, así que en un
+   * par caro el bot no se podía ni crear. Aquí se comprueba de punta a punta:
+   * la configuración vale, el bot arranca y sus órdenes tienen el tamaño que se
+   * pidió en la moneda del par.
+   */
+  it('un market maker en «cantidad de moneda» opera en un par caro', async () => {
+    const CARO: MarketSpec = {
+      ...MARKET,
+      tickSize: '1',
+      stepSize: '0.0001',
+      minQty: '0.0001',
+      minNotional: '10',
+      priceDecimals: 0,
+      qtyDecimals: 4,
+    };
+    const cfg = {
+      direction: 'NEUTRAL',
+      sizingMode: 'BASE',
+      // 0,002 BTC a 100.000 = 200 USDC por capa y lado.
+      orderSizePerSide: '0.002',
+      maxBotPositionValue: '5000',
+      buyDistanceBps: '20',
+      sellDistanceBps: '20',
+      minAllowedDistanceBps: '8',
+      refreshSeconds: 30,
+      layers: 1,
+      layerDistanceMultiplier: '1',
+      layerSizeMultiplier: '1',
+      riskProfile: 'BALANCED',
+      dynamicSpread: false,
+      inventoryPriceAdjustment: false,
+      totalInvestment: '5000',
+    };
+
+    // La configuración es válida contra ese mercado: antes fallaba con
+    // «orderSizePerSide no puede ser menor que 1».
+    const validacion = getStrategy(StrategyKind.MARKET_MAKER).validate(cfg as never, CARO);
+    expect(validacion.issues.filter((i) => i.field === 'orderSizePerSide')).toHaveLength(0);
+
+    const h = harness('MARKET_MAKER', cfg, {
+      market: CARO,
+      price: '100000',
+      spread: '50',
+    });
+    trackCanonicals(h.store);
+
+    await h.runner.start();
+    await settle();
+
+    const orders = await book(h.sim);
+    expect(orders.filter((o) => o.kind === 'QUOTE_BID')).toHaveLength(1);
+    expect(orders.filter((o) => o.kind === 'QUOTE_ASK')).toHaveLength(1);
+
+    // El tamaño es el que se pidió EN MONEDA, no un nocional.
+    const vivas = await h.sim.getOpenOrders('BTC');
+    for (const o of vivas) expect(D(o.qty).eq('0.002')).toBe(true);
+
+    await h.runner.dispose();
+  });
+});

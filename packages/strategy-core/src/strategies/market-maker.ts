@@ -17,7 +17,7 @@ import {
   type ValidationIssue,
   type ValidationResult,
 } from '@crypton/shared';
-import { makeCoid } from '../client-order-id';
+import { makeCoid, parseCoid } from '../client-order-id';
 import {
   buildPreview,
   commonFieldsWith,
@@ -37,6 +37,8 @@ import {
   bookMid,
   bookSpreadBps,
   expiredQuotes,
+  hayLibro,
+  precioEstable,
   inventoryOf,
   limitBreach,
   orderAges,
@@ -45,6 +47,7 @@ import {
   REGIME_DISTANCE,
   riskRegime,
   sideRoles,
+  sinCruzarLibro,
   sizeToQty,
 } from './mm-shared';
 
@@ -600,6 +603,34 @@ export const marketMaker: Strategy<MarketMakerConfig> = {
         }
       }
     }
+    // No se pone un stop POR DEFECTO a propósito: al dispararse cierra la
+    // posición pero el bot sigue vivo y vuelve a cotizar, así que un stop
+    // estrecho en un market maker es una máquina de vender en el mínimo y
+    // recomprar. Su red natural es el tope de posición y la acción al
+    // alcanzarlo. Pero que no lo lleve tiene que decirse, y decirse AL CREARLO
+    // —`protectionNote` solo se pega a los avisos de pausa y parada, que en
+    // este escenario no llegan a ocurrir— (spec 031).
+    if (!cfg.stopLossPct || D(cfg.stopLossPct).lte(0)) {
+      issues.push(
+        warn(
+          'stopLossPct',
+          'Sin stop loss: la red de este bot es el tope de posición y la acción al alcanzarlo. ' +
+            'Un stop cierra la posición pero NO para el bot, que volverá a cotizar; ponlo holgado ' +
+            'si lo quieres como corte ante un movimiento brusco.',
+        ),
+      );
+    }
+    // Un parámetro que no hace nada porque otro lo apaga tiene que decirlo: es
+    // el mismo problema de 001/F-12, pero por combinación (030/F-04).
+    if (cfg.inventoryPriceAdjustment === false && D(cfg.inventorySkewFactor ?? 0).gt(0)) {
+      issues.push(
+        warn(
+          'inventorySkewFactor',
+          'El ajuste de precio por inventario está desactivado: el factor de sesgo no se usa.',
+        ),
+      );
+    }
+
     return toResult(issues);
   },
 
@@ -664,7 +695,7 @@ export const marketMaker: Strategy<MarketMakerConfig> = {
       direction: cfg.direction === 'SHORT' ? 'SHORT' : 'LONG',
       leverage: cfg.leverage,
       marginMode: cfg.marginMode,
-      issues: validation.issues,
+      issues: [...validation.issues, ...avisosDeTopeEnMoneda(cfg, mid)],
     });
   },
 
@@ -786,17 +817,42 @@ export const marketMaker: Strategy<MarketMakerConfig> = {
     // número fijo y pasa a seguir la anchura real del libro. En un par que se
     // ensancha, una distancia fija se queda dentro del diferencial y ejecuta
     // contra flujo informado.
-    const autoBps = cfg.autoAdjustDistance ? bookSpreadBps(ctx.ticker).mul(1.2) : D(0);
+    //
+    // Se congela con el centro. Se leía en vivo, fuera de la puerta de
+    // recotizado, así que con esta opción los precios cambiaban en CADA tick
+    // aunque `shouldRequote` fuese falso: el bot cancelaba y reponía sus 2·N
+    // capas cada quince segundos para siempre, y la espera tras un fill dejaba
+    // de significar nada (spec 029).
+    const autoVivo = cfg.autoAdjustDistance ? bookSpreadBps(ctx.ticker).mul(1.2) : D(0);
+    const autoGuardado = scratch['quotedAutoBps'] as string | undefined;
+    const autoBps = !cfg.autoAdjustDistance
+      ? D(0)
+      : shouldRequote || autoGuardado === undefined
+        ? autoVivo
+        : D(autoGuardado);
+    if (cfg.autoAdjustDistance && shouldRequote) {
+      scratchPatch['quotedAutoBps'] = autoBps.toFixed(4);
+    }
     const buyBase = Decimal.max(D(cfg.buyDistanceBps), autoBps);
     const sellBase = Decimal.max(D(cfg.sellDistanceBps), autoBps);
 
     const dir = cfg.direction ?? 'NEUTRAL';
-    const quoteBids = dir === 'NEUTRAL' || dir === 'LONG';
-    const quoteAsks = dir === 'NEUTRAL' || dir === 'SHORT';
+    // Sin los dos lados del libro no hay toque contra el que medir, y `bookMid`
+    // cae al precio de marca —un oráculo—: cotizar contra él es justo lo que
+    // producía cruces sistemáticos. Mejor no cotizar y decirlo (spec 029).
+    const libro = hayLibro(ctx.ticker);
+    const quoteBids = libro && (dir === 'NEUTRAL' || dir === 'LONG');
+    const quoteAsks = libro && (dir === 'NEUTRAL' || dir === 'SHORT');
     const orderType = cfg.postOnly === false ? 'LIMIT' : 'POST_ONLY';
 
     const buyRole = roles.buy;
     const sellRole = roles.sell;
+
+    // Las órdenes propias que ya están en el libro, por id: hacen falta para
+    // decidir capa a capa si merece la pena recolocarla (spec 031).
+    const vivas = new Map(
+      ctx.openOrders.filter((o) => o.clientOrderId).map((o) => [o.clientOrderId as string, o]),
+    );
 
     const orders: DesiredOrder[] = [];
     let projectedLong = inv.exposure.gt(0) ? inv.exposure : D(0);
@@ -818,9 +874,16 @@ export const marketMaker: Strategy<MarketMakerConfig> = {
           minBps,
           buyBase.mul(distWeights[l]).mul(profile.distance).mul(spreadWiden).mul(buyMul),
         );
-        const price = skewedMid.mul(D(1).minus(bps.div(BPS)));
-        const { qty, notional } = sizeToQty(cfg.sizingMode, unit, price);
+        // Acotado ANTES de dimensionar: la cantidad se calcula dividiendo por
+        // el precio, así que hacerlo después dejaría el nocional descuadrado.
         const coid = makeCoid(ctx.botId, seq, LevelKind.QUOTE_BID, l);
+        const price = sinCruzarLibro(
+          precioEstable(skewedMid.mul(D(1).minus(bps.div(BPS))), bps, vivas.get(coid)),
+          'BUY',
+          ctx.ticker,
+          ctx.market.tickSize,
+        );
+        const { qty, notional } = sizeToQty(cfg.sizingMode, unit, price);
         const reduceOnly = buyRole === 'reducing' && regime === 'HIGH_RISK';
 
         // Caducada: se deja de desear para que el diff la cancele, y el tick
@@ -856,9 +919,14 @@ export const marketMaker: Strategy<MarketMakerConfig> = {
           minBps,
           sellBase.mul(distWeights[l]).mul(profile.distance).mul(spreadWiden).mul(sellMul),
         );
-        const price = skewedMid.mul(D(1).plus(bps.div(BPS)));
-        const { qty, notional } = sizeToQty(cfg.sizingMode, unit, price);
         const coid = makeCoid(ctx.botId, seq, LevelKind.QUOTE_ASK, l);
+        const price = sinCruzarLibro(
+          precioEstable(skewedMid.mul(D(1).plus(bps.div(BPS))), bps, vivas.get(coid)),
+          'SELL',
+          ctx.ticker,
+          ctx.market.tickSize,
+        );
+        const { qty, notional } = sizeToQty(cfg.sizingMode, unit, price);
         const reduceOnly = sellRole === 'reducing' && regime === 'HIGH_RISK';
         const fits = reduceOnly || projectedShort.plus(notional).lte(shortCap);
 
@@ -902,8 +970,22 @@ export const marketMaker: Strategy<MarketMakerConfig> = {
       if (breach.shutdown) scratchPatch['requestStop'] = 'STOP_KEEP_POSITION';
     }
 
+    // Cuántas de las cotizaciones deseadas están de verdad en el libro. La nota
+    // contaba las DESEADAS, así que un bot al que el venue le rechazaba todas
+    // decía «6 cotizaciones» con el libro vacío: exactamente lo contrario de lo
+    // que el usuario necesitaba saber (spec 029).
+    const enLibro = ctx.openOrders.filter((o) => {
+      const parsed = o.clientOrderId ? parseCoid(o.clientOrderId) : null;
+      return parsed !== null && (parsed.kind === 'QUOTE_BID' || parsed.kind === 'QUOTE_ASK');
+    }).length;
+
+    // Un bot que no cotiza tiene que decir por qué: «0 cotizaciones» a secas
+    // se lee como una avería del motor.
     let note =
-      ladoTope + buildNote(inv.exposure, inv.ratio, orders.length, regime, breach.note, cooling);
+      !libro && !breach.note
+        ? 'Sin libro del venue (no publica los dos lados): no se cotiza.'
+        : ladoTope +
+          buildNote(inv.exposure, inv.ratio, orders.length, regime, breach.note, cooling, enLibro);
     // «La app avisa» si el mercado se aleja del ancla: no había tal aviso
     // (001/F-67). Se avisa en la nota cuando la deriva supera el doble de la
     // capa más lejana, que es cuando las cotizaciones quedan lejos del libro.
@@ -970,6 +1052,66 @@ export function validatePriceBand(cfg: {
   return issues;
 }
 
+/**
+ * Los dos avisos de tope que `validate()` no puede dar en modo BASE.
+ *
+ * Con «cantidad de moneda» el tamaño por orden es una cantidad y los topes son
+ * nocional: compararlos exige un precio, y `validate()` no lo tiene. Se saltaba
+ * las dos comprobaciones y nadie las suplía, así que en ese modo el usuario
+ * perdía el aviso de que las capas no caben y —peor— el de 001/F-64: un tope
+ * por lado que no da ni para la cotización más pequeña mata esa cara del bot en
+ * silencio. `preview()` sí recibe precio de referencia (030/F-03).
+ */
+export function avisosDeTopeEnMoneda(cfg: MarketMakerConfig, mid: Decimal): ValidationIssue[] {
+  if (cfg.sizingMode !== SizingMode.BASE || !mid.gt(0)) return [];
+  const issues: ValidationIssue[] = [];
+  const size = D(cfg.orderSizePerSide ?? 0);
+  const layers = Math.floor(cfg.layers ?? 0);
+  if (!size.gt(0) || layers < 1) return [];
+
+  const pesos = geometricWeights(layers, cfg.layerSizeMultiplier ?? 1);
+  const maxPos = D(cfg.maxBotPositionValue ?? 0);
+  const perSide = pesos
+    .reduce((a, b) => a.plus(b), D(0))
+    .mul(size)
+    .mul(mid);
+  if (maxPos.gt(0) && perSide.gt(maxPos)) {
+    issues.push(
+      warn(
+        'layers',
+        'Las capas de un lado suman ' +
+          perSide.toFixed(2) +
+          ', por encima del tope de posición (' +
+          maxPos.toFixed(2) +
+          '): las capas más profundas no llegarán a colocarse.',
+      ),
+    );
+  }
+
+  const menor = size
+    .mul(profileOf(cfg.riskProfile).size)
+    .mul(Decimal.min(...pesos))
+    .mul(mid);
+  for (const key of ['maxLongPosition', 'maxShortPosition'] as const) {
+    const tope = cfg[key] ? D(cfg[key]) : D(0);
+    if (tope.gt(0) && tope.lt(menor)) {
+      issues.push(
+        err(
+          key,
+          'El tope ' +
+            (key === 'maxLongPosition' ? 'largo' : 'corto') +
+            ' (' +
+            tope.toFixed(2) +
+            ') no deja sitio ni a la cotización más pequeña (' +
+            menor.toFixed(2) +
+            ').',
+        ),
+      );
+    }
+  }
+  return issues;
+}
+
 export function buildNote(
   exposure: Decimal,
   ratio: Decimal,
@@ -977,11 +1119,18 @@ export function buildNote(
   regime: string,
   breachNote: string | null,
   cooling: boolean,
+  /** Cotizaciones propias vivas en el libro, si se conocen. */
+  enLibro?: number,
 ): string {
   if (breachNote) return breachNote;
   const head =
     'Inventario ' + exposure.toFixed(2) + ' (' + ratio.mul(100).toFixed(0) + ' % del tope), ';
   if (cooling) return head + 'espera tras ejecución.';
-  const tail = quotes + ' cotizaciones.';
+  // Solo se dice cuando NO coinciden: en marcha coinciden casi siempre, y
+  // repetir el mismo número dos veces no informa de nada.
+  const tail =
+    enLibro !== undefined && enLibro < quotes
+      ? quotes + ' cotizaciones (' + enLibro + ' en el libro).'
+      : quotes + ' cotizaciones.';
   return regime === 'NORMAL' ? head + tail : head + tail + ' Modo ' + regime.toLowerCase() + '.';
 }
