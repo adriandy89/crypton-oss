@@ -141,3 +141,6 @@ ante un 429 se paran sin reintentar. A `findings.md` va solo la evidencia resumi
 | 026 | [Campos muertos fuera del formulario, valores de fábrica y semánticas fijadas](026-campos-muertos-y-decisiones/spec.md) | cambio | hecho | `spec/026-campos-muertos-y-decisiones` |
 | 027 | [Elegir el par: una hoja con buscador, y los totales de la lista de bots](027-selector-de-par/spec.md) | cambio | hecho | `spec/027-selector-de-par` |
 | 028 | [La credencial de Hyperliquid se verifica de verdad, y su caducidad se ve](028-hyperliquid-credencial-verificada/spec.md) | cambio | hecho (comprobaciones manuales pendientes) | `spec/028-hyperliquid-credencial-verificada` |
+| 029 | [El market maker cotiza contra el libro](029-market-maker-contra-el-libro/spec.md) | cambio | hecho (los pendientes de caudal se cerraron en el 031) | `spec/029-market-maker-contra-el-libro` |
+| 030 | [Parámetros, selectores y lo que el formulario no dice](030-parametros-y-selectores/spec.md) | revisión | hecho (F-01..F-06 corregidos) | `spec/030-parametros-y-selectores` |
+| 031 | [Los pendientes de los specs 029 y 030, y las pruebas que faltaban](031-pendientes-y-pruebas/spec.md) | cambio | hecho | `spec/031-pendientes-y-pruebas` |
