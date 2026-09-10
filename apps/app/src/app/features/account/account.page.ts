@@ -22,7 +22,6 @@ import {
   flaskOutline,
   logOutOutline,
   paperPlaneOutline,
-  pulseOutline,
   shieldOutline,
   trophyOutline,
 } from 'ionicons/icons';
@@ -275,12 +274,11 @@ const AVISO_CADUCIDAD_DIAS = 14;
 
         @if (auth.user()?.role === 'ADMIN') {
           <ui-card flush>
-            <!-- La bitacora de actividad (spec 007): que ha pasado y que ha fallado. -->
             <ui-setting-row
-              routerLink="/admin/activity"
-              icon="pulse-outline"
-              title="Actividad"
-              subtitle="Que ha pasado en la plataforma y que ha fallado"
+              routerLink="/admin"
+              icon="shield-outline"
+              title="Administración"
+              subtitle="Actividad, usuarios y bots de toda la plataforma"
             >
               <ui-badge size="sm" tone="neutral">admin</ui-badge>
             </ui-setting-row>
@@ -345,7 +343,6 @@ export class AccountPage implements OnInit {
       logOutOutline,
       shieldOutline,
       paperPlaneOutline,
-      pulseOutline,
       trophyOutline,
       chevronForwardOutline,
     });

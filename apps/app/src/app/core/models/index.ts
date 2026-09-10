@@ -24,6 +24,8 @@ import type {
  * mismos que usa el motor, y duplicarlos aquí garantizaría que tarde o temprano
  * dejaran de coincidir.
  */
+export type { PageMeta, Paginated } from './paging';
+
 export type {
   BotSummary,
   Candle,

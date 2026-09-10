@@ -248,3 +248,44 @@ describe('Tope de conexiones abiertas por usuario', () => {
     suya.close();
   });
 });
+
+/**
+ * El cierre por revocacion de sesion.
+ *
+ * Una conexion SSE presenta su token UNA vez, al abrirse, y despues vive horas.
+ * Sin esto, deshabilitar una cuenta le cortaba la API a su dueno pero le dejaba
+ * el directo puesto: sus fills seguian llegando a la pantalla.
+ */
+describe('dropUser — cortar el directo de un usuario', () => {
+  it('cierra TODAS las conexiones del usuario', () => {
+    const sse = build();
+    const movil = open(sse, 'u1');
+    const portatil = open(sse, 'u1');
+
+    sse.dropUser('u1');
+
+    // Ya no le llega nada por ninguna de las dos.
+    sse.emit('u1', { type: 'FILL', data: {} });
+    expect(movil.types()).toEqual(['HELLO']);
+    expect(portatil.types()).toEqual(['HELLO']);
+    expect(sse.connectionCount()).toBe(0);
+  });
+
+  it('y NINGUNA de otro usuario', () => {
+    const sse = build();
+    const revocado = open(sse, 'u1');
+    const ajena = open(sse, 'u2');
+
+    sse.dropUser('u1');
+
+    sse.emit('u2', { type: 'FILL', data: {} });
+    expect(ajena.types()).toEqual(['HELLO', 'FILL']);
+    void revocado;
+    ajena.close();
+  });
+
+  it('sobre un usuario sin conexiones no revienta', () => {
+    const sse = build();
+    expect(() => sse.dropUser('nadie')).not.toThrow();
+  });
+});

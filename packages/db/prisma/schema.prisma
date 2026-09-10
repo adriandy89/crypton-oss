@@ -404,6 +404,16 @@ model Bot {
   /// 20260826142000_pair_exclusivity_simulated_exempt.
   @@index([user_id, status])
   @@index([venue, symbol])
+  /// El listado global de la consola de administracion (spec 033): «que hay en
+  /// marcha ahora mismo», «que esta en ERROR», ordenado por fecha.
+  ///
+  /// `[user_id, status]` no sirve para eso —`status` no es su columna guia— y
+  /// `[venue, symbol]` tampoco. Es un indice de LECTURA para una pantalla que
+  /// consulta una persona, y se paga con una escritura mas en cada cambio de
+  /// estado del bot. Sale a cuenta: los cambios de estado son contados
+  /// (DRAFT → STARTING → RUNNING → …) y el tick, que si es constante, solo toca
+  /// `last_tick_at`, que no entra en este indice.
+  @@index([status, created_at(sort: Desc)], map: "idx_bot_status_created")
   @@map("bots")
 }
 

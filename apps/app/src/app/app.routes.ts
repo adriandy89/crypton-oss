@@ -121,12 +121,54 @@ export const routes: Routes = [
   // Administracion. Fuera del shell de pestañas: es una herramienta, no una
   // seccion de la app, y no debe ocupar sitio en la barra de nadie.
   //
+  // Agrupacion SIN componente, igual que el bloque de `auth` de arriba y al
+  // contrario que `tabs`: aqui no hay shell —cada pantalla es completa y trae su
+  // propia cabecera—, asi que un padre con `loadComponent` solo añadiria un
+  // outlet anidado, una pila de navegacion de mas y ambigüedad en el boton de
+  // volver. Lo que aporta el padre es tener los guardas escritos UNA vez:
+  // cualquier pantalla que se cuelgue aqui nace protegida.
+  //
   // `adminGuard` es comodidad, no seguridad: el rol sale del token que guarda
-  // este mismo navegador. Quien manda es el `RolesGuard` del servidor.
+  // este mismo navegador. Quien manda es el `RolesGuard` del servidor, y por eso
+  // TODAS estas pantallas manejan ademas el 403 de verdad.
   {
-    path: 'admin/activity',
+    path: 'admin',
     canActivate: [authGuard, adminGuard],
-    loadComponent: () => import('./features/admin/activity.page').then((m) => m.AdminActivityPage),
+    children: [
+      {
+        path: '',
+        loadComponent: () => import('./features/admin/admin.page').then((m) => m.AdminPage),
+      },
+      // La URL no cambia: los enlaces y marcadores a /admin/activity siguen valiendo.
+      {
+        path: 'activity',
+        loadComponent: () =>
+          import('./features/admin/activity.page').then((m) => m.AdminActivityPage),
+      },
+      {
+        path: 'users',
+        loadComponent: () => import('./features/admin/users.page').then((m) => m.AdminUsersPage),
+      },
+      {
+        path: 'users/:id',
+        loadComponent: () =>
+          import('./features/admin/user-detail.page').then((m) => m.AdminUserDetailPage),
+      },
+      {
+        path: 'bots',
+        loadComponent: () => import('./features/admin/bots.page').then((m) => m.AdminBotsPage),
+      },
+      {
+        path: 'bots/:id',
+        loadComponent: () =>
+          import('./features/admin/bot-detail.page').then((m) => m.AdminBotDetailPage),
+      },
+      {
+        path: 'maintenance',
+        loadComponent: () =>
+          import('./features/admin/maintenance.page').then((m) => m.AdminMaintenancePage),
+      },
+    ],
   },
 
   { path: '', redirectTo: 'tabs/bots', pathMatch: 'full' },

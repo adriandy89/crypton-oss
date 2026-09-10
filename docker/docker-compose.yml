@@ -96,6 +96,9 @@ services:
       JWT_ACCESS_TTL: ${JWT_ACCESS_TTL:-15m}
       JWT_REFRESH_SECRET: ${JWT_REFRESH_SECRET:?falta JWT_REFRESH_SECRET}
       JWT_REFRESH_TTL: ${JWT_REFRESH_TTL:-30d}
+      # Revocacion inmediata de sesion. Fail-open a proposito: ver .env.example.
+      AUTH_REVOCATION_FAIL_OPEN: ${AUTH_REVOCATION_FAIL_OPEN:-true}
+      AUTH_REVOCATION_STALE_MAX_MS: ${AUTH_REVOCATION_STALE_MAX_MS:-60000}
 
       # Acceso con Google: sin esto no entra nadie, asi que la API no arranca.
       # Mejor un fallo ruidoso al desplegar que descubrirlo por el primer

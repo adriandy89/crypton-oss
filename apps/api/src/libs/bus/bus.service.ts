@@ -69,6 +69,15 @@ export const BUS_CHANNELS = {
   BOT_EVENTS: 'crypton:bot-events',
   /** Cambios de configuración que el worker debe recargar. */
   BOT_CONFIG: 'crypton:bot-config',
+  /**
+   * Sesiones cortadas: quien revoca avisa a las demas instancias.
+   *
+   * Hace falta porque el SSE se autentica al ABRIRSE y luego vive horas: sin
+   * esto, un usuario recien deshabilitado seguiria viendo sus fills en directo
+   * por una conexion que ya nadie vuelve a comprobar, y posiblemente contra una
+   * instancia distinta de la que atendio al administrador.
+   */
+  AUTH_REVOKED: 'crypton:auth-revoked',
   /** Órdenes de runtime de la API hacia el worker (pausar, parar, pánico). */
   BOT_COMMANDS: 'crypton:bot-commands',
   /**

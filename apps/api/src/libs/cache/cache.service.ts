@@ -2,6 +2,23 @@ import { Injectable, Logger, OnModuleDestroy, OnModuleInit } from '@nestjs/commo
 import { createClient, RedisClientType } from 'redis';
 import type { CacheOptions } from './cache.constants';
 
+/**
+ * Redis no ha respondido. NO significa «no hay clave».
+ *
+ * Existe porque el resto de este servicio se degrada a `null` a proposito —para
+ * una cache es exactamente lo correcto— y hay un llamante para el que esa
+ * degradacion es peligrosa: la revocacion de sesion, donde `null` significaria
+ * «este usuario no esta revocado» y un Redis caido dejaria operar a un usuario
+ * deshabilitado sin que nadie se enterase. Quien llame a `getOrThrow` tiene que
+ * decidir que hace con el fallo, explicitamente.
+ */
+export class CacheUnavailableError extends Error {
+  constructor(readonly operation: string) {
+    super(`Redis no responde (${operation}).`);
+    this.name = 'CacheUnavailableError';
+  }
+}
+
 @Injectable()
 export class CacheService implements OnModuleInit, OnModuleDestroy {
   private client: RedisClientType | null = null;
@@ -93,6 +110,41 @@ export class CacheService implements OnModuleInit, OnModuleDestroy {
       return value ? (JSON.parse(value) as T) : null;
     } catch (error) {
       console.error(`Error in GET from Redis [${this.serviceName}], key: ${key}:`, error);
+      return null;
+    }
+  }
+
+  /**
+   * Si la conexion esta viva.
+   *
+   * Lo mira el camino de autenticacion, que necesita distinguir «no hay marca»
+   * de «no he podido preguntar»: por `get()` los dos casos salen como `null`.
+   */
+  get isReady(): boolean {
+    return this.client?.isReady === true;
+  }
+
+  /**
+   * GET que LANZA si Redis no responde, en vez de devolver `null`.
+   *
+   * Ver `CacheUnavailableError`. Un valor ILEGIBLE si devuelve `null`: eso es un
+   * dato corrupto, no una caida, y degradarse ahi es lo correcto.
+   */
+  async getOrThrow<T>(key: string): Promise<T | null> {
+    if (!this.client?.isReady) {
+      throw new CacheUnavailableError('GET');
+    }
+    let value: string | null;
+    try {
+      value = await this.client.get(key);
+    } catch (error) {
+      throw new CacheUnavailableError(`GET ${key}: ${(error as Error).message}`);
+    }
+    if (value === null) return null;
+    try {
+      return JSON.parse(value) as T;
+    } catch {
+      this.logger.error(`Valor ilegible en Redis [${this.serviceName}], clave: ${key}.`);
       return null;
     }
   }

@@ -1,9 +1,10 @@
 import { INestApplication, ValidationPipe } from '@nestjs/common';
 import { Test } from '@nestjs/testing';
 import request from 'supertest';
-import { DbService } from '../src/libs';
+import { CacheService, DbService } from '../src/libs';
 import { AppModule } from '../src/app.module';
 import { TokenService } from '../src/modules/auth';
+import type { Role } from '@crypton/db';
 
 /**
  * Aislamiento entre usuarios.
@@ -29,6 +30,8 @@ const PREFIX = '/api/v1';
 interface Actor {
   email: string;
   token: string;
+  /** Hace falta para probar que revocar cierra TAMBIEN el refresco. */
+  refreshToken: string;
   id: string;
 }
 
@@ -38,6 +41,16 @@ describe('Aislamiento entre usuarios (e2e)', () => {
   let tokens: TokenService;
   let alicia: Actor;
   let bruno: Actor;
+  /** Una administradora de verdad: es lo unico que abre la consola. */
+  let admin: Actor;
+  /**
+   * Un usuario de usar y tirar, para las pruebas que DESHABILITAN una cuenta.
+   *
+   * No se usa a bruno: dejarlo deshabilitado a mitad de fichero convertiria los
+   * 404 que esperan los bloques siguientes en 401, y el fallo apuntaria a
+   * cualquier sitio menos a la causa.
+   */
+  let victima: Actor;
 
   /** Sufijo único por ejecución: la suite no puede chocar consigo misma. */
   const stamp = `${Date.now()}-${Math.floor(Math.random() * 1e6)}`;
@@ -54,7 +67,7 @@ describe('Aislamiento entre usuarios (e2e)', () => {
    * se firma el par de tokens con el mismo servicio que usa el flujo de verdad.
    * Lo que sí se comprueba del acceso con Google está más abajo, en su bloque.
    */
-  async function crearUsuario(nombre: string): Promise<Actor> {
+  async function crearUsuario(nombre: string, role: Role = 'USER'): Promise<Actor> {
     const email = `${nombre}-${stamp}@crypton.test`;
     const user = await db.user.create({
       data: {
@@ -63,6 +76,7 @@ describe('Aislamiento entre usuarios (e2e)', () => {
         // Identidad de Google simulada, única por ejecución.
         google_sub: `test-${nombre}-${stamp}`,
         is_email_verified: true,
+        role,
         risk_limit: {
           create: {
             max_leverage: 10,
@@ -82,7 +96,7 @@ describe('Aislamiento entre usuarios (e2e)', () => {
       language: user.language,
     });
 
-    return { email, token: par.accessToken, id: user.id };
+    return { email, token: par.accessToken, refreshToken: par.refreshToken, id: user.id };
   }
 
   const as = (actor: Actor) => ({ Authorization: `Bearer ${actor.token}` });
@@ -112,6 +126,8 @@ describe('Aislamiento entre usuarios (e2e)', () => {
     tokens = app.get(TokenService);
     alicia = await crearUsuario('alicia');
     bruno = await crearUsuario('bruno');
+    admin = await crearUsuario('admin', 'ADMIN');
+    victima = await crearUsuario('victima');
   }, 60_000);
 
   afterAll(async () => {
@@ -119,9 +135,20 @@ describe('Aislamiento entre usuarios (e2e)', () => {
     // del esquema se llevan bots, credenciales, límites y vinculaciones.
     await db.user
       .deleteMany({
-        where: { email: { in: [alicia?.email, bruno?.email].filter(Boolean) } },
+        where: {
+          email: {
+            in: [alicia?.email, bruno?.email, admin?.email, victima?.email].filter(Boolean),
+          },
+        },
       })
       .catch(() => undefined);
+
+    // Las marcas de revocacion viven en un Redis compartido y sobreviven a la
+    // suite: sin esto, dos ejecuciones seguidas se pisan.
+    const cache = app?.get(CacheService);
+    for (const actor of [alicia, bruno, admin, victima]) {
+      if (actor) await cache?.del(`auth:revoked:${actor.id}`).catch(() => undefined);
+    }
     await app?.close();
   });
 
@@ -129,6 +156,377 @@ describe('Aislamiento entre usuarios (e2e)', () => {
     expect(alicia.id).toBeTruthy();
     expect(bruno.id).toBeTruthy();
     expect(alicia.id).not.toBe(bruno.id);
+  });
+
+  /**
+   * La consola de administracion (spec 033).
+   *
+   * OJO, porque contradice EN APARIENCIA la cabecera de este fichero: aqui se
+   * espera 403 y no 404. El criterio de «404, nunca 403» existe para no
+   * confirmar la existencia de un recurso ajeno, y sigue vigente en todo lo de
+   * arriba. En `/admin/*` el `RolesGuard` deniega ANTES de mirar el `:id`: el
+   * 403 solo dice «esta ruta es de administracion», que ya lo dice su nombre, y
+   * no revela ninguna fila. Un ADMIN con un id inexistente si recibe 404.
+   *
+   * Que nadie lo «corrija» a 404 sin leer esto.
+   */
+  describe('administracion', () => {
+    let botDeAlicia: string;
+
+    beforeAll(async () => {
+      const cuenta = await db.exchangeAccount.create({
+        data: {
+          user_id: alicia.id,
+          venue: 'HYPERLIQUID',
+          label: 'para-admin',
+          status: 'VERIFIED',
+          public_ref: '0xalicia-admin',
+          enc_payload: 'SECRETO-QUE-NO-PUEDE-SALIR',
+          enc_dek: 'DEK-QUE-NO-PUEDE-SALIR',
+          enc_iv: 'x',
+          enc_tag: 'x',
+          enc_key_id: 'v1',
+        },
+      });
+      // En RUNNING: los comandos de contencion solo valen sobre un bot que el
+      // motor tenga en la mano. Nadie lo ejecuta — en la suite no hay worker.
+      const bot = await db.bot.create({
+        data: {
+          user_id: alicia.id,
+          exchange_account_id: cuenta.id,
+          name: 'bot-vivo-de-alicia',
+          venue: 'HYPERLIQUID',
+          symbol: 'ETH',
+          strategy: 'GRID_CLASSIC',
+          direction: 'LONG',
+          margin_mode: 'CROSS',
+          leverage: 2,
+          status: 'RUNNING',
+          dry_run: true,
+          config_version: 1,
+        },
+      });
+      botDeAlicia = bot.id;
+    });
+
+    const superficie: [metodo: 'get' | 'post', ruta: string][] = [
+      ['get', '/admin/users'],
+      ['get', '/admin/users/00000000-0000-0000-0000-000000000000'],
+      ['post', '/admin/users/00000000-0000-0000-0000-000000000000/disable'],
+      ['post', '/admin/users/00000000-0000-0000-0000-000000000000/enable'],
+      ['post', '/admin/users/00000000-0000-0000-0000-000000000000/sessions/revoke'],
+      ['get', '/admin/bots'],
+      ['get', '/admin/bots/00000000-0000-0000-0000-000000000000'],
+      ['get', '/admin/bots/00000000-0000-0000-0000-000000000000/orders'],
+      ['get', '/admin/bots/00000000-0000-0000-0000-000000000000/fills'],
+      ['get', '/admin/bots/00000000-0000-0000-0000-000000000000/cycles'],
+      ['get', '/admin/bots/00000000-0000-0000-0000-000000000000/events'],
+      ['get', '/admin/bots/00000000-0000-0000-0000-000000000000/revisions'],
+      ['get', '/admin/bots/00000000-0000-0000-0000-000000000000/levels'],
+      ['post', '/admin/bots/00000000-0000-0000-0000-000000000000/commands'],
+      ['get', '/admin/maintenance'],
+      ['post', '/admin/maintenance/preview'],
+      ['post', '/admin/maintenance/purge'],
+    ];
+
+    it.each(superficie)('un usuario normal recibe 403 en %s %s', async (metodo, ruta) => {
+      await http()[metodo](`${PREFIX}${ruta}`).set(as(bruno)).expect(403);
+    });
+
+    it.each(superficie)('sin token, %s %s es 401', async (metodo, ruta) => {
+      await http()[metodo](`${PREFIX}${ruta}`).expect(401);
+    });
+
+    it('la administradora ve a los demas usuarios', async () => {
+      const res = await http()
+        .get(`${PREFIX}/admin/users`)
+        .query({ q: `alicia-${stamp}`, limit: 10 })
+        .set(as(admin))
+        .expect(200);
+
+      expect(res.body.data).toHaveLength(1);
+      expect(res.body.data[0]).toMatchObject({ email: alicia.email, disabled: false });
+      expect(res.body.meta).toMatchObject({ page: 1, hasPreviousPage: false });
+    });
+
+    it('y NADA de lo que no debe verse', async () => {
+      const res = await http().get(`${PREFIX}/admin/users/${alicia.id}`).set(as(admin)).expect(200);
+
+      const json = JSON.stringify(res.body);
+      for (const prohibido of [
+        'SECRETO-QUE-NO-PUEDE-SALIR',
+        'DEK-QUE-NO-PUEDE-SALIR',
+        'google_sub',
+        `test-alicia-${stamp}`,
+      ]) {
+        expect(json).not.toContain(prohibido);
+      }
+      // Y lo que si, para que el test no pase por estar vacio.
+      expect(json).toContain(alicia.email);
+    });
+
+    /**
+     * La prueba de que la consola CRUZA usuarios. El bloque de arriba sigue
+     * comprobando que bruno no alcanza el bot de alicia; este comprueba que la
+     * administradora si, que es justo para lo que existe.
+     */
+    it('el listado global de bots incluye los de otra persona', async () => {
+      const res = await http()
+        .get(`${PREFIX}/admin/bots`)
+        .query({ userId: alicia.id, limit: 50 })
+        .set(as(admin))
+        .expect(200);
+
+      const ids = (res.body.data as { id: string }[]).map((b) => b.id);
+      expect(ids).toContain(botDeAlicia);
+      expect(res.body.data[0].owner.email).toBe(alicia.email);
+      // El dinero viaja como cadena, nunca como numero (invariante 1).
+      expect(typeof res.body.data[0].totalInvestment).toBe('string');
+    });
+
+    it('un id que no existe si es 404, aun siendo administradora', async () => {
+      await http()
+        .get(`${PREFIX}/admin/bots/00000000-0000-0000-0000-000000000000`)
+        .set(as(admin))
+        .expect(404);
+    });
+
+    describe('contener un bot ajeno', () => {
+      const PROHIBIDOS = [
+        'PANIC',
+        'STOP_AND_CLOSE',
+        'CLOSE_NOW',
+        'CANCEL_ALL_ORDERS',
+        'START',
+        'ADJUST_MARGIN',
+        'REPAIR',
+      ];
+
+      it.each(PROHIBIDOS)('%s se rechaza y no deja rastro en la bandeja', async (command) => {
+        // 400 y no 403: lo para el `@IsIn` del DTO antes de llegar al servicio.
+        // Que la puerta de fuera sea la del validador es exactamente lo que se
+        // quiere; la del servicio esta debajo, y la prueba su propio spec.
+        await http()
+          .post(`${PREFIX}/admin/bots/${botDeAlicia}/commands`)
+          .set(as(admin))
+          .send({ command, reason: 'probando lo que no se puede' })
+          .expect(400);
+
+        const encolados = await db.botCommand.count({ where: { bot_id: botDeAlicia, command } });
+        expect(encolados).toBe(0);
+      });
+
+      it('sin motivo no se acepta ni un comando permitido', async () => {
+        await http()
+          .post(`${PREFIX}/admin/bots/${botDeAlicia}/commands`)
+          .set(as(admin))
+          .send({ command: 'PAUSE' })
+          .expect(400);
+      });
+
+      it('PAUSE se encola a nombre de la ADMINISTRADORA, no de la dueña', async () => {
+        await http()
+          .post(`${PREFIX}/admin/bots/${botDeAlicia}/commands`)
+          .set(as(admin))
+          .send({ command: 'PAUSE', reason: 'lleva media hora en error' })
+          .expect(200);
+
+        const fila = await db.botCommand.findFirst({
+          where: { bot_id: botDeAlicia, command: 'PAUSE' },
+          orderBy: { created_at: 'desc' },
+        });
+        // Poner aqui a la dueña seria falsificar la trazabilidad justo en la
+        // fila que existe para investigar quien toco que.
+        expect(fila?.requested_by).toBe(admin.id);
+        expect(fila?.requested_by).not.toBe(alicia.id);
+
+        const evento = await db.botEvent.findFirst({
+          where: { bot_id: botDeAlicia, type: 'COMMAND_PAUSE' },
+          orderBy: { created_at: 'desc' },
+        });
+        // La dueña tiene que poder ver en SU bitacora que vino de fuera.
+        expect(evento?.severity).toBe('WARN');
+        expect(evento?.message).toContain('soporte');
+      });
+    });
+
+    describe('purga de historicos', () => {
+      it('el estado dice que hay guardado y con que reglas', async () => {
+        const res = await http().get(`${PREFIX}/admin/maintenance`).set(as(admin)).expect(200);
+
+        const ambitos = res.body.ambitos as { scope: string; sueloDias: number }[];
+        expect(ambitos.map((a) => a.scope)).toEqual(
+          expect.arrayContaining(['BOT_SNAPSHOTS', 'ACTIVITY_LOG', 'BACKTESTS']),
+        );
+        // La bitacora es la unica con suelo alto.
+        expect(ambitos.find((a) => a.scope === 'ACTIVITY_LOG')?.sueloDias).toBe(90);
+      });
+
+      it('contar no borra', async () => {
+        const antes = await db.botSnapshot.count();
+
+        await http()
+          .post(`${PREFIX}/admin/maintenance/preview`)
+          .set(as(admin))
+          .send({ scope: 'BOT_SNAPSHOTS', days: 15 })
+          .expect(200);
+
+        expect(await db.botSnapshot.count()).toBe(antes);
+      });
+
+      it('la bitacora no se puede purgar por debajo de su suelo', async () => {
+        const antes = await db.activityLog.count();
+
+        // 30 esta en la lista del DTO, asi que llega al servicio: lo para el
+        // suelo, que es justo lo que este test vigila.
+        await http()
+          .post(`${PREFIX}/admin/maintenance/purge`)
+          .set(as(admin))
+          .send({ scope: 'ACTIVITY_LOG', days: 30, reason: 'a ver si cuela' })
+          .expect(400);
+
+        expect(await db.activityLog.count()).toBe(antes);
+      });
+
+      it('una antiguedad fuera de la lista es 400', async () => {
+        await http()
+          .post(`${PREFIX}/admin/maintenance/purge`)
+          .set(as(admin))
+          .send({ scope: 'BOT_SNAPSHOTS', days: 1, reason: 'ni de broma' })
+          .expect(400);
+      });
+
+      it('un ambito inventado es 400', async () => {
+        await http()
+          .post(`${PREFIX}/admin/maintenance/purge`)
+          .set(as(admin))
+          .send({ scope: 'BOT_ORDERS', days: 180, reason: 'las ordenes no se tocan' })
+          .expect(400);
+      });
+
+      it('sin motivo no se purga', async () => {
+        await http()
+          .post(`${PREFIX}/admin/maintenance/purge`)
+          .set(as(admin))
+          .send({ scope: 'BOT_SNAPSHOTS', days: 180 })
+          .expect(400);
+      });
+
+      /**
+       * Lo que este bloque de verdad defiende: el bot de alicia esta RUNNING, asi
+       * que ni sus snapshots ni sus eventos pueden entrar en una purga por mucho
+       * que se pida la antiguedad mas agresiva.
+       */
+      it('los datos de un bot EN MARCHA sobreviven a la purga mas agresiva', async () => {
+        await db.botSnapshot.create({
+          data: {
+            bot_id: botDeAlicia,
+            taken_at: new Date('2020-01-01T00:00:00Z'),
+            equity: '100',
+            position_qty: '0',
+            mark_price: '1',
+            unrealized_pnl: '0',
+            realized_pnl_acc: '0',
+            margin_used: '0',
+            open_orders: 0,
+          },
+        });
+
+        const previo = await http()
+          .post(`${PREFIX}/admin/maintenance/preview`)
+          .set(as(admin))
+          .send({ scope: 'BOT_SNAPSHOTS', days: 15 })
+          .expect(200);
+        const purgables = previo.body.filas as number;
+
+        await http()
+          .post(`${PREFIX}/admin/maintenance/purge`)
+          .set(as(admin))
+          .send({ scope: 'BOT_SNAPSHOTS', days: 15, reason: 'limpieza de prueba' })
+          .expect(200);
+
+        // La fila de 2020 sigue ahi: su bot esta vivo.
+        expect(await db.botSnapshot.count({ where: { bot_id: botDeAlicia } })).toBeGreaterThan(0);
+        expect(purgables).toBeGreaterThanOrEqual(0);
+      });
+    });
+
+    describe('el rol no se toca desde aqui', () => {
+      it('no hay PATCH sobre una cuenta', async () => {
+        await http().patch(`${PREFIX}/admin/users/${bruno.id}`).set(as(admin)).send({}).expect(404);
+      });
+
+      it('no hay ruta para cambiar el rol', async () => {
+        await http()
+          .post(`${PREFIX}/admin/users/${bruno.id}/role`)
+          .set(as(admin))
+          .send({ role: 'ADMIN' })
+          .expect(404);
+      });
+
+      it('y colar `role` en el cuerpo de una accion es 400', async () => {
+        await http()
+          .post(`${PREFIX}/admin/users/${bruno.id}/disable`)
+          .set(as(admin))
+          .send({ reason: 'da igual', role: 'ADMIN' })
+          .expect(400);
+      });
+
+      it('un parametro de consulta no declarado tambien es 400', async () => {
+        await http().get(`${PREFIX}/admin/users`).query({ foo: '1' }).set(as(admin)).expect(400);
+      });
+    });
+
+    describe('deshabilitar corta la sesion en el acto', () => {
+      it('el MISMO token que valia deja de valer', async () => {
+        // Antes: bruno opera con normalidad.
+        await http().get(`${PREFIX}/bots`).set(as(victima)).expect(200);
+
+        await http()
+          .post(`${PREFIX}/admin/users/${victima.id}/disable`)
+          .set(as(admin))
+          .send({ reason: 'cuenta comprometida' })
+          .expect(200);
+
+        // Despues: el mismo token, sin esperar a que caduque.
+        await http().get(`${PREFIX}/bots`).set(as(victima)).expect(401);
+
+        // Y tampoco puede renovar: el cierre es completo, no solo del acceso.
+        await http()
+          .post(`${PREFIX}/auth/refresh`)
+          .send({ refreshToken: victima.refreshToken })
+          .expect(401);
+
+        expect((await db.user.findUnique({ where: { id: victima.id } }))?.disabled).toBe(true);
+      });
+
+      it('rehabilitar levanta la marca y un token nuevo vuelve a valer', async () => {
+        await http().post(`${PREFIX}/admin/users/${victima.id}/enable`).set(as(admin)).expect(200);
+
+        const par = await tokens.issuePair({
+          id: victima.id,
+          email: victima.email,
+          name: 'victima',
+          role: 'USER',
+          language: 'es',
+        });
+        await http()
+          .get(`${PREFIX}/bots`)
+          .set({ Authorization: `Bearer ${par.accessToken}` })
+          .expect(200);
+      });
+
+      it('la administradora no puede deshabilitarse a si misma', async () => {
+        await http()
+          .post(`${PREFIX}/admin/users/${admin.id}/disable`)
+          .set(as(admin))
+          .send({ reason: 'a ver que pasa' })
+          .expect(409);
+
+        // Y sigue dentro.
+        await http().get(`${PREFIX}/admin/users`).set(as(admin)).expect(200);
+      });
+    });
   });
 
   describe('bots', () => {

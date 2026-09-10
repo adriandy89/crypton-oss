@@ -3,6 +3,8 @@ import { ConfigService } from '@nestjs/config';
 import { JwtService } from '@nestjs/jwt';
 import { randomUUID } from 'crypto';
 import { CacheService, requireSecret } from 'src/libs';
+import { SessionRevocationService, type MotivoRevocacion } from './session-revocation.service';
+import { ttlToSeconds } from './ttl';
 import { SessionUser } from './interfaces';
 
 interface RefreshPayload {
@@ -31,21 +33,15 @@ export class TokenService {
   constructor(
     private jwt: JwtService,
     private cache: CacheService,
+    private revocacion: SessionRevocationService,
     config: ConfigService,
   ) {
     // Sin default: un secreto de firma ausente debe impedir el arranque, no
     // degradarse a uno público. Ver `requireSecret`.
     this.accessSecret = requireSecret(config, 'JWT_ACCESS_SECRET');
-    this.accessTtlSec = this.ttlToSeconds(config.get<string>('JWT_ACCESS_TTL', '15m'));
+    this.accessTtlSec = ttlToSeconds(config.get<string>('JWT_ACCESS_TTL', '15m'));
     this.refreshSecret = requireSecret(config, 'JWT_REFRESH_SECRET');
-    this.refreshTtlSec = this.ttlToSeconds(config.get<string>('JWT_REFRESH_TTL', '30d'));
-  }
-
-  private ttlToSeconds(ttl: string): number {
-    const m = /^(\d+)([smhd])$/.exec(ttl.trim());
-    if (!m) return 30 * 24 * 3600;
-    const n = parseInt(m[1], 10);
-    return { s: n, m: n * 60, h: n * 3600, d: n * 86400 }[m[2]] as number;
+    this.refreshTtlSec = ttlToSeconds(config.get<string>('JWT_REFRESH_TTL', '30d'));
   }
 
   async signAccess(user: SessionUser): Promise<string> {
@@ -128,13 +124,26 @@ export class TokenService {
     await this.cache.sRem(userFamsKey(sub), fam);
   }
 
-  /** Kill every session of the user (password change/reset). */
-  async revokeAll(sub: string): Promise<void> {
+  /**
+   * Cierra TODAS las sesiones del usuario: refresh Y access.
+   *
+   * Antes esto solo mataba las familias de refresh, y era un cierre a medias: el
+   * access token que el usuario ya tuviera en la mano seguia valiendo hasta
+   * quince minutos. Sobre `signOutEverywhere()` —cuyo motivo declarado es «creo
+   * que alguien ha entrado en mi cuenta»— eso significaba regalarle al intruso
+   * ese cuarto de hora.
+   *
+   * Las dos mitades van en el mismo metodo a proposito: un llamante que mate las
+   * familias y se olvide de la marca es exactamente el fallo que esto existe
+   * para impedir.
+   */
+  async revokeAll(sub: string, motivo: MotivoRevocacion = 'sesiones_cerradas') {
     const fams = await this.cache.sMembers(userFamsKey(sub));
     if (fams?.length) {
       await this.cache.del(fams.map((f) => famKey(f)));
     }
     await this.cache.del(userFamsKey(sub));
+    return this.revocacion.revoke(sub, motivo);
   }
 
   /** Verify a refresh token WITHOUT consuming it (logout). */

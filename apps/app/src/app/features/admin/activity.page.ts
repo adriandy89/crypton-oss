@@ -1,3 +1,4 @@
+import { ActivatedRoute } from '@angular/router';
 import { Component, OnInit, computed, inject, signal } from '@angular/core';
 import {
   IonBackButton,
@@ -24,7 +25,6 @@ import {
   UiBadgeComponent,
   UiCardComponent,
   UiMeterComponent,
-  UiNoticeComponent,
   type BadgeTone,
 } from '../../shared/ui';
 
@@ -64,6 +64,8 @@ const SEVERIDADES: { value: EventSeverity | ''; label: string }[] = [
  * apilada, «solo fallos» a un toque, y la `ip` fuera de la lista —es un dato
  * personal— hasta que se despliega una fila.
  */
+import { AdminForbiddenComponent } from './admin-forbidden.component';
+
 @Component({
   selector: 'app-admin-activity',
   standalone: true,
@@ -81,13 +83,13 @@ const SEVERIDADES: { value: EventSeverity | ''; label: string }[] = [
     UiBadgeComponent,
     UiCardComponent,
     UiMeterComponent,
-    UiNoticeComponent,
+    AdminForbiddenComponent,
   ],
   template: `
     <ion-header class="ion-no-border">
       <ion-toolbar>
         <ion-buttons slot="start">
-          <ion-back-button defaultHref="/tabs/account" text="" />
+          <ion-back-button defaultHref="/admin" text="" />
         </ion-buttons>
         <ion-title>Actividad</ion-title>
       </ion-toolbar>
@@ -96,13 +98,7 @@ const SEVERIDADES: { value: EventSeverity | ''; label: string }[] = [
     <ion-content>
       <div class="pad">
         @if (forbidden()) {
-          <!-- El guard de la app es comodidad: el rol sale del token que guarda
-               este navegador. Quien manda es el servidor, y si dice que no, se
-               dice aquí en vez de dejar la pantalla vacía. -->
-          <ui-notice tone="danger" icon="warning-outline">
-            El servidor no reconoce esta sesión como administrador. Cierra sesión y vuelve a entrar;
-            si sigue pasando, el rol de la cuenta ha cambiado.
-          </ui-notice>
+          <app-admin-forbidden />
         } @else {
           <!-- ── Resumen ── -->
           <div class="bd-range">
@@ -163,6 +159,11 @@ const SEVERIDADES: { value: EventSeverity | ''; label: string }[] = [
 
           <!-- ── Filtros ── -->
           <div class="filters">
+            @if (actorId()) {
+              <button type="button" class="chip on" (click)="quitarActor()">
+                usuario filtrado ✕
+              </button>
+            }
             <button
               type="button"
               class="chip"
@@ -433,6 +434,7 @@ const SEVERIDADES: { value: EventSeverity | ''; label: string }[] = [
 export class AdminActivityPage implements OnInit {
   private readonly activity = inject(ActivityService);
   private readonly toast = inject(ToastService);
+  private readonly route = inject(ActivatedRoute);
 
   readonly ventanas = VENTANAS;
   readonly actores = ACTORES;
@@ -448,6 +450,14 @@ export class AdminActivityPage implements OnInit {
   /** La fila desplegada, con su `meta` y su `ip`. Una a la vez. */
   readonly abierta = signal<string | null>(null);
 
+  /**
+   * Llega por la URL desde la ficha de un usuario («Ver su actividad»).
+   *
+   * No tiene control propio: es un filtro contextual, no una opcion del menu.
+   * Se pinta como un chip que se quita tocandolo.
+   */
+  readonly actorId = signal<string>('');
+
   readonly onlyFailures = signal(false);
   readonly actor = signal<ActorKind | ''>('');
   readonly severity = signal<EventSeverity | ''>('');
@@ -462,7 +472,13 @@ export class AdminActivityPage implements OnInit {
   );
 
   ngOnInit(): void {
+    this.actorId.set(this.route.snapshot.queryParamMap.get('actorId') ?? '');
     void this.cargar();
+  }
+
+  quitarActor(): void {
+    this.actorId.set('');
+    void this.cargarLista();
   }
 
   setHours(h: number): void {
@@ -545,6 +561,7 @@ export class AdminActivityPage implements OnInit {
     try {
       const res = await this.activity.list(
         {
+          actorId: this.actorId() || undefined,
           onlyFailures: this.onlyFailures(),
           actor: this.actor() || undefined,
           severity: this.severity() || undefined,

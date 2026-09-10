@@ -15,6 +15,7 @@ import {
   DbModule,
   TimeoutInterceptor,
 } from './libs';
+import { AdminModule } from './modules/admin';
 import { ActivityModule } from './modules/activity';
 import { AdvisorModule } from './modules/advisor';
 import { BacktestsModule } from './modules/backtests';
@@ -79,6 +80,7 @@ import { TelegramModule } from './modules/telegram';
     PortfolioModule,
     UsersModule,
     ActivityModule,
+    AdminModule,
   ],
   controllers: [AppController],
   providers: [

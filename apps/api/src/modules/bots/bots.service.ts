@@ -123,6 +123,25 @@ function withTimeout<T>(work: Promise<T>, ms: number): Promise<T> {
   return Promise.race([work, clock]).finally(() => clearTimeout(timer));
 }
 
+/**
+ * Quien FIRMA un comando, cuando no es el dueño del bot.
+ *
+ * Esto ETIQUETA, no autoriza. El primer argumento de `command()` sigue siendo el
+ * dueño y `mustOwn` lo sigue exigiendo igual que siempre: un parametro que solo
+ * puede cambiar de quien dice la fila es un parametro que no puede abrir un
+ * agujero, y por eso el permiso del administrador se decide en `AdminBotsService`
+ * y no aqui.
+ *
+ * Existe porque `bot_commands.requested_by` es la fila que se mira cuando hay que
+ * averiguar quien toco que. Dejar ahi al dueño cuando lo pidio soporte seria
+ * falsificar justo el dato por el que existe la columna.
+ *
+ * Ausente: lo pide el dueño, que es el caso de siempre.
+ */
+export interface CommandOptions {
+  requestedBy?: string;
+}
+
 @Injectable()
 export class BotsService implements OnModuleInit {
   private readonly logger = new Logger(BotsService.name);
@@ -1092,8 +1111,13 @@ export class BotsService implements OnModuleInit {
   // Comandos de runtime
   // ═══════════════════════════════════════════════════════════════
 
-  async command(userId: string, id: string, dto: BotCommandDto) {
+  async command(userId: string, id: string, dto: BotCommandDto, opts: CommandOptions = {}) {
     const bot = await this.mustOwn(userId, id);
+
+    // Un tercero con permiso: hoy solo un administrador conteniendo un bot que
+    // se esta portando mal. Cambia lo que se GUARDA, nunca lo que se permite.
+    const requestedBy = opts.requestedBy ?? userId;
+    const porTerceros = requestedBy !== userId;
 
     // Un comando de runtime solo tiene sentido sobre un bot bajo control del
     // worker. Sin esta puerta, un RESUME sobre un bot ya parado se encolaba,
@@ -1182,7 +1206,7 @@ export class BotsService implements OnModuleInit {
           data: {
             bot_id: id,
             command: dto.command,
-            requested_by: userId,
+            requested_by: requestedBy,
             // `countAsBotCapital` NO viaja al worker: es un efecto de
             // contabilidad que resuelve la API, y el motor solo debe saber
             // cuánto colateral mover y en qué sentido. Mandárselo invitaría a
@@ -1205,10 +1229,14 @@ export class BotsService implements OnModuleInit {
           data: {
             bot_id: id,
             type: 'COMMAND_' + dto.command,
-            severity: DESTRUCTIVE_COMMANDS.has(dto.command) ? 'WARN' : 'INFO',
+            // WARN tambien cuando lo pide un tercero: el dueño tiene que poder ver
+            // en SU bitacora que alguien de fuera le toco el bot, y cuando.
+            severity: DESTRUCTIVE_COMMANDS.has(dto.command) || porTerceros ? 'WARN' : 'INFO',
             message: margin
               ? `Comando ADJUST_MARGIN solicitado: ${margin.action === 'ADD' ? 'aportar' : 'retirar'} ${margin.amount}.`
-              : `Comando ${dto.command} solicitado.`,
+              : porTerceros
+                ? `Comando ${dto.command} solicitado por soporte.`
+                : `Comando ${dto.command} solicitado.`,
           },
         }),
       ]);
@@ -1227,7 +1255,13 @@ export class BotsService implements OnModuleInit {
 
     await this.bus
       .publish(BUS_CHANNELS.BOT_COMMANDS, {
-        userId,
+        // El DUEÑO del bot, no quien lo pide. Iba el solicitante, y hasta la
+        // consola de administracion eran siempre la misma persona —`mustOwn` lo
+        // garantiza—, asi que nunca se noto. `BusMessage.userId` esta documentado
+        // como «el destinatario, lo unico que decide a quien se entrega»: en
+        // cuanto alguien enrute por este campo, el aviso del bot de una persona
+        // acabaria en la pantalla de otra.
+        userId: bot.user_id,
         botId: id,
         type: dto.command,
         data: {},

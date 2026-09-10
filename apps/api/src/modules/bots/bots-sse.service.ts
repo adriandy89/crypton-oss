@@ -98,6 +98,11 @@ export class BotsSseService implements OnModuleInit {
       });
     });
     this.logger.log('SSE enganchado al bus de eventos del worker');
+
+    const revocados$ = await this.bus.listen(BUS_CHANNELS.AUTH_REVOKED);
+    revocados$.subscribe((message) => {
+      if (message.userId) this.dropUser(message.userId);
+    });
   }
 
   /**
@@ -163,6 +168,35 @@ export class BotsSseService implements OnModuleInit {
       subject,
       streamId,
     };
+  }
+
+  /**
+   * Cierra TODAS las conexiones del usuario.
+   *
+   * Lo llama la revocacion de sesion, a traves del bus para que alcance tambien
+   * a las instancias que no atendieron la peticion. Una conexion SSE presenta su
+   * token UNA vez, al abrirse, y despues vive horas: sin esto, deshabilitar una
+   * cuenta le cortaba la API pero le dejaba el directo puesto.
+   *
+   * Se cierra sin avisar de por que: el cliente reconectara, y sera la peticion
+   * de reconexion —esa si autenticada— la que le diga que su sesion ya no vale.
+   */
+  dropUser(userId: string): void {
+    const suyas = [...this.connections].filter(([, c]) => c.userId === userId);
+    for (const [id, conn] of suyas) {
+      this.dropConnection(id);
+      conn.close.next();
+      conn.close.complete();
+      conn.subject.complete();
+    }
+    const set = this.subjects.get(userId);
+    if (set) {
+      for (const subject of set) subject.complete();
+      this.subjects.delete(userId);
+    }
+    if (suyas.length) {
+      this.logger.log(`Sesion revocada: ${suyas.length} conexiones de ${userId} cerradas.`);
+    }
   }
 
   remove(userId: string, owned: Subject<MessageEvent>, streamId?: string): void {
