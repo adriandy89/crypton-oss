@@ -44,6 +44,12 @@ Dos avisos que las guías repiten porque importan:
 | **Resincronizar** (`REPAIR`) | Relee posición, órdenes y ejecuciones del exchange y recalcula el ciclo. **No cancela ni cierra nada** | Se mantienen | Se mantiene | Intacta | Operando | No |
 | **Adelantar seguridad** (`ADD_SAFETY_NOW`) | Ejecuta **a mercado** la siguiente orden de seguridad de la escalera | Se mantienen | Se mantiene | Crece | Operando | Sí |
 
+
+> **Un administrador solo puede pedir dos de estos trece**: «Pausar» y «Parar conservando la
+> posición». Son los que no tocan la posición y conservan el stop-loss. En particular «Cancelar
+> órdenes» **no** está a su alcance, precisamente por la columna de esta tabla que dice que el stop
+> «se cancela también». Ver [Administración](./administracion.md).
+
 Reglas comunes:
 
 - **Alcance**: todos cancelan **solo las órdenes de este bot**, nunca las de sus hermanos ni las que

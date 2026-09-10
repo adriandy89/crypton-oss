@@ -20,6 +20,7 @@ sitio web, ni infraestructura de nadie: todo lo que hace está disponible para q
 | Ruta | Qué es |
 |---|---|
 | `apps/api` | NestJS 11. REST + SSE: cuentas, credenciales cifradas, CRUD de bots, preview, riesgo, backtest, bitácora. **No ejecuta nada**: escribe el comando en `bot_commands` y avisa por Redis. |
+| `apps/api` → `modules/admin` | La consola de administración (spec 033). **Mirar y contener**: lee cuentas y bots de todos, y sobre un bot ajeno solo puede `PAUSE` y `STOP_KEEP_POSITION`. Nunca importa `ExchangeAccountsModule`: es la puerta a descifrar la clave de firma. |
 | `apps/worker` | NestJS 11 sin HTTP. **El motor**: lease en Redis → un `BotRunner` por bot → tick. Único proceso que descifra claves y firma. También escribe la curva de la cartera (`portfolio_snapshots`) y purga las series. |
 | `apps/app` | Ionic 8 + Angular 21 + Capacitor. Ejecuta `strategy-core` **también en cliente** (`features/bots/bot-create.page.ts`, `fullConfig`). |
 | `packages/shared` | Tipos, enums (calcan Prisma), `money.ts` (Decimal), `precision.ts` (redondeo), `liquidation.ts`, `series.ts` (la aritmética de las series y la analítica que pintan las pantallas: la app no suma dinero, lo pide aquí con test). |
@@ -45,10 +46,11 @@ Ficheros que hay que leer **enteros** antes de cambiarlos: `apps/worker/src/engi
 6. **El stop-loss** lo inyecta `withStopLoss()` como orden condicional **nativa** del venue: sobrevive a que el worker muera y a `PAUSE`/`STOP_KEEP_POSITION`. Solo `CANCEL_ALL_ORDERS`, `STOP_AND_CLOSE` y `PANIC` lo cancelan. En el simulador es una condicional en reposo que se dispara con el precio de marca, nunca una orden a mercado inmediata.
 7. **Un adaptador por cuenta de exchange** (`AccountHub`) y una suscripción pública por símbolo (`MarketDataService`): N bots de una cuenta son una conexión y una clave en RAM.
 8. **Secretos**: cifrado de sobre AES-256-GCM. Solo vuelven a claro en `apps/worker/src/engine/credentials.service.ts` y en `apps/api/src/modules/exchange-accounts/exchange-accounts.service.ts` (`openAdapter`). Nunca en Redis, disco ni logs.
-9. **Lease en Redis** (`crypton:lease:bot:<id>`), no en la BD. Redis caído más de un TTL → el worker **suelta** todos sus bots antes que arriesgarse a duplicarlos.
-10. **Un solo bot real por par y cuenta** (índice único parcial en `bots`). Los simulados quedan fuera de la regla.
-11. **Mutabilidad HOT/WARM/COLD** de cada campo (`meta.fields`) decide lo que hace el motor al recargar la configuración. No es una etiqueta decorativa.
-12. **Una escritura con estado desconocido no se reenvía** (`withWriteRetry`): si no se puede saber si la orden entró, se lanza y el tick siguiente reconcilia contra el venue.
+9. **La sesión se revoca de verdad.** `JwtStrategy.validate()` consulta una marca por usuario en Redis (`auth:revoked:<id>`) contra el `iat` del token: deshabilitar una cuenta o cerrarle las sesiones muerde **en la petición siguiente**, no dentro de 15 minutos. Con Redis caído se deja pasar —salvo a quien ya se sabía revocado— a propósito: cerrar la API dejaría a quien tiene bots operando sin poder llegar a su kill-switch.
+10. **Lease en Redis** (`crypton:lease:bot:<id>`), no en la BD. Redis caído más de un TTL → el worker **suelta** todos sus bots antes que arriesgarse a duplicarlos.
+11. **Un solo bot real por par y cuenta** (índice único parcial en `bots`). Los simulados quedan fuera de la regla.
+12. **Mutabilidad HOT/WARM/COLD** de cada campo (`meta.fields`) decide lo que hace el motor al recargar la configuración. No es una etiqueta decorativa.
+13. **Una escritura con estado desconocido no se reenvía** (`withWriteRetry`): si no se puede saber si la orden entró, se lanza y el tick siguiente reconcilia contra el venue.
 
 ## Comandos
 
