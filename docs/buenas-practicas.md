@@ -157,8 +157,8 @@ del exchange antes de dejar un bot con inventario varios días, y cuenta con ell
 | [DCA temporizado](./tdca.md) | buscas operaciones rápidas, el par está en caída libre, o piensas apalancarte por encima de 3× |
 | [Martingala](./martingale.md) | el par cae y no vuelve, usas apalancamiento alto, o no has mirado el tamaño del último escalón |
 | [GridMart](./gridmart.md) | es tu primer bot, quieres algo predecible, o vas a operarlo en Lighter |
-| [Market Maker V1](./market-maker.md) | el par es ilíquido, quieres ir «largo» (Intención Long solo pone compras), o vas a operarlo en Lighter (F-54) |
-| [Market Maker V2](./market-maker-v2.md) | no vas a poner tu comisión real, o vas a operarlo en Lighter (F-54) |
+| [Market Maker V1](./market-maker.md) | el par es ilíquido o quieres ir «largo» (Intención Long solo pone compras) |
+| [Market Maker V2](./market-maker-v2.md) | no vas a poner tu comisión real |
 
 Y para **todas**: no operes a mano ni con otro bot **el mismo par en la misma cuenta**: el exchange
 combina las posiciones y el bot deja de reconocer la suya. No dejes una rejilla con el precio muy fuera de
@@ -209,7 +209,7 @@ La lista completa con su significado, en [comandos, guardas y eventos](./comando
 - **30 órdenes activas por mercado** (y 10 condicionales pendientes): la vista previa avisa si la rejilla
   tiende más; el exceso lo rechaza el venue orden a orden.
 - Las **órdenes a mercado** salen con un 5 % de holgura y quedan pendientes hasta que el sondeo de
-  ejecuciones (cada 12 s) las confirma; sin stream de cuenta (F-54), todo lo que ejecuta se ve con retraso.
+  ejecuciones las confirma el canal de cuenta, que desde el spec 036 llega empujado y no por sondeo.
 
 Mientras esos hallazgos estén abiertos: rejillas pequeñas, sin market makers, y comprobar los cierres en la
 web del exchange. Detalle en [venues y mínimos](./venues-y-minimos.md).

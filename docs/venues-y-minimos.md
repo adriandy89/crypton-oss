@@ -199,4 +199,4 @@ asistente lo dicen: hay que transferirlo a perpetuos dentro del exchange.
 | Órdenes a mercado | Con holgura del adaptador (5 %) | Con holgura (5 %), acuse pendiente hasta el sondeo | Con holgura |
 | Caducidad por edad (MM) | ✅ | ✅ | ✅ |
 | Modo cobertura | — | — | ❌ Rechazado por el formulario |
-| Recomendación hoy | Todo | Rejillas pequeñas y DCA; sin market makers (las ejecuciones llegan por sondeo, F-54) | Todo salvo cobertura; menos de 200 líneas |
+| Recomendación hoy | Todo | Todo, incluidos market makers desde el spec 036 (las ejecuciones ya llegan empujadas) | Todo salvo cobertura; menos de 200 líneas |

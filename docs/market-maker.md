@@ -13,7 +13,7 @@ Imagina una casa de cambio. Pone un cartel que dice:
 
 No le importa si la moneda va a subir o a bajar. Gana **el hueco entre esos dos números**. Si llega alguien con prisa por vender, le compra a 99. Si luego llega otro con prisa por comprar, le vende a 101. Se ha quedado 2 de beneficio y sigue con el mismo dinero que tenía.
 
-Eso es un *market maker*: **pone precio a los dos lados a la vez y cobra la diferencia**.
+Eso es un _market maker_: **pone precio a los dos lados a la vez y cobra la diferencia**.
 
 El bot hace exactamente esto, automáticamente y sin parar:
 
@@ -30,19 +30,19 @@ El problema aparece cuando el precio **no va y viene, sino que se va en línea r
 
 Si BTC cae sin parar, tu orden de compra se ejecuta… y la de venta no. El bot pone otra compra más abajo, y también se ejecuta. Y otra. Acabas **comprando toda la bajada**, con una posición larga en pérdidas y ninguna venta ejecutada.
 
-A eso se le llama **quedarse con inventario del lado equivocado**, y es *el* riesgo de esta estrategia. Toda la parte de riesgo del bot (topes, modos defensivos, sesgo por inventario) existe para frenar exactamente eso.
+A eso se le llama **quedarse con inventario del lado equivocado**, y es _el_ riesgo de esta estrategia. Toda la parte de riesgo del bot (topes, modos defensivos, sesgo por inventario) existe para frenar exactamente eso.
 
 ### Vocabulario mínimo
 
-| Palabra | Qué significa aquí |
-|---|---|
-| **bps** (punto básico) | Una centésima de porcentaje. **100 bps = 1 %**, **20 bps = 0,2 %**. Es la unidad de todo lo que sea "distancia al precio". |
-| **Inventario** | La posición que el bot tiene abierta ahora mismo. Si ha comprado y aún no ha vendido, tiene inventario largo. |
-| **Cotizar** | Colgar en el libro tu compra y tu venta. |
-| **Recotizar** | Cancelar esas órdenes y volver a ponerlas a precios actualizados. |
-| **Maker / Taker** | *Maker* es quien deja la orden colgada esperando (comisión barata). *Taker* es quien se lanza contra una orden que ya está puesta (comisión cara). Un market maker debe ser **siempre maker**. |
-| **Capa** | Cada escalón de órdenes. Con 3 capas hay 3 compras a distancias crecientes y 3 ventas. |
-| **Tope de posición** | El límite de exposición que le pones al bot. Es el freno principal. |
+| Palabra                | Qué significa aquí                                                                                                                                                                             |
+| ---------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **bps** (punto básico) | Una centésima de porcentaje. **100 bps = 1 %**, **20 bps = 0,2 %**. Es la unidad de todo lo que sea "distancia al precio".                                                                     |
+| **Inventario**         | La posición que el bot tiene abierta ahora mismo. Si ha comprado y aún no ha vendido, tiene inventario largo.                                                                                  |
+| **Cotizar**            | Colgar en el libro tu compra y tu venta.                                                                                                                                                       |
+| **Recotizar**          | Cancelar esas órdenes y volver a ponerlas a precios actualizados.                                                                                                                              |
+| **Maker / Taker**      | _Maker_ es quien deja la orden colgada esperando (comisión barata). _Taker_ es quien se lanza contra una orden que ya está puesta (comisión cara). Un market maker debe ser **siempre maker**. |
+| **Capa**               | Cada escalón de órdenes. Con 3 capas hay 3 compras a distancias crecientes y 3 ventas.                                                                                                         |
+| **Tope de posición**   | El límite de exposición que le pones al bot. Es el freno principal.                                                                                                                            |
 
 ---
 
@@ -52,7 +52,7 @@ El motor revisa cada bot **cada 15 segundos**. Además, **una ejecución dispara
 
 ### Paso 1 — ¿Cuál es el precio de referencia?
 
-Toma el **punto medio del libro**: `(mejor compra + mejor venta) / 2`. Si el exchange no publica los dos lados, usa el *precio de marca*.
+Toma el **punto medio del libro**: `(mejor compra + mejor venta) / 2`. Si el exchange no publica los dos lados, usa el _precio de marca_.
 
 Si has rellenado **Precio de referencia**, usa ese número fijo en vez del mercado (ancla manual).
 
@@ -64,7 +64,7 @@ El bot **no** rehace sus órdenes en cada revisión: hacerlo perdería la priori
 - El precio se ha alejado de donde cotizó más de la **Distancia mínima permitida**, **o**
 - Alguna orden de salida ha caducado por su TTL.
 
-> ⚠️ **Detalle poco obvio:** en la V1, `minAllowedDistanceBps` hace **dos trabajos a la vez**: es el suelo duro de la cotización *y* el umbral de deriva que dispara una recotización anticipada. Si lo pones muy bajo, el bot recotizará constantemente. (La V2 separa esos dos trabajos en dos campos distintos.)
+> ⚠️ **Detalle poco obvio:** en la V1, `minAllowedDistanceBps` hace **dos trabajos a la vez**: es el suelo duro de la cotización _y_ el umbral de deriva que dispara una recotización anticipada. Si lo pones muy bajo, el bot recotizará constantemente. (La V2 separa esos dos trabajos en dos campos distintos.)
 
 Si acaba de haber una ejecución y tienes **Espera tras un fill** configurada, el bot **congela** su cotización durante esos segundos. Es para no perseguir al mercado que acaba de barrer su orden.
 
@@ -78,10 +78,10 @@ ocupación  = |ratio| × 100                           (en %)
 
 Con esa ocupación decide en qué **modo de riesgo** está:
 
-| Modo | Cuándo | Lado que AÑADE posición | Lado que la REDUCE |
-|---|---|---|---|
-| **Normal** | Ocupación < umbral defensivo | distancia × 1 | distancia × 1 |
-| **Defensivo** | Ocupación ≥ **70 %** (por defecto) | distancia **× 1,5** (se aleja) | distancia **× 0,6** (se acerca) |
+| Modo            | Cuándo                             | Lado que AÑADE posición        | Lado que la REDUCE                      |
+| --------------- | ---------------------------------- | ------------------------------ | --------------------------------------- |
+| **Normal**      | Ocupación < umbral defensivo       | distancia × 1                  | distancia × 1                           |
+| **Defensivo**   | Ocupación ≥ **70 %** (por defecto) | distancia **× 1,5** (se aleja) | distancia **× 0,6** (se acerca)         |
 | **Alto riesgo** | Ocupación ≥ **90 %** (por defecto) | **× 0 → desaparece del libro** | distancia × 0,5, y marcada `reduceOnly` |
 
 Las dos mitades empujan a la vez hacia deshacer inventario, no solo una.
@@ -124,11 +124,11 @@ Los multiplicadores son **geométricos y sin normalizar**. Con `mult_distancia =
 
 El **perfil de riesgo** multiplica distancia y tamaño a la vez:
 
-| Perfil | Distancia | Tamaño |
-|---|---|---|
-| Conservador | × 1,5 (más lejos) | × 0,7 (más pequeño) |
-| Equilibrado | × 1 (tus números tal cual) | × 1 |
-| Agresivo | × 0,7 (más cerca) | × 1,3 (más grande) |
+| Perfil      | Distancia                  | Tamaño              |
+| ----------- | -------------------------- | ------------------- |
+| Conservador | × 1,5 (más lejos)          | × 0,7 (más pequeño) |
+| Equilibrado | × 1 (tus números tal cual) | × 1                 |
+| Agresivo    | × 0,7 (más cerca)          | × 1,3 (más grande)  |
 
 Antes de colocar cada capa comprueba que **cabe** dentro del tope. En la V1 es **todo o nada**: si la capa no cabe entera, no se coloca. (La V2 sí puede recortarla.)
 
@@ -162,26 +162,26 @@ Antes de colocar cada capa comprueba que **cabe** dentro del tope. En la V1 es *
 
 Para entender qué hace el bot arriesgando lo mínimo: distancias amplias, poco dinero, frenos muy tempranos.
 
-| Campo | Valor |
-|---|---|
-| Par | Uno muy líquido: BTC/USDC o ETH/USDC |
-| Dirección | **Neutral** |
-| Apalancamiento | **1x** |
-| Modo de margen | Aislado |
-| Tamaño por compra/venta | **25 USDC** |
-| Valor máximo de la posición | **150 USDC** |
-| Distancia de compra / venta | **30 bps / 30 bps** |
-| Distancia mínima permitida | **15 bps** |
-| Perfil de riesgo | **Conservador** |
-| Capas | **2** · distancia 1,5 · tamaño 1 |
-| Intervalo de actualización | 60 s |
-| Espera tras un fill | 30 s |
-| Modo defensivo a partir de | **50 %** |
-| Modo de alto riesgo a partir de | **75 %** |
-| Acción al alcanzar el límite | **Pausar entradas** |
-| Solo post-only | **Sí** |
-| Diferencial dinámico | Sí |
-| Ajuste de precio por inventario | Sí |
+| Campo                           | Valor                                |
+| ------------------------------- | ------------------------------------ |
+| Par                             | Uno muy líquido: BTC/USDC o ETH/USDC |
+| Dirección                       | **Neutral**                          |
+| Apalancamiento                  | **1x**                               |
+| Modo de margen                  | Aislado                              |
+| Tamaño por compra/venta         | **25 USDC**                          |
+| Valor máximo de la posición     | **150 USDC**                         |
+| Distancia de compra / venta     | **30 bps / 30 bps**                  |
+| Distancia mínima permitida      | **15 bps**                           |
+| Perfil de riesgo                | **Conservador**                      |
+| Capas                           | **2** · distancia 1,5 · tamaño 1     |
+| Intervalo de actualización      | 60 s                                 |
+| Espera tras un fill             | 30 s                                 |
+| Modo defensivo a partir de      | **50 %**                             |
+| Modo de alto riesgo a partir de | **75 %**                             |
+| Acción al alcanzar el límite    | **Pausar entradas**                  |
+| Solo post-only                  | **Sí**                               |
+| Diferencial dinámico            | Sí                                   |
+| Ajuste de precio por inventario | Sí                                   |
 
 **Qué hace esto con BTC a 100.000 USDC.** El perfil Conservador multiplica la distancia por 1,5 y el tamaño por 0,7:
 
@@ -197,21 +197,21 @@ Los frenos entran pronto: a **75 USDC** de exposición (50 % de 150) pasa a defe
 
 Cuando ya entiendes el comportamiento y quieres que el bot trabaje de verdad.
 
-| Campo | Valor |
-|---|---|
-| Par | Líquido y con movimiento constante |
-| Dirección | **Neutral** |
-| Apalancamiento | **2x** |
-| Tamaño por compra/venta | **50 USDC** |
-| Valor máximo de la posición | **500 USDC** |
-| Distancia de compra / venta | **20 bps / 20 bps** |
-| Distancia mínima permitida | **10 bps** |
-| Perfil de riesgo | **Equilibrado** |
-| Capas | **3** · distancia 1,5 · tamaño 1 |
-| Intervalo de actualización | 30 s |
-| Espera tras un fill | 15 s |
-| Modo defensivo / alto riesgo | 70 % / 90 % |
-| Acción al alcanzar el límite | Pausar entradas |
+| Campo                        | Valor                              |
+| ---------------------------- | ---------------------------------- |
+| Par                          | Líquido y con movimiento constante |
+| Dirección                    | **Neutral**                        |
+| Apalancamiento               | **2x**                             |
+| Tamaño por compra/venta      | **50 USDC**                        |
+| Valor máximo de la posición  | **500 USDC**                       |
+| Distancia de compra / venta  | **20 bps / 20 bps**                |
+| Distancia mínima permitida   | **10 bps**                         |
+| Perfil de riesgo             | **Equilibrado**                    |
+| Capas                        | **3** · distancia 1,5 · tamaño 1   |
+| Intervalo de actualización   | 30 s                               |
+| Espera tras un fill          | 15 s                               |
+| Modo defensivo / alto riesgo | 70 % / 90 %                        |
+| Acción al alcanzar el límite | Pausar entradas                    |
 
 **Con ETH a 3.000 USDC:**
 
@@ -223,11 +223,11 @@ Cuando ya entiendes el comportamiento y quieres que el bot trabaje de verdad.
 
 Igual que la B, más límites de precio para que el bot no acumule fuera de donde tu tesis tiene sentido:
 
-| Campo añadido | Valor de ejemplo (ETH a 3.000) |
-|---|---|
-| No operar por debajo de | **2.600** |
-| No operar por encima de | **3.400** |
-| Stop loss (%) | **8 %** |
+| Campo añadido           | Valor de ejemplo (ETH a 3.000) |
+| ----------------------- | ------------------------------ |
+| No operar por debajo de | **2.600**                      |
+| No operar por encima de | **3.400**                      |
+| Stop loss (%)           | **8 %**                        |
 
 Por debajo de 2.600 el bot **deja de vender en corto** pero mantiene sus compras; por encima de 3.400 deja de comprar pero mantiene sus ventas. Nunca se corta el lado que te saca de la posición.
 
@@ -238,7 +238,7 @@ Por debajo de 2.600 el bot **deja de vender en corto** pero mantiene sus compras
 - [ ] ¿El **Valor máximo de la posición** es dinero que puedo perder entero?
 - [ ] ¿`capas × tamaño` es bastante menor que el tope? (tope ≥ 3 × lo comprometido por lado)
 - [ ] ¿Cada capa supera el mínimo del par (~10 USDC)? Ojo con el perfil Conservador, que lo reduce al 70 %.
-- [ ] ¿La distancia que cotizo cubre la comisión de ida y vuelta? *(Si no sabes calcularlo, usa la [V2](./market-maker-v2.md): lo calcula ella.)*
+- [ ] ¿La distancia que cotizo cubre la comisión de ida y vuelta? _(Si no sabes calcularlo, usa la [V2](./market-maker-v2.md): lo calcula ella.)_
 - [ ] ¿**Solo post-only** activado?
 - [ ] ¿Umbral defensivo **menor** que el de alto riesgo?
 - [ ] ¿He mirado la vista previa antes de crear el bot?
@@ -249,14 +249,14 @@ El bot escribe una nota en cada revisión, del estilo:
 
 > `Inventario 312.40 (62 % del tope), 6 cotizaciones.`
 
-| Lo que ves | Qué significa | Qué hacer |
-|---|---|---|
-| La ocupación sube y **nunca baja** | El mercado está en tendencia y solo se ejecuta un lado | Baja el tope, ensancha distancias o párale |
-| `Modo defensivo` / `Modo high_risk` constantemente | El tope es demasiado pequeño para el tamaño de tus capas | Sube el tope **o** baja el tamaño por orden |
-| `Tope de posición alcanzado: entradas en pausa` | Llegaste al límite; el bot espera a que la posición baje | Decide tú: esperar, o cerrar a mano |
-| `espera tras ejecución` permanente | La espera tras un fill es más larga que el ritmo de ejecuciones | Bájala |
-| Casi ninguna ejecución | Cotizas demasiado lejos, o el par no tiene volumen | Acerca las distancias, o cambia de par |
-| Muchísimas ejecuciones y aun así pierdes | El diferencial no cubre comisiones | Ensancha distancias, o pásate a la V2 |
+| Lo que ves                                         | Qué significa                                                   | Qué hacer                                   |
+| -------------------------------------------------- | --------------------------------------------------------------- | ------------------------------------------- |
+| La ocupación sube y **nunca baja**                 | El mercado está en tendencia y solo se ejecuta un lado          | Baja el tope, ensancha distancias o párale  |
+| `Modo defensivo` / `Modo high_risk` constantemente | El tope es demasiado pequeño para el tamaño de tus capas        | Sube el tope **o** baja el tamaño por orden |
+| `Tope de posición alcanzado: entradas en pausa`    | Llegaste al límite; el bot espera a que la posición baje        | Decide tú: esperar, o cerrar a mano         |
+| `espera tras ejecución` permanente                 | La espera tras un fill es más larga que el ritmo de ejecuciones | Bájala                                      |
+| Casi ninguna ejecución                             | Cotizas demasiado lejos, o el par no tiene volumen              | Acerca las distancias, o cambia de par      |
+| Muchísimas ejecuciones y aun así pierdes           | El diferencial no cubre comisiones                              | Ensancha distancias, o pásate a la V2       |
 
 ---
 
@@ -264,10 +264,10 @@ El bot escribe una nota en cada revisión, del estilo:
 
 Tres campos comunes que salen en el formulario y **no hacen lo que esperarías** en esta estrategia:
 
-| Campo | Realidad |
-|---|---|
-| **Tope de exposición** (`maxNotionalCap`) | ⚠️ **Esta estrategia lo ignora.** Solo lo respetan Rejilla clásica, GridMart y Martingala. Aquí el tope real y único es **Valor máximo de la posición**. |
-| **Capital asignado** (`totalInvestment`) | No dimensiona órdenes. Aquí el tamaño lo mandan **Tamaño por compra/venta** y **Capas**. Sí se usa como denominador de la **Pérdida diaria máxima**. |
+| Campo                                       | Realidad                                                                                                                                                                                                 |
+| ------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **Tope de exposición** (`maxNotionalCap`)   | ⚠️ **Esta estrategia lo ignora.** Solo lo respetan Rejilla clásica, GridMart y Martingala. Aquí el tope real y único es **Valor máximo de la posición**.                                                 |
+| **Capital asignado** (`totalInvestment`)    | No dimensiona órdenes. Aquí el tamaño lo mandan **Tamaño por compra/venta** y **Capas**. Sí se usa como denominador de la **Pérdida diaria máxima**.                                                     |
 | **Espera entre ciclos** (`cooldownMinutes`) | Pensado para estrategias con ciclos que abren y cierran. Un market maker cotiza de forma continua y **no cierra ciclo al quedar plano** (el ciclo dura lo que dura el bot): usa **Espera tras un fill**. |
 
 Sí funcionan con normalidad, aplicados por el motor: **Stop loss**, **Pérdida diaria máxima** y **Al acercarse la liquidación**. El stop loss se coloca como orden condicional **nativa en el exchange** (sigue vivo aunque la plataforma se caiga) y su dirección se calcula del **signo de la posición real**, no de la dirección declarada — que es lo correcto para un bot que cambia de lado solo.
@@ -289,6 +289,7 @@ Sí funcionan con normalidad, aplicados por el motor: **Stop loss**, **Pérdida 
 Hacia qué lado se inclina la cotización. Aquí no describe una posición, sino una **intención**.
 
 > ⚠️ **AVISO IMPORTANTE.** El comportamiento real del código es más tajante de lo que sugiere el nombre:
+>
 > - **Neutral** → coloca compras **y** ventas. Es el market maker de verdad.
 > - **Intención Long** → coloca **solo compras**. **No pone ni una sola venta.** El bot acumula y no tiene salida propia: solo saldrías por stop loss, por la acción al alcanzar el límite o cerrando a mano.
 > - **Intención Short** → coloca **solo ventas**, con el problema simétrico.
@@ -314,11 +315,11 @@ Lo que se pone en **cada orden, en cada lado**. Con varias capas es el tamaño d
 
 Atajo que ajusta distancia y tamaño a la vez, multiplicando lo que hayas escrito:
 
-| | Distancia | Tamaño |
-|---|---|---|
-| Conservador | × 1,5 | × 0,7 |
-| Equilibrado | × 1 | × 1 |
-| Agresivo | × 0,7 | × 1,3 |
+|             | Distancia | Tamaño |
+| ----------- | --------- | ------ |
+| Conservador | × 1,5     | × 0,7  |
+| Equilibrado | × 1       | × 1    |
+| Agresivo    | × 0,7     | × 1,3  |
 
 Equilibrado deja tus números tal cual. Los otros dos mueven el comportamiento entero sin que toques campo por campo.
 
@@ -326,6 +327,7 @@ Equilibrado deja tus números tal cual. Los otros dos mueven el comportamiento e
 
 - **Valor nocional**: escribes 50 USDC y el bot calcula la cantidad al precio de cada momento.
 - **Cantidad de moneda**: escribes 0,001 BTC y el valor en USDC varía con el precio.
+
 > El campo **cambia de unidad contigo**: con «valor nocional» se rotula `USDC` y su mínimo es 1; con
 > «cantidad de moneda» se rotula con la moneda del par y su mínimo pasa a ser el del mercado (el
 > `minQty` del venue, o su paso de cantidad). Hasta el spec 030 el campo decía `USDC` en los dos
@@ -337,18 +339,17 @@ modos**, porque miden el valor de lo que tienes, no su cantidad. En modo «canti
 avisos de que las capas no caben en el tope los da la **vista previa**, que es la que conoce el
 precio.
 
-
 **Consejo**: valor nocional. Es directamente el dinero en juego y se compara sin cuentas contra el tope.
 
 #### Acción al alcanzar el límite · `limitAction` · 🔥 en caliente · ⚠️ campo de riesgo
 
 Qué hace el bot cuando la posición toca su tope:
 
-| Opción | Qué hace |
-|---|---|
+| Opción                            | Qué hace                                                          |
+| --------------------------------- | ----------------------------------------------------------------- |
 | **Pausar entradas** (por defecto) | Deja de cotizar el lado que añade. Espera a que la posición baje. |
-| **Cerrar todo** | Liquida la posición **a mercado**, una sola vez. |
-| **Apagar** | La cierra a mercado y además detiene el bot. |
+| **Cerrar todo**                   | Liquida la posición **a mercado**, una sola vez.                  |
+| **Apagar**                        | La cierra a mercado y además detiene el bot.                      |
 
 **Consejo**: **Pausar entradas**. El modo de alto riesgo ya ha estado empujando hacia la salida antes de llegar aquí; cerrar a mercado en el peor momento realiza la pérdida entera.
 
@@ -566,23 +567,39 @@ Solo avisar / Pausar el bot / Cerrar todo cuando la distancia a la liquidación 
 
 ## 6. ¿V1 o V2?
 
-| | **Market Maker (V1)** | **[Market Maker V2](./market-maker-v2.md)** |
-|---|---|---|
-| El diferencial que escribes | Es **el que se usa** (con ajustes por inventario) | Es un **punto de partida**; la fórmula suma encima |
-| Se adapta a la volatilidad | ❌ No | ✅ Sí: la mide y ensancha |
-| Garantiza cubrir comisiones | ❌ Lo calculas tú | ✅ Suelo automático: `comisión × 2 + margen mínimo` |
-| Precio de referencia externo | ❌ Solo el libro local (o ancla manual fija) | ✅ Puede anclarse a Binance |
-| Caducidad de órdenes por edad | ❌ Solo las de salida | ✅ Todas (`orderMaxAgeSeconds`) |
-| Recorta la última capa al tope | ❌ Todo o nada | ✅ Configurable |
-| Condición de activación | ❌ | ✅ Espera a que el precio cruce un disparador |
-| Sesgo de precio por inventario | ✅ Sí (desplaza el centro) | ❌ No lo tiene |
-| Nº de parámetros | Menos | Bastante más |
-| Capas por defecto | 3 | 1 |
-| Apalancamiento por defecto | 2x | 1x |
+|                                | **Market Maker (V1)**                             | **[Market Maker V2](./market-maker-v2.md)**         |
+| ------------------------------ | ------------------------------------------------- | --------------------------------------------------- |
+| El diferencial que escribes    | Es **el que se usa** (con ajustes por inventario) | Es un **punto de partida**; la fórmula suma encima  |
+| Se adapta a la volatilidad     | ❌ No                                             | ✅ Sí: la mide y ensancha                           |
+| Garantiza cubrir comisiones    | ❌ Lo calculas tú                                 | ✅ Suelo automático: `comisión × 2 + margen mínimo` |
+| Precio de referencia externo   | ❌ Solo el libro local (o ancla manual fija)      | ✅ Puede anclarse a Binance                         |
+| Caducidad de órdenes por edad  | ❌ Solo las de salida                             | ✅ Todas (`orderMaxAgeSeconds`)                     |
+| Recorta la última capa al tope | ❌ Todo o nada                                    | ✅ Configurable                                     |
+| Condición de activación        | ❌                                                | ✅ Espera a que el precio cruce un disparador       |
+| Sesgo de precio por inventario | ✅ Sí (desplaza el centro)                        | ❌ No lo tiene                                      |
+| Nº de parámetros               | Menos                                             | Bastante más                                        |
+| Capas por defecto              | 3                                                 | 1                                                   |
+| Apalancamiento por defecto     | 2x                                                | 1x                                                  |
 
 **Elige la V1 si**: quieres control directo y predecible del diferencial, y prefieres menos mandos.
 
 **Elige la V2 si**: quieres que el bot se adapte solo al ritmo del mercado, y sobre todo si te importa **asegurar que cada vuelta completa deja beneficio limpio después de comisiones**.
+
+---
+
+## 6 bis. Qué mueve y qué NO mueve una cotización viva
+
+Vale igual que para la V2, y está explicado allí con más detalle:
+**[V2, sección 3 bis](./market-maker-v2.md#3-bis-qué-mueve-y-qué-no-mueve-una-cotización-viva)**.
+
+En corto: una cotización a la que el mercado se está **acercando** ya no se retira —es el momento
+por el que existe la estrategia—, y solo se recoloca la que se ha quedado atrás. Antes se movían las
+dos por igual, y por eso un market maker podía pasarse horas sin ejecutar nada.
+
+Ojo a una rareza de esta versión: **«Distancia mínima permitida» hace dos trabajos**. Es el suelo de
+la cotización _y_ el umbral que dispara una recotización anticipada. La V2 tiene un campo propio
+para lo segundo; aquí no. Si lo pones muy por debajo de tu distancia de cotización, el bot se pasará
+el día recolocando órdenes que nadie ha tocado, y te lo dirá al crearlo.
 
 ---
 
@@ -591,9 +608,18 @@ Solo avisar / Pausar el bot / Cerrar todo cuando la distancia a la liquidación 
 Confirmadas en `specs/001-revision-integral/findings.md`, abiertas a 2026-09-06. Cuando un hallazgo se
 cierre, su bloque desaparece de aquí.
 
-> ⚠️ **Limitación conocida (F-54, Lighter).** Lighter no tiene stream de cuenta: las ejecuciones llegan por
-> sondeo cada 12 s, demasiado tarde para recotizar con criterio. **Hasta que se corrija:** no operes market
-> makers en Lighter.
+> ✅ **Resuelto (F-54, Lighter — spec 036).** Las ejecuciones y las órdenes de Lighter llegan ahora
+> **empujadas por su canal de cuenta** (`account_all`), no por un sondeo cada 12 s. El sondeo sigue ahí
+> como red: si el canal deja de entregar, vuelve solo pasados 20 s.
+>
+> La frase que había aquí —«Lighter no tiene stream de cuenta»— era **falsa**: el canal estaba
+> documentado y no se usaba. Al usarlo desaparecen las tres consecuencias: el retraso de hasta 12 s en
+> cada ejecución, el cupo comido por un sondeo que pedía `trades` (peso 600) y el techo de ≈ 1 bot por
+> IP y red.
+>
+> **Antes de operar un market maker con dinero real en Lighter**, comprueba en la pantalla del bot que
+> las ejecuciones aparecen al instante: la forma de los mensajes de ese canal está tomada de la
+> documentación del venue y, si no coincidiera, el bot seguiría funcionando con el sondeo de antes.
 
 **Modo de posición** se aplica al arrancar el bot solo en Aster (Unidireccional; Cobertura está vetada
 allí porque cambiaría el modo de toda la cuenta). En Hyperliquid y Lighter el ajuste no existe: manda el

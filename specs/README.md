@@ -149,4 +149,6 @@ ante un 429 se paran sin reintentar. A `findings.md` va solo la evidencia resumi
 | 030 | [Parámetros, selectores y lo que el formulario no dice](030-parametros-y-selectores/spec.md) | revisión | hecho (F-01..F-06 corregidos) | `spec/030-parametros-y-selectores` |
 | 031 | [Los pendientes de los specs 029 y 030, y las pruebas que faltaban](031-pendientes-y-pruebas/spec.md) | cambio | hecho | `spec/031-pendientes-y-pruebas` |
 | 033 | [Consola de administración](033-consola-de-administracion/spec.md) | cambio | hecho (falta CA-11 manual) | `spec/033-consola-de-administracion` |
-| 034 | [Purga de históricos desde la consola](034-purga-de-historicos/spec.md) | cambio | hecho (falta CA-8 manual) | `spec/034-purga-de-historicos` |
+| 034 | [Purga de históricos desde la consola](034-purga-de-historicos/spec.md) | cambio | hecho (falta CA-8 manual) | `spec/034-purga-de-historicos` || 035 | [El precio tiene que poder alcanzar la cotización](035-el-precio-alcanza-la-cotizacion/spec.md) | cambio | hecho (falta CA-10 manual) | `spec/035-el-precio-alcanza-la-cotizacion` |
+| 036 | [Lighter: el stream de cuenta que ya existía](036-lighter-stream-de-cuenta/spec.md) | cambio | hecho (falta CA-8 manual) | `spec/036-lighter-stream-de-cuenta` |
+

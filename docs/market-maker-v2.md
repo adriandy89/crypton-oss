@@ -45,7 +45,7 @@ Eso da **dos garantías** que la V1 no puede dar:
 
 ### Y dos capacidades más
 
-- **Puede cotizar contra el precio de Binance** en vez del libro de tu exchange. Importante en un DEX pequeño, donde tus propias órdenes *son* el precio: anclarte a tu propio libro es un bucle. Y si esa fuente externa se cae, **el bot retira sus órdenes** en lugar de volver en silencio al precio local.
+- **Puede cotizar contra el precio de Binance** en vez del libro de tu exchange. Importante en un DEX pequeño, donde tus propias órdenes _son_ el precio: anclarte a tu propio libro es un bucle. Y si esa fuente externa se cae, **el bot retira sus órdenes** en lugar de volver en silencio al precio local.
 - **Puede esperar a un precio de disparo** antes de empezar a cotizar.
 
 ### El precio a pagar
@@ -66,12 +66,12 @@ El motor revisa cada bot **cada 15 segundos**, y **una ejecución dispara una re
 
 Depende de dos campos combinados:
 
-| Origen del precio justo | Fuente de precio | Resultado |
-|---|---|---|
-| **Global desde la fuente** | **Datos del exchange** | Punto medio del libro local |
-| **Global desde la fuente** | **Binance** | **Precio de Binance** ← el caso interesante |
-| **Medio del exchange** | (cualquiera) | Punto medio del libro local |
-| **Precio de marca del exchange** | (cualquiera) | Precio de marca del exchange |
+| Origen del precio justo          | Fuente de precio       | Resultado                                   |
+| -------------------------------- | ---------------------- | ------------------------------------------- |
+| **Global desde la fuente**       | **Datos del exchange** | Punto medio del libro local                 |
+| **Global desde la fuente**       | **Binance**            | **Precio de Binance** ← el caso interesante |
+| **Medio del exchange**           | (cualquiera)           | Punto medio del libro local                 |
+| **Precio de marca del exchange** | (cualquiera)           | Precio de marca del exchange                |
 
 > ⚠️ Para anclar de verdad a Binance hace falta poner **las dos cosas**: `Fuente de precio = Binance` **y** `Origen del precio justo = Global desde la fuente`. Con cualquier otra combinación se usa el precio local.
 
@@ -81,7 +81,7 @@ Depende de dos campos combinados:
 
 Es deliberado: si elegiste una fuente externa es porque no te fías del libro local, y sustituirla en silencio sería hacer justo lo contrario de lo que pediste.
 
-*(Detalle técnico: el precio de Binance se sondea por REST cada 2 s y se comparte entre todos los bots que lo pidan, con 30 s de vida.)*
+_(Detalle técnico: el precio de Binance se sondea por REST cada 2 s y se comparte entre todos los bots que lo pidan, con 30 s de vida.)_
 
 ### Paso 2 — ¿Está armado el bot?
 
@@ -130,11 +130,11 @@ exposición = cantidad × precio
 ocupación  = |exposición / Inversión máxima| × 100
 ```
 
-| Modo | Cuándo (por defecto en V2) | Lado que AÑADE | Lado que REDUCE |
-|---|---|---|---|
-| **Normal** | Ocupación < 90 % | × 1 | × 1 |
-| **Defensivo** | Ocupación ≥ **90 %** | **× 1,5** (se aleja) | **× 0,6** (se acerca) |
-| **Alto riesgo** | Ocupación ≥ **100 %** | **× 0 → desaparece** | × 0,5 y `reduceOnly` |
+| Modo            | Cuándo (por defecto en V2) | Lado que AÑADE       | Lado que REDUCE       |
+| --------------- | -------------------------- | -------------------- | --------------------- |
+| **Normal**      | Ocupación < 90 %           | × 1                  | × 1                   |
+| **Defensivo**   | Ocupación ≥ **90 %**       | **× 1,5** (se aleja) | **× 0,6** (se acerca) |
+| **Alto riesgo** | Ocupación ≥ **100 %**      | **× 0 → desaparece** | × 0,5 y `reduceOnly`  |
 
 > Los umbrales por defecto de la V2 (90 / 100) son **mucho más tardíos** que los de la V1 (70 / 90). La lógica es que aquí el diferencial ya se ensancha solo con la volatilidad. Si quieres frenos tempranos, **bájalos tú**.
 
@@ -144,15 +144,15 @@ ocupación  = |exposición / Inversión máxima| × 100
 
 Esta es la parte característica. Con la configuración de fábrica y una volatilidad medida de 20 bps:
 
-| Componente | Cálculo | bps |
-|---|---|---|
-| Distancia base | tu campo | 40,00 |
-| Margen del libro | fijo | +1,50 |
-| Volatilidad | 20 × 0,35 | +7,00 |
-| Coste ida y vuelta | comisión × 2 | +0,00 *(por defecto la comisión es 0)* |
-| Buffer de seguridad | fijo | +0,00 |
-| **Bruto** | | **48,50** |
-| Se aplica el suelo: máx(8 ; 0×2 + 8) = 8 | máx(8 ; 48,50) | **48,50** |
+| Componente                               | Cálculo        | bps                                    |
+| ---------------------------------------- | -------------- | -------------------------------------- |
+| Distancia base                           | tu campo       | 40,00                                  |
+| Margen del libro                         | fijo           | +1,50                                  |
+| Volatilidad                              | 20 × 0,35      | +7,00                                  |
+| Coste ida y vuelta                       | comisión × 2   | +0,00 _(por defecto la comisión es 0)_ |
+| Buffer de seguridad                      | fijo           | +0,00                                  |
+| **Bruto**                                |                | **48,50**                              |
+| Se aplica el suelo: máx(8 ; 0×2 + 8) = 8 | máx(8 ; 48,50) | **48,50**                              |
 
 Y luego, **por capa**, con el techo al final:
 
@@ -164,11 +164,11 @@ El techo (100 por defecto) se aplica **después** de los multiplicadores de capa
 
 El **Comportamiento** (preset) multiplica igual que el perfil de la V1:
 
-| Preset | Distancia | Tamaño |
-|---|---|---|
-| Conservador | × 1,5 | × 0,7 |
-| Equilibrado | × 1 | × 1 |
-| Agresivo | × 0,7 | × 1,3 |
+| Preset      | Distancia | Tamaño |
+| ----------- | --------- | ------ |
+| Conservador | × 1,5     | × 0,7  |
+| Equilibrado | × 1       | × 1    |
+| Agresivo    | × 0,7     | × 1,3  |
 
 ### Paso 7 — Encajar el tamaño en el tope
 
@@ -177,7 +177,7 @@ Aquí la V2 es **más lista que la V1**. Antes de colocar cada capa mira cuánto
 - **Usar tamaño normal hasta el máximo = No** (por defecto) → **recorta** la capa al hueco que quede. Si lo que queda no llega al mínimo del par, la capa no se coloca.
 - **Usar tamaño normal hasta el máximo = Sí** → **todo o nada**: o cabe entera, o no se coloca. Es lo que evita una última capa de 3 USDC que el exchange rechazaría por mínimo de orden.
 
-*(El recorte se hace sobre el **nocional en USDC**, no sobre el tamaño escrito. Con "Cantidad de moneda" el tamaño va en la base y el hueco en la quote: compararlos directamente dejaría el tope sin efecto.)*
+_(El recorte se hace sobre el **nocional en USDC**, no sobre el tamaño escrito. Con "Cantidad de moneda" el tamaño va en la base y el hueco en la quote: compararlos directamente dejaría el tope sin efecto.)_
 
 ### Paso 8 — Guardas finales
 
@@ -213,44 +213,44 @@ cotizaciones se quedan pegadas al toque en vez de salir cruzadas.
 
 Todo local, sin dependencias externas, con frenos tempranos y garantía de beneficio.
 
-| Campo | Valor |
-|---|---|
-| Par | BTC/USDC o ETH/USDC |
-| Dirección | **Neutral** |
-| Apalancamiento | **1x** · Modo de margen: Aislado |
-| Comportamiento | **Conservador** |
-| Tamaño por compra/venta | **25 USDC** |
-| Inversión / posición máxima | **200 USDC** |
-| Distancia de compra / venta | **25 bps / 25 bps** |
-| Distancia mínima permitida | 8 bps |
-| **Estimación de comisión** | **tu comisión real** (ej. 2 bps) |
-| **Margen mínimo de beneficio** | **10 bps** |
-| Buffer de seguridad | 2 bps |
-| Spread dinámico | **Sí** · libro 1,5 · vol ×0,35 |
-| Spread dinámico máximo | 80 bps |
-| Niveles de cotización | **1** |
-| Intervalo de actualización | 60 s |
-| Distancia para reajustar precio | 30 bps |
-| Actualizar órdenes después de | 180 s |
-| Espera tras un fill | 45 s |
-| Umbral defensivo / alto riesgo | **60 % / 80 %** |
-| Acción al alcanzar el límite | Pausar entradas |
-| Solo post-only | **Sí** |
-| Fuente de precio | Datos del exchange |
-| Condición de activación | Sin condición |
+| Campo                           | Valor                            |
+| ------------------------------- | -------------------------------- |
+| Par                             | BTC/USDC o ETH/USDC              |
+| Dirección                       | **Neutral**                      |
+| Apalancamiento                  | **1x** · Modo de margen: Aislado |
+| Comportamiento                  | **Conservador**                  |
+| Tamaño por compra/venta         | **25 USDC**                      |
+| Inversión / posición máxima     | **200 USDC**                     |
+| Distancia de compra / venta     | **25 bps / 25 bps**              |
+| Distancia mínima permitida      | 8 bps                            |
+| **Estimación de comisión**      | **tu comisión real** (ej. 2 bps) |
+| **Margen mínimo de beneficio**  | **10 bps**                       |
+| Buffer de seguridad             | 2 bps                            |
+| Spread dinámico                 | **Sí** · libro 1,5 · vol ×0,35   |
+| Spread dinámico máximo          | 80 bps                           |
+| Niveles de cotización           | **1**                            |
+| Intervalo de actualización      | 60 s                             |
+| Distancia para reajustar precio | 30 bps                           |
+| Actualizar órdenes después de   | 180 s                            |
+| Espera tras un fill             | 45 s                             |
+| Umbral defensivo / alto riesgo  | **60 % / 80 %**                  |
+| Acción al alcanzar el límite    | Pausar entradas                  |
+| Solo post-only                  | **Sí**                           |
+| Fuente de precio                | Datos del exchange               |
+| Condición de activación         | Sin condición                    |
 
 **Qué cotiza con BTC a 100.000 USDC y una volatilidad medida de 20 bps:**
 
-| Componente | bps |
-|---|---|
-| Base | 25,00 |
-| Libro | +1,50 |
-| Volatilidad (20 × 0,35) | +7,00 |
-| Comisión ida y vuelta (2 × 2) | +4,00 |
-| Buffer | +2,00 |
-| **Bruto** | **39,50** |
-| Suelo = máx(8 ; 2×2 + 10) = **14** → 39,50 ya lo supera, no aplica | 39,50 |
-| Preset Conservador × 1,5 | **59,25 ← final** |
+| Componente                                                         | bps               |
+| ------------------------------------------------------------------ | ----------------- |
+| Base                                                               | 25,00             |
+| Libro                                                              | +1,50             |
+| Volatilidad (20 × 0,35)                                            | +7,00             |
+| Comisión ida y vuelta (2 × 2)                                      | +4,00             |
+| Buffer                                                             | +2,00             |
+| **Bruto**                                                          | **39,50**         |
+| Suelo = máx(8 ; 2×2 + 10) = **14** → 39,50 ya lo supera, no aplica | 39,50             |
+| Preset Conservador × 1,5                                           | **59,25 ← final** |
 
 → compra en **99.407,50**, venta en **100.592,50**. Tamaño: 25 × 0,7 = **17,50 USDC**.
 
@@ -260,22 +260,22 @@ Una vuelta completa deja **118,5 bps brutos** − 4 bps de comisión ≈ **114,5
 
 ### Configuración B — "Equilibrada" (uso normal)
 
-| Campo | Valor |
-|---|---|
-| Dirección | **Neutral** · Apalancamiento **1x** |
-| Comportamiento | **Equilibrado** |
-| Tamaño por compra/venta | **50 USDC** |
-| Inversión / posición máxima | **600 USDC** |
-| Distancia de compra / venta | **20 bps / 20 bps** |
-| **Estimación de comisión** | tu comisión real |
-| **Margen mínimo de beneficio** | **8 bps** |
-| Buffer de seguridad | 1 bps |
-| Spread dinámico | Sí · libro 1,5 · vol ×0,35 |
-| Spread dinámico máximo | 100 bps |
-| Niveles de cotización | **2** · distancia 1,3 · tamaño 1 |
-| Usar tamaño normal hasta el máximo | **Sí** |
-| Espera tras un fill | 35 s |
-| Umbral defensivo / alto riesgo | **70 % / 90 %** |
+| Campo                              | Valor                               |
+| ---------------------------------- | ----------------------------------- |
+| Dirección                          | **Neutral** · Apalancamiento **1x** |
+| Comportamiento                     | **Equilibrado**                     |
+| Tamaño por compra/venta            | **50 USDC**                         |
+| Inversión / posición máxima        | **600 USDC**                        |
+| Distancia de compra / venta        | **20 bps / 20 bps**                 |
+| **Estimación de comisión**         | tu comisión real                    |
+| **Margen mínimo de beneficio**     | **8 bps**                           |
+| Buffer de seguridad                | 1 bps                               |
+| Spread dinámico                    | Sí · libro 1,5 · vol ×0,35          |
+| Spread dinámico máximo             | 100 bps                             |
+| Niveles de cotización              | **2** · distancia 1,3 · tamaño 1    |
+| Usar tamaño normal hasta el máximo | **Sí**                              |
+| Espera tras un fill                | 35 s                                |
+| Umbral defensivo / alto riesgo     | **70 % / 90 %**                     |
 
 Con 2 capas de 50 USDC hay **100 USDC comprometidos por lado**, holgados frente al tope de 600.
 
@@ -283,13 +283,13 @@ Con 2 capas de 50 USDC hay **100 USDC comprometidos por lado**, holgados frente 
 
 Cuando operas en un DEX cuyo libro se desvía del mercado global. Añade a la B:
 
-| Campo | Valor |
-|---|---|
-| **Fuente de precio** | **Binance** |
-| **Origen del precio justo** | **Global desde la fuente** |
-| **Tipo de mercado de origen** | **Perpetuo** |
-| Símbolo de origen alternativo | *Vacío*, salvo que el par no se llame igual en Binance |
-| Margen mínimo de beneficio | **12 bps** (un poco más: hay riesgo de desviación entre mercados) |
+| Campo                         | Valor                                                             |
+| ----------------------------- | ----------------------------------------------------------------- |
+| **Fuente de precio**          | **Binance**                                                       |
+| **Origen del precio justo**   | **Global desde la fuente**                                        |
+| **Tipo de mercado de origen** | **Perpetuo**                                                      |
+| Símbolo de origen alternativo | _Vacío_, salvo que el par no se llame igual en Binance            |
+| Margen mínimo de beneficio    | **12 bps** (un poco más: hay riesgo de desviación entre mercados) |
 
 Así el bot cotiza alrededor del precio de Binance, no del libro local: si el DEX se desvía, sus órdenes quedan del lado bueno de esa diferencia.
 
@@ -301,26 +301,26 @@ Así el bot cotiza alrededor del precio de Binance, no del libro local: si el DE
 
 Un bot preparado para arrancar solo cuando el precio llegue a donde tú quieres:
 
-| Campo añadido | Ejemplo |
-|---|---|
-| **Condición de activación** | **Cuando baje a** |
-| **Precio de disparo** | 2.600 (con ETH hoy a 3.000) |
+| Campo añadido               | Ejemplo                     |
+| --------------------------- | --------------------------- |
+| **Condición de activación** | **Cuando baje a**           |
+| **Precio de disparo**       | 2.600 (con ETH hoy a 3.000) |
 
 Hasta que ETH no toque 2.600, el bot no coloca ni una orden. En cuanto lo cruza, queda armado y empieza a cotizar, y sigue armado aunque ETH vuelva a 2.700.
 
 ### Checklist antes de arrancar
 
-- [ ] ¿**Estimación de comisión** puesta con mi comisión real? *(la trampa número uno)*
+- [ ] ¿**Estimación de comisión** puesta con mi comisión real? _(la trampa número uno)_
 - [ ] ¿**Margen mínimo de beneficio** puesto en algo distinto de 0?
 - [ ] ¿Dirección en **Neutral**?
 - [ ] ¿Apalancamiento en 1x?
 - [ ] ¿He **bajado** los umbrales defensivo/alto riesgo desde el 90/100 de fábrica?
 - [ ] ¿La **Inversión / posición máxima** es dinero que puedo perder entero?
 - [ ] ¿`niveles × tamaño` es bastante menor que ese tope?
-- [ ] ¿El **Spread dinámico máximo** queda por encima del suelo calculado? *(si no, la app rechaza la configuración)*
-- [ ] Si uso Binance: ¿**Fuente = Binance** *y* **Origen = Global desde la fuente**? ¿El símbolo existe allí?
+- [ ] ¿El **Spread dinámico máximo** queda por encima del suelo calculado? _(si no, la app rechaza la configuración)_
+- [ ] Si uso Binance: ¿**Fuente = Binance** _y_ **Origen = Global desde la fuente**? ¿El símbolo existe allí?
 - [ ] ¿**Solo post-only** activado?
-- [ ] ¿He mirado la vista previa? *(muestra el diferencial en reposo, sin volatilidad: es el mínimo que va a cotizar)*
+- [ ] ¿He mirado la vista previa? _(muestra el diferencial en reposo, sin volatilidad: es el mínimo que va a cotizar)_
 
 ### Señales de alarma cuando ya está funcionando
 
@@ -328,25 +328,55 @@ El bot escribe una nota muy informativa en cada revisión:
 
 > `Diferencial 54.2/54.2 bps (vol 25.1), inventario 34 % del tope, 2 cotizaciones.`
 
-| Lo que ves | Qué significa | Qué hacer |
-|---|---|---|
-| El diferencial es **mucho** mayor de lo que escribiste | Normal: la fórmula suma. Si es exagerado, mira `vol` | Baja el **Multiplicador de volatilidad** o el **Spread dinámico máximo** |
-| `vol` altísima y casi ninguna ejecución | El bot se ha alejado por un mercado nervioso | Es lo correcto; espera, o baja el multiplicador de volatilidad |
-| El diferencial **no cambia nunca** | O el spread dinámico está apagado, o estás pegado al suelo/techo | Comprueba el suelo: `comisión × 2 + margen mínimo` |
-| `Sin precio de referencia de binance` | La fuente externa no responde | Espera, o cambia a **Datos del exchange** |
-| `Esperando a que el precio…` | La condición de activación no se ha cumplido | Nada; o quita la condición |
-| Inventario que sube y **nunca baja** | Mercado en tendencia | **Baja los umbrales de riesgo**: la V2 no tiene sesgo por inventario que ayude |
-| `Modo defensivo` permanente | El tope es pequeño para tus capas | Sube el tope o baja el tamaño |
+| Lo que ves                                             | Qué significa                                                    | Qué hacer                                                                      |
+| ------------------------------------------------------ | ---------------------------------------------------------------- | ------------------------------------------------------------------------------ |
+| El diferencial es **mucho** mayor de lo que escribiste | Normal: la fórmula suma. Si es exagerado, mira `vol`             | Baja el **Multiplicador de volatilidad** o el **Spread dinámico máximo**       |
+| `vol` altísima y casi ninguna ejecución                | El bot se ha alejado por un mercado nervioso                     | Es lo correcto; espera, o baja el multiplicador de volatilidad                 |
+| El diferencial **no cambia nunca**                     | O el spread dinámico está apagado, o estás pegado al suelo/techo | Comprueba el suelo: `comisión × 2 + margen mínimo`                             |
+| `Sin precio de referencia de binance`                  | La fuente externa no responde                                    | Espera, o cambia a **Datos del exchange**                                      |
+| `Esperando a que el precio…`                           | La condición de activación no se ha cumplido                     | Nada; o quita la condición                                                     |
+| Inventario que sube y **nunca baja**                   | Mercado en tendencia                                             | **Baja los umbrales de riesgo**: la V2 no tiene sesgo por inventario que ayude |
+| `Modo defensivo` permanente                            | El tope es pequeño para tus capas                                | Sube el tope o baja el tamaño                                                  |
+
+---
+
+## 3 bis. Qué mueve y qué NO mueve una cotización viva
+
+Esto es lo que decide si el bot llega a ejecutar alguna vez, y hasta el spec 035 estaba mal.
+
+Un market maker gana dinero de una sola forma: **poniendo una orden y esperando a que el mercado
+venga a buscarla**. Si cada vez que el precio se acerca el bot mueve la orden un poco más lejos, la
+orden no se ejecuta nunca — por muy bien calculado que esté el diferencial y por mucho que el
+mercado se mueva.
+
+Eso es exactamente lo que pasaba: un bot cotizando a 121 bps con «Distancia para reajustar» en 51
+recolocaba sus órdenes cuando el precio había recorrido menos de la mitad del camino, y se pasó
+**23 horas sin una sola ejecución** mientras el precio se movía un 15 %.
+
+Ahora la regla es asimétrica, y conviene entenderla porque explica lo que verás en pantalla:
+
+| Lo que hace el mercado   | Qué pasa con tu cotización                                                                                                                  |
+| ------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------- |
+| **Se acerca** a tu orden | **No se mueve.** Ni por deriva, ni por el intervalo de actualización, ni por la edad máxima. Es el momento por el que existe la estrategia. |
+| **Se aleja** de tu orden | Se recoloca cuando el desvío pasa de la cuarta parte de su distancia: se había quedado atrás y no iba a ejecutarse.                         |
+
+Consecuencia práctica: los dos lados dejan de moverse a la vez. Con el precio cayendo, tu **compra
+se queda quieta** esperando a que la alcancen mientras tu **venta baja** siguiendo al mercado. Es lo
+que hace un creador de mercado de verdad.
+
+Y una advertencia que se sigue de esto: con el arreglo, un bot que antes no ejecutaba **empezará a
+ejecutar**. Revisa tu **Posición máxima** y la **acción al alcanzar el límite** antes de ponerlo en
+real: esa red nunca había hecho falta porque nunca había inventario que topar.
 
 ---
 
 ## 4. Lo que este bot NO mira (importante)
 
-| Campo | Realidad |
-|---|---|
-| **Tope de exposición** (`maxNotionalCap`) | ⚠️ **Esta estrategia lo ignora.** Solo lo respetan Rejilla clásica, GridMart y Martingala. Aquí el tope real es **Inversión / posición máxima**. |
-| **Capital asignado** (`totalInvestment`) | No dimensiona órdenes. El tamaño lo mandan **Tamaño por compra/venta** y **Niveles**. Sí se usa como denominador de la **Pérdida diaria máxima**. |
-| **Espera entre ciclos** (`cooldownMinutes`) | Es para estrategias con ciclos que abren y cierran. Aquí usa **Espera tras un fill**. |
+| Campo                                       | Realidad                                                                                                                                          |
+| ------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **Tope de exposición** (`maxNotionalCap`)   | ⚠️ **Esta estrategia lo ignora.** Solo lo respetan Rejilla clásica, GridMart y Martingala. Aquí el tope real es **Inversión / posición máxima**.  |
+| **Capital asignado** (`totalInvestment`)    | No dimensiona órdenes. El tamaño lo mandan **Tamaño por compra/venta** y **Niveles**. Sí se usa como denominador de la **Pérdida diaria máxima**. |
+| **Espera entre ciclos** (`cooldownMinutes`) | Es para estrategias con ciclos que abren y cierran. Aquí usa **Espera tras un fill**.                                                             |
 
 Sí funcionan, aplicados por el motor: **Stop loss** (orden condicional nativa en el exchange, sigue viva aunque la plataforma se caiga; su dirección sale del **signo de la posición real**), **Pérdida diaria máxima** y **Al acercarse la liquidación**.
 
@@ -361,6 +391,7 @@ Sí funcionan, aplicados por el motor: **Stop loss** (orden condicional nativa e
 #### Dirección · `direction` · ❄️ en frío · por defecto **Neutral**
 
 > ⚠️ **AVISO IMPORTANTE**, igual que en la V1:
+>
 > - **Neutral** → compras **y** ventas. El market maker de verdad.
 > - **Intención Long** → **solo compras, ninguna venta.** El bot acumula sin salida propia.
 > - **Intención Short** → **solo ventas**, con el problema simétrico.
@@ -407,7 +438,7 @@ cantidad.
 
 ### 5.2 Cotización
 
-#### Distancia de compra · `buyDistanceBps` · 🔥 en caliente · 1–2000 bps · por defecto **40**
+#### Distancia de compra · `buyDistanceBps` · 🔥 en caliente · 1–2000 bps · por defecto **20**
 
 **Punto de PARTIDA** del diferencial de compra. **No es la distancia final**: el resto de la fórmula suma encima.
 
@@ -496,6 +527,7 @@ Margen fijo que se suma **siempre** a la parte dinámica, haya volatilidad o no.
 Se aplica **al total y por capa**, después de los multiplicadores de nivel, de preset y de modo de riesgo: ninguna capa cotiza más ancha que esto. Capar solo un sumando, o solo la capa 1, no cumpliría la promesa de "nunca cotizo más ancho de X".
 
 > ⚠️ Dos matices reales del código:
+>
 > 1. **Tiene que quedar por encima del suelo calculado** (`comisión × 2 + margen mínimo`), o la app **rechaza** la configuración: el bot no podría cotizar con beneficio.
 > 2. Con **0** no hay techo; la app lo avisa al validar.
 
@@ -516,6 +548,8 @@ Cuánto tiene que moverse el precio para recotizar antes de tiempo.
 #### Actualizar órdenes después de · `orderMaxAgeSeconds` · 🔥 en caliente · 0–86400 s · por defecto **120**
 
 Edad máxima de **cualquier** cotización viva antes de rehacerla, aunque el precio no se haya movido. Una orden vieja se calculó con un libro que ya no existe.
+
+Con una excepción, y es importante: **no caduca el lado al que el mercado se está acercando**. Si el precio ha bajado desde tu última cotización, tus compras están más cerca de ejecutarse cuanto más tiempo pasa, y tirarlas por viejas sería tirarlas justo antes de cobrar (spec 035).
 
 **Es un ajuste que la V1 no tiene.** Con 0, las órdenes no caducan por edad.
 
@@ -584,11 +618,11 @@ Contra qué precio se cotiza: el del propio exchange donde opera el bot, o **Bin
 
 De dónde sale exactamente el precio de referencia:
 
-| Opción | Qué usa |
-|---|---|
-| **Global desde la fuente** | El precio de la Fuente de precio elegida (Binance, si la elegiste) |
-| **Medio del exchange** | El punto medio del libro donde opera el bot |
-| **Precio de marca del exchange** | El que ese exchange usa para liquidar; más estable que el medio |
+| Opción                           | Qué usa                                                            |
+| -------------------------------- | ------------------------------------------------------------------ |
+| **Global desde la fuente**       | El precio de la Fuente de precio elegida (Binance, si la elegiste) |
+| **Medio del exchange**           | El punto medio del libro donde opera el bot                        |
+| **Precio de marca del exchange** | El que ese exchange usa para liquidar; más estable que el medio    |
 
 ⚠️ Para anclar a Binance hacen falta **las dos cosas**: `Fuente = Binance` **y** `Origen = Global desde la fuente`. Con "Medio del exchange" o "Precio de marca", la fuente externa se ignora.
 
@@ -690,33 +724,33 @@ Solo avisar / Pausar el bot / Cerrar todo cuando la distancia a la liquidación 
 
 Útil para ver de un vistazo qué te vas a encontrar al crear el bot:
 
-| Campo | Por defecto | ¿Lo cambio? |
-|---|---|---|
-| Dirección | Neutral | ✅ Déjalo |
-| Comportamiento | Equilibrado | ✅ Déjalo |
-| Apalancamiento | 1x | ✅ Déjalo |
-| Distancia compra / venta | 40 / 40 bps | Según el par |
-| Distancia mínima permitida | 8 bps | ✅ Déjalo |
-| **Estimación de comisión** | 2 bps | 🟡 Ajústala a tu comisión real de maker |
-| Buffer de seguridad | 0 bps | 1–3 bps |
-| Margen mínimo de beneficio | 8 bps | ✅ Déjalo o súbelo |
-| Solo post-only | Sí | ✅ Déjalo |
-| Umbral defensivo | 90 % | 🟡 Bájalo a 60–70 % |
-| Umbral de alto riesgo | 100 % | 🟡 Bájalo a 80–90 % |
-| Intervalo de actualización | 30 s | ✅ Déjalo |
-| Distancia para reajustar | 30 bps | ✅ Déjalo |
-| Actualizar órdenes después de | 120 s | ✅ Déjalo |
-| Espera tras un fill | 35 s | ✅ Déjalo |
-| Mantener órdenes de salida | 0 (nunca caducan) | ✅ Déjalo |
-| Spread dinámico | Sí | ✅ Déjalo |
-| Muestra de volatilidad | 300 s | ✅ Déjalo |
-| Margen del libro | 1,5 bps | ✅ Déjalo |
-| Multiplicador de volatilidad | 0,35 | El mando principal |
-| Spread dinámico máximo | 100 bps | ✅ Déjalo |
-| Niveles de cotización | 1 | ✅ Déjalo para empezar |
-| Usar tamaño normal hasta el máximo | No | 🟡 Sí en pares con mínimos altos |
-| Fuente de precio | Datos del exchange | Solo Binance si operas en DEX |
-| Condición de activación | Sin condición | Solo si quieres esperar a un precio |
+| Campo                              | Por defecto        | ¿Lo cambio?                             |
+| ---------------------------------- | ------------------ | --------------------------------------- |
+| Dirección                          | Neutral            | ✅ Déjalo                               |
+| Comportamiento                     | Equilibrado        | ✅ Déjalo                               |
+| Apalancamiento                     | 1x                 | ✅ Déjalo                               |
+| Distancia compra / venta           | 20 / 20 bps        | Según el par                            |
+| Distancia mínima permitida         | 8 bps              | ✅ Déjalo                               |
+| **Estimación de comisión**         | 2 bps              | 🟡 Ajústala a tu comisión real de maker |
+| Buffer de seguridad                | 0 bps              | 1–3 bps                                 |
+| Margen mínimo de beneficio         | 8 bps              | ✅ Déjalo o súbelo                      |
+| Solo post-only                     | Sí                 | ✅ Déjalo                               |
+| Umbral defensivo                   | 90 %               | 🟡 Bájalo a 60–70 %                     |
+| Umbral de alto riesgo              | 100 %              | 🟡 Bájalo a 80–90 %                     |
+| Intervalo de actualización         | 30 s               | ✅ Déjalo                               |
+| Distancia para reajustar           | 30 bps             | ✅ Déjalo                               |
+| Actualizar órdenes después de      | 300 s              | ✅ Déjalo                               |
+| Espera tras un fill                | 35 s               | ✅ Déjalo                               |
+| Mantener órdenes de salida         | 0 (nunca caducan)  | ✅ Déjalo                               |
+| Spread dinámico                    | Sí                 | ✅ Déjalo                               |
+| Muestra de volatilidad             | 300 s              | ✅ Déjalo                               |
+| Margen del libro                   | 1,5 bps            | ✅ Déjalo                               |
+| Multiplicador de volatilidad       | 0,35               | El mando principal                      |
+| Spread dinámico máximo             | 100 bps            | ✅ Déjalo                               |
+| Niveles de cotización              | 1                  | ✅ Déjalo para empezar                  |
+| Usar tamaño normal hasta el máximo | No                 | 🟡 Sí en pares con mínimos altos        |
+| Fuente de precio                   | Datos del exchange | Solo Binance si operas en DEX           |
+| Condición de activación            | Sin condición      | Solo si quieres esperar a un precio     |
 
 ---
 
@@ -733,6 +767,6 @@ En una línea:
 
 ## 8. Limitaciones conocidas (hallazgos abiertos)
 
-Confirmadas en `specs/001-revision-integral/findings.md`, abiertas a 2026-09-06. Además de la que la V2
-comparte con la V1 ([F-54](./market-maker.md#7-limitaciones-conocidas-hallazgos-abiertos)):
-
+Confirmadas en `specs/001-revision-integral/findings.md`. La que la V2 compartía con la V1 —F-54, el
+sondeo de ejecuciones en Lighter— quedó **resuelta en el spec 036**: ver
+[la nota de la V1](./market-maker.md#7-limitaciones-conocidas-hallazgos-abiertos).

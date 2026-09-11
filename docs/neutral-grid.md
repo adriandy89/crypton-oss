@@ -392,7 +392,7 @@ esta rejilla no toque a los demás. No se puede cambiar después.
 | Puede acabar corto sin querer | **Sí** | No (en largo) | Sí, acotado por el tope |
 | Freno | `maxExposure` | Rango + `stopOnRangeExit` | Modos defensivo/alto riesgo |
 | Reacciona a movimientos lentos | Bien (la línea vive hasta que se cruza) | Bien | Bien (recotiza cada 30 s) |
-| Hallazgos abiertos propios | `direction` no se lee (§4) | — | F-54 (Lighter, aceptado) |
+| Hallazgos abiertos propios | `direction` no se lee (§4) | — | — (F-54 resuelto en el spec 036) |
 
 **Elige la neutral si**: no quieres sesgo y el par da saltos claros alrededor de un precio reconocible.
 **Elige la clásica si**: quieres acumular o es tu primer bot. **Elige un market maker si**: el par oscila
