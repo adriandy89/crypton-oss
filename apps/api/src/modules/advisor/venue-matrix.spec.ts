@@ -8,8 +8,8 @@ import { coerceConfig, enforceCouplings } from './sanitize';
 /**
  * TODAS las estrategias, en TODOS los mercados reales de los TRES venues.
  *
- * 7 estrategias × 12 mercados × 3 perfiles × 4 capitales = 1.008 configuraciones,
- * cada una llevada por la misma cadena que ejecuta el servidor de verdad
+ * CADA estrategia del registro × 12 mercados × 3 perfiles × 4 capitales, cada
+ * una llevada por la misma cadena que ejecuta el servidor de verdad
  * (generar → recortar → acoplar → validar → previsualizar).
  *
  * ── Lo que se comprueba, y por qué no es circular ────────────────────────────

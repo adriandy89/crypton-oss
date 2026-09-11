@@ -2,7 +2,7 @@
 
 > Estrategia `GRIDMART` · riesgo **ALTO**.
 > Código: [`gridmart.ts`](../packages/strategy-core/src/strategies/gridmart.ts) · hereda la escalera de [`martingale.ts`](../packages/strategy-core/src/strategies/martingale.ts) y `scaledLadder()` de [`ladder.ts`](../packages/strategy-core/src/ladder.ts) · guía in-app en [`gridmart.guide.ts`](../apps/app/src/app/core/content/gridmart.guide.ts).
-> **Empieza por la [guía de la martingala](./martingale.md)**: GridMart es la martingala más una capa encima, y hereda todos sus riesgos. Es la estrategia más compleja de las siete; si es tu primer bot, no es este.
+> **Empieza por la [guía de la martingala](./martingale.md)**: GridMart es la martingala más una capa encima, y hereda todos sus riesgos. Es la estrategia más compleja de todas; si es tu primer bot, no es este.
 
 ---
 

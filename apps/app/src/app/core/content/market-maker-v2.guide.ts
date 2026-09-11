@@ -23,7 +23,7 @@ export const MARKET_MAKER_V2_GUIDE: StrategyGuide<MarketMakerV2Config> = {
   ],
   badWhen: [
     'Quieres control directo del diferencial. Aquí lo que escribes es un punto de partida, no el número final.',
-    'Es la estrategia con más parámetros de las ocho. Si buscas algo simple, el market maker clásico hace lo mismo con la mitad de ajustes.',
+    'Es la estrategia con más parámetros de todas. Si buscas algo simple, el market maker clásico hace lo mismo con la mitad de ajustes.',
     'El par no tiene volumen: por muy bien calculado que esté el diferencial, sin contrapartida no hay ciclos.',
   ],
   examples: [

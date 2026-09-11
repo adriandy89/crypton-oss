@@ -309,7 +309,7 @@ export interface BotRunnerDeps {
    * Velas compartidas. Solo la usan las estrategias que declaran `candles`.
    *
    * Opcional por lo mismo que `priceSource`: solo la de tendencia la declara,
-   * así que un runner sin esto funciona igual para las otras ocho.
+   * así que un runner sin esto funciona igual para todas las demás.
    */
   candleSource?: CandleSourceLike;
   /**
@@ -2188,7 +2188,7 @@ export class BotRunner {
 
     const extremos = this.extremosVistos();
 
-    // Velas SOLO para quien las declara. Las ocho que reconcilian contra el
+    // Velas SOLO para quien las declara. Las que reconcilian contra el
     // libro no lo hacen, así que para ellas esto es una comparación con
     // `undefined` y no se pide una sola vela (specs 038 y 040).
     const quiere = this.strategy.candles?.(this.config);

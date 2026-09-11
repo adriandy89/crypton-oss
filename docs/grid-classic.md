@@ -1,6 +1,6 @@
 # Rejilla clásica (Grid Classic) — guía completa
 
-> Estrategia `GRID_CLASSIC` · riesgo **BAJO** (el más bajo de las siete).
+> Estrategia `GRID_CLASSIC` · riesgo **BAJO** (el más bajo de todas).
 > Código: [`grid-classic.ts`](../packages/strategy-core/src/strategies/grid-classic.ts) · reparto de precios en [`ladder.ts`](../packages/strategy-core/src/ladder.ts) · guía in-app en [`grid-classic.guide.ts`](../apps/app/src/app/core/content/grid-classic.guide.ts).
 > Antes de leer esto conviene tener claro lo de [riesgo y liquidación](./riesgo-y-liquidacion.md) y [buenas prácticas](./buenas-practicas.md).
 
@@ -15,7 +15,7 @@ se ejecuta, te has quedado la diferencia entre las dos líneas, el nivel queda l
 compra. Y así indefinidamente mientras el precio siga dentro del rango.
 
 No apuesta a que el precio suba. **Apuesta a que se mueva.** Cada vaivén entre dos líneas es un ciclo
-cerrado: comprar abajo, vender arriba, repetir. Es la más fácil de entender de las siete.
+cerrado: comprar abajo, vender arriba, repetir. Es la más fácil de entender de todas.
 
 ### El riesgo, dicho claro
 

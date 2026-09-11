@@ -350,7 +350,7 @@ export const tdca: Strategy<TdcaConfig> = {
         });
       }
 
-      // El STOP_LOSS lo añade el motor, igual para las siete estrategias.
+      // El STOP_LOSS lo añade el motor, igual para todas las estrategias.
       // Ver `BotRunner.withStopLoss`.
     }
 

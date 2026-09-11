@@ -198,7 +198,7 @@ export interface BotContext {
    *
    * Solo llega a las estrategias que la declaran (`Strategy.candles`). El motor
    * reconcilia contra el libro y no contra un gráfico, y ese principio sigue
-   * valiendo para las ocho que reconcilian: ninguna la declara, así que ninguna
+   * valiendo para las que reconcilian: ninguna la declara, así que ninguna
    * la recibe y por ninguna se pide una sola vela. La de tendencia decide
    * mirando un gráfico, y por eso es la única que la pide (spec 040).
    *

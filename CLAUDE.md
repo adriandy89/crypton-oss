@@ -25,7 +25,7 @@ sitio web, ni infraestructura de nadie: todo lo que hace está disponible para q
 | `apps/app` | Ionic 8 + Angular 21 + Capacitor. Ejecuta `strategy-core` **también en cliente** (`features/bots/bot-create.page.ts`, `fullConfig`). |
 | `packages/shared` | Tipos, enums (calcan Prisma), `money.ts` (Decimal), `precision.ts` (redondeo), `liquidation.ts`, `series.ts` (la aritmética de las series y la analítica que pintan las pantallas: la app no suma dinero, lo pide aquí con test). |
 | `packages/db` | Prisma 7. Genera TypeScript, así que **se compila** (`dist/src`). Fuente única del modelo. |
-| `packages/strategy-core` | Las 7 estrategias como funciones puras: `validate()`, `preview()`, `plan()`. Más `reconcile`, `order-gate`, `stop-loss`, `cycle-accounting`, `client-order-id`, `mutability`. |
+| `packages/strategy-core` | Cada estrategia como funciones puras: `validate()`, `preview()`, `plan()`. Más `reconcile`, `order-gate`, `stop-loss`, `cycle-accounting`, `client-order-id`, `mutability`. |
 | `packages/exchange-core` | Adaptadores HL/Lighter/Aster tras `ExchangeAdapter`, `DryRunAdapter`, `coid`, `errors`, `rate-limit`, `venue-budget`, `venue-weights`, `endpoints`. |
 | `packages/backtest` | Replay sobre velas con las **mismas** piezas que el motor. |
 | `specs/` | Metodología SDD. **Empieza por `specs/README.md`.** |
@@ -117,7 +117,7 @@ Todo cambio nace de un spec en `specs/NNN-slug/`. Lee `specs/README.md`: es la c
 ## Dónde leer más
 
 - `README.md`: puesta en marcha, estrategias, ajustes en caliente, comandos de ejecución y las pruebas recomendadas antes de poner dinero.
-- `docs/README.md`: la guía de uso. Una guía por estrategia (las siete) con ejemplos verificados por `preview()` y sus limitaciones conocidas, más riesgo y liquidación, venues y mínimos, simulación y backtest, comandos y eventos, y las buenas prácticas de la casa.
+- `docs/README.md`: la guía de uso. Una guía por estrategia, todas, con ejemplos verificados por `preview()` y sus limitaciones conocidas, más riesgo y liquidación, venues y mínimos, simulación y backtest, comandos y eventos, y las buenas prácticas de la casa.
 - `apps/app/src/app/core/content/*.guide.ts`: las guías de cada estrategia tal como las ve el usuario dentro de la app.
 - `docker/README.md`: por qué hay dos composes y qué no se puede hacer con ellos.
 - `specs/README.md` y su índice de specs: la revisión integral (001) con sus hallazgos, los specs 002-007 con lo que se decidió en cada pantalla, el 008 (la guía de uso) y los 009-011 (protecciones, comandos y margen).

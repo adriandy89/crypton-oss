@@ -160,4 +160,5 @@ ante un 429 se paran sin reintentar. A `findings.md` va solo la evidencia resumi
 | 042 | [El take profit puede seguir al precio](042-trailing-take-profit/spec.md) | cambio | hecho (falta CA-13 manual) | `spec/042-trailing-take-profit` |
 | 043 | [Un bot que solo hace eso: entrar, seguir al maximo y salir](043-estrategia-trailing/spec.md) | cambio | hecho (falta CA-12 manual) | `spec/043-estrategia-trailing` |
 | 044 | [Revision de los specs 042 y 043](044-revision-042-043/spec.md) | cambio | hecho (falta CA-6 manual) | `spec/044-revision-042-043` |
+| 045 | [Que el numero de estrategias deje de envejecer](045-el-numero-de-estrategias/spec.md) | cambio | hecho | `spec/045-el-numero-de-estrategias` |
 

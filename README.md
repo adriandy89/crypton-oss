@@ -36,7 +36,7 @@ pantalla escrita dos veces.
 Y el asistente de creación, que empieza por lo que más pesa: qué estrategia, y
 con cuánto riesgo.
 
-![Asistente de nuevo bot, paso de estrategia: las siete estrategias en tarjetas, con Martingala y GridMart marcadas como riesgo alto](docs/img/selector-estrategias.webp)
+![Asistente de nuevo bot, paso de estrategia: las estrategias en tarjetas, con Martingala y GridMart marcadas como riesgo alto](docs/img/selector-estrategias.webp)
 
 El riesgo va declarado en la tarjeta, antes de elegir —Martingala y GridMart
 llevan su aviso desde el primer paso—. Y el formulario de cada estrategia lo
@@ -56,7 +56,7 @@ apps/
 packages/
   shared/          Tipos, enums, aritmética decimal y redondeo a la retícula del venue
   db/              Esquema Prisma + cliente generado y COMPILADO (Prisma 7 emite TypeScript)
-  strategy-core/   Las 8 estrategias como funciones PURAS: validate(), preview(), plan()
+  strategy-core/   Cada estrategia como funciones PURAS: validate(), preview(), plan()
   exchange-core/   Adaptadores de DEX tras una interfaz única + simulador
 docker/            Dos composes SEPARADOS: infraestructura (datos) y aplicación
 scripts/           Utilidades: generar .env y auditar la configuración
@@ -257,7 +257,7 @@ resto los adopta en el siguiente barrido.
 
 ## Estrategias
 
-Las ocho viven en `packages/strategy-core` como funciones puras. La API las usa
+Viven todas en `packages/strategy-core` como funciones puras. La API las usa
 para validar y pintar el preview; el worker, para ejecutar. **Una sola
 implementación**, así que lo que ves antes de crear el bot es literalmente lo que
 se mandará al exchange.
@@ -569,7 +569,7 @@ están en [`docs/buenas-practicas.md`](docs/buenas-practicas.md).
 
 El esquema está materializado (22 tablas) y tanto la API como el worker arrancan
 y responden. Comprobado por HTTP: acceso con Google, límites de riesgo creados al
-entrar por primera vez y los 122 campos de las ocho estrategias con su
+entrar por primera vez y los 122 campos de las estrategias con su
 mutabilidad.
 
 Arrancarlo de verdad destapó dos fallos que ni compilar ni los tests detectan:

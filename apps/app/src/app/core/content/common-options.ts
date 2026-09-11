@@ -2,12 +2,13 @@ import type { CommonBotConfig } from '@crypton/shared';
 import type { OptionDoc } from './types';
 
 /**
- * Fichas de los parámetros que comparten las ocho estrategias.
+ * Fichas de los parámetros que comparten todas las estrategias.
  *
  * Se resuelven como respaldo: si la guía de una estrategia no redefine el
  * campo, el panel enseña esta. La razón de que sea un respaldo y no la única
  * verdad es que varios comunes cambian de sentido según donde caen: el ejemplo
- * claro es `maxNotionalCap`, que solo lo honran tres de las ocho.
+ * claro es `maxNotionalCap`, que unas estrategias aplican al tender la escalera,
+ * otras como segundo tope junto al suyo, y los market makers ni lo leen.
  */
 export const COMMON_OPTION_DOCS: Record<keyof CommonBotConfig, OptionDoc> = {
   exchangeAccountId: {

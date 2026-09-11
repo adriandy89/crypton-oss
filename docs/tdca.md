@@ -16,7 +16,7 @@ mercado** el importe que le dijiste. Cada compra baja tu precio medio. Mientras 
 viva **una orden de cierre sobre el total**, colocada al precio medio más el objetivo de beneficio. Cuando
 esa orden se ejecuta, el ciclo termina y vuelve a empezar de cero.
 
-Es la única de las siete que **opera por reloj**, no por movimiento de precio, y la que menos parámetros
+Es la única que **opera por reloj**, no por movimiento de precio, y la que menos parámetros
 tiene. Su comportamiento es fácil de predecir: es la más sana de las cinco que no son market makers.
 
 ### El riesgo, dicho claro

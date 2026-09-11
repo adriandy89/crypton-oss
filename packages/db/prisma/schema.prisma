@@ -795,9 +795,9 @@ model BotCommand {
 /// Vive aparte de `bots` y de `bot_snapshots` por dos motivos. Son contadores
 /// MONOTÓNICOS que se incrementan en cada ejecución, no una foto periódica:
 /// meterlos en la serie temporal obligaría a recorrerla entera para saber
-/// cuántos fills lleva el bot. Y solo tienen sentido para dos de las siete
-/// estrategias, así que ensanchar `bots` con diez columnas nulas para las otras
-/// cinco no sale a cuenta.
+/// cuántos fills lleva el bot. Y solo tienen sentido para los dos market
+/// makers, así que ensanchar `bots` con diez columnas nulas para todas las
+/// demás no sale a cuenta.
 ///
 /// Las definiciones no son universales; las nuestras están en
 /// `MarketMakerStats` (@crypton/shared) y la app las enseña al pie.

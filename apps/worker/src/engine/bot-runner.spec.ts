@@ -989,7 +989,7 @@ describe('reutilización de ids por estrategia', () => {
 
   describe('recentrar solo aplica a las escaleras', () => {
     /**
-     * Spec 001, F-84. «Recentrar la reticula» corria igual en las siete
+     * Spec 001, F-84. «Recentrar la reticula» corria igual en TODAS las
      * estrategias. En la rejilla clasica las lineas salen del rango, asi que lo
      * unico que hacia era borrar la memoria de los niveles comprados: el bot
      * volvia a tender la compra de cada nivel que ya tenia y retiraba su venta.
@@ -1413,9 +1413,10 @@ describe('reutilización de ids por estrategia', () => {
 
   describe('el motor coloca el stop loss por su cuenta', () => {
     /**
-     * `stopLossPct` lo inyecta `COMMON_FIELDS` en las siete estrategias, pero
-     * solo martingale y tdca lo leian: en las otras cinco el campo salia en el
-     * formulario y no colocaba nada. Ahora lo emite el motor, asi que da igual
+     * `stopLossPct` lo inyecta `COMMON_FIELDS` en TODAS las estrategias, y
+     * cuando esto se escribio solo martingale y tdca lo leian: en las otras
+     * cinco -eran siete entonces- el campo salia en el formulario y no colocaba
+     * nada. Ahora lo emite el motor, asi que da igual
      * que estrategia sea — este test usa una que no lo pide.
      */
     it('lo anade aunque la estrategia no lo pida', async () => {

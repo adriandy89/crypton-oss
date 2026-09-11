@@ -7,9 +7,9 @@
 
 ## 1. Qué es esto, en cristiano
 
-Las otras ocho estrategias de la plataforma hacen variaciones de lo mismo: **comprar barato y
+Casi todas las demás estrategias de la plataforma hacen variaciones de lo mismo: **comprar barato y
 vender caro dentro de un rango**. Una rejilla pone escalones, un market maker pone las dos puntas,
-una martingala promedia a la baja. Todas viven del **ir y venir** del precio.
+una martingala promedia a la baja. Todas ellas viven del **ir y venir** del precio.
 
 Esta hace lo contrario. No compra barato: **compra caro, cuando el precio acaba de romper hacia
 arriba**, y espera que siga subiendo. Y vende barato cuando rompe hacia abajo.

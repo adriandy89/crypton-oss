@@ -754,7 +754,7 @@ describe('martingale.plan', () => {
   });
 
   /**
-   * El stop loss ya NO lo emite la estrategia: lo añade el motor para las siete
+   * El stop loss ya NO lo emite la estrategia: lo añade el motor para todas
    * por igual (`BotRunner.withStopLoss`), porque `stopLossPct` vive en
    * `COMMON_FIELDS` y solo dos de ellas lo leían. Este test vigila que nadie lo
    * reponga aquí: dos emisores del mismo nivel es una duplicidad esperando.
@@ -1617,7 +1617,7 @@ describe('registro de estrategias', () => {
    * disparo salia a precio negativo y la posicion se quedaba sin stop con un
    * WARN. Y una perdida diaria de cero pausaba el bot al arrancar.
    */
-  it('validateCommon rechaza un stop loss imposible y una pérdida diaria no positiva, en las siete', () => {
+  it('validateCommon rechaza un stop loss imposible y una pérdida diaria no positiva, en todas', () => {
     const MINIMOS: Record<string, Record<string, unknown>> = {
       GRID_CLASSIC: { lowerPrice: '90', upperPrice: '110', gridLevels: 5 },
       NEUTRAL_GRID: {
@@ -3062,7 +3062,7 @@ describe('marketMakerV2.validate', () => {
 // adelante igual, hasta un `D(cfg.lowerPrice)` o un `D(cfg.totalInvestment)`
 // con `undefined` dentro.
 //
-// Se cubren las siete a la vez y desde el registro, no una lista escrita a
+// Se cubren todas a la vez y desde el registro, no una lista escrita a
 // mano: una estrategia nueva entra sola en la bateria.
 // ═══════════════════════════════════════════════════════════════
 

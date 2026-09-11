@@ -8,7 +8,7 @@ import { listStrategyMeta } from './registry';
  * campo duplicado, un desplegable vacío o una casilla con un valor por defecto
  * que su propio rango rechaza. Se ve al abrir la pantalla, y no siempre.
  *
- * Estas comprobaciones son baratas y cubren las siete estrategias de golpe.
+ * Estas comprobaciones son baratas y cubren TODAS las estrategias de golpe.
  */
 describe('metadatos de las estrategias', () => {
   const metas = listStrategyMeta();

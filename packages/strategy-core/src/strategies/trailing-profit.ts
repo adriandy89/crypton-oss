@@ -18,7 +18,7 @@
  *    sitio donde decir cuánto dinero se pone es un sitio donde equivocarse.
  * 2. **El seguimiento no se puede apagar**: es lo único que hace. Un interruptor
  *    para desactivarlo la dejaría sin identidad, y para salir en un precio fijo
- *    ya hay siete estrategias.
+ *    ya están casi todas las demás.
  * 3. **Vuelve a entrar.** Al cerrarse la posición se cierra el ciclo y, pasada
  *    la espera, abre otra. Es un bot, no una operación suelta, y eso se dice en
  *    la guía y en la nota del plan (spec 043).

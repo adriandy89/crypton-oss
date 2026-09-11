@@ -481,7 +481,7 @@ escalera corta, pensada para ruido, no para una corrección seria.
 | Entradas | Escalera colgada; entran al tocar el precio | La misma escalera | Por reloj, a mercado |
 | Salida | Una, sobre el total | El satélite por un TP corto; el núcleo por una rejilla de ventas con recompras | Una, sobre el total |
 | Mientras espera el rebote | La posición está quieta | La posición **trabaja** (vende y recompra trozos del núcleo) | Quieta |
-| Complejidad | Media | La más alta de las siete | La más baja |
+| Complejidad | Media | La más alta de todas | La más baja |
 | Peor caso | `capital × apalancamiento` | Igual | `importe × compras × apalancamiento` |
 
 **Elige la martingala si**: quieres cerrar ciclos con rebotes pequeños y aceptas el peor caso completo.

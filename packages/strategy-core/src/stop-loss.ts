@@ -13,8 +13,9 @@ import { stopLossPrice } from './ladder';
  * Añade el nivel de STOP_LOSS al plan si la configuración lo pide.
  *
  * Vive aquí y no en cada estrategia porque `stopLossPct` lo inyecta
- * `COMMON_FIELDS` en las siete, pero solo dos lo leían: las otras cinco pintaban
- * el campo en el formulario y no colocaban nada. Eso es peor que no ofrecerlo
+ * `COMMON_FIELDS` en TODAS, y cuando esto se escribió solo dos lo leían: las
+ * otras cinco pintaban el campo en el formulario y no colocaban nada —eran
+ * siete entonces—. Eso es peor que no ofrecerlo
  * —el usuario cree que tiene red y no la tiene—. En un único sitio no puede
  * volver a desincronizarse al añadir una estrategia.
  *

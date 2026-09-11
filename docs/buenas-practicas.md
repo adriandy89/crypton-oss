@@ -1,6 +1,6 @@
 # Buenas prácticas — antes de poner un céntimo
 
-> Este es el documento que hay que leer primero. Las siete guías de estrategia dan por sabido lo que hay aquí.
+> Este es el documento que hay que leer primero. Las guías de estrategia dan por sabido lo que hay aquí.
 > Referencias: [riesgo y liquidación](./riesgo-y-liquidacion.md) · [venues y mínimos](./venues-y-minimos.md) · [simulación y backtest](./simulacion-y-backtest.md) · [comandos, guardas y eventos](./comandos-guardas-y-eventos.md).
 
 ---

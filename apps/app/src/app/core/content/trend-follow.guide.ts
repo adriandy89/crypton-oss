@@ -6,7 +6,7 @@ export const TREND_FOLLOW_GUIDE: StrategyGuide<TrendFollowConfig> = {
     'Entra cuando el precio rompe el rango en el que llevaba semanas y sale con un stop que le va siguiendo. No busca acertar el suelo ni el techo: busca estar dentro mientras dure el movimiento.',
   risk: 'ALTO',
   bestFor:
-    'El único régimen en el que pierden las otras siete: cuando el precio no va y viene, sino que se va en línea recta. Es la estrategia que compensa a una rejilla o a un market maker, no la que los sustituye.',
+    'El único régimen en el que pierden las estrategias de rango: cuando el precio no va y viene, sino que se va en línea recta. Es la estrategia que compensa a una rejilla o a un market maker, no la que los sustituye.',
   howItWorks: [
     'El bot mira velas cerradas del tamaño que le digas (4 h por defecto) y calcula el máximo y el mínimo de las últimas N, sin contar la que está mirando.',
     'Si el cierre supera ese máximo, abre largo. Si pierde el mínimo, abre corto. Nada más: no hay indicador oculto.',

@@ -1,12 +1,12 @@
 /**
  * Seguimiento de tendencia: la única que gana cuando el precio se va recto.
  *
- * Las otras siete son de rango, de reversión a la media o de acumulación, y
- * todas pierden en el mismo sitio. La guía del market maker lo dice sin
- * rodeos: «el problema aparece cuando el precio no va y viene, sino que se va
- * en línea recta». Todo el arsenal de riesgo de esas siete —sesgos, modos
- * defensivos, topes, y el filtro de tendencia del spec 039— existe para LIMITAR
- * el daño en ese régimen. Esta lo aprovecha (spec 040).
+ * Las estrategias de RANGO —rejillas, market makers, acumulación— pierden
+ * todas en el mismo sitio. La guía del market maker lo dice sin rodeos: «el
+ * problema aparece cuando el precio no va y viene, sino que se va en línea
+ * recta». Todo su arsenal de riesgo —sesgos, modos defensivos, topes, y el
+ * filtro de tendencia del spec 039— existe para LIMITAR el daño en ese
+ * régimen. Esta lo aprovecha (spec 040).
  *
  * Tres decisiones que la definen:
  *

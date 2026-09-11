@@ -13,7 +13,7 @@ qué números, y qué **no** hace todavía.
 3. La guía de **tu estrategia** (tabla de abajo).
 4. [Simulación y backtest](./simulacion-y-backtest.md) para probarla sin dinero.
 
-## Las siete estrategias
+## Las estrategias
 
 | Estrategia | Riesgo | En una frase | Guía | Guía in-app | Código |
 |---|---|---|---|---|---|

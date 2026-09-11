@@ -1,7 +1,7 @@
 # Riesgo y liquidación — cómo se mide y qué hace el motor
 
 > Código: [`liquidation.ts`](../packages/shared/src/liquidation.ts) (la fórmula), [`risk.ts`](../apps/app/src/app/core/utils/risk.ts) (el semáforo de la app), [`risk.service.ts`](../apps/api/src/modules/risk/risk.service.ts) (los límites de tu cuenta) y `checkRiskGuards()` en [`bot-runner.ts`](../apps/worker/src/engine/bot-runner.ts) (las guardas que corren en cada revisión).
-> Las siete guías de estrategia enlazan aquí. Léelo entero una vez; después basta con volver a la tabla que necesites.
+> Las guías de estrategia enlazan aquí. Léelo entero una vez; después basta con volver a la tabla que necesites.
 
 ---
 

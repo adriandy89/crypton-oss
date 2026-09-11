@@ -510,7 +510,7 @@ export const martingale: Strategy<MartingaleConfig> = {
       });
     }
 
-    // El STOP_LOSS no se emite aquí: lo añade el motor para las siete
+    // El STOP_LOSS no se emite aquí: lo añade el motor para todas las
     // estrategias por igual. Ver `BotRunner.withStopLoss`.
 
     const remaining = ladder.length - 1 - filled.size;
