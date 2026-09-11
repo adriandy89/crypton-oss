@@ -198,5 +198,16 @@ asistente lo dicen: hay que transferirlo a perpetuos dentro del exchange.
 | Órdenes activas por mercado | (sin límite conocido que afecte) | **30** (la vista previa avisa) | 200 (la vista previa avisa) |
 | Órdenes a mercado | Con holgura del adaptador (5 %) | Con holgura (5 %), acuse pendiente hasta el sondeo | Con holgura |
 | Caducidad por edad (MM) | ✅ | ✅ | ✅ |
+| Tamaño del toque (cantidad en el mejor bid/ask) | ✅ | ❌ | ✅ |
+| Tasa de funding | ✅ | ❌ | ✅ (con el instante del próximo pago) |
 | Modo cobertura | — | — | ❌ Rechazado por el formulario |
 | Recomendación hoy | Todo | Todo, incluidos market makers desde el spec 036 (las ejecuciones ya llegan empujadas) | Todo salvo cobertura; menos de 200 líneas |
+
+> **Las dos filas nuevas son datos, no capacidades.** Desde el spec 038 el ticker puede llevar la
+> cantidad que hay en el mejor bid y en el mejor ask, y la tasa de funding vigente. Salen de
+> respuestas que el adaptador **ya pedía**, así que no cuestan ni una petición más.
+>
+> Lighter no publica ninguno de los dos en `market_stats`, y sacarlos costaría una llamada por
+> símbolo y tick contra un cupo de 60 por minuto y IP — justo el problema que el spec 036 acaba de
+> aliviar. Una estrategia que los use funciona igual allí, pero **con menos información**: cae al
+> punto medio del libro, que es lo que se ha hecho siempre.

@@ -207,6 +207,8 @@ Lo que la vista previa llama «peor caso» es **todos los niveles ejecutados**. 
 | Martingala | Σ de los escalones = **capital × apalancamiento** | capital | `Tope de exposición` corta la escalera en el escalón en que se alcanza. El último escalón suele ser el mayor de todos. |
 | GridMart | Igual que Martingala | capital | La rejilla de ventas no añade exposición: vende trozos de lo comprado. |
 | Market Maker (V1 y V2) | **Valor máximo de la posición**, en cualquiera de los dos sentidos | Ese valor ÷ apalancamiento | `capital asignado` **no** dimensiona nada aquí: solo es el denominador de la pérdida diaria. |
+| Tendencia | `riesgo por operación / (multiplicador × ATR)` en cantidad, **acotado** por `capital × apalancamiento`, el margen disponible y el `Tope de exposición` | Ese notional ÷ apalancamiento | Lo que se arriesga **no** es el notional: es el `riesgo por operación`, porque el stop está puesto desde el primer momento. Si el tope recorta, se arriesga **menos** de lo declarado y la nota del bot lo dice. |
+| Seguimiento de beneficio | **capital × apalancamiento** en una sola posición, acotado por el margen disponible y el `Tope de exposición` | capital | No hay escalera: la posición entera existe desde el primer minuto. Y hasta llegar al objetivo la única red es el `stop loss`, que por eso viene puesto de fábrica (5 %). Al cerrarse **vuelve a abrir** pasada la espera. |
 
 ---
 

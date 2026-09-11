@@ -149,6 +149,15 @@ ante un 429 se paran sin reintentar. A `findings.md` va solo la evidencia resumi
 | 030 | [Parámetros, selectores y lo que el formulario no dice](030-parametros-y-selectores/spec.md) | revisión | hecho (F-01..F-06 corregidos) | `spec/030-parametros-y-selectores` |
 | 031 | [Los pendientes de los specs 029 y 030, y las pruebas que faltaban](031-pendientes-y-pruebas/spec.md) | cambio | hecho | `spec/031-pendientes-y-pruebas` |
 | 033 | [Consola de administración](033-consola-de-administracion/spec.md) | cambio | hecho (falta CA-11 manual) | `spec/033-consola-de-administracion` |
-| 034 | [Purga de históricos desde la consola](034-purga-de-historicos/spec.md) | cambio | hecho (falta CA-8 manual) | `spec/034-purga-de-historicos` || 035 | [El precio tiene que poder alcanzar la cotización](035-el-precio-alcanza-la-cotizacion/spec.md) | cambio | hecho (falta CA-10 manual) | `spec/035-el-precio-alcanza-la-cotizacion` |
+| 034 | [Purga de históricos desde la consola](034-purga-de-historicos/spec.md) | cambio | hecho (falta CA-8 manual) | `spec/034-purga-de-historicos` |
+| 035 | [El precio tiene que poder alcanzar la cotización](035-el-precio-alcanza-la-cotizacion/spec.md) | cambio | hecho (falta CA-10 manual) | `spec/035-el-precio-alcanza-la-cotizacion` |
 | 036 | [Lighter: el stream de cuenta que ya existía](036-lighter-stream-de-cuenta/spec.md) | cambio | hecho (falta CA-8 manual) | `spec/036-lighter-stream-de-cuenta` |
+| 037 | [Los mandos del market maker se pelean entre si](037-combinaciones-de-market-maker/spec.md) | cambio | hecho (falta CA-13 manual) | `spec/037-combinaciones-de-market-maker` |
+| 038 | [Los datos que el motor no tiene](038-los-datos-que-faltan/spec.md) | cambio | hecho (falta CA-11 manual) | `spec/038-los-datos-que-faltan` |
+| 039 | [Que el market maker mire algo mas que el punto medio](039-inteligencia-de-los-market-maker/spec.md) | cambio | hecho (falta CA-14 manual) | `spec/039-inteligencia-de-los-market-maker` |
+| 040 | [Una estrategia que gane cuando el precio se va en linea recta](040-estrategia-de-tendencia/spec.md) | cambio | hecho (falta CA-14 manual) | `spec/040-estrategia-de-tendencia` |
+| 041 | [Revision de los specs 037-040](041-revision-de-la-tanda/spec.md) | cambio | hecho | `spec/041-revision-de-la-tanda` |
+| 042 | [El take profit puede seguir al precio](042-trailing-take-profit/spec.md) | cambio | hecho (falta CA-13 manual) | `spec/042-trailing-take-profit` |
+| 043 | [Un bot que solo hace eso: entrar, seguir al maximo y salir](043-estrategia-trailing/spec.md) | cambio | hecho (falta CA-12 manual) | `spec/043-estrategia-trailing` |
+| 044 | [Revision de los specs 042 y 043](044-revision-042-043/spec.md) | cambio | hecho (falta CA-6 manual) | `spec/044-revision-042-043` |
 

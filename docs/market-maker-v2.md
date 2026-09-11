@@ -97,7 +97,7 @@ Recotiza si se cumple alguna de estas:
 
 - Ha pasado el **Intervalo de actualización de órdenes** (30 s por defecto), **o**
 - El precio se ha movido más que la **Distancia para reajustar precio** (30 bps por defecto), **o**
-- Alguna orden ha superado su **Actualizar órdenes después de** (120 s por defecto), **o**
+- Alguna orden ha superado su **Actualizar órdenes después de** (300 s por defecto), **o**
 - Una orden de salida ha superado su TTL.
 
 > A diferencia de la V1, aquí el umbral de deriva es **un campo propio** (`repriceThresholdBps`) y no el suelo de la cotización. Puedes tener un suelo de 8 bps y recotizar solo a los 30 bps de deriva.
@@ -146,7 +146,7 @@ Esta es la parte característica. Con la configuración de fábrica y una volati
 
 | Componente                               | Cálculo        | bps                                    |
 | ---------------------------------------- | -------------- | -------------------------------------- |
-| Distancia base                           | tu campo       | 40,00                                  |
+| Distancia base                           | tu campo       | 20,00                                  |
 | Margen del libro                         | fijo           | +1,50                                  |
 | Volatilidad                              | 20 × 0,35      | +7,00                                  |
 | Coste ida y vuelta                       | comisión × 2   | +0,00 _(por defecto la comisión es 0)_ |
@@ -444,7 +444,7 @@ cantidad.
 
 > Si te sorprende ver el bot cotizando más lejos de lo que escribiste, es exactamente esto.
 
-#### Distancia de venta · `sellDistanceBps` · 🔥 en caliente · 1–2000 bps · por defecto **40**
+#### Distancia de venta · `sellDistanceBps` · 🔥 en caliente · 1–2000 bps · por defecto **20**
 
 El espejo. Simétricas si quieres neutralidad de verdad.
 
@@ -545,7 +545,7 @@ Cuánto tiene que moverse el precio para recotizar antes de tiempo.
 - **Alto**: deja las órdenes quietas aunque el precio se aleje.
 - **Consejo**: un valor cercano a tu distancia de cotización evita quedarte con órdenes ya fuera de mercado.
 
-#### Actualizar órdenes después de · `orderMaxAgeSeconds` · 🔥 en caliente · 0–86400 s · por defecto **120**
+#### Actualizar órdenes después de · `orderMaxAgeSeconds` · 🔥 en caliente · 0–86400 s · por defecto **300**
 
 Edad máxima de **cualquier** cotización viva antes de rehacerla, aunque el precio no se haya movido. Una orden vieja se calculó con un libro que ya no existe.
 
@@ -563,6 +563,8 @@ Viene con **35 s**, bastante más que en la V1 (0).
 
 Cuánto vive una orden **de salida** antes de rehacerla al precio nuevo. Solo aplica al lado que reduce inventario. Con 0, espera a su precio indefinidamente.
 
+> ⚠️ Igual que la caducidad por edad, **no caduca el lado al que el mercado se está acercando** (spec 037). Al recotizar, el centro se mueve con el precio: recolocar una salida que el mercado viene a buscar la **aleja**, justo el tick antes de cobrarla.
+
 ### 5.5 Niveles
 
 #### Niveles de cotización · `layers` · 🌤️ en tibio · 1–10 · por defecto **1**
@@ -573,7 +575,7 @@ Cuántas órdenes escalonadas por lado.
 
 #### Multiplicador de distancia por nivel · `layerDistanceMultiplier` · 🌤️ en tibio · 1–3 · por defecto **1**
 
-Cuánto se aleja cada nivel del anterior. **Con 1** (el valor de fábrica) todos van a la misma distancia.
+Cuánto se aleja cada nivel del anterior. **Con 1** —el valor de fábrica— todos caerían al mismo precio, así que **la app rechaza esa combinación en cuanto hay más de un nivel**: si subes `Niveles de cotización`, sube también este número (1,3–1,5 es lo normal).
 
 #### Multiplicador de tamaño por nivel · `layerSizeMultiplier` · 🌤️ en tibio · 0,1–3 · por defecto **1**
 
@@ -652,7 +654,155 @@ Por encima de este precio el bot **solo reduce, no abre**: desactiva el lado que
 
 > Las bandas cortan **solo el lado que abre**. El lado que te saca de la posición sigue siempre vivo.
 
-### 5.8 Condición de activación
+
+### 5.8 Microestructura — mirar algo más que el punto medio
+
+Todo este grupo nace **apagado**, y se enciende de uno en uno mirando la nota del bot. No son
+ajustes finos: cada uno cambia dónde cotiza el bot.
+
+> ⚠️ **En Lighter, tres de ellos no hacen nada.** El microprecio, el sesgo por desequilibrio y los
+> dos de funding necesitan datos que ese venue no publica (`docs/venues-y-minimos.md` §7). No
+> fallan: se comportan como si estuvieran apagados.
+
+#### Precio justo · `fairPriceMode` · 🔥 en caliente · por defecto **Punto medio**
+
+El punto medio `(mejor compra + mejor venta) / 2` **ignora cuánta cantidad hay a cada lado**. Si
+hay 30 BTC esperando para comprar y 1 para vender, el precio no está en el medio: está a punto de
+subir.
+
+El **microprecio** pondera cada precio por la cantidad del lado contrario:
+
+```
+microprecio = (venta × cantidad_compra + compra × cantidad_venta) / (cantidad_compra + cantidad_venta)
+```
+
+Con 99,90 / 100,10 y cantidades 30 / 10, sale **100,05** en vez de 100,00: el bot cotiza sus dos
+lados cinco céntimos más arriba, que es donde el mercado está yendo.
+
+**Es el primero que conviene probar.** Sin tamaños del libro se comporta exactamente igual que el
+punto medio.
+
+#### Sesgo por desequilibrio del libro · `obiSkewFactor` · 🔥 en caliente · 0–2 · por defecto **0**
+
+Cuánto desplaza la cotización el desequilibrio `(cantidad_compra − cantidad_venta) / (suma)`, que
+va de −1 a +1. El desplazamiento es `factor × desequilibrio × distancia_base`.
+
+**Empieza en 0,3–0,5.** Cuanto más alto, más se mueve el centro, y cada movimiento que pase de la
+distancia de reajuste es una recotización más: se paga en cuota del venue y en prioridad de cola.
+
+#### Sesgo de tamaño por inventario · `sizeSkewFactor` · 🔥 en caliente · 0–1 · por defecto **0**
+
+Sesga **el tamaño** en vez del precio: con posición larga, las compras se hacen más pequeñas
+(`× (1 − factor × ocupación)`) y las ventas más grandes (`× (1 + …)`).
+
+Es más suave que mover distancias, porque **no aleja el lado por el que quieres salir**. Con el
+tope lleno y el factor a 1, el lado que añade desaparece — lo mismo que ya hace el modo de alto
+riesgo.
+
+#### Sesgo por funding · `fundingSkewFactor` · 🔥 en caliente · 0–3 · por defecto **0**
+
+En un perpetuo, mantener posición **cobra o paga cada periodo**. El funding dice qué lado está
+siendo pagado, y este mando inclina la cotización hacia ese lado:
+
+| Funding | Quién paga | Qué hace el bot |
+|---|---|---|
+| Positivo | Los largos | Baja el centro: vende más cerca y compra más lejos ⇒ tiende a quedarse **corto**, que es quien cobra |
+| Negativo | Los cortos | Sube el centro ⇒ tiende a quedarse **largo** |
+
+**El signo sale del funding, no de tu posición**, y eso sorprende. Es correcto: funciona igual
+estando largo (te saca antes del lado que paga) que estando corto (te mantiene en el que cobra).
+
+**Mídelo antes de confiar en él.** Mira unos días qué funding tiene tu par: con 1 bp por hora y
+factor 1, el centro se mueve 1 bp — poco. Con 30 bps en un día de euforia, se mueve 30.
+
+#### Funding máximo en contra · `maxAdverseFundingBps` · 🔥 en caliente · 0–100 · por defecto **0**
+
+Por encima de ese funding, el bot **deja de abrir** posición del lado que paga. El lado que reduce
+inventario sigue vivo **siempre**: cortar los dos te dejaría atrapado.
+
+Un funding extremo y sostenido suele querer decir que todo el mundo está del mismo lado. No es el
+mando para empezar.
+
+#### Horizonte de markout · `markoutHorizonSeconds` · 🔥 en caliente · 0–300 s · por defecto **0**
+
+**La medida de si te están eligiendo.** Para cada ejecución, mira dónde está el mercado N segundos
+después:
+
+- Te compran a 100 y el mercado se va a 99 ⇒ markout **negativo**: quien te compró sabía algo.
+- Te compran a 100 y el mercado sube a 101 ⇒ markout positivo: cobraste el diferencial.
+
+Con 0 no se mide nada y no se guarda nada. **30–60 s** es lo razonable: por debajo mide ruido.
+
+**Enciéndelo con la sensibilidad en 0.** Así lo ves en la nota del bot —`markout −3,1/+0,8 bps`—
+durante unos días sin que cambie una sola orden.
+
+#### Sensibilidad al markout · `markoutSensitivity` · 🔥 en caliente · 0–3 · por defecto **0**
+
+Cuánto se **aleja** un lado cuando su markout es negativo: se suma
+`max(0, −markout) × sensibilidad` bps a la distancia de ese lado. Si te están comprando barato,
+tus compras se alejan y tus ventas no se tocan.
+
+**Un markout bueno no acerca la cotización.** El suelo está en cero a propósito: perseguir al
+mercado cuando te va bien es la otra forma conocida de perder dinero haciendo de creador de
+mercado.
+
+
+#### Ajuste de precio por inventario · `inventoryPriceAdjustment` · 🔥 en caliente · por defecto **No**
+
+**Lo que la V2 no tenía y la V1 sí.** Desplaza el centro en contra del inventario: con posición
+larga baja, así que la venta queda más cerca y la compra más lejos, y el bot tiende solo a volver
+a cero.
+
+Hasta el spec 039, lo único que reaccionaba al inventario en esta versión eran los modos de
+riesgo, y **de fábrica entran al 90 %** — es decir, casi nunca. Por eso esta guía recomendaba
+bajarlos a mano.
+
+**Llega apagado** para no cambiar la conducta de los bots V2 que ya existen. **Enciéndelo.**
+
+#### Sesgo por inventario · `inventorySkewFactor` · 🔥 en caliente · 0–3 · por defecto **0**
+
+Con cuánta fuerza. Empieza en **1**, que es el valor con el que la V1 lleva funcionando desde
+siempre. Subirlo hace que el bot corra más por deshacerse del inventario, a costa de vender antes
+de tiempo en un movimiento que le venía bien.
+
+#### Filtro de tendencia · `trendGuardEfficiency` · 🔥 en caliente · 0–1 · por defecto **0**
+
+**La respuesta al único riesgo de verdad de esta estrategia**: que el precio no vaya y venga, sino
+que se vaya en línea recta.
+
+Sobre las mismas muestras con las que ya se mide la volatilidad, calcula la **eficiencia de
+Kaufman**:
+
+```
+eficiencia = |recorrido neto| / suma de |movimientos|
+```
+
+- **1** = línea recta. El mercado va a un sitio.
+- **0** = ir y venir sin avanzar. El terreno del market maker.
+
+Por encima del umbral, **el lado que pelea contra la dirección deja de abrir**. En un mercado que
+cae, el que pelea es la compra —coger un cuchillo que cae—, así que se corta la compra y la venta
+sigue viva. El lado que reduce inventario nunca se corta.
+
+**0,6–0,7** es un umbral razonable. Con 0 está apagado.
+
+#### Estimador de volatilidad · `volEstimator` · 🔥 en caliente · por defecto **Recorrido**
+
+Cómo se convierte en un número el movimiento del precio de la ventana.
+
+- **Recorrido**: `(máximo − mínimo) / media`. Simple, pero **crece con el número de muestras**: dos
+  bots con la misma volatilidad real pero distinto ritmo de refresco miden cosas distintas. Y
+  desde el spec 035 el ritmo de refresco depende de si el mercado se está acercando, así que el
+  número depende de algo que no es la volatilidad.
+- **Parkinson**: divide por `√(2 · ln n)`, que es como crece el recorrido de un paseo aleatorio
+  con el número de observaciones. Quita esa dependencia.
+
+> ⚠️ **Parkinson da números mucho más pequeños.** Con 20 muestras divide por 2,4; con 200, por
+> 3,3. Al cambiarlo hay que **volver a ajustar el multiplicador de volatilidad**, o el bot dejará
+> de ensancharse cuando debía. Por eso no es el valor de fábrica.
+
+
+### 5.9 Condición de activación
 
 #### Condición de activación · `activationMode` · 🔥 en caliente · por defecto **Sin condición**
 
@@ -666,7 +816,7 @@ El precio que tiene que cruzarse. Con una condición de activación puesta, la a
 
 **Consejo**: ponlo donde de verdad quieras empezar a cotizar, no donde está el precio hoy.
 
-### 5.9 Exchange
+### 5.10 Exchange
 
 #### Modo de posición · `positionMode` · ❄️ en frío · por defecto **Automático**
 
@@ -684,7 +834,7 @@ Es **en tibio** porque el venue puede rechazar el cambio con posición abierta y
 
 **Aislado**: el peor caso es el margen asignado a este bot, y la liquidación llega antes. **Cruzado**: liquidación más lejos, pero una posición perdedora puede arrastrar el saldo del resto de bots de esa cuenta. **La V2 viene en cruzado** de fábrica.
 
-### 5.10 Comunes que aplica el motor (o que no aplica nadie)
+### 5.11 Comunes que aplica el motor (o que no aplica nadie)
 
 #### Conexión de exchange · `exchangeAccountId` · ❄️ en frío
 
@@ -751,6 +901,14 @@ Solo avisar / Pausar el bot / Cerrar todo cuando la distancia a la liquidación 
 | Usar tamaño normal hasta el máximo | No                 | 🟡 Sí en pares con mínimos altos        |
 | Fuente de precio                   | Datos del exchange | Solo Binance si operas en DEX           |
 | Condición de activación            | Sin condición      | Solo si quieres esperar a un precio     |
+| **Precio justo**                   | Punto medio        | 🟡 Microprecio, donde el venue lo permita |
+| **Ajuste de precio por inventario** | No                | 🟡 **Enciéndelo**: es lo que le faltaba |
+| Sesgo por desequilibrio            | 0                  | 0,3–0,5 cuando hayas visto el resto     |
+| Sesgo de tamaño por inventario     | 0                  | 0,3–0,5                                 |
+| Sesgo por funding                  | 0                  | Mídelo antes                            |
+| Filtro de tendencia                | 0                  | 🟡 0,6–0,7                              |
+| Horizonte de markout               | 0                  | 🟡 45 s, con sensibilidad 0 para mirarlo |
+| Estimador de volatilidad           | Recorrido          | Solo si reajustas el multiplicador      |
 
 ---
 

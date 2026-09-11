@@ -101,10 +101,12 @@ Con posición larga el centro **baja**: la venta queda más cerca (sale antes) y
 Si **Diferencial dinámico** está activado (lo está por defecto):
 
 ```
-ensanchamiento = 1 + |ratio|
+ensanchamiento = 1 + |ratio|        ← SOLO en el lado que añade posición
 ```
 
-Con la posición a la mitad del tope cotiza un 50 % más ancho; con el tope lleno, el doble. Cuanto más cargado está, más caro cobra por seguir cargándose.
+Con la posición a la mitad del tope, el lado que **añade** cotiza un 50 % más ancho; con el tope lleno, el doble. Cuanto más cargado está, más caro cobra por seguir cargándose.
+
+> El lado que **reduce** no se ensancha. Hasta el spec 037 se ensanchaba también, y el resultado era que el modo defensivo no acercaba nada: con base 20 bps y el tope al 70 %, la salida salía a `20 × 1,7 × 0,6 = 20,4` bps, **más lejos** que los 20 de inventario cero. Es decir, el mando que existe para deshacer inventario cancelaba al mando que existe para deshacer inventario.
 
 ### Paso 6 — Calcular cada capa y colocar
 
@@ -393,7 +395,7 @@ Intenta colocar órdenes que **no tomen liquidez de inmediato**, para pagar siem
 
 #### Diferencial dinámico · `dynamicSpread` · 🔥 en caliente · por defecto **Sí**
 
-Ensancha la cotización a medida que crece el inventario: `× (1 + ocupación)`. Con el tope al 50 %, cotiza un 50 % más ancho; con el tope lleno, el doble.
+Ensancha **el lado que añade** a medida que crece el inventario: `× (1 + ocupación)`. Con el tope al 50 %, ese lado cotiza un 50 % más ancho; con el tope lleno, el doble. El lado que **reduce** no se toca: encarecer la salida de una posición de la que estás intentando salir no tiene sentido, y anulaba el modo defensivo (spec 037).
 
 **Consejo**: **déjalo activado**. Es lo que evita que una tendencia te llene la posición siempre al mismo precio.
 
@@ -432,7 +434,9 @@ de referencia** puesto.
 Cuánto vive una orden **de salida** antes de rehacerla al precio nuevo. Solo aplica al lado que **reduce** inventario.
 
 - **0** = no caduca nunca: la salida espera a su precio indefinidamente.
-- **Con valor** = el bot la retira y la vuelve a poner más cerca del mercado actual: cierra antes, a peor precio.
+- **Con valor** = el bot la retira y la vuelve a poner al precio nuevo.
+
+> ⚠️ **Con una excepción, y es la importante**: si el mercado se está **acercando** a la salida, no caduca. Al recotizar, el centro se mueve con el precio, así que una venta a la que el mercado sube sale **más arriba** que la vieja — el TTL apartaba la orden el tick antes de cobrarla, y hacía lo contrario de lo que promete. Es el mismo defecto que el spec 035 corrigió para la deriva y la edad, cerrado por esta puerta en el spec 037.
 
 ### 5.4 Niveles (capas)
 
@@ -448,7 +452,7 @@ Cuántas órdenes escalonadas por lado.
 
 Cuánto se aleja cada capa respecto de la anterior. Con 1,5 y base 20 bps: **20 → 30 → 45**.
 
-Con **1**, todas las capas van a la misma distancia y se ejecutan prácticamente juntas.
+Con **1** todas las capas caerían al mismo precio, así que **la app rechaza esa combinación** si hay más de una capa: tres órdenes al mismo precio no dan más profundidad que una, gastan cuota y el venue puede rechazarlas como duplicadas.
 
 #### Multiplicador de tamaño por capa · `layerSizeMultiplier` · 🌤️ en tibio · 0,1–3 · por defecto **1**
 
@@ -502,7 +506,100 @@ Por encima de este precio el bot **solo reduce, no abre**: desactiva el lado que
 
 > Las bandas cortan **solo el lado que abre**. El lado que te saca de la posición sigue siempre vivo — cortar los dos te dejaría atrapado con inventario y sin nadie que lo deshaga.
 
-### 5.7 Exchange
+
+### 5.7 Microestructura — mirar algo más que el punto medio
+
+Todo este grupo nace **apagado**, y se enciende de uno en uno mirando la nota del bot. No son
+ajustes finos: cada uno cambia dónde cotiza el bot.
+
+> ⚠️ **En Lighter, tres de ellos no hacen nada.** El microprecio, el sesgo por desequilibrio y los
+> dos de funding necesitan datos que ese venue no publica (`docs/venues-y-minimos.md` §7). No
+> fallan: se comportan como si estuvieran apagados.
+
+#### Precio justo · `fairPriceMode` · 🔥 en caliente · por defecto **Punto medio**
+
+El punto medio `(mejor compra + mejor venta) / 2` **ignora cuánta cantidad hay a cada lado**. Si
+hay 30 BTC esperando para comprar y 1 para vender, el precio no está en el medio: está a punto de
+subir.
+
+El **microprecio** pondera cada precio por la cantidad del lado contrario:
+
+```
+microprecio = (venta × cantidad_compra + compra × cantidad_venta) / (cantidad_compra + cantidad_venta)
+```
+
+Con 99,90 / 100,10 y cantidades 30 / 10, sale **100,05** en vez de 100,00: el bot cotiza sus dos
+lados cinco céntimos más arriba, que es donde el mercado está yendo.
+
+**Es el primero que conviene probar.** Sin tamaños del libro se comporta exactamente igual que el
+punto medio.
+
+#### Sesgo por desequilibrio del libro · `obiSkewFactor` · 🔥 en caliente · 0–2 · por defecto **0**
+
+Cuánto desplaza la cotización el desequilibrio `(cantidad_compra − cantidad_venta) / (suma)`, que
+va de −1 a +1. El desplazamiento es `factor × desequilibrio × distancia_base`.
+
+**Empieza en 0,3–0,5.** Cuanto más alto, más se mueve el centro, y cada movimiento que pase de la
+distancia de reajuste es una recotización más: se paga en cuota del venue y en prioridad de cola.
+
+#### Sesgo de tamaño por inventario · `sizeSkewFactor` · 🔥 en caliente · 0–1 · por defecto **0**
+
+Sesga **el tamaño** en vez del precio: con posición larga, las compras se hacen más pequeñas
+(`× (1 − factor × ocupación)`) y las ventas más grandes (`× (1 + …)`).
+
+Es más suave que mover distancias, porque **no aleja el lado por el que quieres salir**. Con el
+tope lleno y el factor a 1, el lado que añade desaparece — lo mismo que ya hace el modo de alto
+riesgo.
+
+#### Sesgo por funding · `fundingSkewFactor` · 🔥 en caliente · 0–3 · por defecto **0**
+
+En un perpetuo, mantener posición **cobra o paga cada periodo**. El funding dice qué lado está
+siendo pagado, y este mando inclina la cotización hacia ese lado:
+
+| Funding | Quién paga | Qué hace el bot |
+|---|---|---|
+| Positivo | Los largos | Baja el centro: vende más cerca y compra más lejos ⇒ tiende a quedarse **corto**, que es quien cobra |
+| Negativo | Los cortos | Sube el centro ⇒ tiende a quedarse **largo** |
+
+**El signo sale del funding, no de tu posición**, y eso sorprende. Es correcto: funciona igual
+estando largo (te saca antes del lado que paga) que estando corto (te mantiene en el que cobra).
+
+**Mídelo antes de confiar en él.** Mira unos días qué funding tiene tu par: con 1 bp por hora y
+factor 1, el centro se mueve 1 bp — poco. Con 30 bps en un día de euforia, se mueve 30.
+
+#### Funding máximo en contra · `maxAdverseFundingBps` · 🔥 en caliente · 0–100 · por defecto **0**
+
+Por encima de ese funding, el bot **deja de abrir** posición del lado que paga. El lado que reduce
+inventario sigue vivo **siempre**: cortar los dos te dejaría atrapado.
+
+Un funding extremo y sostenido suele querer decir que todo el mundo está del mismo lado. No es el
+mando para empezar.
+
+#### Horizonte de markout · `markoutHorizonSeconds` · 🔥 en caliente · 0–300 s · por defecto **0**
+
+**La medida de si te están eligiendo.** Para cada ejecución, mira dónde está el mercado N segundos
+después:
+
+- Te compran a 100 y el mercado se va a 99 ⇒ markout **negativo**: quien te compró sabía algo.
+- Te compran a 100 y el mercado sube a 101 ⇒ markout positivo: cobraste el diferencial.
+
+Con 0 no se mide nada y no se guarda nada. **30–60 s** es lo razonable: por debajo mide ruido.
+
+**Enciéndelo con la sensibilidad en 0.** Así lo ves en la nota del bot —`markout −3,1/+0,8 bps`—
+durante unos días sin que cambie una sola orden.
+
+#### Sensibilidad al markout · `markoutSensitivity` · 🔥 en caliente · 0–3 · por defecto **0**
+
+Cuánto se **aleja** un lado cuando su markout es negativo: se suma
+`max(0, −markout) × sensibilidad` bps a la distancia de ese lado. Si te están comprando barato,
+tus compras se alejan y tus ventas no se tocan.
+
+**Un markout bueno no acerca la cotización.** El suelo está en cero a propósito: perseguir al
+mercado cuando te va bien es la otra forma conocida de perder dinero haciendo de creador de
+mercado.
+
+
+### 5.8 Exchange
 
 #### Modo de posición · `positionMode` · ❄️ en frío · por defecto **Automático**
 
@@ -529,7 +626,7 @@ Es **en tibio** y no en caliente porque el venue puede rechazar el cambio con po
 
 **Consejo**: **Aislado** si quieres que el peor caso de este bot no toque a los demás.
 
-### 5.8 Comunes que aplica el motor (o que no aplica nadie)
+### 5.9 Comunes que aplica el motor (o que no aplica nadie)
 
 #### Conexión de exchange · `exchangeAccountId` · ❄️ en frío
 
@@ -576,7 +673,9 @@ Solo avisar / Pausar el bot / Cerrar todo cuando la distancia a la liquidación 
 | Caducidad de órdenes por edad  | ❌ Solo las de salida                             | ✅ Todas (`orderMaxAgeSeconds`)                     |
 | Recorta la última capa al tope | ❌ Todo o nada                                    | ✅ Configurable                                     |
 | Condición de activación        | ❌                                                | ✅ Espera a que el precio cruce un disparador       |
-| Sesgo de precio por inventario | ✅ Sí (desplaza el centro)                        | ❌ No lo tiene                                      |
+| Sesgo de precio por inventario | ✅ Sí (desplaza el centro)                        | ✅ Desde el spec 039, apagado de fábrica            |
+| Microprecio y desequilibrio    | ✅ Desde el spec 039                              | ✅ Desde el spec 039                                |
+| Filtro de tendencia            | ❌ (no guarda muestras)                           | ✅ Desde el spec 039                                |
 | Nº de parámetros               | Menos                                             | Bastante más                                        |
 | Capas por defecto              | 3                                                 | 1                                                   |
 | Apalancamiento por defecto     | 2x                                                | 1x                                                  |

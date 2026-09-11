@@ -159,6 +159,8 @@ del exchange antes de dejar un bot con inventario varios días, y cuenta con ell
 | [GridMart](./gridmart.md) | es tu primer bot, quieres algo predecible, o vas a operarlo en Lighter |
 | [Market Maker V1](./market-maker.md) | el par es ilíquido o quieres ir «largo» (Intención Long solo pone compras) |
 | [Market Maker V2](./market-maker-v2.md) | no vas a poner tu comisión real |
+| [Tendencia](./trend-follow.md) | necesitas ver operaciones a menudo, el par lleva meses de lado, o no aguantas que falle seis de cada diez veces |
+| [Seguimiento de beneficio](./trailing-profit.md) | el par va y viene sin ir a ningún sitio, no piensas poner stop loss, o esperabas una sola operación (este bot vuelve a entrar al cerrar) |
 
 Y para **todas**: no operes a mano ni con otro bot **el mismo par en la misma cuenta**: el exchange
 combina las posiciones y el bot deja de reconocer la suya. No dejes una rejilla con el precio muy fuera de

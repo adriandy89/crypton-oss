@@ -24,6 +24,8 @@ qué números, y qué **no** hace todavía.
 | GridMart (`GRIDMART`) | **Alto** | Martingala con rejilla de ventas y recompras. | [gridmart.md](./gridmart.md) | [`gridmart.guide.ts`](../apps/app/src/app/core/content/gridmart.guide.ts) | [`gridmart.ts`](../packages/strategy-core/src/strategies/gridmart.ts) |
 | Market Maker (`MARKET_MAKER`) | Medio | Cotiza a los dos lados y cobra el diferencial. | [market-maker.md](./market-maker.md) | [`market-maker.guide.ts`](../apps/app/src/app/core/content/market-maker.guide.ts) | [`market-maker.ts`](../packages/strategy-core/src/strategies/market-maker.ts) |
 | Market Maker V2 (`MARKET_MAKER_V2`) | Medio | Diferencial compuesto con volatilidad, libro y coste de operar. | [market-maker-v2.md](./market-maker-v2.md) | [`market-maker-v2.guide.ts`](../apps/app/src/app/core/content/market-maker-v2.guide.ts) | [`market-maker-v2.ts`](../packages/strategy-core/src/strategies/market-maker-v2.ts) |
+| Tendencia (`TREND_FOLLOW`) | **Alto** | Rompe el rango, entra, y sale con un stop por ATR que sigue al precio. La única que gana en línea recta. | [trend-follow.md](./trend-follow.md) | [`trend-follow.guide.ts`](../apps/app/src/app/core/content/trend-follow.guide.ts) | [`trend-follow.ts`](../packages/strategy-core/src/strategies/trend-follow.ts) |
+| Seguimiento de beneficio (`TRAILING_PROFIT`) | **Alto** | Una operación que deja correr el beneficio: al llegar a tu objetivo sigue al máximo y cierra al retroceder. | [trailing-profit.md](./trailing-profit.md) | [`trailing-profit.guide.ts`](../apps/app/src/app/core/content/trailing-profit.guide.ts) | [`trailing-profit.ts`](../packages/strategy-core/src/strategies/trailing-profit.ts) |
 
 Cada guía de estrategia tiene la misma espina: qué es · cómo funciona paso a paso · cómo configurarla con
 poco riesgo (configuraciones A/B/C con sus números, checklist, señales de alarma) · lo que no mira ·
@@ -40,6 +42,8 @@ poco riesgo (configuraciones A/B/C con sus números, checklist, señales de alar
 | [Comandos, guardas y eventos](./comandos-guardas-y-eventos.md) | Los trece comandos y qué conservan el stop, en caliente/tibio/frío, las guardas, los 36 eventos con qué hacer, la nota del bot |
 | [Administración](./administracion.md) | Qué ve y qué puede hacer un `ADMIN`: las tres pantallas, los dos únicos comandos sobre bots ajenos y por qué los demás no están, que deshabilitar no para los bots, qué queda registrado |
 | [Market Maker V1](./market-maker.md) · [V2](./market-maker-v2.md) | Las dos guías de market making, con su comparativa |
+| [Tendencia](./trend-follow.md) | La única que gana cuando el precio se va recto, y por qué pierde más veces de las que acierta |
+| [Seguimiento de beneficio](./trailing-profit.md) | El take profit que sigue al máximo, el suelo de lo que se cobra y por qué nace con stop puesto |
 
 ## Convenciones
 

@@ -56,7 +56,7 @@ apps/
 packages/
   shared/          Tipos, enums, aritmética decimal y redondeo a la retícula del venue
   db/              Esquema Prisma + cliente generado y COMPILADO (Prisma 7 emite TypeScript)
-  strategy-core/   Las 7 estrategias como funciones PURAS: validate(), preview(), plan()
+  strategy-core/   Las 8 estrategias como funciones PURAS: validate(), preview(), plan()
   exchange-core/   Adaptadores de DEX tras una interfaz única + simulador
 docker/            Dos composes SEPARADOS: infraestructura (datos) y aplicación
 scripts/           Utilidades: generar .env y auditar la configuración
@@ -257,7 +257,7 @@ resto los adopta en el siguiente barrido.
 
 ## Estrategias
 
-Las siete viven en `packages/strategy-core` como funciones puras. La API las usa
+Las ocho viven en `packages/strategy-core` como funciones puras. La API las usa
 para validar y pintar el preview; el worker, para ejecutar. **Una sola
 implementación**, así que lo que ves antes de crear el bot es literalmente lo que
 se mandará al exchange.
@@ -271,6 +271,8 @@ se mandará al exchange.
 | **GridMart** | Martingala + rejilla de ventas + recompras. | **Alto** |
 | **Market Maker** | Cotiza a los dos lados por bps, con sesgo por inventario. | Medio |
 | **Market Maker V2** | Igual, pero el diferencial se calcula (volatilidad, libro, coste) y puede anclarse a un precio externo. | Medio |
+| **Tendencia** | Entra al romper un rango y sale con un stop por ATR que sigue al precio. La única que gana en línea recta. | **Alto** |
+| **Seguimiento de beneficio** | Una operación que deja correr el beneficio: al llegar a tu objetivo sigue al máximo y cierra al retroceder. | **Alto** |
 
 Cada estrategia tiene su **guía de uso** en [`docs/README.md`](docs/README.md), con
 configuraciones de ejemplo verificadas contra el código, lo que cada bot no mira
@@ -567,7 +569,7 @@ están en [`docs/buenas-practicas.md`](docs/buenas-practicas.md).
 
 El esquema está materializado (22 tablas) y tanto la API como el worker arrancan
 y responden. Comprobado por HTTP: acceso con Google, límites de riesgo creados al
-entrar por primera vez y los 122 campos de las siete estrategias con su
+entrar por primera vez y los 122 campos de las ocho estrategias con su
 mutabilidad.
 
 Arrancarlo de verdad destapó dos fallos que ni compilar ni los tests detectan:

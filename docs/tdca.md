@@ -53,6 +53,10 @@ Si hay posición, el bot desea una orden **LIMIT reduce-only** sobre **toda** la
 `media × (1 + take profit / 100)` (en corto, restando). Cada compra cambia la media, así que la orden se
 recoloca sola en la siguiente revisión. Mientras haya posición, la salida está en el libro.
 
+Con **Seguir al máximo** encendido esto cambia: el take profit pasa a ser el punto de **activación**, por
+debajo de él **no hay orden de beneficio** —solo el stop loss— y a partir de él la salida es un disparador
+que sube con el máximo y nunca baja. Ver **Seguir al máximo** en el apartado 6.1.
+
 ### Paso 2 — ¿Toca comprar? Cuatro condiciones, todas a la vez
 
 El bot solo compra si **ninguna** de estas lo bloquea; la nota del bot enumera las que bloquean:
@@ -300,6 +304,60 @@ siempre viva y se recalcula con cada compra.
 **Consejo**: con una entrada taker y una salida maker, por debajo del 0,3 % un ciclo puede acabar en
 pérdida. 1-2 % es razonable para un DCA.
 
+#### Seguir al máximo (trailing) · `trailingTakeProfit` · 🔥 en caliente · por defecto **Apagado**
+
+Convierte el take profit en un objetivo que **sigue al precio**. Al llegar al porcentaje que pediste el bot
+no cierra: empieza a seguir al máximo y solo vende cuando el precio retrocede lo que digas.
+
+Con él encendido, el **take profit deja de ser la salida y pasa a ser la activación**. Tu «15 %» sigue
+donde estaba y significa otra cosa: el punto en el que empieza el seguimiento.
+
+Las tres fases, con activación 15 % y retroceso 1 % sobre una media de 100:
+
+| Fase | Precio | Qué hace el bot |
+|---|---|---|
+| Antes de activar | 100 → 114 | **Nada**. No hay orden de beneficio en el libro; la única protección es tu stop loss, que sigue intacto |
+| Se activa | 115 | Coloca un disparador en `115 × 0,99 = 113,85` |
+| Sigue | 115 → 130 | Sube el disparador a `130 × 0,99 = 128,70`. **Nunca lo baja** |
+| Cierra | 130 → 128,70 | Vende a mercado |
+
+**El suelo de lo que cobras es `activación × (1 − retroceso)`**: con 15 % y 1 %, **+13,85 %**. Un trailing
+puede darte mucho más que un objetivo fijo, y también un poco menos. Eso no es un fallo: es el peaje.
+
+**No es una mejora gratis.** En marcos cortos **baja la tasa de acierto**, porque el retroceso normal de
+una cripto —un 1-3 % al día sin cambiar de tendencia— lo dispara antes de tiempo. Funciona mejor cuando lo
+que esperas es un movimiento grande, no ruido.
+
+**Al encenderlo en un bot en marcha**: la orden de beneficio que hubiera en el libro se cancela en la
+siguiente revisión, y si el precio todavía no ha llegado al objetivo **no se sustituye por nada** hasta que
+llegue. Es lo correcto —no hay nada que asegurar por debajo del objetivo— pero conviene saberlo.
+
+#### Retroceso para salir (%) · `trailingCallbackPct` · 🔥 en caliente · 0,1–10 · por defecto **1**
+
+Cuánto tiene que caer el precio desde el máximo alcanzado para que el bot cierre. En corto es al revés:
+cuánto tiene que subir desde el mínimo.
+
+Es todo el compromiso de esta función: **pequeño** asegura casi todo el máximo pero te saca en la primera
+sacudida; **grande** aguanta el ruido y te deja correr la tendencia, a cambio de devolver más cuando gire.
+
+**Consejo**: míralo contra lo que respira tu par, no en abstracto. Por debajo del 0,5 % en algo que se
+mueve un 1-3 % al día, sales en el primer respiro — la app te avisa.
+
+#### Umbral para mover el disparador (bps) · `trailingRepriceBps` · 🔥 en caliente · 1–200 · por defecto **20**
+
+Cuánto tiene que avanzar el disparador para que el bot lo **mueva de verdad** en el exchange. 20 bps son un
+0,2 %. Por debajo de eso el máximo sube pero la orden se queda donde está.
+
+Existe porque mover la orden son **dos peticiones** (cancelar y colocar). En **Lighter** el cupo son 60
+peticiones por minuto **de toda tu IP**, o sea unas 25 recolocaciones: un trailing que se mueve en cada
+revisión se come el presupuesto de todos tus bots de ese exchange.
+
+**Consejo**: déjalo como está salvo en Lighter, donde conviene subirlo.
+
+**Cómo se ejecuta, y por qué importa**: la orden que se coloca es **condicional nativa del exchange**, así
+que se dispara aunque el worker de CRYPTON esté caído y aunque la caída de precio ocurra entre dos
+revisiones. Lo que gestiona el motor es **dónde** ponerla, no si se ejecuta.
+
 ### 6.2 Riesgo
 
 #### Notional máximo de la posición · `maxPositionNotional` · 🔥 en caliente · opcional · ⚠️ campo de riesgo
@@ -362,6 +420,9 @@ los otros bots.
 | Comprar solo si mejora la media | Sí | ✅ Déjalo salvo DCA clásico |
 | Margen bajo la media | 0,5 % | 🟡 1-2 % en pares volátiles |
 | Take profit | 1,5 % | ✅ Razonable |
+| Seguir al máximo (trailing) | Apagado | 🟡 Enciéndelo solo si esperas un movimiento grande |
+| Retroceso para salir | 1 % | 🟡 Mídelo contra lo que respira tu par |
+| Umbral para mover el disparador | 20 bps | ✅ Déjalo; súbelo en Lighter |
 | Notional máximo de la posición | vacío | 🔴 **Ponlo**: es el único tope que lee |
 | Al acercarse la liquidación | Solo avisar | ✅ A 1× no aplica |
 | Espera entre ciclos | 0 | ✅ Déjalo (muerto) |
