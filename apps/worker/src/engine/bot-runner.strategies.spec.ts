@@ -790,6 +790,45 @@ describe('Market Maker V2 en el simulador', () => {
     await h.runner.dispose();
   });
 
+  /**
+   * El caso del spec 035, contra el circuito entero.
+   *
+   * Aqui pasa por el reconciliador de verdad, `revisarOrden`, el coid en
+   * hexadecimal y el post-only. El precio baja en veinte pasos pequeños en vez de
+   * saltar de golpe: es lo que hace un mercado, y es lo que el bot no soportaba
+   * — cada paso disparaba el refresco y la cotizacion se apartaba otro tanto, asi
+   * que el precio no la alcanzaba nunca.
+   *
+   * Corto a proposito: el reloj es el de pared, asi que ni `refreshSeconds` ni
+   * `orderMaxAgeSeconds` llegan a disparar y lo que se mide es exclusivamente el
+   * umbral de deriva.
+   */
+  it('el precio baja en veinte pasos y la cotizacion no se aparta: acaba ejecutando', async () => {
+    const h = harness('MARKET_MAKER_V2', { ...CONFIG, repriceThresholdBps: '5' });
+    trackCanonicals(h.store);
+
+    await h.runner.start();
+    await settle();
+
+    const bid = (await book(h.sim)).find((o) => o.kind === 'QUOTE_BID')!;
+    expect(bid).toBeDefined();
+
+    // Veinte pasos hasta pasarse de la cotizacion inicial: el simulador casa
+    // cuando el ASK baja hasta el precio de la compra, no cuando lo hace el mid,
+    // asi que hay que cruzar tambien la media horquilla.
+    const desde = D('100');
+    const paso = desde.minus(D(bid.price).minus('0.2')).div(20);
+    for (let i = 1; i <= 20; i++) {
+      h.source.move(desde.minus(paso.mul(i)).toFixed(4));
+      await settle(10);
+    }
+    await settle(120);
+
+    expect(D(await positionQty(h.sim)).gt(0)).toBe(true);
+
+    await h.runner.dispose();
+  });
+
   it('la espera tras un fill impide recotizar de inmediato', async () => {
     // Es la diferencia observable entre el V2 con y sin cooldown: el mercado
     // acaba de barrer la cotización y perseguirlo es lo que convierte una

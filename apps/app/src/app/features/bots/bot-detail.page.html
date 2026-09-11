@@ -214,7 +214,7 @@
               [value]="v ? '−' + money(v.peorCaida) : '—'"
               [tone]="v && v.peorCaida !== '0' ? 'danger' : ''"
             />
-            <ui-stat label="En mercado" [value]="enMercado() ? enMercado() + ' %' : '—'" />
+            <ui-stat label="Con posición" [value]="enMercado() ? enMercado() + ' %' : '—'" />
           </div>
         </div>
 

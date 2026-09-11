@@ -1,6 +1,7 @@
 import { createServer, type Server } from 'node:http';
 import type { AddressInfo } from 'node:net';
 import { WebSocketServer, type WebSocket as WS } from 'ws';
+import type { Fill } from '@crypton/shared';
 import { LighterAdapter, resubscribePaced } from './adapters/lighter';
 
 /**
@@ -570,5 +571,366 @@ describe('Lighter WebSocket — los casos que el venue no deja provocar', () => 
     });
     await ESPERA(200);
     expect(velas).toHaveLength(1);
+  });
+});
+
+/**
+ * El canal de cuenta de Lighter (spec 036).
+ *
+ * F-54 decia «Lighter no tiene stream de cuenta» y era falso: lo tiene
+ * documentado y no se usaba. En su lugar se sondeaba cada doce segundos pidiendo
+ * `trades`, que pesa 600, lo que dejaba la capacidad en un bot por IP y daba
+ * hasta doce segundos de retraso a cada ejecucion.
+ *
+ * Estos casos son los que el venue no deja provocar: se levanta un servidor
+ * WebSocket local y se le manda la forma que documenta Lighter.
+ */
+describe('Lighter — el canal de cuenta', () => {
+  let wss: WebSocketServer;
+  let puerto: number;
+  let clientes: WS[] = [];
+  let recibidos: string[] = [];
+  let adapter: LighterAdapter | null = null;
+
+  const CUENTA = 7;
+
+  beforeEach(async () => {
+    clientes = [];
+    recibidos = [];
+    wss = new WebSocketServer({ port: 0, host: '127.0.0.1' });
+    wss.on('connection', (ws) => {
+      clientes.push(ws);
+      ws.send(JSON.stringify({ type: 'connected', session_id: 'test' }));
+      ws.on('message', (raw) => {
+        const texto = String(raw);
+        recibidos.push(texto);
+        if (texto.includes('"ping"')) ws.send(JSON.stringify({ type: 'pong' }));
+      });
+    });
+    await new Promise<void>((r) => wss.on('listening', r));
+    puerto = (wss.address() as AddressInfo).port;
+  });
+
+  afterEach(async () => {
+    await adapter?.close();
+    adapter = null;
+    await new Promise<void>((r) => wss.close(() => r()));
+  });
+
+  const crear = (): LighterAdapter => {
+    adapter = new LighterAdapter(
+      { venue: 'LIGHTER', accountIndex: CUENTA, apiKeyIndex: 0, apiPrivateKey: '' },
+      { wsUrl: 'ws://127.0.0.1:' + puerto },
+    );
+    return adapter;
+  };
+
+  const emitir = (msg: unknown): void => {
+    for (const c of clientes) c.send(JSON.stringify(msg));
+  };
+
+  /**
+   * La tabla de mercados, para que `market_id` se pueda traducir a simbolo.
+   *
+   * Hace falta pedir el ticker antes: `market_stats/all` solo se suscribe
+   * cuando alguien quiere precios, y sin esa tabla el adaptador no sabe que el
+   * mercado 1 es BTC — asi que descartaria la ejecucion en vez de inventarse un
+   * simbolo, que es lo correcto.
+   */
+  const sembrarMercados = async (a: LighterAdapter): Promise<void> => {
+    a.streamTicker('BTC').subscribe(() => undefined);
+    await ESPERA(200);
+    emitir({
+      type: 'subscribed/market_stats',
+      channel: 'market_stats:all',
+      market_stats: {
+        '1': {
+          symbol: 'BTC',
+          market_id: 1,
+          last_trade_price: '77000',
+          mark_price: '77000',
+          best_bid_price: '76999',
+          best_ask_price: '77001',
+          daily_price_change: 1,
+          daily_price_high: 1,
+          daily_price_low: 1,
+          daily_quote_token_volume: 1,
+        },
+      },
+    });
+    await ESPERA(250);
+  };
+
+  /** Una ejecucion nuestra como COMPRADOR, con la forma que documenta el venue. */
+  const ejecucion = (over: Record<string, unknown> = {}): Record<string, unknown> => ({
+    trade_id: 900001,
+    market_id: 1,
+    type: 'trade',
+    ask_account_id: 999,
+    bid_account_id: CUENTA,
+    ask_id: 11,
+    bid_id: 22,
+    ask_client_id: 111,
+    bid_client_id: 222,
+    is_maker_ask: false,
+    price: '77000',
+    size: '0.01',
+    maker_fee: 1500,
+    taker_fee: 3000,
+    timestamp: 1_700_000_000,
+    ...over,
+  });
+
+  it('pide el canal de cuenta con el indice de la cuenta', async () => {
+    const a = crear();
+    a.streamFills().subscribe(() => undefined);
+    await ESPERA(300);
+
+    expect(recibidos.join(' ')).toContain('account_all/' + CUENTA);
+  });
+
+  /**
+   * Y NO pide el de ordenes, que es una decision y no un olvido: empujarlas
+   * exigiria un mapeo de estados que hoy no existe —`toVenueOrder` se escribio
+   * para el listado de ordenes ACTIVAS y solo sabe decir OPEN—, asi que una
+   * cancelacion empujada resucitaria la orden en la base. Las ordenes siguen
+   * llegando por el sondeo, que es barato; lo caro era `trades`, de peso 600.
+   */
+  it('no pide el canal de ordenes: su mapeo de estados no existe todavia', async () => {
+    const a = crear();
+    a.streamFills().subscribe(() => undefined);
+    await ESPERA(300);
+
+    expect(recibidos.join(' ')).not.toContain('account_all_orders/');
+  });
+
+  it('una ejecucion del canal llega como Fill, con sus campos', async () => {
+    const a = crear();
+    const vistos: Fill[] = [];
+    a.streamFills().subscribe((f) => vistos.push(f));
+    await ESPERA(300);
+    await sembrarMercados(a);
+
+    emitir({
+      type: 'update/account_all',
+      channel: 'account_all:' + CUENTA,
+      trades: [ejecucion()],
+    });
+    await ESPERA(250);
+
+    expect(vistos).toHaveLength(1);
+    expect(vistos[0]).toMatchObject({
+      venue: 'LIGHTER',
+      symbol: 'BTC',
+      venueFillId: '900001',
+      side: 'BUY',
+      price: '77000',
+      qty: '0.01',
+      // `is_maker_ask: false` y nosotros somos el bid: el maker somos NOSOTROS,
+      // asi que la comision que cuenta es la de maker.
+      isTaker: false,
+    });
+    // Los timestamps de Lighter vienen en segundos y el motor los quiere en ms.
+    expect(vistos[0].ts).toBe(1_700_000_000_000);
+  });
+
+  it('la misma ejecucion dos veces se emite UNA', async () => {
+    const a = crear();
+    const vistos: Fill[] = [];
+    a.streamFills().subscribe((f) => vistos.push(f));
+    await ESPERA(300);
+    await sembrarMercados(a);
+
+    const msg = {
+      type: 'update/account_all',
+      channel: 'account_all:' + CUENTA,
+      trades: [ejecucion()],
+    };
+    emitir(msg);
+    await ESPERA(150);
+    emitir(msg);
+    await ESPERA(250);
+
+    // El ledger deduplica por (orden, id), pero emitir dos veces mueve el reloj
+    // de `lastFillTs` y ensucia la bitacora.
+    expect(vistos).toHaveLength(1);
+  });
+
+  it('acepta las ejecuciones agrupadas por mercado, no solo en lista', async () => {
+    const a = crear();
+    const vistos: Fill[] = [];
+    a.streamFills().subscribe((f) => vistos.push(f));
+    await ESPERA(300);
+    await sembrarMercados(a);
+
+    emitir({
+      type: 'update/account_all',
+      channel: 'account_all:' + CUENTA,
+      trades: { '1': [ejecucion({ trade_id: 900002 })] },
+    });
+    await ESPERA(250);
+
+    expect(vistos).toHaveLength(1);
+    expect(vistos[0].venueFillId).toBe('900002');
+  });
+
+  /**
+   * La regla que gobierna el spec 036: lo que no se reconoce no cuenta. La forma
+   * del mensaje viene de la documentacion, no de una conexion autenticada, asi
+   * que si el venue manda otra cosa el bot tiene que quedarse como estaba —
+   * sondeando— y no inventarse una ejecucion.
+   */
+  it('un mensaje con una forma desconocida no produce ninguna ejecucion', async () => {
+    const a = crear();
+    const vistos: Fill[] = [];
+    a.streamFills().subscribe((f) => vistos.push(f));
+    await ESPERA(300);
+    await sembrarMercados(a);
+
+    emitir({ type: 'subscribed/account_all', channel: 'account_all:' + CUENTA });
+    emitir({ type: 'update/account_all', channel: 'account_all:' + CUENTA, positions: [] });
+    emitir({
+      type: 'update/account_all',
+      channel: 'account_all:' + CUENTA,
+      trades: [{ lo_que_sea: 1 }],
+    });
+    await ESPERA(250);
+
+    expect(vistos).toHaveLength(0);
+  });
+
+  it('una ejecucion de OTRA cuenta se descarta', async () => {
+    const a = crear();
+    const vistos: Fill[] = [];
+    a.streamFills().subscribe((f) => vistos.push(f));
+    await ESPERA(300);
+    await sembrarMercados(a);
+
+    emitir({
+      type: 'update/account_all',
+      channel: 'account_all:' + CUENTA,
+      trades: [ejecucion({ bid_account_id: 4242, ask_account_id: 4343 })],
+    });
+    await ESPERA(250);
+
+    expect(vistos).toHaveLength(0);
+  });
+
+  it('al reconectar se vuelve a pedir el canal de cuenta', async () => {
+    const a = crear();
+    a.streamFills().subscribe(() => undefined);
+    await ESPERA(300);
+
+    recibidos = [];
+    for (const c of clientes) c.terminate();
+    await ESPERA(1500);
+
+    // Sin esto el socket vuelve abierto y mudo, que es la averia mas dificil de
+    // ver: la salud dice arriba y no llega un solo dato.
+    expect(recibidos.join(' ')).toContain('account_all/' + CUENTA);
+  });
+});
+
+describe('Lighter — la salud del canal de cuenta manda sobre el sondeo', () => {
+  let wss: WebSocketServer;
+  let puerto: number;
+  let clientes: WS[] = [];
+  let adapter: LighterAdapter | null = null;
+  const CUENTA = 7;
+
+  beforeEach(async () => {
+    clientes = [];
+    wss = new WebSocketServer({ port: 0, host: '127.0.0.1' });
+    wss.on('connection', (ws) => {
+      clientes.push(ws);
+      ws.send(JSON.stringify({ type: 'connected', session_id: 'test' }));
+      ws.on('message', (raw) => {
+        if (String(raw).includes('"ping"')) ws.send(JSON.stringify({ type: 'pong' }));
+      });
+    });
+    await new Promise<void>((r) => wss.on('listening', r));
+    puerto = (wss.address() as AddressInfo).port;
+  });
+
+  afterEach(async () => {
+    await adapter?.close();
+    adapter = null;
+    await new Promise<void>((r) => wss.close(() => r()));
+  });
+
+  /**
+   * La salud de CUENTA es la que decide si se sondea, y es distinta de la de
+   * precios. Mezclarlas es lo que dejó a un bot sin ver sus ejecuciones: el
+   * gráfico entregaba, el adaptador daba el stream por bueno y las órdenes
+   * dejaban de mirarse.
+   */
+  it('una ejecucion del canal anuncia los fills ARRIBA', async () => {
+    adapter = new LighterAdapter(
+      { venue: 'LIGHTER', accountIndex: CUENTA, apiKeyIndex: 0, apiPrivateKey: '' },
+      { wsUrl: 'ws://127.0.0.1:' + puerto },
+    );
+    const salud: string[] = [];
+    adapter.streamHealth().subscribe((h) => salud.push(h.stream + ':' + h.status));
+    adapter.streamFills().subscribe(() => undefined);
+    adapter.streamTicker('BTC').subscribe(() => undefined);
+    await ESPERA(300);
+
+    for (const c of clientes) {
+      c.send(
+        JSON.stringify({
+          type: 'subscribed/market_stats',
+          channel: 'market_stats:all',
+          market_stats: {
+            '1': {
+              symbol: 'BTC',
+              market_id: 1,
+              last_trade_price: '77000',
+              mark_price: '77000',
+              best_bid_price: '76999',
+              best_ask_price: '77001',
+              daily_price_change: 1,
+              daily_price_high: 1,
+              daily_price_low: 1,
+              daily_quote_token_volume: 1,
+            },
+          },
+        }),
+      );
+    }
+    await ESPERA(200);
+
+    for (const c of clientes) {
+      c.send(
+        JSON.stringify({
+          type: 'update/account_all',
+          channel: 'account_all:' + CUENTA,
+          trades: [
+            {
+              trade_id: 1,
+              market_id: 1,
+              type: 'trade',
+              ask_account_id: 999,
+              bid_account_id: CUENTA,
+              ask_id: 1,
+              bid_id: 2,
+              ask_client_id: 3,
+              bid_client_id: 4,
+              is_maker_ask: false,
+              price: '77000',
+              size: '0.01',
+              maker_fee: 0,
+              taker_fee: 0,
+              timestamp: 1_700_000_000,
+            },
+          ],
+        }),
+      );
+    }
+    await ESPERA(250);
+
+    expect(salud).toContain('fills:UP');
+    // Y NO las ordenes: ese canal no se usa, asi que su salud sigue siendo la
+    // del sondeo. Anunciarlas arriba apagaria un sondeo que sigue haciendo falta.
+    expect(salud).not.toContain('orders:UP');
   });
 });

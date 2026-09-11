@@ -52,6 +52,7 @@ import {
   riskRegime,
   sampleVolatility,
   sideRoles,
+  precioEstable,
   sinCruzarLibro,
   sizeToQty,
 } from './mm-shared';
@@ -796,8 +797,13 @@ export const marketMakerV2: Strategy<MarketMakerV2Config> = {
       sizingMode: SizingMode.QUOTE,
       limitAction: 'PAUSE_ENTRIES',
       positionMode: PositionModeSetting.AUTO,
-      buyDistanceBps: '40',
-      sellDistanceBps: '40',
+      // 20 y no 40 (spec 035). Con 40, el diferencial en reposo salia a 45,5 bps
+      // por lado —91 de ida y vuelta— antes de que la volatilidad añadiera nada:
+      // eso no es una cotizacion, es una orden esperando un desplome. Con 20 la
+      // anchura la pone la volatilidad MEDIDA, que es para lo que se diseño esta
+      // version, y el suelo por coste sigue impidiendo cotizar a perdida.
+      buyDistanceBps: '20',
+      sellDistanceBps: '20',
       minAllowedDistanceBps: '8',
       feeEstimateBps: '2',
       safetyBufferBps: '0',
@@ -807,7 +813,10 @@ export const marketMakerV2: Strategy<MarketMakerV2Config> = {
       highRiskThresholdPct: '100',
       refreshSeconds: 30,
       repriceThresholdBps: '30',
-      orderMaxAgeSeconds: 120,
+      // 300 y no 120 (spec 035): es el techo real de la ventana de ejecucion, y
+      // coincide con `volatilitySampleSeconds` a proposito — no se tira una
+      // cotizacion antes de haber observado una ventana entera de volatilidad.
+      orderMaxAgeSeconds: 300,
       fillCooldownSeconds: 35,
       exitOrderTtlSeconds: 0,
       dynamicSpread: true,
@@ -919,6 +928,34 @@ export const marketMakerV2: Strategy<MarketMakerV2Config> = {
             ' bps) es menor que el suelo por coste (' +
             floorBps.toFixed(1) +
             ' bps): el bot no podría cotizar con beneficio.',
+        ),
+      );
+    }
+
+    // Recotizar antes de que el mercado llegue a la cotizacion (spec 035).
+    //
+    // Con la tolerancia asimetrica ya no impide ejecutar —la orden que el
+    // mercado alcanza se conserva—, pero un umbral muy por debajo de la
+    // distancia sigue recotizando para nada y quemando cuota del venue: en
+    // Lighter son sesenta peticiones por minuto y por IP, y cada recotizacion
+    // son cuatro.
+    //
+    // El aviso salta solo en lo PATOLOGICO —umbral por debajo de la cuarta parte
+    // de la distancia, que es la tolerancia con la que se conservan las
+    // ordenes—, no cada vez que el umbral queda algo por debajo. Un aviso que
+    // sale siempre es un aviso que se ignora siempre.
+    const umbral = D(cfg.repriceThresholdBps ?? 0);
+    const enCalma = composeSpreadBps(cfg, Decimal.min(buyBps, sellBps), D(0)).bps;
+    if (umbral.gt(0) && umbral.mul(4).lt(enCalma)) {
+      issues.push(
+        warn(
+          'repriceThresholdBps',
+          'Rehaces la cotización cuando el precio se mueve ' +
+            umbral.toFixed(0) +
+            ' bps, pero cotizas a ' +
+            enCalma.toFixed(0) +
+            ' bps del mercado: el bot se pasará el día recolocando órdenes que nadie ha tocado. ' +
+            'Sube el reajuste hacia la distancia de cotización, o acerca la cotización.',
         ),
       );
     }
@@ -1075,6 +1112,17 @@ export const marketMakerV2: Strategy<MarketMakerV2Config> = {
         ? anchorNow.minus(quotedMid).div(quotedMid).mul(BPS).abs()
         : null;
 
+    // Hacia qué lado se ha movido el mercado desde la última cotización. Una sola
+    // señal para las dos cosas que dependen de ella —conservar la cotización que
+    // el mercado alcanza y no caducarla por edad—, porque con dos copias
+    // divergen. Se calcula del ANCLA y no de los precios: deducirla comparando
+    // la orden viva con la deseada confundía «el mercado ha venido» con «el
+    // diferencial se ha ensanchado» (spec 035).
+    const seAcerca = {
+      bid: quotedMid != null && anchorNow.lt(quotedMid),
+      ask: quotedMid != null && anchorNow.gt(quotedMid),
+    };
+
     const staleByTime = ctx.now - quotedAt >= refreshMs;
     const staleByDrift = driftBps != null && driftBps.gte(D(cfg.repriceThresholdBps ?? 30));
 
@@ -1105,6 +1153,10 @@ export const marketMakerV2: Strategy<MarketMakerV2Config> = {
           roles,
           maxAgeSeconds: cfg.orderMaxAgeSeconds,
           exitTtlSeconds: cfg.exitOrderTtlSeconds,
+          // Si el precio ha bajado desde la ultima cotizacion, las compras se
+          // han acercado —y son las que estan a punto de cobrar—; si ha subido,
+          // las ventas. A ese lado no se le aplica la edad (spec 035).
+          alcanzando: seAcerca,
         });
 
     const shouldRequote =
@@ -1166,6 +1218,14 @@ export const marketMakerV2: Strategy<MarketMakerV2Config> = {
     const buyRole = roles.buy;
     const sellRole = roles.sell;
 
+    // Las ordenes propias que ya estan en el libro, por id. La V1 tenia este
+    // mapa desde el spec 031 y la V2 no: por eso aqui cada recotizacion movia
+    // las dos cotizaciones si o si, incluida la que el mercado estaba a punto de
+    // alcanzar (spec 035).
+    const vivas = new Map(
+      ctx.openOrders.filter((o) => o.clientOrderId).map((o) => [o.clientOrderId as string, o]),
+    );
+
     const orders: DesiredOrder[] = [];
     let projectedLong = inv.exposure.gt(0) ? inv.exposure : D(0);
     let projectedShort = inv.exposure.lt(0) ? inv.exposure.abs() : D(0);
@@ -1185,13 +1245,17 @@ export const marketMakerV2: Strategy<MarketMakerV2Config> = {
         const bps = conTecho(buy, buy.bps.mul(distWeights[l]).mul(profile.distance).mul(buyMul));
         // Acotado ANTES de dimensionar: la cantidad se calcula dividiendo por
         // el precio, así que hacerlo después dejaría el nocional descuadrado.
+        const coid = makeCoid(ctx.botId, seq, LevelKind.QUOTE_BID, l);
+        // `precioEstable` ANTES de acotar al libro y antes de dimensionar: una
+        // cotizacion a la que el mercado se esta acercando no se mueve, y con el
+        // precio viejo sale tambien la cantidad vieja, asi que `reconcile` la da
+        // por buena en vez de reemplazarla.
         const price = sinCruzarLibro(
-          mid.mul(D(1).minus(bps.div(BPS))),
+          precioEstable(mid.mul(D(1).minus(bps.div(BPS))), bps, seAcerca.bid, vivas.get(coid)),
           'BUY',
           ctx.ticker,
           ctx.market.tickSize,
         );
-        const coid = makeCoid(ctx.botId, seq, LevelKind.QUOTE_BID, l);
         const reduceOnly = buyRole === 'reducing' && regime === 'HIGH_RISK';
 
         if (price.gt(0) && !expired.has(coid)) {
@@ -1229,13 +1293,13 @@ export const marketMakerV2: Strategy<MarketMakerV2Config> = {
         !(sellRole === 'adding' && (band.blockSell || breach.pauseEntries))
       ) {
         const bps = conTecho(sell, sell.bps.mul(distWeights[l]).mul(profile.distance).mul(sellMul));
+        const coid = makeCoid(ctx.botId, seq, LevelKind.QUOTE_ASK, l);
         const price = sinCruzarLibro(
-          mid.mul(D(1).plus(bps.div(BPS))),
+          precioEstable(mid.mul(D(1).plus(bps.div(BPS))), bps, seAcerca.ask, vivas.get(coid)),
           'SELL',
           ctx.ticker,
           ctx.market.tickSize,
         );
-        const coid = makeCoid(ctx.botId, seq, LevelKind.QUOTE_ASK, l);
         const reduceOnly = sellRole === 'reducing' && regime === 'HIGH_RISK';
 
         if (price.gt(0) && !expired.has(coid)) {
@@ -1288,6 +1352,26 @@ export const marketMakerV2: Strategy<MarketMakerV2Config> = {
       if (breach.shutdown) scratchPatch['requestStop'] = 'STOP_KEEP_POSITION';
     }
 
+    // El diferencial APLICADO, no el bruto (spec 035).
+    //
+    // La nota imprimia `buy.bps`, que es lo que sale de componer la formula
+    // ANTES de pasar por el techo y por los multiplicadores de capa, preset y
+    // regimen. Con el techo mordiendo, la nota decia 121 bps mientras las
+    // ordenes estaban a 100: el usuario leia un numero que no existia en el
+    // libro. Se imprime lo mismo que se coloca, y se usa la capa 0, que es la
+    // que puede ejecutar.
+    // Con TODOS los multiplicadores que aplica la colocacion, incluido el del
+    // regimen: sin el, en modo defensivo la nota volvia a decir un numero que no
+    // estaba en el libro, que es el defecto que este bloque vino a arreglar.
+    const buyAplicado = conTecho(
+      buy,
+      buy.bps.mul(distWeights[0]).mul(profile.distance).mul(regimeMul[buyRole]),
+    );
+    const sellAplicado = conTecho(
+      sell,
+      sell.bps.mul(distWeights[0]).mul(profile.distance).mul(regimeMul[sellRole]),
+    );
+
     // Un bot que no cotiza tiene que decir por qué: «0 cotizaciones» a secas
     // se lee como una avería del motor (spec 029).
     const note =
@@ -1295,9 +1379,9 @@ export const marketMakerV2: Strategy<MarketMakerV2Config> = {
       (!libro
         ? 'Sin libro del venue (no publica los dos lados): no se cotiza.'
         : 'Diferencial ' +
-          buy.bps.toFixed(1) +
+          buyAplicado.toFixed(1) +
           '/' +
-          sell.bps.toFixed(1) +
+          sellAplicado.toFixed(1) +
           ' bps (vol ' +
           volBps.toFixed(1) +
           '), inventario ' +

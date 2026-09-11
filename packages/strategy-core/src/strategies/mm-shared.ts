@@ -109,21 +109,60 @@ const TOLERANCIA_DE_CAPA = D('0.25');
 
 /**
  * El precio que se va a desear para una capa, conservando el de la orden que ya
- * está viva cuando la diferencia no compensa recolocarla.
+ * está viva cuando moverla no compensa —o cuando moverla sería un disparate—.
  *
  * Devolver el precio VIEJO es lo que hace que `reconcile` dé la orden por buena
  * y no la reemplace. Se conserva antes de dimensionar a propósito: la cantidad
  * se calcula dividiendo por el precio, así que con el precio viejo sale también
  * la cantidad vieja y la orden coincide entera.
+ *
+ * ── La asimetría, que es lo que hace que un market maker ejecute ──
+ *
+ * Hay dos formas de que el precio deseado se separe del que ya está puesto, y no
+ * son la misma cosa:
+ *
+ * · **El mercado se ALEJA de la orden.** La cotización se ha quedado atrás y no
+ *   va a ejecutarse: traerla es lo correcto, con la tolerancia de siempre.
+ * · **El mercado se ACERCA a la orden.** Es, literalmente, lo único que hace que
+ *   un market maker gane dinero. Recolocarla ahora la aparta justo cuando estaba
+ *   a punto de cobrar.
+ *
+ * Hasta el spec 035 se trataban igual —el `.abs()` de aquí borraba el sentido— y
+ * el resultado fue un bot que se pasó 23 HORAS con dos órdenes vivas y cero
+ * ejecuciones mientras el precio recorría un 15 %: cada vez que el mercado se le
+ * acercaba lo bastante para disparar el refresco, la orden se recolocaba más
+ * lejos. La cotización no podía estar nunca a menos de `distancia − umbral` del
+ * mercado, así que solo habría ejecutado con un salto de la distancia entera
+ * dentro de un tick.
+ *
+ * **Y por qué `acercandose` viene de fuera y no se deduce del precio.** La
+ * primera versión lo dedujo comparando la orden viva con la que se cotizaría
+ * ahora: para una compra, «la viva está más alta» parecía significar «el mercado
+ * ha bajado hacia ella». No es lo mismo. Esa comparación también se cumple
+ * cuando el precio deseado se ALEJA porque el diferencial se ha ensanchado — un
+ * pico de volatilidad, el régimen defensivo o el usuario subiendo la distancia
+ * en caliente—, y el resultado era una cotización que podía estrecharse y no
+ * ensancharse nunca: justo las protecciones de riesgo, descartadas en silencio.
+ * En la V1, que no caduca por edad, el efecto habría sido permanente.
+ *
+ * Quien llama sabe distinguirlo con un dato que aquí no está: si el ancla se ha
+ * movido hacia este lado respecto al centro de la última cotización. Es la misma
+ * señal que decide la caducidad por edad (ver `expiredQuotes`), y usar una sola
+ * para las dos cosas es lo que impide que vuelvan a divergir.
  */
 export function precioEstable(
   deseado: Decimal,
   bps: Decimal,
+  /** ¿El mercado se ha movido HACIA este lado desde la última cotización? */
+  acercandose: boolean,
   viva: VenueOrder | undefined,
 ): Decimal {
   if (!viva || !deseado.gt(0)) return deseado;
   const actual = D(viva.price);
   if (!actual.gt(0)) return deseado;
+
+  if (acercandose) return actual;
+
   const desvioBps = actual.minus(deseado).abs().div(deseado).mul(BPS);
   return desvioBps.lte(bps.mul(TOLERANCIA_DE_CAPA)) ? actual : deseado;
 }
@@ -290,6 +329,20 @@ export function sideRoles(qty: Decimal): SideRoles {
  * bot se quedaría recotizando en cada tick para siempre —escribiendo el scratch
  * en la base cada quince segundos sin cambiar una sola orden—. Cancelar es lo
  * único que renueva el reloj, así que caducar y recotizar van juntos.
+ *
+ * **Y por qué `alcanzando` saca del conjunto a un lado entero.** El motivo de
+ * caducar por edad es que «una orden vieja se calculó con un libro que ya no
+ * existe». Eso es cierto de la cotización que el mercado dejó atrás, y falso de
+ * la que el mercado está viniendo a buscar: esa está más cerca de ejecutarse
+ * cuanto más tiempo pasa. Tirarla por vieja era la segunda mitad del defecto del
+ * spec 035 —con la primera ya corregida, la caducidad se convertía en el nuevo
+ * techo: una cotización a 78 bps necesita ocho minutos de mercado para ser
+ * alcanzada y se moría a los dos—.
+ *
+ * Se decide por LADO y no por orden porque el dato exacto ya está: si el precio
+ * ha bajado respecto al centro de la última cotización, todas las compras se han
+ * acercado y todas las ventas se han alejado. No hace falta mirar precio a
+ * precio.
  */
 export function expiredQuotes(opts: {
   ages: Map<string, number>;
@@ -301,6 +354,12 @@ export function expiredQuotes(opts: {
   maxAgeSeconds?: number | null;
   /** Edad máxima de las órdenes del lado que reduce. */
   exitTtlSeconds?: number | null;
+  /**
+   * Lados a los que el mercado se está acercando. No caducan por edad.
+   *
+   * Ausente = como antes: caduca todo lo viejo.
+   */
+  alcanzando?: { bid: boolean; ask: boolean };
 }): Set<string> {
   const out = new Set<string>();
   const { ages, now, layers, coidFor, roles } = opts;
@@ -309,8 +368,8 @@ export function expiredQuotes(opts: {
     const bid = coidFor('QUOTE_BID', l);
     const ask = coidFor('QUOTE_ASK', l);
 
-    if (isOlderThan(ages, bid, now, opts.maxAgeSeconds)) out.add(bid);
-    if (isOlderThan(ages, ask, now, opts.maxAgeSeconds)) out.add(ask);
+    if (!opts.alcanzando?.bid && isOlderThan(ages, bid, now, opts.maxAgeSeconds)) out.add(bid);
+    if (!opts.alcanzando?.ask && isOlderThan(ages, ask, now, opts.maxAgeSeconds)) out.add(ask);
 
     // El TTL de salida solo aplica al lado que deshace inventario: una orden de
     // salida vieja está a un precio que el mercado ya dejó atrás.

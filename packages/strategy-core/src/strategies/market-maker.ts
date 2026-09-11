@@ -530,6 +530,30 @@ export const marketMaker: Strategy<MarketMakerConfig> = {
       );
     }
 
+    // En esta version `minAllowedDistanceBps` hace DOS trabajos: es el suelo de
+    // la cotizacion y, ademas, el umbral de deriva que dispara una recotizacion
+    // anticipada (ver la puerta de recotizado en `plan`). Es una rareza que la
+    // V2 no tiene —alli hay un campo propio— y que conviene decir en voz alta
+    // cuando el numero es tan bajo que el bot se pasa el dia recolocando.
+    //
+    // Solo en lo patologico: por debajo de la cuarta parte de la primera capa,
+    // que es la tolerancia con la que se conservan las ordenes vivas. De fabrica
+    // (8 frente a 20) no salta, y con lo que sugiere el asesor tampoco.
+    if (minBps.gt(0) && minBps.mul(4).lt(Decimal.min(buyBps, sellBps))) {
+      issues.push(
+        warn(
+          'minAllowedDistanceBps',
+          'Este campo es a la vez el suelo de la cotización y el umbral que dispara una ' +
+            'recotización. Con ' +
+            minBps.toFixed(0) +
+            ' bps y la primera capa a ' +
+            Decimal.min(buyBps, sellBps).toFixed(0) +
+            ' bps, el bot rehará su cotización en cuanto el precio se mueva una fracción de lo ' +
+            'que la separa del mercado: gasta cuota del venue sin adelantar la ejecución.',
+        ),
+      );
+    }
+
     const layers = Math.floor(cfg.layers ?? 0);
     if (layers < 1 || layers > 10)
       issues.push(err('layers', 'Las capas deben estar entre 1 y 10.'));
@@ -725,6 +749,16 @@ export const marketMaker: Strategy<MarketMakerConfig> = {
     const staleByTime = ctx.now - quotedAt >= refreshMs;
     const staleByDrift = driftBps != null && driftBps.gte(D(cfg.minAllowedDistanceBps));
 
+    // Hacia qué lado se ha movido el mercado desde la última cotización. Es la
+    // señal que conserva la orden que está a punto de ejecutarse (spec 035), y
+    // se calcula del ANCLA y no de los precios: deducirla comparando la orden
+    // viva con la deseada confundía «el mercado ha venido» con «el diferencial
+    // se ha ensanchado», y anulaba el ensanchado por volatilidad y por régimen.
+    const seAcerca = {
+      bid: quotedMid != null && liveMid.lt(quotedMid),
+      ask: quotedMid != null && liveMid.gt(quotedMid),
+    };
+
     // Espera tras un fill: el mercado acaba de barrer nuestra cotización, así
     // que perseguirlo de inmediato es justo lo que convierte una ejecución
     // rentable en una racha de ejecuciones adversas. Se congela la cotización
@@ -878,7 +912,12 @@ export const marketMaker: Strategy<MarketMakerConfig> = {
         // el precio, así que hacerlo después dejaría el nocional descuadrado.
         const coid = makeCoid(ctx.botId, seq, LevelKind.QUOTE_BID, l);
         const price = sinCruzarLibro(
-          precioEstable(skewedMid.mul(D(1).minus(bps.div(BPS))), bps, vivas.get(coid)),
+          precioEstable(
+            skewedMid.mul(D(1).minus(bps.div(BPS))),
+            bps,
+            seAcerca.bid,
+            vivas.get(coid),
+          ),
           'BUY',
           ctx.ticker,
           ctx.market.tickSize,
@@ -921,7 +960,7 @@ export const marketMaker: Strategy<MarketMakerConfig> = {
         );
         const coid = makeCoid(ctx.botId, seq, LevelKind.QUOTE_ASK, l);
         const price = sinCruzarLibro(
-          precioEstable(skewedMid.mul(D(1).plus(bps.div(BPS))), bps, vivas.get(coid)),
+          precioEstable(skewedMid.mul(D(1).plus(bps.div(BPS))), bps, seAcerca.ask, vivas.get(coid)),
           'SELL',
           ctx.ticker,
           ctx.market.tickSize,

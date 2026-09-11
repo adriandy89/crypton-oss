@@ -35,7 +35,7 @@ export const MARKET_MAKER_V2_GUIDE: StrategyGuide<MarketMakerV2Config> = {
       setup: [
         { label: 'Tamaño por compra/venta', value: '60 USDC' },
         { label: 'Inversión / posición máxima', value: '600 USDC' },
-        { label: 'Distancia compra / venta', value: '40 bps / 40 bps' },
+        { label: 'Distancia compra / venta', value: '20 bps / 20 bps' },
         { label: 'Estimación de comisión', value: '2 bps' },
         { label: 'Margen mínimo de beneficio', value: '8 bps' },
         { label: 'Spread dinámico', value: 'Si · libro 1,5 · vol. x0,35' },
@@ -160,12 +160,12 @@ export const MARKET_MAKER_V2_GUIDE: StrategyGuide<MarketMakerV2Config> = {
       what: 'Cuánto tiene que moverse el precio para recotizar antes de tiempo.',
       affects:
         'Valores bajos siguen al mercado de cerca y cancelan mucho; altos dejan las órdenes quietas aunque el precio se aleje.',
-      tip: 'Un valor cercano a tu distancia de cotización evita quedarte con órdenes ya fuera de mercado.',
+      tip: 'Ponlo cerca de tu distancia de cotización o por encima. Muy por debajo, el bot rehace sus órdenes antes de que el mercado llegue a tocarlas y se pasa el día recolocando para nada.',
     },
     orderMaxAgeSeconds: {
       what: 'Edad máxima de una cotización viva antes de rehacerla, aunque el precio no se haya movido.',
       affects:
-        'Una orden vieja fue calculada con un libro que ya no existe. Bajarlo mantiene la cotización fresca a costa de más cancelaciones.',
+        'Una orden vieja fue calculada con un libro que ya no existe. Bajarlo mantiene la cotización fresca a costa de más cancelaciones. No caduca el lado al que el mercado se está acercando: esas órdenes están más cerca de ejecutarse cuanto más esperan.',
       tip: 'Con 0 las órdenes no caducan por edad. Es un ajuste que el market maker clásico no tiene.',
     },
     fillCooldownSeconds: {

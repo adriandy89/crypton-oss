@@ -136,6 +136,20 @@ export function oldestPrice(chart: Record<string, number> | undefined): string |
  *     enrutador que mire solo `type` los tira a la basura y deja al adaptador
  *     esperando datos que no van a llegar.
  */
+/**
+ * Normaliza lo que puede venir como lista o como mapa por mercado.
+ *
+ * `account_all/*` documenta las ejecuciones agrupadas por `market_id` y los
+ * canales sueltos las mandan en lista. Aceptar las dos formas cuesta seis lineas
+ * y evita que una suposicion sobre un canal que nadie ha visto en vivo deje al
+ * bot sin ejecuciones (spec 036).
+ */
+function listaDe<T>(v: T[] | Record<string, T[]> | undefined): T[] {
+  if (!v) return [];
+  if (Array.isArray(v)) return v;
+  return Object.values(v).flat();
+}
+
 interface LighterWsMessage {
   type?: string;
   channel?: string;
@@ -147,6 +161,36 @@ interface LighterWsMessage {
     b?: { price?: string; size?: string };
   };
   market_stats?: Record<string, LighterMarketStats>;
+  /** Canales de cuenta (`account_all*`). Ver `LighterWsTrade` y `streamAccount`. */
+  trades?: LighterWsTrade[] | Record<string, LighterWsTrade[]>;
+  orders?: LighterOrder[] | Record<string, LighterOrder[]>;
+}
+
+/**
+ * Una ejecucion tal y como la manda el canal de cuenta.
+ *
+ * Es la MISMA entidad que devuelve `GET /trades`, asi que los campos se
+ * declaran una vez y los usan las dos vias. Todo opcional a proposito: esta
+ * forma esta tomada de la documentacion y no de una conexion autenticada (ver
+ * el spec 036), asi que el codigo tiene que sobrevivir a que falte cualquier
+ * cosa — y `tradeToFill` devuelve `null` cuando falta lo imprescindible.
+ */
+export interface LighterWsTrade {
+  trade_id?: number | string;
+  market_id?: number;
+  type?: string;
+  ask_account_id?: number;
+  bid_account_id?: number;
+  ask_id?: number | string;
+  bid_id?: number | string;
+  ask_client_id?: number | string;
+  bid_client_id?: number | string;
+  is_maker_ask?: boolean;
+  price?: string | number;
+  size?: string | number;
+  maker_fee?: number;
+  taker_fee?: number;
+  timestamp?: number;
 }
 
 /**
@@ -235,6 +279,18 @@ const POLL_INTERVAL_MS = 12_000;
  * justo cuando la reconexión también lo necesita.
  */
 const WS_FALLBACK_AFTER_MS = 20_000;
+
+/** Ids de ejecucion recordados para deduplicar. Un dia largo de un bot activo. */
+const MAX_SEEN_FILLS = 5_000;
+
+/**
+ * Silencio del canal de cuenta que lo da por caido.
+ *
+ * Generoso a proposito: una cuenta tranquila puede pasar minutos sin una sola
+ * ejecucion, y volver a sondear de mas no cuesta casi nada; darlo por vivo
+ * cuando esta mudo si cuesta.
+ */
+const ACCOUNT_SILENCE_MS = 5 * 60_000;
 
 /** Tope del backoff al reintentar resolver un canal. Ver `subscribe`. */
 const SUBSCRIBE_RETRY_MAX_MS = 30_000;
@@ -326,6 +382,8 @@ export class LighterAdapter implements ExchangeAdapter {
   private readonly channels = new Set<string>();
   /** Quién atiende cada canal. La clave lleva `:`, como vuelve del venue. */
   private readonly routes = new Map<string, (msg: LighterWsMessage) => void>();
+  /** Canales que necesitan token en cada suscripcion. Ver `subscribePayload`. */
+  private readonly authChannels = new Map<string, () => string>();
   /** Última foto de `market_stats`, FUSIONADA: las updates son parciales. */
   private readonly stats = new Map<number, LighterMarketStats>();
   private readonly statsBySymbol = new Map<string, number>();
@@ -340,8 +398,14 @@ export class LighterAdapter implements ExchangeAdapter {
    * Existe ya para que `shouldPoll` pregunte por lo correcto desde el primer
    * día: mezclar las dos saludes es lo que dejó a un bot sin ver sus fills.
    */
-  private readonly accountStreamUp = false;
-  private readonly accountStreamDownSince = 0;
+  private accountStreamUp = false;
+  private accountStreamDownSince = 0;
+  /** Suscripciones al canal de cuenta. `null` mientras nadie ha pedido el flujo. */
+  private accountSub: { stop: () => void }[] | null = null;
+  /** Ultimo mensaje del canal de cuenta. Un canal mudo se trata como caido. */
+  private accountLastMsgAt = 0;
+  /** Ids de ejecucion ya emitidos, para no repetirlos entre stream y sondeo. */
+  private readonly seenFills = new Set<string>();
   /**
    * Se dispara en `close()` y termina los flujos compartidos. Quien esté
    * suscrito tiene que enterarse de que este adaptador ya no entrega nada más.
@@ -820,34 +884,8 @@ export class LighterAdapter implements ExchangeAdapter {
     return (data.trades ?? [])
       .filter((t) => t.ask_account_id === mine || t.bid_account_id === mine)
       .filter((t) => normalizeTs(t.timestamp) >= sinceMs)
-      .map((t) => {
-        // Somos el lado vendedor si la orden del ask es nuestra.
-        const weAsk = t.ask_account_id === mine;
-        const weMaker = weAsk ? t.is_maker_ask : !t.is_maker_ask;
-        return {
-          venue: Venue.LIGHTER,
-          symbol,
-          // El `trade_id` es del venue y único dentro de él; el ledger deduplica
-          // por (orden, id), así que basta con esto.
-          venueFillId: String(t.trade_id),
-          // `Trade.type` del SDK: `trade`, `liquidation`, `deleverage` o
-          // `market-settlement`. Todo lo que no es `trade` es un cierre FORZADO
-          // por el venue, y el motor tiene que tratarlo como liquidación (pausar
-          // y avisar) en vez de contarlo como ejecución propia. Un comentario
-          // aquí afirmaba que el payload no traía ningún campo que lo dijera
-          // (001/F-05).
-          ...(t.type && t.type !== 'trade' ? { liquidation: true } : {}),
-          venueOrderId: String(weAsk ? t.ask_id : t.bid_id),
-          clientOrderId: String(weAsk ? t.ask_client_id : t.bid_client_id),
-          side: weAsk ? ('SELL' as const) : ('BUY' as const),
-          price: D(t.price).toFixed(),
-          qty: D(t.size).toFixed(),
-          fee: feeToUsdc(weMaker ? t.maker_fee : t.taker_fee),
-          feeAsset: 'USDC',
-          isTaker: !weMaker,
-          ts: normalizeTs(t.timestamp),
-        };
-      })
+      .map((t) => this.tradeToFill(t as LighterWsTrade, symbol))
+      .filter((f): f is Fill => f !== null)
       .sort((a, b) => a.ts - b.ts);
   }
 
@@ -1554,10 +1592,127 @@ export class LighterAdapter implements ExchangeAdapter {
    */
   private ensurePolling(): void {
     if (this.pollTimer || this.closed) return;
+    // El canal de cuenta PRIMERO: mientras entregue, el barrido de abajo no
+    // gasta ni una peticion (`shouldPoll`). El temporizador se crea igual —es
+    // la red de seguridad— y se queda sin trabajo solo.
+    this.ensureAccountStream();
     this.pollTimer = setInterval(() => {
       void this.poll();
     }, POLL_INTERVAL_MS);
     void this.poll();
+  }
+
+  /**
+   * El canal de cuenta de Lighter: ejecuciones y ordenes empujadas.
+   *
+   * Estaba documentado y sin usar desde el spec 001 (F-54). En su lugar se
+   * sondeaba cada doce segundos pidiendo `trades`, que pesa 600 —el doble que
+   * cualquier otra lectura—: con una cuenta Standard, sesenta peticiones por
+   * minuto y por IP, eso dejaba la capacidad real en UN bot por IP y red, y daba
+   * hasta doce segundos de retraso a cada ejecucion. Doce segundos es lo que
+   * hace inservible un market maker: cuando el bot se entera de que le han
+   * ejecutado, el precio que motivo la cotizacion ya no existe.
+   *
+   * **La regla que gobierna esto** (spec 036, R-1): el canal solo se da por
+   * bueno cuando entrega algo que sabemos interpretar. Su forma esta tomada de
+   * la documentacion y no de una conexion autenticada, y los mapeos de Lighter
+   * ya se apartaron de su documentacion antes (001/F-55). Asi que mientras no
+   * llegue un mensaje reconocible, `accountStreamUp` sigue en falso y el sondeo
+   * sigue funcionando: si la forma real no coincide, esto queda como estaba,
+   * nunca peor.
+   */
+  private ensureAccountStream(): void {
+    if (this.accountSub || this.closed) return;
+    const id = this.creds.accountIndex;
+
+    const alTocar = (msg: LighterWsMessage): void => {
+      // SOLO las ejecuciones encienden el canal, y solo ellas apagan su sondeo.
+      //
+      // La primera version aceptaba tambien `orders`, y eso rompia justo la
+      // promesa de R-1: un canal de ordenes que entregara daba por vivo el de
+      // ejecuciones y apagaba `pollFills` aunque las ejecuciones no llegaran
+      // nunca. Peor que antes, que es lo unico que este spec no puede permitirse.
+      const trades = listaDe(msg.trades);
+      if (trades.length === 0) return;
+
+      const antes = this.accountStreamUp;
+      this.accountStreamUp = true;
+      this.accountStreamDownSince = 0;
+      this.accountLastMsgAt = Date.now();
+
+      for (const t of trades) this.emitTrade(t);
+
+      if (!antes) this.health$.next({ stream: 'fills', status: 'UP' });
+    };
+
+    // UN solo canal, y no tambien `account_all_orders`.
+    //
+    // Las ordenes seguirian llegando por el sondeo: `accountActiveOrders` es una
+    // lectura barata, mientras que `trades` pesa 600 y es lo que de verdad se
+    // come el cupo. Y empujar ordenes exigiria un mapeo de estados que hoy no
+    // existe —`toVenueOrder` se escribio para el listado de ordenes ACTIVAS y
+    // solo sabe decir OPEN o PARTIALLY_FILLED—, asi que una cancelacion
+    // empujada resucitaria la orden en la base. Cuando la forma del canal este
+    // confirmada en vivo (CA-8), ese es el siguiente paso.
+    this.accountSub = [
+      this.subscribe(
+        () => Promise.resolve('account_all/' + id),
+        alTocar,
+        () => this.authToken(),
+      ),
+    ];
+  }
+
+  /** Marca el canal de cuenta como caido: `shouldPoll` volvera a sondear. */
+  private accountStreamDown(detail?: string): void {
+    if (!this.accountStreamUp) return;
+    this.accountStreamUp = false;
+    this.accountStreamDownSince = Date.now();
+    this.health$.next({ stream: 'fills', status: 'DOWN', detail });
+  }
+
+  private emitTrade(t: LighterWsTrade): void {
+    const symbol = this.symbolOfMarketId(t.market_id);
+    if (!symbol) return;
+    const fill = this.tradeToFill(t, symbol);
+    if (!fill) return;
+    // Sin repetir lo que ya conto el sondeo, y viceversa: el ledger deduplica
+    // por (orden, id), pero emitir dos veces mueve el reloj de `lastFillTs` y
+    // ensucia la bitacora.
+    if (this.seenFills.has(fill.venueFillId)) return;
+    this.rememberFill(fill.venueFillId);
+    // El reloj del sondeo NO se toca desde aqui. Adelantarlo con lo que entrega
+    // el canal dejaria fuera de la ventana del barrido cualquier ejecucion que
+    // el canal se hubiera saltado, y entonces la red de seguridad no podria
+    // recuperarla nunca. Que el sondeo relea algo ya visto no cuesta nada:
+    // `seenFills` lo descarta.
+    this.fills$.next(fill);
+  }
+
+  /**
+   * El simbolo de un `market_id`, sin gastar una peticion.
+   *
+   * Se resuelve contra los indices que ya estan cargados —la tabla del stream y
+   * el catalogo—; si el mercado no esta en ninguno, se devuelve nada y el
+   * mensaje se descarta. Pedir el catalogo aqui seria una llamada por mensaje.
+   */
+  private symbolOfMarketId(id: number | undefined): string | null {
+    if (id === undefined) return null;
+    for (const [symbol, marketId] of this.statsBySymbol) if (marketId === id) return symbol;
+    for (const [symbol, marketId] of this.marketIndex) if (marketId === id) return symbol;
+    return null;
+  }
+
+  /** Ids de ejecucion ya emitidos, con tope: el proceso vive semanas. */
+  private rememberFill(id: string): void {
+    this.seenFills.add(id);
+    if (this.seenFills.size <= MAX_SEEN_FILLS) return;
+    const sobra = this.seenFills.size - MAX_SEEN_FILLS;
+    let n = 0;
+    for (const viejo of this.seenFills) {
+      this.seenFills.delete(viejo);
+      if (++n >= sobra) break;
+    }
   }
 
   /**
@@ -1581,9 +1736,21 @@ export class LighterAdapter implements ExchangeAdapter {
    * peso real de `trades` (600) descontado del presupuesto.
    */
   private shouldPoll(): boolean {
-    // `accountStreamUp` será lo que gobierne esto cuando exista el canal de
-    // cuenta. Hoy es siempre false, y por tanto se sondea — que es lo correcto.
     if (!this.accountStreamUp) return true;
+
+    // Un canal MUDO no es un canal vivo.
+    //
+    // `accountStreamUp` solo se apagaba con la caida del socket, asi que un
+    // token caducado, un `{"error"}` del venue o un canal que simplemente deja
+    // de mandar dejaban la bandera en cierto para siempre y el sondeo apagado
+    // para siempre con ella. El silencio es exactamente el sintoma que este
+    // adaptador no puede permitirse: es el que deja a un bot sin ver sus
+    // ejecuciones.
+    if (Date.now() - this.accountLastMsgAt > ACCOUNT_SILENCE_MS) {
+      this.accountStreamDown('el canal de cuenta lleva demasiado tiempo mudo');
+      return true;
+    }
+
     if (this.accountStreamDownSince === 0) return false;
     return Date.now() - this.accountStreamDownSince > WS_FALLBACK_AFTER_MS;
   }
@@ -1671,7 +1838,12 @@ export class LighterAdapter implements ExchangeAdapter {
     const since = this.lastFillTs.get(symbol) ?? Date.now() - 60_000;
     const fills = await this.getRecentFills(symbol, since);
     for (const fill of fills) {
-      this.fills$.next(fill);
+      // Las dos vias comparten memoria: el canal puede haber entregado ya esta
+      // ejecucion, y emitirla otra vez ensucia la bitacora del bot.
+      if (!this.seenFills.has(fill.venueFillId)) {
+        this.rememberFill(fill.venueFillId);
+        this.fills$.next(fill);
+      }
       if (fill.ts > since) this.lastFillTs.set(symbol, fill.ts);
     }
   }
@@ -1818,7 +1990,7 @@ export class LighterAdapter implements ExchangeAdapter {
         // envío falla en silencio y la siguiente apertura vuelve a empezar.
         void resubscribePaced([...this.channels], (channel) => {
           try {
-            socket.send(JSON.stringify({ type: 'subscribe', channel }));
+            socket.send(JSON.stringify(this.subscribePayload(channel)));
           } catch {
             // El socket ya no está: la próxima reconexión reenviará todo.
           }
@@ -1833,7 +2005,14 @@ export class LighterAdapter implements ExchangeAdapter {
       // si hay que sondear el estado de cuenta es `shouldPoll`, y mira el canal
       // de cuenta, que es otro. Guardarla aquí invitaba justo a la confusión
       // que dejó a un bot sin ver sus ejecuciones.
-      onHealth: ({ status, detail }) => this.health$.next({ stream: 'ticker', status, detail }),
+      onHealth: ({ status, detail }) => {
+        this.health$.next({ stream: 'ticker', status, detail });
+        // Y si el socket se cae, el canal de CUENTA se cae con el: es el mismo
+        // socket multiplexado. Sin esto, `accountStreamUp` se quedaria en cierto
+        // para siempre y el sondeo no volveria nunca — que es la unica forma de
+        // que este spec empeore las cosas en vez de mejorarlas.
+        if (status === 'DOWN') this.accountStreamDown(detail);
+      },
     });
     return this.socket;
   }
@@ -1880,6 +2059,14 @@ export class LighterAdapter implements ExchangeAdapter {
   private subscribe(
     resolve: () => Promise<string>,
     onMessage: (msg: LighterWsMessage) => void,
+    /**
+     * Firma el token de los canales autenticados (`account_all*`).
+     *
+     * Se guarda ademas en `authChannels` porque `onOpen` vuelve a pedir TODOS
+     * los canales al reconectar, y un canal autenticado que se repita SIN token
+     * deja el socket abierto y mudo: la averia que `onOpen` existe para evitar.
+     */
+    auth?: () => string,
   ): { stop: () => void } {
     // Por el efecto, no por el valor: hace falta que el socket exista para que
     // `onOpen` encuentre este canal en `channels` cuando conecte.
@@ -1907,11 +2094,12 @@ export class LighterAdapter implements ExchangeAdapter {
           // respuesta, aunque se pida con barras.
           this.routes.set(name.replace(/\//g, ':'), onMessage);
           this.channels.add(name);
+          if (auth) this.authChannels.set(name, auth);
           // Solo si ya está abierto. Si todavía conecta, `onOpen` pedirá TODOS
           // los canales de `channels` —este incluido— y mandar aquí solo
           // serviría para lanzar «readyState 0 (CONNECTING)» y anunciar una
           // avería que no existe.
-          this.send({ type: 'subscribe', channel: name });
+          this.send(this.subscribePayload(name));
         })
         .catch((e) => {
           if (stopped || this.closed) return;
@@ -1933,11 +2121,34 @@ export class LighterAdapter implements ExchangeAdapter {
         if (!channel) return;
         this.routes.delete(channel.replace(/\//g, ':'));
         this.channels.delete(channel);
+        this.authChannels.delete(channel);
         // La baja se manda si el socket está abierto; si no, basta con haberlo
         // sacado de `channels` para que la próxima reconexión no lo repita.
         this.send({ type: 'unsubscribe', channel });
       },
     };
+  }
+
+  /**
+   * El mensaje de suscripcion de un canal, con su token si lo necesita.
+   *
+   * Uno solo para las dos rutas —la suscripcion inicial y la resuscripcion de
+   * `onOpen`— porque si divergen, la que se olvide del token deja el canal
+   * abierto y sin datos, y eso no se nota hasta que falta una ejecucion.
+   */
+  private subscribePayload(channel: string): Record<string, unknown> {
+    const auth = this.authChannels.get(channel);
+    if (!auth) return { type: 'subscribe', channel };
+    try {
+      return { type: 'subscribe', channel, auth: auth() };
+    } catch {
+      // Sin firmante listo no hay token. Se manda igual y sin el: el canal
+      // quedara mudo, `accountStreamUp` seguira en falso y el sondeo hara su
+      // trabajo. Lanzar aqui tumbaria la suscripcion de TODOS los canales,
+      // incluidos los de precios, por un token que se puede reintentar solo en
+      // la siguiente reconexion.
+      return { type: 'subscribe', channel };
+    }
   }
 
   /** Manda por el socket solo si está abierto. Ver `subscribe`. */
@@ -2071,6 +2282,49 @@ export class LighterAdapter implements ExchangeAdapter {
       throw new ExchangeError('RULES', 'Mercado desconocido en Lighter: ' + symbol, this.venue);
     }
     return id;
+  }
+
+  /**
+   * Una ejecucion de Lighter a `Fill`. **La unica** traduccion de este dato.
+   *
+   * La usan las dos vias —el sondeo REST y el canal de cuenta— a proposito: son
+   * la misma entidad `Trade` del venue, y dos mapeos del mismo dato divergen a
+   * la tercera vez que alguien toca uno de los dos (spec 036, R-4).
+   *
+   * Devuelve `null` cuando falta lo imprescindible. Eso no es defensa
+   * decorativa: la forma del mensaje del canal esta tomada de la documentacion y
+   * no de una conexion autenticada, asi que un campo que no venga donde se
+   * espera tiene que producir «no se» y no un fill inventado.
+   */
+  private tradeToFill(t: LighterWsTrade, symbol: string): Fill | null {
+    const mine = this.creds.accountIndex;
+    if (t.ask_account_id !== mine && t.bid_account_id !== mine) return null;
+    if (t.trade_id === undefined || t.price === undefined || t.size === undefined) return null;
+
+    // Somos el lado vendedor si la orden del ask es nuestra.
+    const weAsk = t.ask_account_id === mine;
+    const weMaker = weAsk ? t.is_maker_ask : !t.is_maker_ask;
+    return {
+      venue: Venue.LIGHTER,
+      symbol,
+      // El `trade_id` es del venue y unico dentro de el; el ledger deduplica
+      // por (orden, id), asi que basta con esto.
+      venueFillId: String(t.trade_id),
+      // `Trade.type`: `trade`, `liquidation`, `deleverage` o
+      // `market-settlement`. Todo lo que no es `trade` es un cierre FORZADO por
+      // el venue, y el motor tiene que tratarlo como liquidacion (pausar y
+      // avisar) en vez de contarlo como ejecucion propia (001/F-05).
+      ...(t.type && t.type !== 'trade' ? { liquidation: true } : {}),
+      venueOrderId: String(weAsk ? t.ask_id : t.bid_id),
+      clientOrderId: String(weAsk ? t.ask_client_id : t.bid_client_id),
+      side: weAsk ? ('SELL' as const) : ('BUY' as const),
+      price: D(t.price).toFixed(),
+      qty: D(t.size).toFixed(),
+      fee: feeToUsdc(weMaker ? t.maker_fee : t.taker_fee),
+      feeAsset: 'USDC',
+      isTaker: !weMaker,
+      ts: normalizeTs(t.timestamp ?? 0),
+    };
   }
 
   private toVenueOrder(o: LighterOrder, symbol: string): VenueOrder {

@@ -77,7 +77,8 @@ export function fidelityWarnings(opts: {
     avisos.push(
       'Market maker: se recotiza UNA vez por vela, no cada quince segundos. El intervalo de ' +
         'actualización, la espera tras ejecución y la ventana de volatilidad no se reproducen, ' +
-        'y el precio de referencia externo es la propia serie de velas.',
+        'y el precio de referencia externo es la propia serie de velas. Recotizar menos de la ' +
+        'cuenta hace que el replay ejecute MÁS que el motor, no menos.',
     );
     const maxAge = Number(opts.config?.['orderMaxAgeSeconds'] ?? 0);
     const velaSeg = candleSpanMs(opts.interval) / 1000;

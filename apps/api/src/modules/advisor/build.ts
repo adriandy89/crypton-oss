@@ -397,13 +397,49 @@ function buildMarketMaker(k: Knobs, ctx: BuildContext, v2: boolean): Record<stri
   const suelo = 2 * feeBps + margenMinimo + 1.5;
 
   const maxBps = v2 ? 2000 : 1000;
-  const spread = clamp(
-    Math.max(f.atrPct1h * 100 * 0.35 * FACTOR[k.spread], suelo + 2),
+
+  // El horizonte de una cotizacion viva son MINUTOS, no una hora (spec 035).
+  //
+  // Antes esto era `0,35 x ATR(1h)`, que sobre un par con ATR del 2,9 % pedia
+  // 102 bps por lado: eso no es cotizar, es pedir como mucho una ejecucion por
+  // hora. La cotizacion vive lo que tarda en recotizarse o caducar, asi que la
+  // referencia es el recorrido esperado en esa ventana. Con escalado por raiz,
+  // el recorrido a cinco minutos es ATR(1h)/sqrt(12).
+  const recorrido5m = (f.atrPct1h * 100) / Math.sqrt(12);
+  const objetivo = clamp(
+    Math.max(0.5 * recorrido5m * FACTOR[k.spread], suelo + 2),
     suelo + 2,
     maxBps,
   );
-  const distancia = Math.round(spread);
-  const minDistancia = Math.round(clamp(Math.min(spread * 0.4, spread - 1), 1, 500));
+
+  // Y la volatilidad NO se cuenta dos veces (spec 035).
+  //
+  // En la V2, `composeSpreadBps` vuelve a sumar el margen de libro, la comision
+  // de ida y vuelta, el colchon y `volatilityMultiplier x recorrido`. Escribir
+  // el objetivo entero en `buyDistanceBps` hacia que el bot cotizase a la suma
+  // de las dos: el asesor creia haber pedido 102 bps y el bot ponia 121. Aqui se
+  // escribe el RESTO, y el suelo por coste de la propia estrategia se encarga de
+  // que nunca baje de lo que cuesta operar.
+  const volMulNum = clamp(0.35 * FACTOR[k.spread], 0, 5);
+  const volMul = stepped(volMulNum, 0, 5, 0.05, 2);
+  const yaSumado = v2 ? 1.5 + 2 * feeBps + 1 + volMulNum * recorrido5m : 0;
+  const distancia = Math.round(clamp(objetivo - yaSumado, 1, maxBps));
+
+  // El suelo por coste, que es lo que este campo dice ser. Antes era
+  // `0,4 x spread`: un umbral de deriva disfrazado de suelo.
+  //
+  // En la V1 hay que llegar a un compromiso, porque alli el mismo campo hace DOS
+  // trabajos: es el suelo de la cotizacion Y el umbral de deriva que dispara una
+  // recotizacion (spec 035, F-01). El suelo por coste a secas —catorce puntos
+  // basicos— frente a una distancia de sesenta convierte el bot en una maquina
+  // de recolocar ordenes que nadie ha tocado, y en Lighter eso es cuota. La
+  // mitad de la distancia respeta las dos funciones: cubre el coste de sobra y
+  // no recotiza antes de que el mercado haya hecho medio camino.
+  //
+  // La V2 no lo necesita: tiene `repriceThresholdBps` aparte, asi que aqui el
+  // campo puede ser lo que dice ser.
+  const sueloEfectivo = v2 ? suelo : Math.max(suelo, distancia * 0.5);
+  const minDistancia = Math.round(clamp(Math.min(sueloEfectivo, distancia - 1), 1, 500));
 
   const minNotional = Math.max(Number(ctx.market.minNotional ?? 0), 1);
   // Cada capa cotiza a los DOS lados, asi que N capas son 2N ordenes vivas. Con
@@ -488,14 +524,16 @@ function buildMarketMaker(k: Knobs, ctx: BuildContext, v2: boolean): Record<stri
     safetyBufferBps: dec(1, 1),
     minProfitMarginBps: dec(margenMinimo, 1),
     orderBookMarginBps: dec(1.5, 1),
-    repriceThresholdBps: Math.round(clamp(spread * 0.5, 1, 1000)),
-    orderMaxAgeSeconds: Math.round(clamp(120 / FACTOR[k.cadence], 0, 86400) / 5) * 5,
+    // El centro solo se recalcula cuando el mercado ha recorrido una cotizacion
+    // entera. Era `spread x 0,5`, que recotizaba a mitad de camino (spec 035).
+    repriceThresholdBps: Math.round(clamp(objetivo, 1, 1000)),
+    orderMaxAgeSeconds: Math.round(clamp(300 / FACTOR[k.cadence], 0, 86400) / 5) * 5,
     fillCooldownSeconds: Math.round(clamp(35 / FACTOR[k.cadence], 0, 3600) / 5) * 5,
     volatilitySampleSeconds: 300,
-    volatilityMultiplier: stepped(clamp(0.35 * FACTOR[k.spread], 0, 5), 0, 5, 0.05, 2),
+    volatilityMultiplier: volMul,
     // El techo dinamico nunca puede quedar por debajo del suelo por coste, o el
     // bot no podria cotizar con beneficio en ningun momento.
-    maxDynamicSpreadBps: Math.round(clamp(spread * 4, suelo, 5000)),
+    maxDynamicSpreadBps: Math.round(clamp(objetivo * 4, suelo, 5000)),
     useFullSizeUntilMax: k.profile === 'AGRESIVA',
   };
 }

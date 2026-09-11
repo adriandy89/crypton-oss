@@ -527,7 +527,14 @@ export function repartoDeEjecucion(mm: {
   };
 }
 
-/** Fracción de los puntos con posición abierta, en % sin decimales; null sin puntos. */
+/**
+ * Fracción de los puntos con POSICIÓN abierta, en % sin decimales; null sin puntos.
+ *
+ * Cuenta posición, no órdenes en el libro. La pantalla lo rotulaba «En mercado»,
+ * que se lee justo al revés: un market maker con dos cotizaciones vivas y nada
+ * ejecutado leía «En mercado 0 %» y parecía una avería (spec 035). Ahora la app
+ * lo llama «Con posición».
+ */
 export function enMercadoPct(cantidades: readonly Numeric[]): string | null {
   if (cantidades.length === 0) return null;
   const abiertos = cantidades.filter((q) => !D(q).isZero()).length;

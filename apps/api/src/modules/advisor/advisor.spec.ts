@@ -1,6 +1,6 @@
 import { StrategyKind } from '@crypton/db';
-import { getStrategy } from '@crypton/strategy-core';
-import type { BotConfig, MarketSpec } from '@crypton/shared';
+import { composeSpreadBps, getStrategy } from '@crypton/strategy-core';
+import { D, type BotConfig, type MarketSpec } from '@crypton/shared';
 import { buildConfig, defaultKnobs, PROFILES, type BuildContext } from './build';
 import type { MarketFeatures } from './market-features';
 import { coerceConfig, enforceCouplings, ladderCoveragePct, MAX_SAFE_LEVERAGE } from './sanitize';
@@ -215,6 +215,44 @@ describe('recomendaciones de configuracion', () => {
           expect(lev[0]).toBeLessThanOrEqual(lev[2]);
         });
       }
+    }
+  });
+
+  /**
+   * El doble conteo de la volatilidad (spec 035).
+   *
+   * `buyDistanceBps` es la BASE del diferencial, no el diferencial: en la V2,
+   * `composeSpreadBps` le vuelve a sumar el margen de libro, la comision de ida
+   * y vuelta, el colchon y `volatilityMultiplier x recorrido`. El asesor
+   * escribia el objetivo entero ahi, asi que el bot acababa cotizando a la suma
+   * de las dos cosas — creia pedir 102 bps y el bot ponia 121, y el usuario veia
+   * un market maker que no ejecutaba nunca.
+   */
+  describe('lo que el asesor pide es lo que el bot cotiza', () => {
+    for (const regimen of REGIMENES) {
+      it(`market maker V2 / ${regimen.nombre}`, () => {
+        const ctx: BuildContext = {
+          market: MERCADOS[0].spec,
+          features: { ...regimen.f, mark: MERCADOS[0].mark },
+          totalInvestment: 5000,
+        };
+        const { config } = materializar(StrategyKind.MARKET_MAKER_V2, PROFILES[1], ctx);
+
+        // Lo que de verdad se va a cotizar, con la volatilidad que el propio
+        // asesor estima para este par.
+        const recorrido5m = (regimen.f.atrPct1h * 100) / Math.sqrt(12);
+        const cotizado = composeSpreadBps(
+          config as never,
+          D(config['buyDistanceBps'] as string),
+          D(recorrido5m),
+        ).bps;
+
+        // Con el doble conteo, esto salia por encima del doble del objetivo.
+        // Basta con exigir que no se vaya al doble: el numero exacto depende del
+        // suelo por coste, que es intocable y a veces manda.
+        const objetivo = Math.max(0.5 * recorrido5m, 15.5);
+        expect(cotizado.toNumber()).toBeLessThanOrEqual(objetivo * 2);
+      });
     }
   });
 
