@@ -15,6 +15,7 @@ import { gridSellLevels } from './strategies/gridmart';
 import { BASE_LIMIT_TTL_MS } from './ladder';
 import { diffConfig } from './mutability';
 import { getStrategy, listStrategies } from './registry';
+import { comunCon } from './common';
 import { parseCoid } from './client-order-id';
 import { withStopLoss } from './stop-loss';
 import {
@@ -1393,6 +1394,100 @@ describe('diffConfig', () => {
 
 describe('registro de estrategias', () => {
   /**
+   * `meta.default` y `defaults()` tienen que decir lo mismo (spec 037 R-5).
+   *
+   * No es cosmetico: el formulario se siembra con `defaults()`, pero el panel de
+   * ayuda le ensena al usuario `meta.default` como «por defecto: X», y
+   * `coerceConfig` del asesor cae a `meta.default` cuando no puede interpretar
+   * un valor. Con los dos numeros en desacuerdo, la ayuda miente y el asesor
+   * puede materializar un valor que la estrategia nunca eligio.
+   *
+   * Paso en la V2: el spec 035 bajo la distancia de 40 a 20 y subio la edad
+   * maxima de 120 a 300 en `defaults()`, y nadie toco los descriptores.
+   *
+   * Las cuatro excepciones son campos COMUNES cuyo descriptor vive una sola vez
+   * en `COMMON_FIELDS` mientras cada estrategia lo redefine en su `defaults()`.
+   * La via para arreglarlo ya existe -`commonFieldsWith`, que es lo que usan los
+   * dos market makers- y sale en su propio spec (037/F-08). Esta lista tiene que
+   * MENGUAR; si crece, es que alguien ha desincronizado un campo nuevo.
+   */
+  const DESINCRONIZADOS_CONOCIDOS: Record<string, string[]> = {
+    NEUTRAL_GRID: ['marginMode'],
+    TDCA: ['leverage'],
+    MARTINGALE: ['cooldownMinutes'],
+    GRIDMART: ['cooldownMinutes'],
+  };
+
+  it('solo la de tendencia pide velas (specs 038 y 040)', () => {
+    // El motor reconcilia contra el LIBRO, no contra un grafico. Ese principio
+    // sigue valiendo para las SIETE que reconcilian; la de tendencia decide
+    // mirando un grafico y por eso es la unica que declara `candles`.
+    //
+    // Si este test se pone rojo por una estrategia nueva en la lista, que sea a
+    // proposito y con su spec: cada `candles` declarado es un sondeo de velas
+    // mas contra el cupo del venue.
+    const conVelas = listStrategies()
+      .filter((s) => s.candles !== undefined)
+      .map((s) => s.kind);
+    expect(conVelas).toEqual([StrategyKind.TREND_FOLLOW]);
+  });
+
+  it('comunCon revienta al cargar si la clave no existe', () => {
+    // El motivo de que exista: `COMMON_FIELDS.find(...)!` convertia una clave
+    // mal escrita en un descriptor SIN `key`, que `commonFieldsWith` anade como
+    // campo basura al final en vez de sustituir nada. Silencioso.
+    expect(() => comunCon('marginMode', { default: 'CROSS' })).not.toThrow();
+    expect(() => comunCon('margenMode', { default: 'CROSS' })).toThrow(/margenMode/);
+  });
+
+  /**
+   * La unica excepcion, y esta razonada.
+   *
+   * GridMart HEREDA la escalera de Martingala y su validacion compartida exige
+   * `takeProfitPct`, pero alli no gobierna ninguna orden -sale por el satelite y
+   * por la rejilla del nucleo-, asi que el spec 026 lo saco del formulario. Es
+   * el unico caso en el que un campo tiene que estar en la config y no puede
+   * estar en la meta. Queda anotado para que la proxima estrategia que lo
+   * intente tenga que explicarse aqui.
+   */
+  const NO_DECLARADOS_CONOCIDOS: Record<string, string[]> = {
+    GRIDMART: ['takeProfitPct', 'tpMode'],
+  };
+
+  it('defaults() no devuelve ningun campo que meta.fields no declare', () => {
+    // Spec 044, F-04. `diffConfig` trata como COLD todo campo que la estrategia
+    // no declara -la opcion conservadora, y la correcta-. Un campo que vive en
+    // la configuracion sin estar en la meta es una trampa cargada: un cliente
+    // que reconstruyera la config desde `meta.fields` lo dejaria fuera,
+    // `diffConfig` lo veria cambiar a `undefined` y RECHAZARIA la edicion entera
+    // de un bot en marcha por un campo que el usuario no puede ni ver.
+    for (const s of listStrategies()) {
+      const declarados = new Set(s.meta.fields.map((f) => f.key));
+      const permitidos = NO_DECLARADOS_CONOCIDOS[s.kind] ?? [];
+      const sobran = Object.keys(s.defaults()).filter(
+        (k) => !declarados.has(k) && !permitidos.includes(k),
+      );
+      expect({ kind: s.kind, sobran }).toEqual({ kind: s.kind, sobran: [] });
+    }
+  });
+
+  it('meta.default coincide con defaults() en toda estrategia', () => {
+    for (const s of listStrategies()) {
+      const d = s.defaults();
+      const permitidos = DESINCRONIZADOS_CONOCIDOS[s.kind] ?? [];
+      for (const f of s.meta.fields) {
+        if (f.default === undefined || !(f.key in d)) continue;
+        if (permitidos.includes(f.key)) continue;
+        expect({ kind: s.kind, key: f.key, meta: String(f.default) }).toEqual({
+          kind: s.kind,
+          key: f.key,
+          meta: String(d[f.key]),
+        });
+      }
+    }
+  });
+
+  /**
    * Spec 001, F-71. Aster en modo cobertura exige `positionSide` en cada orden
    * y prohibe `reduceOnly`; el adaptador habla solo el dialecto unidireccional.
    * Pedir cobertura cambiaria el modo de TODA la cuenta (afecta a todos sus
@@ -1865,6 +1960,63 @@ describe('marketMaker.plan — guardas nuevas', () => {
 
     expect(bidDef).toBeLessThan(bidNormal); // la compra se aleja
     expect(askDef).toBeLessThan(askNormal); // la venta se acerca
+  });
+
+  // spec 037 R-9. Con ancla manual `quotedMid` no se escribe -el centro no se
+  // mueve-, asi que `shouldRequote` era `true` para siempre. Con
+  // `autoAdjustDistance` eso significa recalcular la distancia del libro vivo y
+  // reescribir scratch en CADA tick: el derroche que el 029 congelo, por otra
+  // puerta.
+  it('con ancla y distancia automatica no se recotiza en cada tick', () => {
+    const conAncla = { referencePrice: '100', autoAdjustDistance: true, refreshSeconds: 30 };
+    const t0 = 1_000_000;
+
+    const primero = plan(conAncla, { now: t0 });
+    expect(primero.scratchPatch?.['quotedAt']).toBe(t0);
+    // El centro es el ancla: no hay centro que recordar.
+    expect(primero.scratchPatch?.['quotedMid']).toBeUndefined();
+
+    // 15 s despues, dentro del refresco de 30 s y con el libro quieto.
+    const segundo = plan(conAncla, {
+      now: t0 + 15_000,
+      cycle: { scratch: { ...(primero.scratchPatch ?? {}), cycleSeq: 1 } },
+    });
+    expect(segundo.scratchPatch?.['quotedAutoBps']).toBeUndefined();
+    expect(byKind(segundo.orders, LevelKind.QUOTE_BID)[0].price).toBe(
+      byKind(primero.orders, LevelKind.QUOTE_BID)[0].price,
+    );
+  });
+
+  // spec 037 R-1. Los tests de arriba fijan `dynamicSpread: false`, asi que el
+  // ensanchado por inventario nunca se habia comprobado con numeros. Se aplicaba
+  // a los DOS lados multiplicando al regimen, que si es asimetrico, y con eso el
+  // acercamiento de la salida quedaba anulado: a 75 % de carga la venta salia a
+  // 20 x 1,75 x 0,6 = 21 bps, MAS lejos que los 20 de inventario cero.
+  describe('el ensanchado por inventario no aleja la salida (spec 037 R-1)', () => {
+    const fino = { tickSize: '0.01', priceDecimals: 2 };
+    const conCarga = (qty: string) =>
+      plan(
+        { dynamicSpread: true, defensiveThresholdPct: '70', highRiskThresholdPct: '90' },
+        { position: makePosition(qty, '100'), market: fino },
+      );
+
+    it('en defensivo la venta se acerca pese al ensanchado', () => {
+      // 750 = 75 % del tope. 20 bps x 0,6 = 12 bps sobre 100: el ensanchado
+      // (x1,75) es cosa del lado que anade.
+      expect(byKind(conCarga('7.5').orders, LevelKind.QUOTE_ASK)[0].price).toBe('100.12');
+    });
+
+    it('el lado que anade conserva su ensanchado', () => {
+      // 20 x 1,75 x 1,5 = 52,5 bps sobre 100, redondeado a la baja al tick.
+      expect(byKind(conCarga('7.5').orders, LevelKind.QUOTE_BID)[0].price).toBe('99.47');
+    });
+
+    it('en alto riesgo la venta sale a la mitad de la distancia base', () => {
+      // 900 = 90 % del tope, justo en el umbral: deja de anadir y solo reduce.
+      const { orders } = conCarga('9');
+      expect(byKind(orders, LevelKind.QUOTE_BID)).toHaveLength(0);
+      expect(byKind(orders, LevelKind.QUOTE_ASK)[0].price).toBe('100.10'); // 20 x 0,5
+    });
   });
 
   it('en alto riesgo deja de añadir y la salida sale reduce-only', () => {
@@ -2697,6 +2849,109 @@ describe('marketMakerV2.plan', () => {
       expect(Number(a.price)).toBeGreaterThan(109.95);
     }
   });
+
+  // spec 037 R-2. `layerDistanceMultiplier` nace en 1 en la V2 (en la V1, en
+  // 1,5), asi que subir `layers` sin tocarlo dejaba todas las capas al mismo
+  // precio: cuota quemada y ningun beneficio, porque tres ordenes al mismo
+  // precio no dan mas profundidad que una.
+  it('no repite capas al mismo precio con el multiplicador en 1', () => {
+    const { orders } = plan({ layers: 3, layerDistanceMultiplier: '1' });
+    for (const lado of [LevelKind.QUOTE_BID, LevelKind.QUOTE_ASK]) {
+      const precios = byKind(orders, lado).map((o) => o.price);
+      expect(new Set(precios).size).toBe(precios.length);
+    }
+  });
+
+  it('con multiplicador mayor que 1 sigue colocando todas las capas', () => {
+    const { orders } = plan({ layers: 3, layerDistanceMultiplier: '1.5' });
+    expect(byKind(orders, LevelKind.QUOTE_BID)).toHaveLength(3);
+    expect(byKind(orders, LevelKind.QUOTE_ASK)).toHaveLength(3);
+  });
+
+  // spec 037 R-4. El techo se aplica despues de los multiplicadores de capa y
+  // preset, y `preview()` no lo aplicaba: prometia el diferencial bruto en la
+  // pantalla que el usuario mira ANTES de poner dinero.
+  it('la vista previa pinta el mismo precio que coloca el bot, con techo', () => {
+    const extra = { buyDistanceBps: '500', sellDistanceBps: '500', maxDynamicSpreadBps: '50' };
+    const config = cfg({ ...(base as object), ...extra });
+    const vista = getStrategy(StrategyKind.MARKET_MAKER_V2).preview(config, makeMarket(), '100');
+    const { orders } = plan(extra);
+
+    for (const kind of [LevelKind.QUOTE_BID, LevelKind.QUOTE_ASK]) {
+      const delPlan = byKind(orders, kind)[0];
+      const delPreview = vista.levels.find((n) => n.kind === kind)!;
+      expect({ kind, price: delPreview.price }).toEqual({ kind, price: delPlan.price });
+    }
+  });
+
+  // spec 037 R-6. Con NEUTRAL el bot cotiza los dos lados, asi que una sola
+  // media ponderada de compras y ventas da una entrada media que no existe.
+  // spec 037 R-7. Contaba `orders.length` -las DESEADAS-, asi que decia «2
+  // cotizaciones» mientras el venue las rechazaba todas. El 029 lo corrigio en
+  // la V1 con parseCoid y no se porto.
+  it('la nota cuenta las cotizaciones vivas en el libro, no las deseadas', () => {
+    const viva = {
+      venue: 'HYPERLIQUID' as const,
+      symbol: 'BTC',
+      clientOrderId: makeCoid('1a2b3c4d-0000-0000-0000-000000000000', 1, LevelKind.QUOTE_BID, 0),
+      venueOrderId: 'v1',
+      side: 'BUY' as const,
+      type: 'POST_ONLY' as const,
+      price: '99.6',
+      qty: '1',
+      filledQty: '0',
+      avgPrice: null,
+      status: 'OPEN' as const,
+      reduceOnly: false,
+      createdAt: 1_000_000,
+    };
+    // Dos deseadas, UNA viva.
+    const { note } = plan({}, { openOrders: [viva] });
+    expect(note).toContain('1 cotizaciones');
+  });
+
+  // spec 037 R-8. `cooling` miraba `quotedMid != null` en vez de
+  // `lastFillAt > 0`: con un reloj sintetico -backtest, dry-run- y sin una sola
+  // ejecucion, `now - 0 < cooldownMs` es cierto y el bot no volvia a cotizar.
+  it('sin ninguna ejecucion no hay espera, aunque el reloj sea pequeno', () => {
+    // El reloj importa: 31 s es MENOS que el enfriamiento de 35 s -asi que la
+    // condicion vieja `now - lastFillAt < cooldownMs`, con `lastEntryAt` nulo y
+    // por tanto 0, se cumplia- y a la vez el precio se ha movido 100 bps, muy
+    // por encima del umbral de reajuste.
+    const primero = plan({ fillCooldownSeconds: 35 }, { now: 1000 });
+    const bid0 = byKind(primero.orders, LevelKind.QUOTE_BID)[0].price;
+    expect(bid0).toBe('99.6');
+
+    const segundo = plan(
+      { fillCooldownSeconds: 35 },
+      {
+        now: 31_000,
+        price: '101',
+        cycle: { scratch: { ...(primero.scratchPatch ?? {}), cycleSeq: 1 } },
+      },
+    );
+    // Sin enfriamiento el centro sigue al mercado. Congelado, se habria quedado
+    // cotizando alrededor de 100 para siempre, sin haber ejecutado nada.
+    expect(Number(byKind(segundo.orders, LevelKind.QUOTE_BID)[0].price)).toBeGreaterThan(100);
+  });
+
+  it('la vista previa de un market maker NEUTRAL no mezcla los dos lados', () => {
+    const vista = (direction: string) =>
+      getStrategy(StrategyKind.MARKET_MAKER_V2).preview(
+        cfg({ ...(base as object), direction, leverage: 5 }),
+        makeMarket(),
+        '100',
+      );
+    const neutral = vista('NEUTRAL');
+    const soloLargo = vista('LONG');
+
+    // Las compras de los dos son las MISMAS, asi que la liquidacion del lado
+    // largo tiene que salir igual. Mezclando compras y ventas en una sola media
+    // ponderada salia otra cosa: una entrada media que no existe.
+    expect(neutral.estimatedLiquidationPrice).toBe(soloLargo.estimatedLiquidationPrice);
+    // Y el lado corto se avisa aparte, en vez de desaparecer en la media.
+    expect(neutral.issues.some((i) => /Lado corto/.test(i.message))).toBe(true);
+  });
 });
 
 describe('marketMakerV2.validate', () => {
@@ -2721,6 +2976,16 @@ describe('marketMakerV2.validate', () => {
 
   it('acepta una configuración razonable', () => {
     expect(validate({}).ok).toBe(true);
+  });
+
+  it('rechaza varios niveles con el multiplicador de distancia en 1 (spec 037 R-2)', () => {
+    const r = validate({ layers: 3, layerDistanceMultiplier: '1' });
+    expect(r.ok).toBe(false);
+    expect(r.issues.some((i) => i.field === 'layerDistanceMultiplier')).toBe(true);
+  });
+
+  it('un solo nivel con el multiplicador en 1 es correcto', () => {
+    expect(validate({ layers: 1, layerDistanceMultiplier: '1' }).ok).toBe(true);
   });
 
   it('rechaza un símbolo de origen con la forma del par del venue', () => {

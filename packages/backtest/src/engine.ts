@@ -442,7 +442,12 @@ export async function runReplay(opts: ReplayOptions): Promise<ReplayOutput> {
         ...(o.triggerPrice
           ? {
               triggerPrice: o.triggerPrice,
-              intent: o.levelKind === 'TAKE_PROFIT' ? ('TP' as const) : ('SL' as const),
+              // Y con la MISMA precedencia que el motor: lo que declare la
+              // estrategia manda sobre lo que se deduce del nivel. Lo declara
+              // el trailing take profit, que es un objetivo de beneficio en la
+              // contabilidad y un stop en el disparo (spec 042 R-1).
+              intent:
+                o.intent ?? (o.levelKind === 'TAKE_PROFIT' ? ('TP' as const) : ('SL' as const)),
             }
           : {}),
       })

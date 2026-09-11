@@ -71,6 +71,52 @@ export interface Ticker {
   /** Precio de marca: el que usa el venue para liquidar. Es el que manda en riesgo. */
   mark: string;
   ts: number;
+
+  // ── Lo que no todos los venues publican ────────────────────────────────
+  //
+  // Los cuatro son OPCIONALES y `undefined` significa «este venue no lo
+  // publica», nunca cero. La diferencia importa: `bidSize: '0'` es un libro sin
+  // compradores —un estado real— y `undefined` es no saberlo. Colapsarlos
+  // obligaría a cada consumidor a adivinar cuál de los dos está viendo.
+  //
+  // Ninguno cuesta una petición nueva: salen de respuestas que el adaptador ya
+  // pide (spec 038).
+
+  /**
+   * Cantidad en el mejor bid, en moneda base.
+   *
+   * Con `askSize`, es lo que permite calcular el MICROPRECIO
+   * —`(ask·Q_bid + bid·Q_ask)/(Q_bid+Q_ask)`— y el desequilibrio del toque. El
+   * punto medio pelado ignora los tamaños, así que cotiza igual con el libro
+   * cargado de compradores que de vendedores.
+   *
+   * Hyperliquid y Aster sí; Lighter no lo publica en `market_stats`, y sacarlo
+   * costaría una petición por símbolo y tick contra un cupo de 60/min por IP.
+   */
+  bidSize?: string;
+  /** Cantidad en el mejor ask, en moneda base. Ver `bidSize`. */
+  askSize?: string;
+
+  /**
+   * Tasa de funding vigente, en FRACCIÓN por periodo y CON SIGNO.
+   *
+   * Positivo = los largos pagan a los cortos. En un perpetuo el inventario no
+   * solo tiene riesgo de precio: cobra o paga cada periodo, y ese es el segundo
+   * canal económico que una estrategia puede querer mirar.
+   */
+  fundingRate?: string;
+  /**
+   * Instante del próximo pago de funding, en epoch ms.
+   *
+   * Absoluto y no «cuánto falta» a propósito: el ticker se cachea, se republica
+   * por Redis con 30 s de vida y lo lee un tick posterior, así que un delta
+   * llegaría caducado por construcción.
+   *
+   * Hyperliquid no lo publica en su contexto de activo, así que allí queda
+   * `undefined`: el funding es horario, pero deducir la hora en punto sería
+   * inventarse un dato que el venue no da.
+   */
+  nextFundingAt?: number;
 }
 
 export interface Balance {

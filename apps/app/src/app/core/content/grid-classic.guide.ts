@@ -18,7 +18,7 @@ export const GRID_CLASSIC_GUIDE: StrategyGuide<GridClassicConfig> = {
     'El par lleva días o semanas oscilando entre dos precios reconocibles.',
     'Quieres ingresos de la volatilidad sin tener que acertar la dirección.',
     'Prefieres muchas operaciones pequeñas y cerradas antes que una grande y abierta.',
-    'Es la más fácil de entender de las siete: literalmente comprar abajo y vender arriba, repetido.',
+    'Es la más fácil de entender de las ocho: literalmente comprar abajo y vender arriba, repetido.',
   ],
   badWhen: [
     'El precio está en tendencia clara. Si se va por debajo del rango te quedas con todas las compras ejecutadas y ninguna venta: una posición perdedora completa.',

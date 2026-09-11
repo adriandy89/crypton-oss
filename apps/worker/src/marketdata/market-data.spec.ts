@@ -16,7 +16,7 @@ import { MarketWatchService } from './watch.service';
 /** Un adaptador público de mentira: cuenta suscripciones y bajas. */
 function fakeAdapter() {
   const streams = new Map<string, Subject<Ticker>>();
-  const counters = { subscribes: 0, unsubscribes: 0 };
+  const counters = { subscribes: 0, unsubscribes: 0, candles: 0 };
 
   return {
     counters,
@@ -41,6 +41,24 @@ function fakeAdapter() {
       },
       getTicker: (symbol: string) =>
         Promise.resolve({ symbol, last: '1', ts: Date.now() } as Ticker),
+      getCandles: (_symbol: string, _interval: string, q: { limit?: number }) => {
+        counters.candles++;
+        // Una vela por minuto terminando en la EN CURSO, que es lo que devuelve
+        // un venue de verdad.
+        const ahora = Date.now();
+        const t0 = Math.floor(ahora / 60_000) * 60_000;
+        const n = q.limit ?? 10;
+        return Promise.resolve(
+          Array.from({ length: n }, (_, i) => ({
+            t: t0 - (n - 1 - i) * 60_000,
+            o: '1',
+            h: '2',
+            l: '0.5',
+            c: '1.5',
+            v: '10',
+          })),
+        );
+      },
       close: () => Promise.resolve(),
     },
   };
@@ -713,5 +731,77 @@ describe('MarketWatchService — lo que llega por Redis no puede tumbar el motor
       expect(() => h.emit(data)).not.toThrow();
     }
     h.watch.onModuleDestroy();
+  });
+});
+
+describe('candleHistory() — la ventana que ve el motor (spec 038)', () => {
+  const esperar = () => new Promise((r) => setTimeout(r, 0));
+
+  it('la primera llamada no tiene nada, y la siguiente ya tiene la ventana', async () => {
+    const { service } = build();
+
+    // Sincrona a proposito: `buildContext` no puede esperar a la red sin
+    // convertir cada tick en una espera. La primera vez dispara el refresco.
+    expect(service.candleHistory(HL, 'BTC', '1m', 5)).toBeNull();
+    await esperar();
+
+    const velas = service.candleHistory(HL, 'BTC', '1m', 5);
+    expect(velas).toHaveLength(5);
+    await service.onModuleDestroy();
+  });
+
+  it('la ultima vela entregada esta CERRADA', async () => {
+    const { service } = build();
+    service.candleHistory(HL, 'BTC', '1m', 5);
+    await esperar();
+
+    const velas = service.candleHistory(HL, 'BTC', '1m', 5)!;
+    const ultima = velas[velas.length - 1];
+    // Entregar la vela en curso rompe la pureza de `plan()`: cambia dentro de
+    // su propio intervalo, asi que dos llamadas con el mismo estado darian
+    // planes distintos.
+    expect(ultima.t + 60_000).toBeLessThanOrEqual(Date.now());
+  });
+
+  it('N bots del mismo par y resolucion son UNA peticion', async () => {
+    const { service, fake } = build();
+
+    service.candleHistory(HL, 'BTC', '1m', 5);
+    service.candleHistory(HL, 'BTC', '1m', 5);
+    service.candleHistory(HL, 'BTC', '1m', 3);
+    await esperar();
+    service.candleHistory(HL, 'BTC', '1m', 5);
+
+    expect(fake.counters.candles).toBe(1);
+    await service.onModuleDestroy();
+  });
+
+  it('resoluciones distintas son ventanas distintas', async () => {
+    const { service, fake } = build();
+    service.candleHistory(HL, 'BTC', '1m', 5);
+    service.candleHistory(HL, 'BTC', '5m', 5);
+    await esperar();
+    expect(fake.counters.candles).toBe(2);
+    await service.onModuleDestroy();
+  });
+
+  it('si el venue falla no se vacia lo que ya habia', async () => {
+    const { service, fake } = build();
+    service.candleHistory(HL, 'BTC', '1m', 5);
+    await esperar();
+    expect(service.candleHistory(HL, 'BTC', '1m', 5)).toHaveLength(5);
+
+    // El siguiente refresco revienta. Una ventana de hace un minuto sirve mucho
+    // mejor que ninguna.
+    (fake.adapter as { getCandles: unknown }).getCandles = () =>
+      Promise.reject(new Error('venue caido'));
+    const hist = (service as unknown as { candleHistories: Map<string, { fetchedAt: number }> })
+      .candleHistories;
+    for (const h of hist.values()) h.fetchedAt = 0;
+
+    service.candleHistory(HL, 'BTC', '1m', 5);
+    await esperar();
+    expect(service.candleHistory(HL, 'BTC', '1m', 5)).toHaveLength(5);
+    await service.onModuleDestroy();
   });
 });

@@ -11,6 +11,8 @@ import { gridClassic } from './strategies/grid-classic';
 import { gridmart } from './strategies/gridmart';
 import { marketMaker } from './strategies/market-maker';
 import { marketMakerV2 } from './strategies/market-maker-v2';
+import { trendFollow } from './strategies/trend-follow';
+import { trailingProfit } from './strategies/trailing-profit';
 import { martingale } from './strategies/martingale';
 import { neutralGrid } from './strategies/neutral-grid';
 import { tdca } from './strategies/tdca';
@@ -76,6 +78,8 @@ const REGISTRY: Record<StrategyKind, Strategy<any>> = {
   [StrategyKind.GRIDMART]: conValidacionGenerica(gridmart),
   [StrategyKind.MARKET_MAKER]: conValidacionGenerica(marketMaker),
   [StrategyKind.MARKET_MAKER_V2]: conValidacionGenerica(marketMakerV2),
+  [StrategyKind.TREND_FOLLOW]: conValidacionGenerica(trendFollow),
+  [StrategyKind.TRAILING_PROFIT]: conValidacionGenerica(trailingProfit),
 };
 
 export function getStrategy(kind: StrategyKind): Strategy<BotConfig> {

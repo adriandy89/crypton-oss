@@ -633,6 +633,43 @@ describe('DryRunAdapter', () => {
       expect(sim.stats().realizedPnl).toBe(D('110').minus('100.1').toFixed());
     });
 
+    it('un take profit que SIGUE al precio dispara a la BAJA, aunque esté muy arriba', async () => {
+      // El caso del spec 042. La posición entró a ~100 y el precio ha subido a
+      // 125; el seguimiento pone su disparador en 123,75, o sea MUY por encima
+      // de la entrada. Si llegara etiquetado como take-profit, la condición
+      // «marca >= 123,75» sería cierta al colocarlo y el venue cerraría la
+      // posición al instante: el fallo 001/F-80.
+      //
+      // Por eso el `intent` viaja explícito y vale más que el `levelKind`: en
+      // la contabilidad es un objetivo de beneficio y en el disparo es un stop.
+      const { source, sim } = await conLargo();
+      await mover(sim, source, '125', '125.2');
+
+      await sim.placeOrder(stop({ price: '123.75', triggerPrice: '123.75', clientOrderId: 'ttp' }));
+      // No se ha cerrado nada: sigue esperando el retroceso.
+      expect(await sim.getOpenOrders()).toHaveLength(1);
+      expect(await sim.getPositions()).toHaveLength(1);
+
+      // Sube más: el disparador no le afecta.
+      await mover(sim, source, '130', '130.2');
+      expect(await sim.getOpenOrders()).toHaveLength(1);
+
+      // Y retrocede: ahí sí.
+      await mover(sim, source, '123', '123.2');
+      expect(await sim.getPositions()).toHaveLength(0);
+    });
+
+    it('y la misma orden etiquetada como TP se ejecutaría en el acto', async () => {
+      // El contraejemplo, para que quede escrito por qué existe el campo.
+      const { source, sim } = await conLargo();
+      await mover(sim, source, '125', '125.2');
+      await sim.placeOrder(
+        stop({ intent: 'TP', price: '123.75', triggerPrice: '123.75', clientOrderId: 'mal' }),
+      );
+      await mover(sim, source, '125.1', '125.3');
+      expect(await sim.getPositions()).toHaveLength(0);
+    });
+
     it('el stop se dispara antes que la liquidación cuando está por encima de ella', async () => {
       // A 10× la liquidación de una entrada a 100,1 ronda 90,6; el stop a 95
       // tiene que cerrar la posición ANTES aunque el tick baje de golpe a 80.

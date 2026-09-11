@@ -90,6 +90,42 @@ describe('la puerta de salida de órdenes', () => {
       expect(revisarOrden(LIGHTER_BTC, stop, false, '52500').motivo).toBe('OK');
     });
 
+    /**
+     * Spec 044, F-02. La regla existia solo para el `levelKind` STOP_LOSS, y en
+     * cuanto hubo un TAKE_PROFIT que tambien es condicional -el seguimiento del
+     * spec 042- se quedo corta: su disparador vive un retroceso POR DEBAJO de la
+     * marca, asi que una posicion que si cumple el minimo se media por debajo y
+     * la salida no se colocaba.
+     */
+    it('un take profit CONDICIONAL tambien se mide en la marca', () => {
+      const trailing = orden({
+        levelKind: 'TAKE_PROFIT',
+        type: 'MARKET',
+        side: 'SELL',
+        intent: 'SL',
+        qty: '0.0002',
+        // Disparador un 10 % por debajo de la marca: 9,45 alli, 10,5 aqui.
+        price: '47250.0',
+        triggerPrice: '47250.0',
+      });
+      expect(revisarOrden(LIGHTER_BTC, trailing, false, '52500').motivo).toBe('OK');
+      // Y sin marca se sigue midiendo donde se puede, como el stop.
+      expect(revisarOrden(LIGHTER_BTC, trailing, false).motivo).toBe('RESTO_INCERRABLE');
+    });
+
+    it('un take profit LIMIT sigue midiendose en su propio precio', () => {
+      // Ahi el precio de la orden SI es el precio al que se ejecuta, asi que
+      // medirlo en la marca seria mentir en la direccion contraria.
+      const limit = orden({
+        levelKind: 'TAKE_PROFIT',
+        type: 'LIMIT',
+        side: 'SELL',
+        qty: '0.0002',
+        price: '47250.0',
+      });
+      expect(revisarOrden(LIGHTER_BTC, limit, false, '52500').motivo).toBe('RESTO_INCERRABLE');
+    });
+
     it('sin precio de marca se sigue midiendo al precio de la orden', () => {
       const stop = orden({
         levelKind: 'STOP_LOSS',

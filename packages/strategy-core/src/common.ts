@@ -171,6 +171,21 @@ export const COMMON_FIELDS: readonly FieldMeta[] = [
  *
  * El orden se conserva: se sustituye en el sitio, no se reordena.
  */
+/**
+ * Un campo común con algo cambiado, para pasárselo a `commonFieldsWith`.
+ *
+ * Existe para no escribir `COMMON_FIELDS.find(...)!` en cada estrategia: esa
+ * aserción convierte una clave mal escrita en un descriptor sin `key`, que
+ * `commonFieldsWith` añade como campo basura al final de la lista en vez de
+ * sustituir nada. Aquí revienta al cargar el módulo, que es cuando se quiere
+ * saber (spec 037 R-5).
+ */
+export function comunCon(key: string, cambios: Partial<FieldMeta>): FieldMeta {
+  const base = COMMON_FIELDS.find((f) => f.key === key);
+  if (!base) throw new Error(`No existe el campo común «${key}».`);
+  return { ...base, ...cambios };
+}
+
 export function commonFieldsWith(overrides: readonly FieldMeta[]): FieldMeta[] {
   const byKey = new Map(overrides.map((f) => [f.key, f]));
   const replaced = COMMON_FIELDS.map((f) => byKey.get(f.key) ?? f);

@@ -585,6 +585,12 @@ export class HyperliquidAdapter implements ExchangeAdapter {
     ]);
     const bid = book?.levels[0]?.[0]?.px;
     const ask = book?.levels[1]?.[0]?.px;
+    // Las cantidades del toque ya venían en esta misma respuesta y se tiraban
+    // (spec 038). Sin ellas no hay microprecio ni desequilibrio del libro: el
+    // punto medio pelado cotiza igual con el libro cargado de compradores que
+    // de vendedores.
+    const bidSz = book?.levels[0]?.[0]?.sz;
+    const askSz = book?.levels[1]?.[0]?.sz;
     const mark = ctx?.markPx;
     // Con un lado del libro vacío no se inventa la mitad del otro (001/F-26):
     // manda la marca del venue y, si tampoco la hay, RETRYABLE, que el motor
@@ -611,6 +617,14 @@ export class HyperliquidAdapter implements ExchangeAdapter {
       // lo que ya hacen Aster y Lighter.
       mark: (mark ? D(mark) : mid).toFixed(),
       ts: Date.now(),
+      // Opcionales de verdad: un lado sin nivel deja el suyo sin poner, en vez
+      // de fingir un cero, que significaría «libro vacío» (spec 038).
+      ...(bidSz != null ? { bidSize: bidSz } : {}),
+      ...(askSz != null ? { askSize: askSz } : {}),
+      // `funding` viene en el contexto de activo, que ya se pedía para la marca
+      // y está memoizado: N bots preguntando son una petición. El venue no
+      // publica el instante del próximo pago, así que `nextFundingAt` no va.
+      ...(ctx?.funding != null ? { fundingRate: ctx.funding } : {}),
     };
   }
 
@@ -1062,8 +1076,12 @@ export class HyperliquidAdapter implements ExchangeAdapter {
           // última y cada bbo la lleva (001/F-25). Hasta que llegue la primera
           // va el mid, que es lo que había.
           let mark: string | null = null;
+          // Y el funding, del mismo evento: es una suscripción que ya existía
+          // (spec 038).
+          let funding: string | null = null;
           const ctx = this.subs.activeAssetCtx({ coin: symbol }, (ev) => {
             mark = ev.ctx.markPx ?? mark;
+            funding = ev.ctx.funding ?? funding;
           });
           const bbo = this.subs.bbo({ coin: symbol }, (ev) => {
             const [bid, ask] = ev.bbo;
@@ -1078,6 +1096,9 @@ export class HyperliquidAdapter implements ExchangeAdapter {
               ask: firstNum(ask?.px, 0).toFixed(),
               mark: mark ?? mid.toFixed(),
               ts: ev.time,
+              ...(bid?.sz != null ? { bidSize: bid.sz } : {}),
+              ...(ask?.sz != null ? { askSize: ask.sz } : {}),
+              ...(funding != null ? { fundingRate: funding } : {}),
             });
           });
           return Promise.all([bbo, ctx]).then(([b, c]) => ({

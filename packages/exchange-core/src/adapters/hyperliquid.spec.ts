@@ -199,6 +199,40 @@ describe('precio enviado (F-04)', () => {
   });
 });
 
+describe('lo que el venue ya mandaba y se tiraba (spec 038)', () => {
+  it('getTicker devuelve los tamanos del toque y el funding', async () => {
+    mockInfo.metaAndAssetCtxs.mockResolvedValue(catalogo({ funding: '0.0000125' }));
+    mockInfo.l2Book.mockResolvedValue({
+      levels: [[{ px: '79580', sz: '3.5' }], [{ px: '79587', sz: '0.25' }]],
+    });
+    const adapter = new HyperliquidAdapter(creds());
+
+    const t = await adapter.getTicker('BTC');
+
+    expect(t.bidSize).toBe('3.5');
+    expect(t.askSize).toBe('0.25');
+    expect(t.fundingRate).toBe('0.0000125');
+    // El venue no publica el instante del proximo pago: no se inventa.
+    expect(t.nextFundingAt).toBeUndefined();
+  });
+
+  it('sin esos campos en la respuesta quedan sin poner, no a cero', async () => {
+    // Un cero significaria «libro vacio», que es otra cosa que «no lo publica».
+    mockInfo.metaAndAssetCtxs.mockResolvedValue(catalogo());
+    mockInfo.l2Book.mockResolvedValue({ levels: [[{ px: '79580' }], [{ px: '79587' }]] });
+    const adapter = new HyperliquidAdapter(creds());
+
+    const t = await adapter.getTicker('BTC');
+
+    expect(t.bidSize).toBeUndefined();
+    expect(t.askSize).toBeUndefined();
+    expect(t.fundingRate).toBeUndefined();
+    // Y lo de siempre sigue saliendo.
+    expect(t.bid).toBe('79580');
+    expect(t.mark).toBe('79587');
+  });
+});
+
 describe('precio de marca (F-25, F-26)', () => {
   it('mark es el markPx del venue y last el punto medio del libro', async () => {
     mockInfo.metaAndAssetCtxs.mockResolvedValue(catalogo());

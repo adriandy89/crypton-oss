@@ -81,6 +81,22 @@ export const GRIDMART_GUIDE: StrategyGuide<GridMartConfig> = {
     },
   ],
   options: {
+    trailingTakeProfit: {
+      what: 'Heredado de Martingala y sin efecto aquí: GridMart no cierra por take profit.',
+      affects:
+        'No hace nada. GridMart tiene dos salidas a la vez —el satélite por su propio objetivo y el núcleo por la rejilla de ventas—, así que no hay un único precio de salida al que seguir.',
+      tip: 'No sale en el formulario. Si quieres seguir al máximo, la estrategia es Martingala o el DCA temporizado.',
+    },
+    trailingCallbackPct: {
+      what: 'Heredado de Martingala y sin efecto aquí.',
+      affects: 'No hace nada: sin un objetivo único que seguir, no hay retroceso que medir.',
+      tip: 'No sale en el formulario.',
+    },
+    trailingRepriceBps: {
+      what: 'Heredado de Martingala y sin efecto aquí.',
+      affects: 'No hace nada: GridMart no coloca ningún disparador que seguir al máximo.',
+      tip: 'No sale en el formulario.',
+    },
     ...LADDER_OPTION_DOCS,
     takeProfitPct: {
       what: 'Objetivo de beneficio heredado de la martingala, sobre el precio medio de la posición. En GridMart NO gobierna ninguna orden.',

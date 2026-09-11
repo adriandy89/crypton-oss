@@ -3,6 +3,7 @@ export * from './registry';
 export * from './mutability';
 export * from './client-order-id';
 export * from './ladder';
+export * from './trailing-take-profit';
 // La liquidacion estimada vivia aqui, pero la necesita tambien el simulador de
 // `exchange-core` —que no depende de este paquete— para poder reventar una
 // posicion como lo haria el venue. Se mudo a `shared`, que es lo unico que los
@@ -33,6 +34,9 @@ export type { MartingaleConfig } from './strategies/martingale';
 export type { GridMartConfig } from './strategies/gridmart';
 export type { MarketMakerConfig } from './strategies/market-maker';
 export type { MarketMakerV2Config } from './strategies/market-maker-v2';
+export type { TrendFollowConfig } from './strategies/trend-follow';
+export type { TrailingProfitConfig } from './strategies/trailing-profit';
+export * from './indicadores';
 export { composeSpreadBps, resolveAnchor } from './strategies/market-maker-v2';
 export { MAX_VOL_SAMPLES, sampleVolatility } from './strategies/mm-shared';
 

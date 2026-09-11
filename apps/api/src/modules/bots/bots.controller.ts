@@ -257,7 +257,7 @@ export class BotsController {
    * agua y eficiencia.
    *
    * Endpoint aparte y no dentro de `GET /bots/:id` porque solo tiene sentido
-   * para dos de las siete estrategias, y la pantalla de detalle lo pide cuando
+   * para dos de las ocho estrategias, y la pantalla de detalle lo pide cuando
    * hace falta en vez de engordar el listado de todos los bots.
    */
   @Get(':id/mm-stats')

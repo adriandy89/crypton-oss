@@ -543,6 +543,13 @@ export class AsterAdapter implements ExchangeAdapter {
       ask: ask.toFixed(),
       mark: firstNum(premium.markPrice, bid.plus(ask).div(2)).toFixed(),
       ts: Date.now(),
+      // Los cuatro venían ya en estas dos respuestas y se descartaban: no hay
+      // petición nueva ni peso nuevo (spec 038). Se ponen solo si el venue los
+      // manda; `undefined` es «no lo publica», que no es lo mismo que cero.
+      ...(book.bidQty != null ? { bidSize: book.bidQty } : {}),
+      ...(book.askQty != null ? { askSize: book.askQty } : {}),
+      ...(premium.lastFundingRate != null ? { fundingRate: premium.lastFundingRate } : {}),
+      ...(premium.nextFundingTime != null ? { nextFundingAt: premium.nextFundingTime } : {}),
     };
   }
 
@@ -932,6 +939,11 @@ export class AsterAdapter implements ExchangeAdapter {
     const s = symbol.toLowerCase();
     stream = this.sharedSocket<Ticker>((emit) => {
       let mark: Decimal | null = null;
+      // El stream de marca ya suscrito trae también el funding (`r`) y el
+      // instante del próximo pago (`T`): se guardan como la marca y viajan con
+      // cada actualización del libro (spec 038).
+      let funding: string | null = null;
+      let nextFunding: number | null = null;
       return this.openSocket(
         () => `${this.ws}/stream?streams=${s}@bookTicker/${s}@markPrice@1s`,
         (raw) => {
@@ -940,12 +952,18 @@ export class AsterAdapter implements ExchangeAdapter {
             const ev = (msg.data ?? msg) as {
               e?: string;
               p?: string;
+              r?: string;
+              T?: number;
               b?: string;
+              B?: string;
               a?: string;
+              A?: string;
               E?: number;
             };
             if (ev.e === 'markPriceUpdate') {
               mark = firstNum(ev.p, 0);
+              funding = ev.r ?? funding;
+              nextFunding = ev.T ?? nextFunding;
               return;
             }
             if (ev.b === undefined && ev.a === undefined) return;
@@ -960,6 +978,10 @@ export class AsterAdapter implements ExchangeAdapter {
               ask: ask.toFixed(),
               mark: (mark && !mark.isZero() ? mark : mid).toFixed(),
               ts: ev.E ?? Date.now(),
+              ...(ev.B != null ? { bidSize: ev.B } : {}),
+              ...(ev.A != null ? { askSize: ev.A } : {}),
+              ...(funding != null ? { fundingRate: funding } : {}),
+              ...(nextFunding != null ? { nextFundingAt: nextFunding } : {}),
             });
           } catch {
             /* mensaje malformado: se ignora en vez de tumbar el stream entero */
@@ -1342,11 +1364,18 @@ interface AsterKlineEvent {
 
 interface AsterBookTicker {
   bidPrice?: string;
+  /** Cantidad en el mejor bid. Documentado por el venue (spec 038). */
+  bidQty?: string;
   askPrice?: string;
+  askQty?: string;
 }
 
 interface AsterPremiumIndex {
   markPrice?: string;
+  /** Tasa de funding vigente, fracción con signo. */
+  lastFundingRate?: string;
+  /** Instante del próximo pago, epoch ms. */
+  nextFundingTime?: number;
 }
 
 interface AsterUserEvent {

@@ -3,6 +3,7 @@ import {
   Venue,
   type BotConfig,
   type BotContext,
+  type Candle,
   type CycleState,
   type MarketSpec,
   type OrderSide,
@@ -132,6 +133,10 @@ export interface MakeContextOptions {
   fairPrice?: string | null;
   /** Sobrescribe el libro: sirve para un venue que no publica BBO. */
   ticker?: Partial<Ticker>;
+  /** Velas cerradas, para la estrategia que las declara (specs 038 y 040). */
+  candles?: Candle[];
+  /** Extremos vistos por el stream desde la última planificación (spec 042). */
+  extremos?: { alto: string; bajo: string };
 }
 
 export function makeContext(opts: MakeContextOptions): BotContext {
@@ -149,6 +154,8 @@ export function makeContext(opts: MakeContextOptions): BotContext {
     availableBalance: opts.availableBalance ?? '100000',
     now: opts.now ?? 1_000_000,
     fairPrice: opts.fairPrice ?? null,
+    ...(opts.candles ? { candles: opts.candles } : {}),
+    ...(opts.extremos ? { extremos: opts.extremos } : {}),
   };
 }
 

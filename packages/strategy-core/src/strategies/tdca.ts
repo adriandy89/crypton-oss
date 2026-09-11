@@ -30,9 +30,17 @@ import {
   type RawLevel,
 } from '../common';
 import { takeProfitPrice } from '../ladder';
+import {
+  TRAILING_DEFAULTS,
+  camposTrailing,
+  limpiarTrailing,
+  trailingVigente,
+  validarTrailing,
+  type TrailingConfig,
+} from '../trailing-take-profit';
 import type { Strategy } from '../types';
 
-export interface TdcaConfig extends CommonBotConfig {
+export interface TdcaConfig extends CommonBotConfig, TrailingConfig {
   /** Margen de cada compra. El notional real es esto por el apalancamiento. */
   amountPerBuy: string;
   intervalMinutes: number;
@@ -41,6 +49,14 @@ export interface TdcaConfig extends CommonBotConfig {
   buyOnlyIfImprovesAverage?: boolean;
   /** Cuánto por debajo del medio hace falta estar para comprar. */
   marginBelowAveragePct?: string;
+  /**
+   * Beneficio al que sale, sobre el precio medio real del venue.
+   *
+   * Con `trailingTakeProfit` encendido este campo NO cambia de unidad ni de
+   * sitio: cambia de papel. Deja de ser «el precio al que salgo» y pasa a ser
+   * «el precio en el que empiezo a seguir al máximo», que es el modelo de
+   * 3Commas y lo que evita que el usuario aprenda un campo nuevo (spec 042).
+   */
   takeProfitPct: string;
   maxPositionNotional?: string | null;
 }
@@ -123,6 +139,7 @@ const TDCA_FIELDS: readonly FieldMeta[] = [
     risky: true,
     unit: 'USDC',
   },
+  ...camposTrailing('tdca'),
 ] as const;
 
 const META: StrategyMeta = {
@@ -143,6 +160,7 @@ export const tdca: Strategy<TdcaConfig> = {
       buyOnlyIfImprovesAverage: true,
       marginBelowAveragePct: '0.5',
       takeProfitPct: '1.5',
+      ...TRAILING_DEFAULTS,
       leverage: 1,
       marginMode: 'ISOLATED',
       direction: 'LONG',
@@ -168,6 +186,8 @@ export const tdca: Strategy<TdcaConfig> = {
     if (!tp.isFinite() || tp.lte(0)) {
       issues.push(err('takeProfitPct', 'El take profit debe ser mayor que cero.'));
     }
+
+    issues.push(...validarTrailing(cfg));
 
     // El techo real del bot es amountPerBuy × maxBuysPerCycle. Si supera la
     // inversión total declarada, el usuario está mirando un número que no es
@@ -266,20 +286,69 @@ export const tdca: Strategy<TdcaConfig> = {
     const orders: DesiredOrder[] = [];
     const immediate: DesiredOrder[] = [];
     const blockers: string[] = [];
+    const scratchPatch: Record<string, unknown> = {};
+    let notaSalida = '';
 
     // ── Salida: siempre viva mientras haya posición ──
     if (pos.gt(0) && ctx.position) {
+      const salida = exitSide(cfg.direction);
       const tp = takeProfitPrice(ctx.position.entryPrice, cfg.takeProfitPct, cfg.direction);
-      orders.push({
-        clientOrderId: makeCoid(ctx.botId, seq, LevelKind.TAKE_PROFIT, 0),
-        levelKind: LevelKind.TAKE_PROFIT,
-        levelIndex: 0,
-        side: exitSide(cfg.direction),
-        type: 'LIMIT',
-        price: px(ctx.market, tp, exitSide(cfg.direction)),
-        qty: qy(ctx.market, pos),
-        reduceOnly: true,
-      });
+
+      if (cfg.trailingTakeProfit) {
+        // Con el seguimiento encendido, `tp` deja de ser el precio de salida y
+        // pasa a ser el de ACTIVACIÓN. Mientras no se cruce no hay orden de
+        // beneficio —no hay nada que asegurar— y el `stopLossPct` que el motor
+        // inyecta sigue cubriendo la bajada (spec 042 R-4).
+        const t = trailingVigente({
+          scratch: ctx.cycle.scratch,
+          extremos: ctx.extremos,
+          mark,
+          activacion: tp,
+          direction: cfg.direction,
+          callbackPct: cfg.trailingCallbackPct ?? TRAILING_DEFAULTS.trailingCallbackPct,
+          repriceBps: cfg.trailingRepriceBps ?? TRAILING_DEFAULTS.trailingRepriceBps,
+          now: ctx.now,
+        });
+        Object.assign(scratchPatch, t.patch);
+        notaSalida = ' ' + t.nota;
+
+        if (t.disparo) {
+          const precio = px(ctx.market, t.disparo, salida);
+          orders.push({
+            clientOrderId: makeCoid(ctx.botId, seq, LevelKind.TAKE_PROFIT, 0),
+            levelKind: LevelKind.TAKE_PROFIT,
+            levelIndex: 0,
+            side: salida,
+            type: 'MARKET',
+            price: precio,
+            triggerPrice: precio,
+            // Un take profit que SIGUE al precio dispara a la BAJA en un largo:
+            // en la contabilidad es un take profit y en el disparo es un stop.
+            // Sin este `intent` el motor lo armaría al revés y el venue cerraría
+            // la posición al colocarlo, que es el fallo 001/F-80 (spec 042 R-1).
+            intent: 'SL',
+            qty: qy(ctx.market, pos),
+            reduceOnly: true,
+          });
+        }
+      } else {
+        // Apagado: se borra su estado. Sin esto, volver a encenderlo recupera
+        // el máximo de antes y coloca un disparador que puede estar ya por
+        // encima del mercado, o sea un cierre a mercado inmediato (spec 044 R-1).
+        const limpieza = limpiarTrailing(ctx.cycle.scratch);
+        if (limpieza) Object.assign(scratchPatch, limpieza);
+
+        orders.push({
+          clientOrderId: makeCoid(ctx.botId, seq, LevelKind.TAKE_PROFIT, 0),
+          levelKind: LevelKind.TAKE_PROFIT,
+          levelIndex: 0,
+          side: salida,
+          type: 'LIMIT',
+          price: px(ctx.market, tp, salida),
+          qty: qy(ctx.market, pos),
+          reduceOnly: true,
+        });
+      }
 
       // El STOP_LOSS lo añade el motor, igual para las siete estrategias.
       // Ver `BotRunner.withStopLoss`.
@@ -356,9 +425,10 @@ export const tdca: Strategy<TdcaConfig> = {
       orders,
       immediate,
       note:
-        blockers.length > 0
+        (blockers.length > 0
           ? 'Sin comprar: ' + blockers.join('; ') + '.'
-          : 'Comprando (' + (ctx.cycle.entriesFilled + 1) + '/' + maxBuys + ').',
+          : 'Comprando (' + (ctx.cycle.entriesFilled + 1) + '/' + maxBuys + ').') + notaSalida,
+      scratchPatch: Object.keys(scratchPatch).length ? scratchPatch : undefined,
     };
   },
 };

@@ -699,3 +699,93 @@ describe('conservar una cotizacion no puede anular las protecciones', () => {
     expect(segundo.orders.find((o) => o.levelKind === LevelKind.QUOTE_BID)?.price).toBe(viva.price);
   });
 });
+
+describe('el TTL de salida no tira la orden que el mercado viene a buscar (spec 037 R-3)', () => {
+  /**
+   * La tercera puerta del defecto del spec 035, que quedo abierta.
+   *
+   * `exitOrderTtlSeconds` promete «la retira y la vuelve a poner mas cerca del
+   * mercado actual: cierra antes, a peor precio». Eso solo es verdad cuando el
+   * mercado se ha ALEJADO de la salida. Si se ha acercado, al recotizar el
+   * centro se mueve con el precio y la salida nueva sale MAS LEJOS que la
+   * vieja: el TTL hace justo lo contrario de lo que promete, y de paso aparta
+   * la orden el tick anterior a cobrarla.
+   *
+   * Se prueba con posicion LARGA, asi que la venta es la salida.
+   */
+  const t0 = 1_000_000;
+  const TTL = 30;
+
+  const salidaTrasElTtl = (kind: StrategyKind, midDespues: string) => {
+    const estrategia = getStrategy(kind);
+    const config = {
+      ...estrategia.defaults(),
+      ...comun,
+      buyDistanceBps: '20',
+      sellDistanceBps: '20',
+      layers: 1,
+      refreshSeconds: 15,
+      fillCooldownSeconds: 0,
+      exitOrderTtlSeconds: TTL,
+      orderMaxAgeSeconds: 0,
+      dynamicSpread: false,
+      inventoryPriceAdjustment: false,
+      feeEstimateBps: '0',
+      minProfitMarginBps: '0',
+      safetyBufferBps: '0',
+      orderBookMarginBps: '0',
+    } as unknown as BotConfig;
+
+    const ctx = (price: string, now: number, extra: Record<string, unknown>) =>
+      makeContext({
+        strategy: kind,
+        config,
+        price,
+        market: MERCADO_MM,
+        now,
+        position: makePosition('1', '100'),
+        ...extra,
+      });
+
+    const primero = estrategia.plan(ctx('100', t0, { cycle: { scratch: { cycleSeq: 1 } } }));
+    const ask = primero.orders.find((o) => o.levelKind === LevelKind.QUOTE_ASK)!;
+    expect(ask.price).toBe('100.20');
+
+    const viva: VenueOrder = {
+      venue: 'HYPERLIQUID',
+      symbol: 'BTC',
+      clientOrderId: ask.clientOrderId,
+      venueOrderId: 'v1',
+      side: 'SELL',
+      type: 'POST_ONLY',
+      price: ask.price,
+      qty: ask.qty,
+      filledQty: '0',
+      avgPrice: null,
+      status: 'OPEN',
+      reduceOnly: false,
+      createdAt: t0,
+    };
+
+    // Pasado el TTL con creces.
+    const segundo = estrategia.plan(
+      ctx(midDespues, t0 + (TTL + 10) * 1000, {
+        openOrders: [viva],
+        cycle: { scratch: { ...(primero.scratchPatch ?? {}), cycleSeq: 1 } },
+      }),
+    );
+    return segundo.orders.find((o) => o.levelKind === LevelKind.QUOTE_ASK)?.price;
+  };
+
+  for (const kind of [StrategyKind.MARKET_MAKER, StrategyKind.MARKET_MAKER_V2]) {
+    it(`${kind}: con el mercado subiendo hacia ella, la salida sobrevive al TTL`, () => {
+      expect(salidaTrasElTtl(kind, '100.05')).toBe('100.20');
+    });
+
+    it(`${kind}: pero si el mercado se ha alejado, el TTL sigue caducandola`, () => {
+      // La conducta que el campo promete y que hay que conservar: aqui la
+      // salida se quedo atras y el tick siguiente la repone mas abajo.
+      expect(salidaTrasElTtl(kind, '99.90')).toBeUndefined();
+    });
+  }
+});

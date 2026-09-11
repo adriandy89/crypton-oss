@@ -46,17 +46,30 @@ export function revisarOrden(
   order: DesiredOrder,
   entradasVivas: boolean,
   /**
-   * Precio de marca, si se conoce. Solo lo usa el STOP_LOSS: su `price` es el
-   * precio de DISPARO, y medir ahí el mínimo del venue dejaba sin red a una
-   * posición de 10,5 USDC con un stop al −10 % (9,45 al disparo, por debajo de
-   * 10). Lo que el venue cierra es la posición que hay, al precio que hay; el
-   * disparo solo dice cuándo (001/F-91). El tick y el paso los garantiza ya el
-   * redondeo de `withStopLoss`, así que redondear el mark aquí no quita nada.
+   * Precio de marca, si se conoce. Lo usa toda CONDICIONAL A MERCADO: su
+   * `price` es el precio de DISPARO, y medir ahí el mínimo del venue dejaba sin
+   * red a una posición de 10,5 USDC con un stop al −10 % (9,45 al disparo, por
+   * debajo de 10). Lo que el venue cierra es la posición que hay, al precio que
+   * hay; el disparo solo dice cuándo (001/F-91). El tick y el paso los garantiza
+   * ya el redondeo de quien la emite, así que redondear el mark aquí no quita
+   * nada.
+   *
+   * La regla era `levelKind === 'STOP_LOSS'` y se quedó corta en cuanto hubo un
+   * TAKE_PROFIT que también es condicional: el seguimiento del spec 042 pone su
+   * disparador un retroceso POR DEBAJO de la marca, así que una posición de 13
+   * USDC se medía como 11,7 y la salida no se colocaba contra un mínimo de 12
+   * (spec 044 R-2). En corto es al revés —el disparador queda por encima— y la
+   * puerta era más permisiva de la cuenta.
    */
   markPrice?: string | null,
 ): Veredicto {
-  const esStop = order.levelKind === 'STOP_LOSS';
-  const referencia = esStop && markPrice ? markPrice : order.price;
+  // El stop-loss sigue entrando por su nombre y no solo por su forma: la regla
+  // se AMPLIA, no se estrecha. Un stop emitido sin disparador es igualmente una
+  // orden a mercado que cierra la posicion, y medirlo en la marca sigue siendo
+  // lo correcto.
+  const aMercado =
+    order.levelKind === 'STOP_LOSS' || (order.type === 'MARKET' && order.triggerPrice != null);
+  const referencia = aMercado && markPrice ? markPrice : order.price;
   const check = normalizeOrder(market, referencia, order.qty, order.side);
   if (check.violations.length === 0) return { motivo: 'OK' };
 

@@ -25,6 +25,7 @@ const GROUP_ORDER = [
   'timing',
   'levels',
   'dynamicSpread',
+  'intelligence',
   'priceSource',
   'activation',
   'venue',

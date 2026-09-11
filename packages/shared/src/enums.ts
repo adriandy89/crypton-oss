@@ -34,6 +34,10 @@ export const StrategyKind = {
   GRIDMART: 'GRIDMART',
   MARKET_MAKER: 'MARKET_MAKER',
   MARKET_MAKER_V2: 'MARKET_MAKER_V2',
+  /** Seguimiento de tendencia: la unica que gana en linea recta (spec 040). */
+  TREND_FOLLOW: 'TREND_FOLLOW',
+  /** Entra una vez y sale siguiendo al maximo desde su objetivo (spec 043). */
+  TRAILING_PROFIT: 'TRAILING_PROFIT',
 } as const;
 export type StrategyKind = (typeof StrategyKind)[keyof typeof StrategyKind];
 

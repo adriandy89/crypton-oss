@@ -11,6 +11,8 @@ import {
   SourceMarketType,
   StrategyKind,
   type BotContext,
+  type CycleState,
+  type Fill,
   type CommonBotConfig,
   type DesiredOrder,
   type DesiredState,
@@ -21,10 +23,11 @@ import {
   type ValidationIssue,
   type ValidationResult,
 } from '@crypton/shared';
-import { makeCoid } from '../client-order-id';
+import { makeCoid, parseCoid } from '../client-order-id';
 import {
   buildPreview,
   commonFieldsWith,
+  comunCon,
   err,
   invalidPreview,
   px,
@@ -39,8 +42,19 @@ import type { Strategy } from '../types';
 import { validatePriceBand, validateRiskThresholds } from './market-maker';
 import {
   activationGate,
+  anotarFill,
   BPS,
-  bookMid,
+  centroDeMercado,
+  centroSesgado,
+  deriva,
+  factorDeTamano,
+  fundingAdverso,
+  fundingBps,
+  INTEL_DEFAULTS,
+  INTEL_FIELDS,
+  penalizacionMarkout,
+  resolverMarkout,
+  type IntelConfig,
   expiredQuotes,
   hayLibro,
   inventoryOf,
@@ -69,7 +83,7 @@ import {
  * (el anillo en `cycle.scratch`) y la posibilidad de anclar a una fuente ajena
  * al venue.
  */
-export interface MarketMakerV2Config extends CommonBotConfig {
+export interface MarketMakerV2Config extends CommonBotConfig, IntelConfig {
   orderSizePerSide: string;
   maxBotPositionValue: string;
   behaviorPreset?: 'CONSERVATIVE' | 'BALANCED' | 'AGGRESSIVE';
@@ -102,6 +116,12 @@ export interface MarketMakerV2Config extends CommonBotConfig {
   maxDynamicSpreadBps?: string;
 
   useFullSizeUntilMax?: boolean;
+  /** El sesgo de inventario que la V1 tenía y la V2 no (spec 039 R-3). */
+  inventoryPriceAdjustment?: boolean;
+  inventorySkewFactor?: string;
+  /** Por encima de esta eficiencia de Kaufman, no se añade contra la deriva. */
+  trendGuardEfficiency?: string;
+  volEstimator?: 'RANGE' | 'PARKINSON';
   layers: number;
   layerDistanceMultiplier: string;
   layerSizeMultiplier: string;
@@ -190,7 +210,7 @@ const V2_FIELDS: readonly FieldMeta[] = [
     max: 2000,
     step: 1,
     required: true,
-    default: 40,
+    default: 20,
     group: 'quoting',
     unit: 'bps',
     advanced: true,
@@ -204,7 +224,7 @@ const V2_FIELDS: readonly FieldMeta[] = [
     max: 2000,
     step: 1,
     required: true,
-    default: 40,
+    default: 20,
     group: 'quoting',
     unit: 'bps',
     advanced: true,
@@ -363,7 +383,7 @@ const V2_FIELDS: readonly FieldMeta[] = [
     max: 86400,
     step: 5,
     required: false,
-    default: 120,
+    default: 300,
     group: 'timing',
     unit: 'sec',
     advanced: true,
@@ -636,7 +656,72 @@ const V2_FIELDS: readonly FieldMeta[] = [
     group: 'activation',
     advanced: true,
   },
+  {
+    key: 'inventoryPriceAdjustment',
+    kind: 'boolean',
+    mutability: Mutability.HOT,
+    labelKey: 'strategy.mm.inventoryPriceAdjustment',
+    helpKey: 'strategy.mm.inventoryPriceAdjustmentHelp',
+    required: false,
+    default: false,
+    group: 'intelligence',
+    advanced: true,
+  },
+  {
+    key: 'inventorySkewFactor',
+    kind: 'number',
+    mutability: Mutability.HOT,
+    labelKey: 'strategy.mm.inventorySkewFactor',
+    helpKey: 'strategy.mm.inventorySkewFactorHelp',
+    min: 0,
+    max: 3,
+    step: 0.05,
+    required: false,
+    default: 0,
+    group: 'intelligence',
+    advanced: true,
+  },
+  {
+    key: 'trendGuardEfficiency',
+    kind: 'number',
+    mutability: Mutability.HOT,
+    labelKey: 'strategy.mmv2.trendGuardEfficiency',
+    helpKey: 'strategy.mmv2.trendGuardEfficiencyHelp',
+    min: 0,
+    max: 1,
+    step: 0.05,
+    required: false,
+    default: 0,
+    group: 'intelligence',
+    advanced: true,
+  },
+  {
+    key: 'volEstimator',
+    kind: 'enum',
+    mutability: Mutability.HOT,
+    labelKey: 'strategy.mmv2.volEstimator',
+    helpKey: 'strategy.mmv2.volEstimatorHelp',
+    options: ['RANGE', 'PARKINSON'],
+    required: false,
+    default: 'RANGE',
+    group: 'intelligence',
+    control: 'segment',
+    advanced: true,
+  },
 ] as const;
+
+/**
+ * Comunes que esta estrategia redefine en `defaults()`.
+ *
+ * `meta.default` no lo lee el formulario —la app siembra con `defaults()`—,
+ * pero sí el panel de ayuda, que le enseña al usuario «por defecto: X», y
+ * `coerceConfig` del asesor cuando no puede interpretar un valor. Con los dos
+ * números en desacuerdo, la ayuda mentía (spec 037 R-5).
+ */
+const V2_COMUNES: FieldMeta[] = [
+  comunCon('marginMode', { default: 'CROSS' }),
+  comunCon('leverage', { default: 1 }),
+];
 
 const V2_DIRECTION: FieldMeta = {
   key: 'direction',
@@ -654,7 +739,7 @@ const META: StrategyMeta = {
   kind: StrategyKind.MARKET_MAKER_V2,
   labelKey: 'strategy.mmv2.label',
   descriptionKey: 'strategy.mmv2.description',
-  fields: [...commonFieldsWith([V2_DIRECTION]), ...V2_FIELDS],
+  fields: [...commonFieldsWith([V2_DIRECTION, ...V2_COMUNES]), ...V2_FIELDS, ...INTEL_FIELDS],
 };
 
 /**
@@ -770,13 +855,21 @@ function validateFairSource(cfg: MarketMakerV2Config): ValidationIssue[] {
  * Binance es porque no se fía del mid local, y usar el local sin avisar sería
  * hacer justo lo contrario de lo que pidió.
  */
-export function resolveAnchor(cfg: MarketMakerV2Config, ctx: BotContext): Decimal | null {
+export function resolveAnchor(
+  cfg: MarketMakerV2Config,
+  ctx: BotContext,
+  baseBps: Decimal = D(0),
+): Decimal | null {
   const origin = cfg.fairPriceOrigin ?? FairPriceOrigin.SOURCE_GLOBAL;
   if (origin === FairPriceOrigin.VENUE_MARK) return D(ctx.ticker.mark);
-  if (origin === FairPriceOrigin.VENUE_MID) return bookMid(ctx.ticker);
+  // El microprecio y el desequilibrio hablan del LIBRO LOCAL, así que solo
+  // aplican cuando el ancla es ese libro. Con el precio de marca o con una
+  // fuente externa se usa lo que el usuario pidió, sin mezclar referencias
+  // (spec 039 R-1, R-2).
+  if (origin === FairPriceOrigin.VENUE_MID) return centroDeMercado(cfg, ctx.ticker, baseBps);
 
   const source = cfg.priceSource ?? PriceSource.EXCHANGE;
-  if (source === PriceSource.EXCHANGE) return bookMid(ctx.ticker);
+  if (source === PriceSource.EXCHANGE) return centroDeMercado(cfg, ctx.ticker, baseBps);
 
   if (!ctx.fairPrice) return null;
   const fair = D(ctx.fairPrice);
@@ -828,6 +921,13 @@ export const marketMakerV2: Strategy<MarketMakerV2Config> = {
       layers: 1,
       layerDistanceMultiplier: '1',
       layerSizeMultiplier: '1',
+      // El sesgo de inventario que la V1 tiene desde siempre llega aquí
+      // APAGADO: encenderlo cambiaría dónde cotiza un bot V2 en marcha.
+      inventoryPriceAdjustment: false,
+      inventorySkewFactor: '0',
+      trendGuardEfficiency: '0',
+      volEstimator: 'RANGE',
+      ...INTEL_DEFAULTS,
       priceSource: PriceSource.EXCHANGE,
       fairPriceOrigin: FairPriceOrigin.SOURCE_GLOBAL,
       sourceMarketType: SourceMarketType.PERP,
@@ -860,6 +960,18 @@ export const marketMakerV2: Strategy<MarketMakerV2Config> = {
     const layers = Math.floor(cfg.layers ?? 0);
     if (layers < 1 || layers > 10) {
       issues.push(err('layers', 'Los niveles de cotización deben estar entre 1 y 10.'));
+    }
+    // Varios niveles a la misma distancia son el mismo precio repetido: gastan
+    // cuota y el venue puede rechazarlos como duplicados. Es el valor de
+    // fábrica del multiplicador en la V2, así que basta con subir `layers`
+    // para caer en ello (spec 037 R-2).
+    if (layers > 1 && D(cfg.layerDistanceMultiplier ?? 1).lte(1)) {
+      issues.push(
+        err(
+          'layerDistanceMultiplier',
+          'Con más de un nivel, el multiplicador de distancia tiene que ser mayor que 1: con 1 todos los niveles caen al mismo precio.',
+        ),
+      );
     }
     if (Math.floor(cfg.refreshSeconds ?? 0) < 15) {
       issues.push(
@@ -1023,8 +1135,14 @@ export const marketMakerV2: Strategy<MarketMakerV2Config> = {
 
     // Sin histórico no hay volatilidad que medir: el preview enseña el
     // diferencial en reposo, que es el suelo de lo que el bot va a cotizar.
-    const buySpread = composeSpreadBps(cfg, D(cfg.buyDistanceBps), D(0)).bps;
-    const sellSpread = composeSpreadBps(cfg, D(cfg.sellDistanceBps), D(0)).bps;
+    // Se guarda el objeto entero y no solo `bps` porque el techo se aplica
+    // DESPUÉS de los multiplicadores de capa y de preset, igual que en `plan()`.
+    // Sin esto la vista previa pintaba el diferencial bruto: con
+    // `buyDistanceBps: 500` y un techo de 50, prometía 500 bps y el bot colocaba
+    // a 50. Y es la pantalla que el usuario mira antes de poner dinero
+    // (spec 037 R-4).
+    const buy = composeSpreadBps(cfg, D(cfg.buyDistanceBps), D(0));
+    const sell = composeSpreadBps(cfg, D(cfg.sellDistanceBps), D(0));
 
     const levels: RawLevel[] = [];
     const dir = cfg.direction ?? 'NEUTRAL';
@@ -1033,7 +1151,7 @@ export const marketMakerV2: Strategy<MarketMakerV2Config> = {
       const unit = size.mul(sizeWeights[l]);
 
       if (dir === 'NEUTRAL' || dir === 'LONG') {
-        const bps = buySpread.mul(distWeights[l]).mul(profile.distance);
+        const bps = conTecho(buy, buy.bps.mul(distWeights[l]).mul(profile.distance));
         const price = mid.mul(D(1).minus(bps.div(BPS)));
         const { qty, notional } = sizeToQty(cfg.sizingMode, unit, price);
         levels.push({
@@ -1048,7 +1166,7 @@ export const marketMakerV2: Strategy<MarketMakerV2Config> = {
       }
 
       if (dir === 'NEUTRAL' || dir === 'SHORT') {
-        const bps = sellSpread.mul(distWeights[l]).mul(profile.distance);
+        const bps = conTecho(sell, sell.bps.mul(distWeights[l]).mul(profile.distance));
         const price = mid.mul(D(1).plus(bps.div(BPS)));
         const { qty, notional } = sizeToQty(cfg.sizingMode, unit, price);
         levels.push({
@@ -1070,8 +1188,21 @@ export const marketMakerV2: Strategy<MarketMakerV2Config> = {
       direction: cfg.direction === 'SHORT' ? 'SHORT' : 'LONG',
       leverage: cfg.leverage,
       marginMode: cfg.marginMode,
+      // Con dirección NEUTRAL el bot cotiza los DOS lados, así que mezclar
+      // compras y ventas en una sola media ponderada da una entrada media y una
+      // liquidación que no existen. Es lo mismo que `neutral-grid` resolvió en
+      // 001/F-14 y que aquí faltaba (spec 037 R-6).
+      neutral: cfg.direction === 'NEUTRAL',
       issues: validation.issues,
     });
+  },
+
+  /** Anota la ejecución para el markout. Apagado no toca `scratch` (039 R-7). */
+  onFill(ctx: BotContext, fill: Fill, cycle: CycleState): CycleState {
+    const cfg = ctx.config as unknown as MarketMakerV2Config;
+    const pend = anotarFill(cycle.scratch, fill, ctx.now, cfg.markoutHorizonSeconds);
+    if (!pend) return cycle;
+    return { ...cycle, scratch: { ...cycle.scratch, mkPend: pend } };
   },
 
   plan(ctx: BotContext): DesiredState {
@@ -1082,7 +1213,10 @@ export const marketMakerV2: Strategy<MarketMakerV2Config> = {
     const scratchPatch: Record<string, unknown> = {};
 
     // ── 1. Precio de referencia ──
-    const anchorNow = resolveAnchor(cfg, ctx);
+    // La distancia base, arriba del todo: el sesgo por desequilibrio se expresa
+    // en fracción de ella (spec 039).
+    const baseBps = D(cfg.buyDistanceBps).plus(cfg.sellDistanceBps).div(2);
+    const anchorNow = resolveAnchor(cfg, ctx, baseBps);
     if (anchorNow == null) {
       return {
         orders: [],
@@ -1128,7 +1262,12 @@ export const marketMakerV2: Strategy<MarketMakerV2Config> = {
 
     const cooldownMs = Math.max(0, Math.floor(cfg.fillCooldownSeconds ?? 0)) * 1000;
     const lastFillAt = ctx.cycle.lastEntryAt ?? 0;
-    const cooling = cooldownMs > 0 && quotedMid != null && ctx.now - lastFillAt < cooldownMs;
+    // `lastFillAt > 0` y no `quotedMid != null`, como en la V1: sin ninguna
+    // ejecución `lastEntryAt` es nulo, y `now - 0 < cooldownMs` es cierto con
+    // cualquier reloj pequeño. En producción `now` es epoch y nunca se cumple,
+    // pero en backtest y en dry-run con reloj sintético el bot entraba en
+    // enfriamiento permanente sin haber ejecutado nada (spec 037 R-8).
+    const cooling = cooldownMs > 0 && lastFillAt > 0 && ctx.now - lastFillAt < cooldownMs;
 
     // Cotizaciones caducadas: por edad («actualizar órdenes después de») o por
     // el TTL del lado que sale. Se comprueban SOLO nuestros ids, generándolos,
@@ -1179,6 +1318,7 @@ export const marketMakerV2: Strategy<MarketMakerV2Config> = {
       anchorNow,
       cfg.volatilitySampleSeconds,
       shouldRequote && cfg.dynamicSpread !== false,
+      cfg.volEstimator ?? 'RANGE',
     );
     if (vol.samples) scratchPatch['volSamples'] = vol.samples;
     // La volatilidad que fija los precios es la de la ÚLTIMA recotización.
@@ -1199,6 +1339,37 @@ export const marketMakerV2: Strategy<MarketMakerV2Config> = {
     const breach = limitBreach(cfg, atCap, scratch);
 
     // ── 6. Diferencial compuesto ──
+    // El sesgo de inventario que la V1 tenía y la V2 no. Misma función, para
+    // que no sean dos implementaciones parecidas (spec 039 R-3).
+    const skewFactor =
+      cfg.inventoryPriceAdjustment === false ? D(0) : D(cfg.inventorySkewFactor ?? 0);
+    const porInventario = centroSesgado(mid, inv.ratio, skewFactor, baseBps);
+    const fSkew = D(cfg.fundingSkewFactor ?? 0);
+    const fBps = fSkew.gt(0) ? fundingBps(ctx.ticker) : null;
+    const centro = fBps ? porInventario.mul(D(1).minus(fSkew.mul(fBps).div(BPS))) : porInventario;
+
+    // Markout y filtro de tendencia, los dos apagados de fábrica.
+    const mk = resolverMarkout(scratch, mid, ctx.now, cfg.markoutHorizonSeconds);
+    if (mk.patch) Object.assign(scratchPatch, mk.patch);
+    const sens = D(cfg.markoutSensitivity ?? 0);
+    const castigoBid = penalizacionMarkout(mk.bidBps, sens);
+    const castigoAsk = penalizacionMarkout(mk.askBps, sens);
+
+    // Filtro de tendencia: por encima de esta eficiencia de Kaufman el mercado
+    // va en línea recta, que es el terreno donde un market maker acumula todo
+    // el inventario del lado equivocado. Deja de AÑADIR contra la deriva; el
+    // lado que reduce sigue vivo, como con las bandas de precio (spec 039 R-8).
+    const umbralTendencia = D(cfg.trendGuardEfficiency ?? 0);
+    const tendencia = umbralTendencia.gt(0) ? deriva(scratch['volSamples']) : null;
+    const contraTendencia =
+      tendencia && tendencia.eficiencia.gte(umbralTendencia)
+        ? tendencia.bps.gt(0)
+          ? 'SELL'
+          : tendencia.bps.lt(0)
+            ? 'BUY'
+            : null
+        : null;
+
     const profile = profileOf(cfg.behaviorPreset);
     const buy = composeSpreadBps(cfg, D(cfg.buyDistanceBps), volBps);
     const sell = composeSpreadBps(cfg, D(cfg.sellDistanceBps), volBps);
@@ -1227,6 +1398,13 @@ export const marketMakerV2: Strategy<MarketMakerV2Config> = {
     );
 
     const orders: DesiredOrder[] = [];
+    // Un precio ya colocado no se repite: dos capas al mismo precio no dan más
+    // profundidad que una, gastan cuota y el venue puede rechazarlas como
+    // duplicadas. Pasa con el multiplicador de distancia en 1 —el valor de
+    // fábrica de la V2— y también cuando el tick del venue redondea dos capas
+    // vecinas al mismo sitio, que es el caso que `validate()` no puede ver
+    // porque no conoce el precio (spec 037 R-2).
+    const colocados = { BUY: new Set<string>(), SELL: new Set<string>() };
     let projectedLong = inv.exposure.gt(0) ? inv.exposure : D(0);
     let projectedShort = inv.exposure.lt(0) ? inv.exposure.abs() : D(0);
     const minNotional = D(ctx.market.minNotional ?? 0);
@@ -1234,15 +1412,29 @@ export const marketMakerV2: Strategy<MarketMakerV2Config> = {
     for (let l = 0; l < layers; l++) {
       const unit = size.mul(sizeWeights[l]);
       if (unit.lte(0)) continue;
+      const kTam = cfg.sizeSkewFactor ?? 0;
+      const unitBuy = unit.mul(factorDeTamano(buyRole, inv.ratio, kTam));
+      const unitSell = unit.mul(factorDeTamano(sellRole, inv.ratio, kTam));
 
       // ── Compras ──
       const buyMul = regimeMul[buyRole];
       if (
         quoteBids &&
         buyMul.gt(0) &&
-        !(buyRole === 'adding' && (band.blockBuy || breach.pauseEntries))
+        !(
+          buyRole === 'adding' &&
+          (band.blockBuy ||
+            breach.pauseEntries ||
+            contraTendencia === 'BUY' ||
+            fundingAdverso(ctx.ticker, 'BUY', cfg.maxAdverseFundingBps))
+        )
       ) {
-        const bps = conTecho(buy, buy.bps.mul(distWeights[l]).mul(profile.distance).mul(buyMul));
+        // El castigo por markout entra ANTES del techo: la promesa de «nunca
+        // cotizo más ancho de X» tiene que seguir valiendo.
+        const bps = conTecho(
+          buy,
+          buy.bps.mul(distWeights[l]).mul(profile.distance).mul(buyMul).plus(castigoBid),
+        );
         // Acotado ANTES de dimensionar: la cantidad se calcula dividiendo por
         // el precio, así que hacerlo después dejaría el nocional descuadrado.
         const coid = makeCoid(ctx.botId, seq, LevelKind.QUOTE_BID, l);
@@ -1251,7 +1443,7 @@ export const marketMakerV2: Strategy<MarketMakerV2Config> = {
         // precio viejo sale tambien la cantidad vieja, asi que `reconcile` la da
         // por buena en vez de reemplazarla.
         const price = sinCruzarLibro(
-          precioEstable(mid.mul(D(1).minus(bps.div(BPS))), bps, seAcerca.bid, vivas.get(coid)),
+          precioEstable(centro.mul(D(1).minus(bps.div(BPS))), bps, seAcerca.bid, vivas.get(coid)),
           'BUY',
           ctx.ticker,
           ctx.market.tickSize,
@@ -1263,20 +1455,22 @@ export const marketMakerV2: Strategy<MarketMakerV2Config> = {
           // «cantidad de moneda» el tamaño va en la base y el hueco en la quote:
           // compararlos directamente hacía que el tope no frenara nada —0,5 BTC
           // «cabían» en un hueco de 1000 USDC y se colocaban 50 000.
-          const wanted = sizeToQty(cfg.sizingMode, unit, price);
+          const wanted = sizeToQty(cfg.sizingMode, unitBuy, price);
           const room = maxPos.gt(0) && !reduceOnly ? maxPos.minus(projectedLong) : wanted.notional;
           const notional = fitToRoom(cfg, wanted.notional, room, reduceOnly, minNotional);
           // Sin recorte se conserva la cantidad exacta que pidió el usuario, en
           // vez de reconstruirla dividiendo y perdiendo el último decimal.
           const qty = notional.eq(wanted.notional) ? wanted.qty : notional.div(price);
-          if (qty.gt(0)) {
+          const precio = px(ctx.market, price, 'BUY');
+          if (qty.gt(0) && !colocados.BUY.has(precio)) {
+            colocados.BUY.add(precio);
             orders.push({
               clientOrderId: coid,
               levelKind: LevelKind.QUOTE_BID,
               levelIndex: l,
               side: 'BUY',
               type: orderType,
-              price: px(ctx.market, price, 'BUY'),
+              price: precio,
               qty: qy(ctx.market, qty),
               reduceOnly,
             });
@@ -1290,12 +1484,21 @@ export const marketMakerV2: Strategy<MarketMakerV2Config> = {
       if (
         quoteAsks &&
         sellMul.gt(0) &&
-        !(sellRole === 'adding' && (band.blockSell || breach.pauseEntries))
+        !(
+          sellRole === 'adding' &&
+          (band.blockSell ||
+            breach.pauseEntries ||
+            contraTendencia === 'SELL' ||
+            fundingAdverso(ctx.ticker, 'SELL', cfg.maxAdverseFundingBps))
+        )
       ) {
-        const bps = conTecho(sell, sell.bps.mul(distWeights[l]).mul(profile.distance).mul(sellMul));
+        const bps = conTecho(
+          sell,
+          sell.bps.mul(distWeights[l]).mul(profile.distance).mul(sellMul).plus(castigoAsk),
+        );
         const coid = makeCoid(ctx.botId, seq, LevelKind.QUOTE_ASK, l);
         const price = sinCruzarLibro(
-          precioEstable(mid.mul(D(1).plus(bps.div(BPS))), bps, seAcerca.ask, vivas.get(coid)),
+          precioEstable(centro.mul(D(1).plus(bps.div(BPS))), bps, seAcerca.ask, vivas.get(coid)),
           'SELL',
           ctx.ticker,
           ctx.market.tickSize,
@@ -1307,20 +1510,22 @@ export const marketMakerV2: Strategy<MarketMakerV2Config> = {
           // «cantidad de moneda» el tamaño va en la base y el hueco en la quote:
           // compararlos directamente hacía que el tope no frenara nada —0,5 BTC
           // «cabían» en un hueco de 1000 USDC y se colocaban 50 000.
-          const wanted = sizeToQty(cfg.sizingMode, unit, price);
+          const wanted = sizeToQty(cfg.sizingMode, unitSell, price);
           const room = maxPos.gt(0) && !reduceOnly ? maxPos.minus(projectedShort) : wanted.notional;
           const notional = fitToRoom(cfg, wanted.notional, room, reduceOnly, minNotional);
           // Sin recorte se conserva la cantidad exacta que pidió el usuario, en
           // vez de reconstruirla dividiendo y perdiendo el último decimal.
           const qty = notional.eq(wanted.notional) ? wanted.qty : notional.div(price);
-          if (qty.gt(0)) {
+          const precio = px(ctx.market, price, 'SELL');
+          if (qty.gt(0) && !colocados.SELL.has(precio)) {
+            colocados.SELL.add(precio);
             orders.push({
               clientOrderId: coid,
               levelKind: LevelKind.QUOTE_ASK,
               levelIndex: l,
               side: 'SELL',
               type: orderType,
-              price: px(ctx.market, price, 'SELL'),
+              price: precio,
               qty: qy(ctx.market, qty),
               reduceOnly,
             });
@@ -1372,6 +1577,15 @@ export const marketMakerV2: Strategy<MarketMakerV2Config> = {
       sell.bps.mul(distWeights[0]).mul(profile.distance).mul(regimeMul[sellRole]),
     );
 
+    // Las que están DE VERDAD en el libro, no las deseadas. Contar
+    // `orders.length` decía «2 cotizaciones» mientras el venue las rechazaba
+    // todas, que es justo lo que el usuario necesitaba saber. El 029 lo corrigió
+    // en la V1 y no se portó (spec 037 R-7).
+    const enLibro = ctx.openOrders.filter((o) => {
+      const parsed = o.clientOrderId ? parseCoid(o.clientOrderId) : null;
+      return parsed !== null && (parsed.kind === 'QUOTE_BID' || parsed.kind === 'QUOTE_ASK');
+    }).length;
+
     // Un bot que no cotiza tiene que decir por qué: «0 cotizaciones» a secas
     // se lee como una avería del motor (spec 029).
     const note =
@@ -1387,8 +1601,12 @@ export const marketMakerV2: Strategy<MarketMakerV2Config> = {
           '), inventario ' +
           inv.loadPct.toFixed(0) +
           ' % del tope, ' +
-          orders.length +
+          enLibro +
           ' cotizaciones' +
+          (mk.muestras > 0
+            ? ', markout ' + mk.bidBps.toFixed(1) + '/' + mk.askBps.toFixed(1) + ' bps'
+            : '') +
+          (contraTendencia ? ', sin añadir contra la tendencia' : '') +
           (cooling ? ', espera tras ejecución' : '') +
           (regime === 'NORMAL' ? '' : '. Modo ' + regime.toLowerCase()) +
           '.');

@@ -1,5 +1,6 @@
 import type {
   BotConfig,
+  CandleInterval,
   CommonBotConfig,
   BotContext,
   CycleState,
@@ -74,6 +75,23 @@ export interface Strategy<C extends CommonBotConfig = BotConfig> {
    * Con esto el ciclo es la vida del bot hasta que se para o se cierra a mano.
    */
   readonly keepCycleOnFlat?: boolean;
+
+  /**
+   * Velas que esta estrategia necesita en `plan()`, si necesita alguna.
+   *
+   * Va en el CÓDIGO y no en la configuración del usuario a propósito: así el
+   * principio del motor —reconciliar contra el libro y no contra un gráfico—
+   * sigue valiendo para todas las que no la declaran, y es imposible encender
+   * por descuido un sondeo de velas en un bot que no las usa.
+   *
+   * El motor las sirve de una caché compartida por `(venue, símbolo,
+   * intervalo)`: N bots del mismo par son una petición (spec 038).
+   *
+   * Es una FUNCIÓN de la configuración y no una constante porque el intervalo
+   * es del bot, no de la estrategia: dos bots de tendencia sobre el mismo par
+   * pueden querer uno velas de 1 h y otro de 1 d (spec 040).
+   */
+  readonly candles?: (config: C) => { interval: CandleInterval; bars: number };
 
   /** Valores por defecto sensatos para un usuario que empieza. */
   defaults(): Record<string, unknown>;

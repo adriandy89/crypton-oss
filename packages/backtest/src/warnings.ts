@@ -60,6 +60,14 @@ export function fidelityWarnings(opts: {
       'kill-switch, acción al acercarse la liquidación). En el replay solo existen el ' +
       'stop-loss y la liquidación.',
 
+    // 8 bis. Los datos de microestructura que el replay no puede reconstruir: una
+    //    vela no dice cuánta cantidad había en el toque, y la serie no trae la
+    //    tasa de funding. Una estrategia que los mire se comporta aquí como si
+    //    el venue no los publicara (spec 038).
+    'Sin tamaños del toque ni tasa de funding: una vela no dice cuánta cantidad había ' +
+      'a cada lado del libro. Una estrategia que use el microprecio, el desequilibrio o ' +
+      'el funding se comporta en el replay como si el venue no los publicara.',
+
     // 8. Hueco que comparte con el modo simulación actual; se declara, no se oculta.
     'El margen retenido por las órdenes en reposo no se descuenta del saldo ' +
       'disponible, así que el capital libre sale algo sobreestimado.',
@@ -71,6 +79,30 @@ export function fidelityWarnings(opts: {
 
   // Los market makers son los que más pierden con «un plan() por vela»: todo lo
   // que los define ocurre entre velas, y aquí no ocurre (001/F-65).
+  // La de tendencia es la unica que decide sobre VELAS, asi que el replay -que
+  // corre plan() una vez por vela- reproduce su cadencia casi exactamente. Lo
+  // que no reproduce es el stop de seguimiento entre velas: aqui solo puede
+  // moverse una vez por vela, y en el motor se mueve cada quince segundos.
+  if (opts.strategy === StrategyKind.TREND_FOLLOW) {
+    avisos.push(
+      'Tendencia: el stop de seguimiento se mueve UNA vez por vela, no cada quince segundos. ' +
+        'En un movimiento rapido el replay lo deja mas atras que el motor, asi que tiende a ' +
+        'salir peor de lo que saldria en real, no mejor.',
+    );
+  }
+
+  // El seguimiento de beneficio tiene el mismo hueco que el stop de tendencia, y
+  // uno mas suyo: la MARCA DE AGUA del motor -el maximo visto entre dos
+  // planificaciones- no existe en el replay, que solo ve el cierre de la vela.
+  // Los dos huecos empujan en la misma direccion: el replay sale mas abajo.
+  if (opts.strategy === StrategyKind.TRAILING_PROFIT) {
+    avisos.push(
+      'Seguimiento de beneficio: el disparador se mueve UNA vez por vela y el maximo se mide ' +
+        'sobre el cierre, no sobre lo que el motor ve entre revisiones. Las dos cosas hacen que ' +
+        'el replay siga al maximo con retraso y salga por debajo de lo que saldria en real.',
+    );
+  }
+
   const esMarketMaker =
     opts.strategy === StrategyKind.MARKET_MAKER || opts.strategy === StrategyKind.MARKET_MAKER_V2;
   if (esMarketMaker) {

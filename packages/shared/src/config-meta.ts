@@ -26,6 +26,8 @@ export type FieldGroup =
   | 'timing'
   | 'levels'
   | 'dynamicSpread'
+  /** Microestructura: microprecio, desequilibrio, funding, markout (spec 039). */
+  | 'intelligence'
   | 'priceSource'
   | 'activation'
   | 'venue';

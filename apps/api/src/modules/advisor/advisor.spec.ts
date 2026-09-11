@@ -1,7 +1,7 @@
 import { StrategyKind } from '@crypton/db';
 import { composeSpreadBps, getStrategy } from '@crypton/strategy-core';
 import { D, type BotConfig, type MarketSpec } from '@crypton/shared';
-import { buildConfig, defaultKnobs, PROFILES, type BuildContext } from './build';
+import { BANDS, buildConfig, defaultKnobs, PROFILES, type BuildContext } from './build';
 import type { MarketFeatures } from './market-features';
 import { coerceConfig, enforceCouplings, ladderCoveragePct, MAX_SAFE_LEVERAGE } from './sanitize';
 
@@ -149,6 +149,49 @@ function materializar(
   return { config, ctx };
 }
 
+describe('ninguna banda deja las capas al mismo precio (spec 037 R-2)', () => {
+  // `defaultKnobs` no llega a MUY_BAJA en `spread` -su minimo es BAJA-, pero el
+  // asesor con modelo si: `esBanda` acepta las cinco y el valor entra tal cual
+  // en `buildConfig`. Con MUY_BAJA el calculo daba 1,4 x 0,55 = 0,77, acotado a
+  // 1, y con mas de una capa eso son N ordenes al MISMO precio, que es lo que la
+  // estrategia rechaza desde el spec 037.
+  const CON_CAPAS = [StrategyKind.MARKET_MAKER, StrategyKind.MARKET_MAKER_V2];
+
+  for (const kind of CON_CAPAS) {
+    for (const banda of BANDS) {
+      it(`${kind}/${banda}`, () => {
+        const ctx: BuildContext = {
+          market: MERCADOS[0].spec,
+          features: { ...REGIMENES[0].f, mark: MERCADOS[0].mark },
+          totalInvestment: 5000,
+          maxLeverageUsuario: null,
+          direction: 'LONG',
+        };
+        const strategy = getStrategy(kind);
+        const knobs = { ...defaultKnobs('EQUILIBRADA', ctx.features), spread: banda };
+        let config = coerceConfig(
+          strategy.meta.fields,
+          strategy.defaults(),
+          buildConfig(kind, knobs, ctx),
+        );
+        config = enforceCouplings(kind, config, ctx.market, ctx.maxLeverageUsuario);
+
+        const capas = Number(config['layers']);
+        const mult = Number(config['layerDistanceMultiplier']);
+        if (capas > 1) expect(mult).toBeGreaterThan(1);
+
+        const paraValidar = {
+          ...config,
+          symbol: ctx.market.symbol,
+          exchangeAccountId: 'test',
+        } as unknown as BotConfig;
+        const issues = strategy.validate(paraValidar, ctx.market).issues;
+        expect(issues.filter((i) => i.field === 'layerDistanceMultiplier')).toEqual([]);
+      });
+    }
+  }
+});
+
 describe('recomendaciones de configuracion', () => {
   describe('el apalancamiento nunca supera lo que el servidor acepta', () => {
     // 18x y no 20x: `RiskService` rechaza con 403 si la distancia a liquidacion
@@ -190,6 +233,8 @@ describe('recomendaciones de configuracion', () => {
       StrategyKind.MARTINGALE,
       StrategyKind.GRID_CLASSIC,
       StrategyKind.MARKET_MAKER_V2,
+      StrategyKind.TREND_FOLLOW,
+      StrategyKind.TRAILING_PROFIT,
     ]) {
       for (const regimen of REGIMENES) {
         it(`${kind} / ${regimen.nombre}`, () => {

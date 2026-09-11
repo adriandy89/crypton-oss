@@ -83,6 +83,21 @@ export const FIELD_LABELS: Record<string, string> = {
   'strategy.tdca.maxPositionNotionalHelp':
     'Tope del valor de la posición. Alcanzado, deja de comprar aunque le quede cupo e intervalo cumplido.',
   'strategy.tdca.takeProfitPct': 'Take profit (%)',
+  'strategy.tdca.takeProfitPctHelp':
+    'Beneficio sobre el precio medio al que se cierra la posición entera. Con «Seguir al máximo» ' +
+    'encendido deja de ser la salida y pasa a ser el punto en el que empieza el seguimiento.',
+  'strategy.tdca.trailingTakeProfit': 'Seguir al máximo (trailing)',
+  'strategy.tdca.trailingTakeProfitHelp':
+    'El take profit deja de ser un precio fijo: al llegar a él, el bot empieza a seguir al máximo y ' +
+    'solo cierra cuando el precio retrocede lo que digas. Con 15 % y 1 %, lo mínimo que cobras es +13,85 %.',
+  'strategy.tdca.trailingCallbackPct': 'Retroceso para salir (%)',
+  'strategy.tdca.trailingCallbackPctHelp':
+    'Cuánto tiene que caer desde el máximo para que cierre. Por debajo del 0,5 % te saca en el primer ' +
+    'respiro del par: muchas criptos se mueven un 1-3 % al día sin cambiar de tendencia.',
+  'strategy.tdca.trailingRepriceBps': 'Umbral para mover el disparador (bps)',
+  'strategy.tdca.trailingRepriceBpsHelp':
+    'Cuánto tiene que avanzar el disparador para recolocarlo en el exchange. Bajarlo lo hace más fino ' +
+    'y gasta más peticiones; en Lighter el cupo son 60 por minuto de toda la IP.',
 
   // Martingala
   'strategy.martingale.label': 'Martingala',
@@ -103,6 +118,39 @@ export const FIELD_LABELS: Record<string, string> = {
   'strategy.martingale.takeProfitPctHelp':
     'Beneficio sobre el precio medio al que se cierra la posición entera. Se recalcula con cada seguridad ejecutada.',
   'strategy.martingale.tpMode': 'Modo de take profit',
+  'strategy.martingale.trailingTakeProfit': 'Seguir al máximo (trailing)',
+  'strategy.martingale.trailingTakeProfitHelp':
+    'El take profit deja de ser un precio fijo: al llegar a él, el bot empieza a seguir al máximo y ' +
+    'solo cierra cuando el precio retrocede lo que digas. Con 15 % y 1 %, lo mínimo que cobras es +13,85 %.',
+  'strategy.martingale.trailingCallbackPct': 'Retroceso para salir (%)',
+  'strategy.martingale.trailingCallbackPctHelp':
+    'Cuánto tiene que caer desde el máximo para que cierre. Por debajo del 0,5 % te saca en el primer ' +
+    'respiro del par: muchas criptos se mueven un 1-3 % al día sin cambiar de tendencia.',
+  'strategy.martingale.trailingRepriceBps': 'Umbral para mover el disparador (bps)',
+  'strategy.martingale.trailingRepriceBpsHelp':
+    'Cuánto tiene que avanzar el disparador para recolocarlo en el exchange. Bajarlo lo hace más fino ' +
+    'y gasta más peticiones; en Lighter el cupo son 60 por minuto de toda la IP.',
+
+  // Seguimiento de beneficio
+  'strategy.trailing.label': 'Seguimiento de beneficio',
+  'strategy.trailing.activationMode': 'Cuándo entra',
+  'strategy.trailing.activationModeHelp':
+    'A mercado abre en la primera revisión. Las otras dos esperan sin coste a que la marca cruce tu precio.',
+  'strategy.trailing.activationPrice': 'Precio de entrada',
+  'strategy.trailing.activationPriceHelp':
+    'El nivel que tiene que cruzar la marca para abrir. Es un disparador, no una orden colgada en el libro.',
+  'strategy.trailing.takeProfitPct': 'Beneficio al que empieza a seguir (%)',
+  'strategy.trailing.takeProfitPctHelp':
+    'No es el precio al que sale: es donde deja de mirar un precio fijo y empieza a seguir al máximo. ' +
+    'Ponlo por encima de lo que el par se mueve en un día normal.',
+  'strategy.trailing.trailingCallbackPct': 'Retroceso para salir (%)',
+  'strategy.trailing.trailingCallbackPctHelp':
+    'Cuánto tiene que caer desde el máximo para que cierre. Por debajo del 0,5 % te saca en el primer ' +
+    'respiro del par.',
+  'strategy.trailing.trailingRepriceBps': 'Umbral para mover el disparador (bps)',
+  'strategy.trailing.trailingRepriceBpsHelp':
+    'Cuánto tiene que avanzar el disparador para recolocarlo en el exchange. Súbelo en Lighter, donde ' +
+    'el cupo son 60 peticiones por minuto de toda la IP.',
 
   // GridMart
   'strategy.gridmart.label': 'GridMart',
@@ -136,6 +184,26 @@ export const FIELD_LABELS: Record<string, string> = {
   'strategy.mm.minAllowedDistanceBpsHelp':
     'Suelo duro: el bot no cotiza nunca más cerca del precio que esto.',
   'strategy.mm.dynamicSpread': 'Diferencial dinámico',
+
+  // Microestructura (spec 039). Comunes a las dos versiones: los descriptores
+  // viven una sola vez en `mm-shared`, así que la etiqueta también.
+  // Tendencia (spec 040).
+  'strategy.trend.candleInterval': 'Resolución de las velas',
+  'strategy.trend.breakoutPeriod': 'Velas del canal de ruptura',
+  'strategy.trend.atrPeriod': 'Velas del ATR',
+  'strategy.trend.atrStopMultiplier': 'Stop, en ATR',
+  'strategy.trend.riskPerTradePct': 'Riesgo por operación',
+  'strategy.trend.entryEfficiency': 'Eficiencia mínima para entrar',
+  'strategy.trend.stopRepriceBps': 'Movimiento mínimo del stop',
+  'strategy.trend.direction': 'Lados que opera',
+
+  'strategy.mm.fairPriceMode': 'Precio justo',
+  'strategy.mm.obiSkewFactor': 'Sesgo por desequilibrio del libro',
+  'strategy.mm.sizeSkewFactor': 'Sesgo de tamaño por inventario',
+  'strategy.mm.fundingSkewFactor': 'Sesgo por funding',
+  'strategy.mm.maxAdverseFundingBps': 'Funding máximo en contra',
+  'strategy.mm.markoutHorizonSeconds': 'Horizonte de markout',
+  'strategy.mm.markoutSensitivity': 'Sensibilidad al markout',
   'strategy.mm.dynamicSpreadHelp': 'Ensancha la cotización a medida que crece el inventario.',
   'strategy.mm.layers': 'Capas',
   'strategy.mm.layerDistanceMultiplier': 'Multiplicador de distancia por capa',
@@ -388,6 +456,7 @@ export const GROUP_LABELS: Record<string, string> = {
   timing: 'Tiempos',
   levels: 'Niveles',
   dynamicSpread: 'Spread dinámico',
+  intelligence: 'Microestructura',
   priceSource: 'Precio',
   activation: 'Condición de activación',
   venue: 'Exchange',

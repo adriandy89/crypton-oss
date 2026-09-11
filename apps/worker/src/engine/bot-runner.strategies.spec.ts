@@ -595,6 +595,185 @@ describe('TDCA en el simulador', () => {
   });
 });
 
+describe('TDCA con el take profit que sigue al precio (spec 042)', () => {
+  /**
+   * El circuito entero: plan -> `intent` -> orden condicional nativa ->
+   * simulador. Es el unico sitio donde se puede comprobar la marca de agua,
+   * porque vive en el runner y se alimenta del stream, no del tick.
+   */
+  it('no sale hasta el objetivo, sigue al maximo entre revisiones y cierra al retroceder', async () => {
+    const h = harness('TDCA', {
+      amountPerBuy: '100',
+      intervalMinutes: 60,
+      maxBuysPerCycle: 5,
+      buyOnlyIfImprovesAverage: true,
+      takeProfitPct: '20',
+      trailingTakeProfit: true,
+      trailingCallbackPct: '1',
+      totalInvestment: '1000',
+    });
+    trackCanonicals(h.store);
+
+    await h.runner.start();
+    await settle();
+    expect(await positionQty(h.sim)).not.toBe('0');
+
+    // 1. Por debajo del objetivo (100,05 x 1,20 = 120,06) no hay salida: la
+    //    unica proteccion es el stop loss, y eso es lo correcto.
+    h.source.move('110');
+    await settle();
+    await tick(h.runner);
+    expect((await book(h.sim)).filter((o) => o.kind === 'TAKE_PROFIT')).toHaveLength(0);
+
+    // 2. Cruza el objetivo: nace el disparador en 125 x 0,99 = 123,75, que la
+    //    reticula de 0,1 redondea ARRIBA -hacia el mercado, que dispara antes-.
+    h.source.move('125');
+    await settle();
+    await tick(h.runner);
+    const armado = (await book(h.sim)).filter((o) => o.kind === 'TAKE_PROFIT');
+    expect(armado).toHaveLength(1);
+    expect(armado[0].price).toBe(px('123.8'));
+    expect(armado[0].side).toBe('SELL');
+    // Y NO ha cerrado la posicion al colocarla: el disparador esta muy por
+    // encima de la entrada y aun asi apunta hacia abajo (spec 042 R-1). Si
+    // llegara etiquetado como take profit, el venue lo habria ejecutado ya.
+    expect(await positionQty(h.sim)).not.toBe('0');
+
+    // 3. Sube a 130 y vuelve a 126 SIN que el motor planifique. Es el caso que
+    //    justifica la marca de agua: sin ella ese maximo no habria existido.
+    h.source.move('130');
+    await settle();
+    h.source.move('126');
+    await settle();
+    expect(await positionQty(h.sim)).not.toBe('0');
+
+    await tick(h.runner);
+    const seguido = (await book(h.sim)).filter((o) => o.kind === 'TAKE_PROFIT');
+    expect(seguido).toHaveLength(1);
+    expect(seguido[0].price).toBe(px('128.7'));
+
+    // 4. Y al siguiente precio cierra: 126 ya esta por debajo del disparador.
+    h.source.move('126');
+    await settle();
+    expect(await positionQty(h.sim)).toBe('0');
+
+    await h.runner.dispose();
+  });
+
+  it('el disparador NO baja aunque el precio se desplome', async () => {
+    const h = harness('TDCA', {
+      amountPerBuy: '100',
+      intervalMinutes: 60,
+      maxBuysPerCycle: 5,
+      buyOnlyIfImprovesAverage: true,
+      takeProfitPct: '20',
+      trailingTakeProfit: true,
+      trailingCallbackPct: '5',
+      totalInvestment: '1000',
+    });
+    trackCanonicals(h.store);
+
+    await h.runner.start();
+    await settle();
+
+    h.source.move('130');
+    await settle();
+    await tick(h.runner);
+    // 130 x 0,95 = 123,5.
+    expect((await book(h.sim)).find((o) => o.kind === 'TAKE_PROFIT')?.price).toBe(px('123.5'));
+
+    // Una caida a 124 no llega al disparador y NO puede bajarlo.
+    h.source.move('124');
+    await settle();
+    await tick(h.runner);
+    const tras = (await book(h.sim)).find((o) => o.kind === 'TAKE_PROFIT');
+    expect(tras?.price).toBe(px('123.5'));
+    expect(await positionQty(h.sim)).not.toBe('0');
+
+    await h.runner.dispose();
+  });
+});
+
+describe('Seguimiento de beneficio en el simulador (spec 043)', () => {
+  it('entra una vez, no sale hasta el objetivo y cierra al retroceder desde el maximo', async () => {
+    const h = harness('TRAILING_PROFIT', {
+      takeProfitPct: '20',
+      trailingCallbackPct: '1',
+      trailingRepriceBps: 20,
+      totalInvestment: '1000',
+      leverage: 1,
+    });
+    trackCanonicals(h.store);
+
+    await h.runner.start();
+    await settle();
+
+    // 1. Abre con el capital asignado: 1.000 de nocional a la MARCA, que es
+    //    sobre la que se dimensiona. La compra se llena en el ask, medio
+    //    diferencial mas arriba, asi que el nocional REAL queda un pelo por
+    //    encima del tope: 0,05 % aqui. Es la misma cuenta que hace la
+    //    estrategia de tendencia desde el spec 041.
+    const abierta = await positionQty(h.sim);
+    expect(Number(abierta) * 100).toBeCloseTo(1000, 6);
+
+    // 2. Al +10 % no hay salida de beneficio, y tampoco una segunda entrada: la
+    //    condicion de apertura sigue siendo cierta mientras el bot no mire la
+    //    posicion, y por eso NO se declara `reusesOrderSlots` (spec 041).
+    h.source.move('110');
+    await settle();
+    await tick(h.runner);
+    expect((await book(h.sim)).filter((o) => o.kind === 'TAKE_PROFIT')).toHaveLength(0);
+    expect(await positionQty(h.sim)).toBe(abierta);
+
+    // 3. Cruza el objetivo (100,05 x 1,20 = 120,06): nace el disparador.
+    h.source.move('125');
+    await settle();
+    await tick(h.runner);
+    expect((await book(h.sim)).find((o) => o.kind === 'TAKE_PROFIT')?.price).toBe(px('123.8'));
+    expect(await positionQty(h.sim)).toBe(abierta);
+
+    // 4. Sube a 130 y vuelve a 126 SIN planificar: la marca de agua del motor
+    //    guarda ese maximo y el disparador sube con el.
+    h.source.move('130');
+    await settle();
+    h.source.move('126');
+    await settle();
+    await tick(h.runner);
+    expect((await book(h.sim)).find((o) => o.kind === 'TAKE_PROFIT')?.price).toBe(px('128.7'));
+
+    // 5. Y cierra: 126 esta por debajo del disparador.
+    h.source.move('126');
+    await settle();
+    expect(await positionQty(h.sim)).toBe('0');
+
+    await h.runner.dispose();
+  });
+
+  it('con condicion de entrada no abre nada hasta que el precio la cumple', async () => {
+    const h = harness('TRAILING_PROFIT', {
+      activationMode: 'PRICE_BELOW',
+      activationPrice: '90',
+      takeProfitPct: '20',
+      trailingCallbackPct: '1',
+      totalInvestment: '1000',
+      leverage: 1,
+    });
+    trackCanonicals(h.store);
+
+    await h.runner.start();
+    await settle();
+    expect(await positionQty(h.sim)).toBe('0');
+    expect(await h.sim.getOpenOrders('BTC')).toHaveLength(0);
+
+    h.source.move('89');
+    await settle();
+    await tick(h.runner);
+    expect(await positionQty(h.sim)).not.toBe('0');
+
+    await h.runner.dispose();
+  });
+});
+
 describe('Neutral Grid en el simulador', () => {
   it('cotiza los dos lados fuera de la banda muerta y rearma las líneas solo al alejarse el precio', async () => {
     const h = harness('NEUTRAL_GRID', {

@@ -1,3 +1,5 @@
+import { D, Decimal, type Numeric } from './money';
+
 /**
  * Rasgos de un mercado, calculados a partir de sus velas.
  *
@@ -35,4 +37,36 @@ export interface MarketFeatures {
   worstDayPct: number;
   /** El tick del mercado en puntos basicos: el suelo real de un diferencial. */
   tickBps: number;
+}
+
+/**
+ * Eficiencia de Kaufman: recorrido NETO sobre recorrido TOTAL, en [0, 1].
+ *
+ * 1 = línea recta, el mercado va a un sitio. 0 = ir y venir sin avanzar, que es
+ * el terreno de una rejilla o de un market maker.
+ *
+ * Vive aquí, y no en cada sitio que la usa, porque la usan dos: el asesor la
+ * calcula sobre cierres horarios para decidir con qué configuración nace un
+ * bot, y el market maker la calcula sobre sus propias muestras de precio para
+ * decidir si deja de cotizar contra la tendencia. Son entradas distintas y la
+ * misma pregunta; tener dos implementaciones era tener dos respuestas (spec
+ * 039).
+ *
+ * Devuelve 0 con menos de dos valores o sin recorrido: no se pronuncia.
+ */
+export function eficienciaKaufman(valores: readonly Numeric[]): Decimal {
+  if (valores.length < 2) return D(0);
+  let recorrido = D(0);
+  for (let i = 1; i < valores.length; i++) {
+    recorrido = recorrido.plus(
+      D(valores[i])
+        .minus(D(valores[i - 1]))
+        .abs(),
+    );
+  }
+  if (!recorrido.gt(0)) return D(0);
+  const neto = D(valores[valores.length - 1])
+    .minus(D(valores[0]))
+    .abs();
+  return neto.div(recorrido);
 }

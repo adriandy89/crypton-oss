@@ -79,6 +79,53 @@ export const MARKET_MAKER_GUIDE: StrategyGuide<MarketMakerConfig> = {
     },
   ],
   options: {
+    // ── Microestructura (spec 039) ──────────────────────────────────
+    //
+    // Todo esto nace APAGADO. Son los mandos que dejan al bot mirar algo más
+    // que el punto medio, y cada uno tiene su precio: por eso se encienden de
+    // uno en uno y mirando la nota del bot, no todos a la vez.
+    fairPriceMode: {
+      what: 'De dónde sale el precio justo alrededor del cual se cotiza.',
+      affects:
+        'Con «Punto medio» es (mejor compra + mejor venta) / 2, que ignora cuánta cantidad hay a cada lado. Con «Microprecio» se pondera cada precio por la cantidad del lado contrario: si hay mucha gente esperando para comprar, el precio justo sube.',
+      tip: 'Es el mando con mejor relación beneficio/riesgo de este grupo, y el primero que conviene probar. Requiere que el venue publique los tamaños del libro: Hyperliquid y Aster sí, Lighter no — allí se comporta exactamente igual que «Punto medio».',
+    },
+    obiSkewFactor: {
+      what: 'Cuánto desplaza la cotización el desequilibrio entre las cantidades del mejor bid y del mejor ask.',
+      affects:
+        'Con más cantidad esperando para comprar, las dos cotizaciones suben. Con 0 el desequilibrio no se mira.',
+      tip: 'Empieza en 0,3–0,5. Subirlo mucho hace que el centro se mueva a menudo, y cada movimiento por encima de la «distancia para reajustar» es una recotización más: se paga en cuota del venue y en prioridad en el libro.',
+    },
+    sizeSkewFactor: {
+      what: 'Sesga el TAMAÑO de cada lado según el inventario, en vez de la distancia.',
+      affects:
+        'Con posición larga, las compras se hacen más pequeñas y las ventas más grandes. Con el tope lleno y el factor al máximo, el lado que añade desaparece.',
+      tip: 'Es más suave que mover precios: no sacrifica la probabilidad de que ejecute justo el lado por el que quieres salir. 0,3–0,5 es un buen punto de partida.',
+    },
+    fundingSkewFactor: {
+      what: 'Inclina la cotización hacia el lado al que el exchange está pagando funding.',
+      affects:
+        'Con funding positivo —los largos pagan— las dos cotizaciones bajan, así que el bot tiende a quedarse corto, que es el lado que cobra. Con funding negativo, al revés.',
+      tip: 'Mídelo antes de confiar en él: mira unos días qué funding tiene tu par y cuánto se movería la cotización. Lighter no publica funding, así que allí este mando no hace nada.',
+    },
+    maxAdverseFundingBps: {
+      what: 'Funding en contra a partir del cual el bot deja de ABRIR posición del lado que paga.',
+      affects:
+        'Con 0 no hay filtro. Por encima del umbral, el lado que se pondría a pagar deja de cotizar; el lado que reduce inventario sigue vivo siempre.',
+      tip: 'Un funding extremo y sostenido suele significar que todo el mundo está del mismo lado. No es el mando para empezar.',
+    },
+    markoutHorizonSeconds: {
+      what: 'Cuántos segundos después de cada ejecución se mira dónde está el mercado.',
+      affects:
+        'Es la medida de si te están eligiendo: si te compran y el precio sigue bajando, el markout es negativo. Con 0 no se mide nada y no se guarda nada.',
+      tip: '30–60 s. Por debajo mide ruido; por encima, mide otra cosa. Enciéndelo con la sensibilidad en 0 primero: así lo ves en la nota del bot sin que cambie ninguna orden.',
+    },
+    markoutSensitivity: {
+      what: 'Cuánto se aleja un lado cuando su markout es negativo.',
+      affects:
+        'La penalización se suma a la distancia de ESE lado. Un markout bueno no acerca la cotización: perseguir al mercado cuando te va bien es la otra forma conocida de perder dinero haciendo mercado.',
+      tip: 'Necesita el horizonte encendido. Empieza en 0,5–1 después de haber mirado unos días qué markout tiene tu bot.',
+    },
     orderSizePerSide: {
       what: 'Lo que se pone en cada orden, en cada lado. Con varias capas, es el tamaño de la primera.',
       affects:
@@ -119,7 +166,7 @@ export const MARKET_MAKER_GUIDE: StrategyGuide<MarketMakerConfig> = {
       what: 'Cuánto se aleja cada capa respecto de la anterior. Con 1,5 y una primera capa a 20 bps, la segunda va a 30 y la tercera a 45.',
       affects:
         'Subirlo abre la cotización en abanico: la capa cercana se ejecuta a menudo y las lejanas esperan movimientos grandes.',
-      tip: 'Con 1 todas las capas van a la misma distancia y se ejecutan prácticamente juntas.',
+      tip: 'Tiene que ser mayor que 1 si hay más de una capa: con 1 todas caerían al mismo precio, y esa combinación se rechaza al guardar.',
     },
     layerSizeMultiplier: {
       what: 'Cuánto crece cada capa respecto de la anterior.',
@@ -134,9 +181,9 @@ export const MARKET_MAKER_GUIDE: StrategyGuide<MarketMakerConfig> = {
       tip: 'Equilibrado deja tus números tal cual. Usa los otros dos para mover el comportamiento entero de una vez.',
     },
     dynamicSpread: {
-      what: 'Ensancha la cotización a medida que crece el inventario.',
+      what: 'Ensancha el lado que AÑADE posición a medida que crece el inventario.',
       affects:
-        'Activado, cuanto más cargado está el bot más lejos cotiza, para no seguir acumulando al mismo ritmo. Desactivado, la distancia es siempre la que fijaste.',
+        'Activado, cuanto más cargado está el bot más lejos cotiza el lado que sigue cargándolo. El lado que reduce no se toca: encarecer la salida anularía el modo defensivo. Desactivado, la distancia es siempre la que fijaste.',
       tip: 'Déjalo activado: es lo que evita que una tendencia te llene la posición al precio de siempre.',
     },
     inventoryPriceAdjustment: {

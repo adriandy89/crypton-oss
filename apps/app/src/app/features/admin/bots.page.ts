@@ -42,6 +42,8 @@ const ESTRATEGIAS: StrategyKind[] = [
   'GRIDMART',
   'MARKET_MAKER',
   'MARKET_MAKER_V2',
+  'TREND_FOLLOW',
+  'TRAILING_PROFIT',
 ];
 
 /**

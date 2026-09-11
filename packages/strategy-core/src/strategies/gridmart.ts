@@ -172,8 +172,20 @@ const GRIDMART_FIELDS: readonly FieldMeta[] = [
  * sale por `satelliteTpPct` y el núcleo por la rejilla. Fuera del formulario;
  * `defaults()` los sigue fijando porque la validación compartida de la escalera
  * los espera (spec 026, F-12).
+ *
+ * Los tres del seguimiento al máximo llegan aquí por herencia de tipo y se van
+ * por la misma puerta. GridMart no puede ofrecerlo con un interruptor: no usa
+ * `takeProfitPct` y tiene DOS salidas a la vez —el satélite y la rejilla del
+ * núcleo—, así que cuál de las dos sigue al máximo es otro diseño y no un
+ * campo más (spec 042, fuera de alcance).
  */
-const HEREDADOS_SIN_EFECTO: ReadonlySet<string> = new Set(['takeProfitPct', 'tpMode']);
+const HEREDADOS_SIN_EFECTO: ReadonlySet<string> = new Set([
+  'takeProfitPct',
+  'tpMode',
+  'trailingTakeProfit',
+  'trailingCallbackPct',
+  'trailingRepriceBps',
+]);
 
 const META: StrategyMeta = {
   kind: StrategyKind.GRIDMART,

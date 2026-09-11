@@ -17,7 +17,7 @@ export const TDCA_GUIDE: StrategyGuide<TdcaConfig> = {
   goodWhen: [
     'Quieres acumular un par que crees que vale más de lo que cotiza, sin apostarlo todo a un solo precio.',
     'Prefieres una estrategia con pocos parámetros y comportamiento fácil de predecir.',
-    'Te vale un ritmo lento: es la única de las siete que opera por reloj y no por movimiento de precio.',
+    'Te vale un ritmo lento: es la única que opera por reloj y no por movimiento de precio.',
   ],
   badWhen: [
     'Buscas operaciones rápidas. Aquí un ciclo puede durar días.',
@@ -77,6 +77,24 @@ export const TDCA_GUIDE: StrategyGuide<TdcaConfig> = {
     },
   ],
   options: {
+    trailingTakeProfit: {
+      what: 'Convierte el take profit en un objetivo que sigue al precio. Al llegar al porcentaje que pediste, el bot no cierra: empieza a seguir al máximo y solo vende cuando el precio retrocede lo que digas.',
+      affects:
+        'Apagado, sales exactamente en tu objetivo. Encendido, un movimiento que siga subiendo te deja dentro y cobras más — pero cobras siempre un poco menos que el máximo, porque el retroceso es el peaje. Con 15 % de objetivo y 1 % de retroceso, el suelo de lo que cobras es +13,85 %.',
+      tip: 'No es una mejora gratis: en marcos cortos baja la tasa de acierto, porque el retroceso normal de una cripto lo dispara antes de tiempo. Mientras no llegues al objetivo, la única protección es tu stop loss — que sigue intacto.',
+    },
+    trailingCallbackPct: {
+      what: 'Cuánto tiene que caer el precio desde el máximo alcanzado para que el bot cierre.',
+      affects:
+        'Es todo el compromiso de esta estrategia: pequeño te saca pronto y asegura casi todo el máximo; grande aguanta las sacudidas y te deja correr la tendencia, a cambio de devolver más cuando por fin gire.',
+      tip: 'Míralo contra lo que respira tu par. Por debajo del 0,5 % en algo que se mueve un 1-3 % al día, sales en el primer respiro.',
+    },
+    trailingRepriceBps: {
+      what: 'Cuánto tiene que avanzar el disparador para que el bot lo mueva de verdad en el exchange. 20 bps son un 0,2 %.',
+      affects:
+        'Bajarlo hace que el seguimiento sea más fino y gaste más peticiones; subirlo lo hace más perezoso y puede dejar el disparador algo por detrás del máximo.',
+      tip: 'Déjalo como está salvo en Lighter, donde el cupo son 60 peticiones por minuto de toda tu IP y cada recolocación gasta dos.',
+    },
     amountPerBuy: {
       what: 'Cuánto margen se compromete en cada compra. Con apalancamiento, la posición que añade es este importe multiplicado por el apalancamiento.',
       affects:

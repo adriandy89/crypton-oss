@@ -2,6 +2,7 @@ import { Logger } from '@nestjs/common';
 import { Subscription } from 'rxjs';
 import {
   D,
+  Decimal,
   ExchangeError,
   FairPriceOrigin,
   PriceSource,
@@ -17,7 +18,10 @@ import {
   type OrderAck,
   type Position,
   type StrategyKind,
+  type Candle,
+  type CandleInterval,
   type Ticker,
+  type Venue,
   type VenueOrder,
 } from '@crypton/shared';
 import { codecFor, shortMessage, type ExchangeAdapter } from '@crypton/exchange-core';
@@ -230,6 +234,23 @@ function sameFairFeed(a: FairFeedRequest | null, b: FairFeedRequest | null): boo
   );
 }
 
+/**
+ * De dónde salen las velas para las estrategias que las declaran.
+ *
+ * Tan estrecha como `PriceSourceLike` y por la misma razón: así un test puede
+ * construir un runner sin levantar medio worker, y así el motor no depende del
+ * servicio entero para leer un dato público.
+ */
+export interface CandleSourceLike {
+  candleHistory(
+    venue: Venue,
+    symbol: string,
+    interval: CandleInterval,
+    bars: number,
+    testnet?: boolean,
+  ): Candle[] | null;
+}
+
 export interface PriceSourceLike {
   acquire(req: FairFeedRequest): string | null;
   release(key: string | null): void;
@@ -285,6 +306,13 @@ export interface BotRunnerDeps {
    */
   priceSource?: PriceSourceLike;
   /**
+   * Velas compartidas. Solo la usan las estrategias que declaran `candles`.
+   *
+   * Opcional por lo mismo que `priceSource`: solo la de tendencia la declara,
+   * así que un runner sin esto funciona igual para las otras ocho.
+   */
+  candleSource?: CandleSourceLike;
+  /**
    * Arranca en pausa. Se usa al adoptar un bot que ya estaba pausado.
    *
    * Un bot pausado SIGUE teniendo runner, y no es un descuido: su posición
@@ -331,6 +359,14 @@ export class BotRunner {
   private stopped = false;
   private paused = false;
   private lastTicker: Ticker | null = null;
+  /**
+   * Máximo y mínimo del precio de marca vistos desde la última planificación.
+   *
+   * Se alimenta del stream —varias veces por segundo— y se vacía al planificar
+   * en el tick, así que lo que la estrategia recibe es exactamente «lo que ha
+   * pasado entre tu último plan y este». Sin persistir: ver `BotContext.extremos`.
+   */
+  private extremos: { alto: Decimal; bajo: Decimal } | null = null;
   /**
    * ¿Ya se avisó de que a este bot lo liquidaron?
    *
@@ -576,6 +612,7 @@ export class BotRunner {
       adapter.streamTicker(bot.symbol).subscribe({
         next: (t) => {
           this.lastTicker = t;
+          this.observarExtremo(t);
         },
       }),
     );
@@ -680,6 +717,7 @@ export class BotRunner {
         store.ownVenueClientIds(this.botId, [cycleSeq, cycleSeq - 1]),
       ]);
       this.lastTicker = ticker;
+      this.observarExtremo(ticker);
 
       // Un venue que no da precio NO es un venue sobre el que planificar. La
       // escalera entera se ancla en el `mark`, asi que con un cero la
@@ -740,6 +778,12 @@ export class BotRunner {
       }
 
       const ctx = this.buildContext(ticker, position, openOrders, balances[0]?.available ?? '0');
+      // La ventana se cierra AQUÍ y solo aquí, que es donde se planifica de
+      // verdad. `buildContext` se usa también al recibir una ejecución y en
+      // `ADD_SAFETY_NOW`, y vaciarla allí se comería el máximo justo cuando más
+      // se mueve el precio: la estrategia lo habría visto una vez, de pasada, y
+      // el plan siguiente ya no (spec 042 R-6).
+      this.extremos = null;
       await this.warnIfFairPriceStale(ctx);
       const desired = this.withStopLoss(this.strategy.plan(ctx), position, cycleSeq);
 
@@ -1057,7 +1101,11 @@ export class BotRunner {
         // deducirlo del lado y el reduce-only, y deducirlo mal invierte la
         // condición de disparo (un stop-loss etiquetado como take-profit se
         // ejecuta al instante).
-        intent: order.levelKind === 'TAKE_PROFIT' ? 'TP' : 'SL',
+        //
+        // Se deduce del `levelKind` salvo que la estrategia lo declare. Lo
+        // declara el trailing take profit, que contablemente es un objetivo de
+        // beneficio y mecánicamente un stop (spec 042 R-1).
+        intent: order.intent ?? (order.levelKind === 'TAKE_PROFIT' ? 'TP' : 'SL'),
       });
     } catch (e) {
       const err = e as ExchangeError;
@@ -2138,6 +2186,22 @@ export class BotRunner {
     // la decisión correcta —dejar de cotizar— depende justo de esa diferencia.
     const fresh = fair && now - fair.ts < FAIR_PRICE_STALE_MS ? fair : null;
 
+    const extremos = this.extremosVistos();
+
+    // Velas SOLO para quien las declara. Las ocho que reconcilian contra el
+    // libro no lo hacen, así que para ellas esto es una comparación con
+    // `undefined` y no se pide una sola vela (specs 038 y 040).
+    const quiere = this.strategy.candles?.(this.config);
+    const candles = quiere
+      ? (this.deps.candleSource?.candleHistory(
+          this.deps.bot.venue,
+          this.deps.bot.symbol,
+          quiere.interval,
+          quiere.bars,
+          this.deps.testnet,
+        ) ?? undefined)
+      : undefined;
+
     return {
       botId: this.botId,
       venue: this.deps.bot.venue,
@@ -2151,7 +2215,41 @@ export class BotRunner {
       availableBalance,
       now,
       fairPrice: fresh?.price ?? null,
+      ...(candles ? { candles } : {}),
+      ...(extremos ? { extremos } : {}),
     };
+  }
+
+  /**
+   * Anota el precio de MARCA en la marca de agua del periodo.
+   *
+   * Se llama desde el stream —varias veces por segundo— y también con el ticker
+   * de cada tick, para que un bot cuyo venue no empuja precios tenga al menos
+   * el del tick y no reciba `extremos` siempre vacío.
+   *
+   * Un precio no positivo se ignora en vez de arrastrarse: un cero convertido
+   * en mínimo daría un disparador de trailing en cero, y ese es el tipo de dato
+   * que no debe poder cruzar hasta una estrategia (spec 042 R-5).
+   */
+  private observarExtremo(t: Ticker): void {
+    const marca = D(t.mark);
+    if (!marca.isFinite() || marca.lte(0)) return;
+    const prev = this.extremos;
+    this.extremos = prev
+      ? { alto: Decimal.max(prev.alto, marca), bajo: Decimal.min(prev.bajo, marca) }
+      : { alto: marca, bajo: marca };
+  }
+
+  /**
+   * Los extremos vistos desde la planificación anterior.
+   *
+   * LEE y no vacía: quien cierra la ventana es el tick, porque es el único que
+   * planifica de verdad. Si se vaciara aquí, el `buildContext` de una ejecución
+   * se comería el máximo justo cuando más se mueve el precio.
+   */
+  private extremosVistos(): { alto: string; bajo: string } | null {
+    const e = this.extremos;
+    return e ? { alto: e.alto.toFixed(), bajo: e.bajo.toFixed() } : null;
   }
 
   /**

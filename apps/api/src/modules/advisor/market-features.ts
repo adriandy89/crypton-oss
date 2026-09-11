@@ -1,4 +1,9 @@
-import type { Candle, MarketFeatures, MarketSpec } from '@crypton/shared';
+import {
+  eficienciaKaufman,
+  type Candle,
+  type MarketFeatures,
+  type MarketSpec,
+} from '@crypton/shared';
 
 /**
  * Rasgos de mercado, calculados aqui y nunca por el modelo.
@@ -104,11 +109,10 @@ export function buildFeatures(
   const trendPct = lenta > 0 ? ((rapida - lenta) / lenta) * 100 : 0;
 
   // ── Eficiencia: recorrido neto sobre recorrido total ──
-  const tramo = cierres1h.slice(-168);
-  let recorrido = 0;
-  for (let i = 1; i < tramo.length; i++) recorrido += Math.abs(tramo[i] - tramo[i - 1]);
-  const neto = tramo.length > 1 ? Math.abs(tramo[tramo.length - 1] - tramo[0]) : 0;
-  const efficiency = recorrido > 0 ? neto / recorrido : 0;
+  // La función vive en `shared` porque el market maker la usa también, sobre
+  // sus propias muestras de precio, para decidir si deja de cotizar contra la
+  // tendencia. Misma pregunta, entradas distintas (spec 039).
+  const efficiency = Number(eficienciaKaufman(cierres1h.slice(-168)));
 
   // ── La peor sesion del periodo ──
   // Se contrasta despues contra la distancia a liquidacion: si el peor dia se

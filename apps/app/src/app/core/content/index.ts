@@ -4,6 +4,8 @@ import { GRIDMART_GUIDE } from './gridmart.guide';
 import { GRID_CLASSIC_GUIDE } from './grid-classic.guide';
 import { MARKET_MAKER_GUIDE } from './market-maker.guide';
 import { MARKET_MAKER_V2_GUIDE } from './market-maker-v2.guide';
+import { TREND_FOLLOW_GUIDE } from './trend-follow.guide';
+import { TRAILING_PROFIT_GUIDE } from './trailing-profit.guide';
 import { MARTINGALE_GUIDE } from './martingale.guide';
 import { NEUTRAL_GRID_GUIDE } from './neutral-grid.guide';
 import { TDCA_GUIDE } from './tdca.guide';
@@ -27,6 +29,8 @@ export const STRATEGY_GUIDES: Record<StrategyKind, StrategyGuide> = {
   GRIDMART: GRIDMART_GUIDE,
   MARKET_MAKER: MARKET_MAKER_GUIDE,
   MARKET_MAKER_V2: MARKET_MAKER_V2_GUIDE,
+  TREND_FOLLOW: TREND_FOLLOW_GUIDE,
+  TRAILING_PROFIT: TRAILING_PROFIT_GUIDE,
 };
 
 export const strategyGuide = (kind: string): StrategyGuide | null =>

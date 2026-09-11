@@ -49,6 +49,8 @@ export const STRATEGY_LABELS: Record<StrategyKind, string> = {
   GRIDMART: 'GridMart',
   MARKET_MAKER: 'Market maker',
   MARKET_MAKER_V2: 'Market maker V2',
+  TREND_FOLLOW: 'Tendencia',
+  TRAILING_PROFIT: 'Seguimiento de beneficio',
 };
 
 /**
@@ -67,6 +69,10 @@ export const STRATEGY_BLURBS: Record<StrategyKind, string> = {
   GRIDMART: 'Martingala con rejilla de ventas y recompras.',
   MARKET_MAKER: 'Cotiza a los dos lados y cobra el diferencial.',
   MARKET_MAKER_V2: 'Diferencial compuesto con volatilidad, libro y coste de operar.',
+  TREND_FOLLOW:
+    'Entra cuando el precio rompe su rango y sale con un stop que le sigue. La unica que gana en linea recta.',
+  TRAILING_PROFIT:
+    'Una operacion que deja correr el beneficio: al llegar a tu objetivo sigue al maximo y cierra al retroceder.',
 };
 
 /** Las dos estrategias que llevan ficha de market making. */

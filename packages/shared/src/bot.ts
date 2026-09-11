@@ -15,6 +15,7 @@ import type {
   TimeInForce,
   Venue,
 } from './enums';
+import type { Candle } from './candle';
 import type { MarketSpec, Position, Ticker } from './market';
 import type { VenueOrder } from './orders';
 
@@ -77,6 +78,23 @@ export interface DesiredOrder {
   reduceOnly: boolean;
   timeInForce?: TimeInForce;
   triggerPrice?: string;
+  /**
+   * Sentido del disparo, cuando no es el que se deduciría del `levelKind`.
+   *
+   * El motor deduce 'TP' de `TAKE_PROFIT` y 'SL' del resto, y eso vale para
+   * todo lo que había: un objetivo de beneficio dispara al SUBIR y un stop al
+   * bajar. Pero un take profit que SIGUE al precio es, mecánicamente, un stop:
+   * para un largo es una venta que dispara al BAJAR, aunque esté muy por
+   * encima de la entrada.
+   *
+   * Sin esta puerta solo quedaban dos salidas, las dos malas: emitirlo como
+   * `TAKE_PROFIT` lo armaría al revés —la condición ya sería cierta al
+   * colocarlo y el venue cerraría la posición al instante, que es el fallo
+   * 001/F-80—, y emitirlo como `STOP_LOSS` dejaría al bot sin el stop-loss del
+   * usuario, porque `withStopLoss` se calla si la estrategia ya emitió uno
+   * (spec 042 R-1).
+   */
+  intent?: 'TP' | 'SL';
 }
 
 export interface DesiredState {
@@ -175,6 +193,37 @@ export interface BotContext {
    * umbral, es peor que no tenerlo.
    */
   fairPrice?: string | null;
+  /**
+   * Velas CERRADAS, de la más antigua a la más reciente.
+   *
+   * Solo llega a las estrategias que la declaran (`Strategy.candles`). El motor
+   * reconcilia contra el libro y no contra un gráfico, y ese principio sigue
+   * valiendo para las ocho que reconcilian: ninguna la declara, así que ninguna
+   * la recibe y por ninguna se pide una sola vela. La de tendencia decide
+   * mirando un gráfico, y por eso es la única que la pide (spec 040).
+   *
+   * Cerradas a propósito: la vela en curso cambia dentro del mismo minuto, así
+   * que entregarla rompería la pureza de `plan()` —dos llamadas con el mismo
+   * estado darían planes distintos— (spec 038).
+   */
+  candles?: Candle[];
+  /**
+   * Extremos del precio de MARCA vistos DESDE LA ÚLTIMA planificación.
+   *
+   * El motor planifica cada quince segundos pero recibe precios varias veces
+   * por segundo. Sin esto, un máximo que sube y baja entre dos revisiones no
+   * existe para la estrategia, y un trailing lo perdería entero.
+   *
+   * De la MARCA y no del último negociado porque es el que los venues suavizan:
+   * un mal print no puede inventar un máximo y, con él, un disparador ya por
+   * debajo del mercado que cerraría la posición al instante.
+   *
+   * Vive en memoria del runner y no se persiste a propósito: lo que se guarda
+   * es el máximo del ciclo, en `scratch`. El peor caso de un reinicio del
+   * worker es perder el pico de los últimos quince segundos, y eso hace que el
+   * bot salga un poco más abajo, nunca más arriba (spec 042 R-6).
+   */
+  extremos?: { alto: string; bajo: string };
 }
 
 // ── Preview previo a crear el bot ─────────────────────────────────────────

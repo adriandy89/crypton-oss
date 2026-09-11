@@ -496,6 +496,7 @@ export class BotCreatePage implements OnInit, OnDestroy {
       'timing',
       'levels',
       'dynamicSpread',
+      'intelligence',
       'priceSource',
       'activation',
       'venue',
@@ -563,7 +564,7 @@ export class BotCreatePage implements OnInit, OnDestroy {
   /**
    * Obligatorios sin rellenar, segun el descriptor de ESTA estrategia.
    *
-   * Generico a proposito: sale de `FieldMeta.required`, que las siete
+   * Generico a proposito: sale de `FieldMeta.required`, que las ocho
    * estrategias ya declaran. No hay —ni puede haber— una lista por tipo de bot
    * escrita aqui, porque entonces una estrategia nueva llegaria sin validar.
    */
@@ -585,7 +586,7 @@ export class BotCreatePage implements OnInit, OnDestroy {
    * llamaban al motor tenian que acordarse de anadirlos, y los tres se
    * acordaban solo del par: `validateCommon()` respondia «Falta la conexion de
    * exchange» sobre un campo que esta pantalla no pinta, y «Calcular la
-   * escalera» no podia encenderse en NINGUNA de las siete estrategias.
+   * escalera» no podia encenderse en NINGUNA de las ocho estrategias.
    *
    * Por eso es UNA funcion y no tres literales: el cuarto consumidor la hereda
    * en vez de reintroducir el fallo. Es ademas la misma forma que arma el

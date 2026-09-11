@@ -11,10 +11,13 @@ import {
   D,
   Decimal,
   LimitAction,
+  Mutability,
   SizingMode,
   type BotContext,
   type CommonBotConfig,
+  type FieldMeta,
   type Numeric,
+  eficienciaKaufman,
   type Ticker,
   type VenueOrder,
 } from '@crypton/shared';
@@ -52,6 +55,289 @@ export function bookSpreadBps(ticker: Ticker): Decimal {
   if (!bid.gt(0) || !ask.gt(0)) return D(0);
   const mid = bid.plus(ask).div(2);
   return mid.gt(0) ? ask.minus(bid).div(mid).mul(BPS) : D(0);
+}
+
+/**
+ * Tamaños del toque, cuando el venue los publica.
+ *
+ * `null` si falta cualquiera de los dos, y `null` significa «no se sabe», que
+ * no es lo mismo que cero. Lighter no los publica; Hyperliquid y Aster sí
+ * (spec 038).
+ */
+function tamanos(ticker: Ticker): { bid: Decimal; ask: Decimal } | null {
+  if (ticker.bidSize == null || ticker.askSize == null) return null;
+  const bid = D(ticker.bidSize);
+  const ask = D(ticker.askSize);
+  if (!bid.isFinite() || !ask.isFinite()) return null;
+  if (bid.lt(0) || ask.lt(0) || bid.plus(ask).lte(0)) return null;
+  return { bid, ask };
+}
+
+/**
+ * MICROPRECIO de Stoikov: `(ask·Q_bid + bid·Q_ask) / (Q_bid + Q_ask)`.
+ *
+ * El punto medio pelado ignora cuánta cantidad hay a cada lado, así que cotiza
+ * igual con el libro cargado de compradores que de vendedores. El microprecio
+ * pondera cada precio por la cantidad del lado CONTRARIO —más compradores
+ * empujan el precio justo hacia el ask— y es martingala por construcción, cosa
+ * que el medio ponderado ingenuo no es.
+ *
+ * Cae al punto medio cuando el venue no publica tamaños. No se inventa nada:
+ * quien lo llame no tiene por qué saber en qué venue está.
+ */
+export function microprecio(ticker: Ticker): Decimal {
+  const q = tamanos(ticker);
+  const mid = bookMid(ticker);
+  if (!q || !hayLibro(ticker)) return mid;
+  const bid = D(ticker.bid);
+  const ask = D(ticker.ask);
+  return ask.mul(q.bid).plus(bid.mul(q.ask)).div(q.bid.plus(q.ask));
+}
+
+/**
+ * Desequilibrio del toque: `(Q_bid − Q_ask) / (Q_bid + Q_ask)`, en [−1, +1].
+ *
+ * Positivo = más cantidad esperando para comprar. `null` cuando el venue no
+ * publica tamaños, para que quien lo use pueda no aplicar el sesgo en vez de
+ * aplicarlo con un cero que parecería «equilibrado».
+ */
+export function desequilibrio(ticker: Ticker): Decimal | null {
+  const q = tamanos(ticker);
+  if (!q) return null;
+  return q.bid.minus(q.ask).div(q.bid.plus(q.ask));
+}
+
+/**
+ * Centro desplazado EN CONTRA del inventario (el precio de reserva).
+ *
+ * Con inventario largo el centro baja: la venta queda más cerca y la compra más
+ * lejos, de modo que el bot se deshaga antes de acumular más. Es lo que hace
+ * que un market maker tienda solo a posición cero sin dejar de cotizar los dos
+ * lados.
+ *
+ * Estaba escrito a mano en la V1; se extrae para que la V2 use EXACTAMENTE el
+ * mismo código y no una reimplementación parecida (spec 039 R-3).
+ */
+export const centroSesgado = (
+  mid: Decimal,
+  ratio: Decimal,
+  factor: Numeric,
+  baseBps: Decimal,
+): Decimal => mid.mul(D(1).minus(D(factor).mul(ratio).mul(baseBps).div(BPS)));
+
+/**
+ * Sesgo del centro por FUNDING, en bps. Positivo = el centro baja.
+ *
+ * El signo sale del funding y NO del inventario, que es lo que sorprende:
+ * `f > 0` significa que los largos pagan y los cortos cobran. Bajar el centro
+ * acerca las ventas y aleja las compras, o sea inclina el libro del bot hacia
+ * estar corto — el lado al que el venue está pagando. Y funciona igual estando
+ * largo (te saca antes del lado que paga) que estando corto (te mantiene en el
+ * que cobra), así que no hace falta mirar `q`.
+ *
+ * Cero cuando el venue no publica funding: Lighter no lo hace (spec 038).
+ */
+export function fundingBps(ticker: Ticker): Decimal | null {
+  if (ticker.fundingRate == null) return null;
+  const f = D(ticker.fundingRate);
+  return f.isFinite() ? f.mul(BPS) : null;
+}
+
+/**
+ * Factor de tamaño por inventario, por lado.
+ *
+ * El lado que añade se achica y el que reduce se agranda. Es más suave que
+ * mover precios: no sacrifica probabilidad de ejecución justo en el lado que
+ * quieres que ejecute. Nunca baja de cero.
+ */
+export const factorDeTamano = (
+  role: 'adding' | 'reducing',
+  ratio: Decimal,
+  factor: Numeric,
+): Decimal => {
+  const k = D(factor).mul(ratio.abs());
+  return role === 'adding' ? Decimal.max(D(0), D(1).minus(k)) : D(1).plus(k);
+};
+
+/**
+ * Los mandos de microestructura, comunes a las dos versiones (spec 039).
+ *
+ * TODOS nacen apagados. No es prudencia decorativa: encender cualquiera de
+ * ellos cambia dónde cotiza un bot que ya está en marcha, y el principio 6 de
+ * `specs/README.md` no admite eso sin decisión de su dueño.
+ */
+export interface IntelConfig {
+  fairPriceMode?: 'MID' | 'MICRO';
+  obiSkewFactor?: string;
+  sizeSkewFactor?: string;
+  fundingSkewFactor?: string;
+  maxAdverseFundingBps?: string;
+  markoutHorizonSeconds?: number;
+  markoutSensitivity?: string;
+}
+
+/**
+ * Descriptores de los mandos de microestructura, uno solo para las dos
+ * versiones: así no pueden divergir en rango, en ayuda ni en valor de fábrica.
+ *
+ * Todos `advanced` y en su propio grupo, porque son para quien ya entiende la
+ * estrategia; y todos en cero, porque encender cualquiera cambia dónde cotiza
+ * un bot en marcha.
+ */
+export const INTEL_FIELDS: readonly FieldMeta[] = [
+  {
+    key: 'fairPriceMode',
+    kind: 'enum',
+    mutability: Mutability.HOT,
+    labelKey: 'strategy.mm.fairPriceMode',
+    helpKey: 'strategy.mm.fairPriceModeHelp',
+    options: ['MID', 'MICRO'],
+    required: false,
+    default: 'MID',
+    group: 'intelligence',
+    control: 'segment',
+    advanced: true,
+  },
+  {
+    key: 'obiSkewFactor',
+    kind: 'number',
+    mutability: Mutability.HOT,
+    labelKey: 'strategy.mm.obiSkewFactor',
+    helpKey: 'strategy.mm.obiSkewFactorHelp',
+    min: 0,
+    max: 2,
+    step: 0.05,
+    required: false,
+    default: 0,
+    group: 'intelligence',
+    advanced: true,
+  },
+  {
+    key: 'sizeSkewFactor',
+    kind: 'number',
+    mutability: Mutability.HOT,
+    labelKey: 'strategy.mm.sizeSkewFactor',
+    helpKey: 'strategy.mm.sizeSkewFactorHelp',
+    min: 0,
+    max: 1,
+    step: 0.05,
+    required: false,
+    default: 0,
+    group: 'intelligence',
+    advanced: true,
+  },
+  {
+    key: 'fundingSkewFactor',
+    kind: 'number',
+    mutability: Mutability.HOT,
+    labelKey: 'strategy.mm.fundingSkewFactor',
+    helpKey: 'strategy.mm.fundingSkewFactorHelp',
+    min: 0,
+    max: 3,
+    step: 0.05,
+    required: false,
+    default: 0,
+    group: 'intelligence',
+    advanced: true,
+  },
+  {
+    key: 'maxAdverseFundingBps',
+    kind: 'number',
+    mutability: Mutability.HOT,
+    labelKey: 'strategy.mm.maxAdverseFundingBps',
+    helpKey: 'strategy.mm.maxAdverseFundingBpsHelp',
+    min: 0,
+    max: 100,
+    step: 0.5,
+    required: false,
+    default: 0,
+    group: 'intelligence',
+    unit: 'bps',
+    advanced: true,
+  },
+  {
+    key: 'markoutHorizonSeconds',
+    kind: 'integer',
+    mutability: Mutability.HOT,
+    labelKey: 'strategy.mm.markoutHorizonSeconds',
+    helpKey: 'strategy.mm.markoutHorizonSecondsHelp',
+    min: 0,
+    max: 300,
+    step: 5,
+    required: false,
+    default: 0,
+    group: 'intelligence',
+    unit: 'sec',
+    advanced: true,
+  },
+  {
+    key: 'markoutSensitivity',
+    kind: 'number',
+    mutability: Mutability.HOT,
+    labelKey: 'strategy.mm.markoutSensitivity',
+    helpKey: 'strategy.mm.markoutSensitivityHelp',
+    min: 0,
+    max: 3,
+    step: 0.05,
+    required: false,
+    default: 0,
+    group: 'intelligence',
+    advanced: true,
+  },
+] as const;
+
+/** Los valores de fábrica de `INTEL_FIELDS`, para el `defaults()` de cada una. */
+export const INTEL_DEFAULTS = {
+  fairPriceMode: 'MID' as const,
+  obiSkewFactor: '0',
+  sizeSkewFactor: '0',
+  fundingSkewFactor: '0',
+  maxAdverseFundingBps: '0',
+  markoutHorizonSeconds: 0,
+  markoutSensitivity: '0',
+};
+
+/**
+ * Centro de MERCADO: el punto de referencia antes de mirar el inventario.
+ *
+ * Aquí van las dos correcciones que hablan del mercado y no del bot —el
+ * microprecio y el desequilibrio del toque—, y van aquí a propósito: este valor
+ * es el que se congela en `quotedMid` entre recotizaciones. Aplicarlas después
+ * de la congelación movería los precios en CADA tick sin recotizar, que es
+ * exactamente el defecto que el spec 029 arregló en `autoAdjustDistance`.
+ *
+ * El precio: con `obiSkewFactor` alto, el centro se mueve más y se recotiza más
+ * a menudo. Por eso el campo llega hasta 2 pero la guía recomienda empezar en
+ * 0,3–0,5, donde el desplazamiento queda por debajo del umbral de reajuste.
+ */
+export function centroDeMercado(cfg: IntelConfig, ticker: Ticker, baseBps: Decimal): Decimal {
+  const base = cfg.fairPriceMode === 'MICRO' ? microprecio(ticker) : bookMid(ticker);
+  const k = D(cfg.obiSkewFactor ?? 0);
+  if (k.lte(0)) return base;
+  const i = desequilibrio(ticker);
+  // Sin tamaños no hay desequilibrio que aplicar, y aplicar cero sería fingir
+  // que el libro está equilibrado cuando lo que pasa es que no se sabe.
+  if (i == null) return base;
+  return base.mul(D(1).plus(k.mul(i).mul(baseBps).div(BPS)));
+}
+
+/**
+ * ¿Este lado añadiría posición del lado que PAGA funding?
+ *
+ * `f > 0` = los largos pagan, así que comprar es ponerse del lado que paga.
+ * Se usa para el filtro de funding extremo, que corta solo el lado que abre:
+ * el que reduce sigue vivo siempre, como con las bandas de precio.
+ */
+export function fundingAdverso(
+  ticker: Ticker,
+  side: 'BUY' | 'SELL',
+  maxBps: Numeric | undefined | null,
+): boolean {
+  const tope = D(maxBps ?? 0);
+  if (!tope.gt(0)) return false;
+  const f = fundingBps(ticker);
+  if (f == null || f.abs().lte(tope)) return false;
+  return side === 'BUY' ? f.gt(0) : f.lt(0);
 }
 
 /** El venue publica los dos lados. Sin esto no hay libro contra el que cotizar. */
@@ -373,10 +659,27 @@ export function expiredQuotes(opts: {
 
     // El TTL de salida solo aplica al lado que deshace inventario: una orden de
     // salida vieja está a un precio que el mercado ya dejó atrás.
-    if (roles.buy === 'reducing' && isOlderThan(ages, bid, now, opts.exitTtlSeconds)) {
+    //
+    // «Ya dejó atrás» es la clave, y por eso `alcanzando` exime también a este
+    // TTL. El campo promete «la retira y la vuelve a poner más cerca del
+    // mercado actual», y eso solo es cierto cuando el mercado se ALEJÓ: al
+    // recotizar, el centro se mueve con el precio, así que si el mercado ha
+    // subido hacia una venta, la venta nueva sale MÁS ARRIBA que la vieja. Es
+    // decir, el TTL apartaba la salida justo el tick antes de cobrarla, y hacía
+    // lo contrario de lo que promete. La tercera puerta del defecto del spec
+    // 035, cerrada en el 037 (R-3).
+    if (
+      !opts.alcanzando?.bid &&
+      roles.buy === 'reducing' &&
+      isOlderThan(ages, bid, now, opts.exitTtlSeconds)
+    ) {
       out.add(bid);
     }
-    if (roles.sell === 'reducing' && isOlderThan(ages, ask, now, opts.exitTtlSeconds)) {
+    if (
+      !opts.alcanzando?.ask &&
+      roles.sell === 'reducing' &&
+      isOlderThan(ages, ask, now, opts.exitTtlSeconds)
+    ) {
       out.add(ask);
     }
   }
@@ -422,6 +725,7 @@ export function sampleVolatility(
   mid: Decimal,
   windowSeconds: number | undefined | null,
   record: boolean,
+  estimator: 'RANGE' | 'PARKINSON' = 'RANGE',
 ): VolatilityRead {
   const window = Math.max(1, Math.floor(windowSeconds ?? 300)) * 1000;
   const raw = Array.isArray(scratch['volSamples']) ? (scratch['volSamples'] as VolSample[]) : [];
@@ -449,8 +753,166 @@ export function sampleVolatility(
     sum = sum.plus(v);
   }
   const mean = sum.div(trimmed.length);
-  const volBps = mean.gt(0) ? max.minus(min).div(mean).mul(BPS) : D(0);
+  let volBps = mean.gt(0) ? max.minus(min).div(mean).mul(BPS) : D(0);
+
+  // Estimador de Parkinson: el recorrido CRECE con el número de muestras, así
+  // que dos bots con la misma volatilidad real pero distinto ritmo de refresco
+  // miden cosas distintas — y la ventana efectiva depende de cuántas veces se
+  // haya recotizado, que es justo lo que el spec 035 volvió variable. Dividir
+  // por `√(2·ln n)` quita esa dependencia. Opcional porque cambiarlo cambia el
+  // diferencial de los bots en marcha (spec 039 R-9).
+  if (estimator === 'PARKINSON' && trimmed.length > 2) {
+    volBps = volBps.div(D(Math.sqrt(2 * Math.log(trimmed.length))));
+  }
   return { volBps, samples };
+}
+
+// ── Markout: medir si te están eligiendo ──────────────────────────────────
+
+/** Una ejecución pendiente de evaluar: `[epoch ms, precio, lado]`. */
+export type FillPendiente = readonly [number, string, 'BUY' | 'SELL'];
+
+/** Tope del anillo de fills pendientes, por lo mismo que `MAX_VOL_SAMPLES`. */
+export const MAX_FILLS_PENDIENTES = 60;
+
+export interface MarkoutRead {
+  /** EWMA del markout de cada lado, en bps. Negativo = te están eligiendo. */
+  bidBps: Decimal;
+  askBps: Decimal;
+  /** Cuántas ejecuciones han entrado en la media. */
+  muestras: number;
+  /** Parche para `scratch`, o `null` si no hay nada que guardar. */
+  patch: Record<string, unknown> | null;
+}
+
+const EWMA_ALPHA = D(0.2);
+
+/**
+ * Anota una ejecución para evaluarla más tarde.
+ *
+ * La llama `onFill`, que el motor ya cablea y que ya usan `gridmart` y
+ * `neutral-grid`. Devuelve el anillo nuevo, o `null` si el markout está
+ * apagado: apagado no escribe NADA en `scratch`.
+ */
+export function anotarFill(
+  scratch: Record<string, unknown>,
+  fill: { price: string; side: 'BUY' | 'SELL' },
+  now: number,
+  horizonSeconds: number | undefined | null,
+): FillPendiente[] | null {
+  if (!horizonSeconds || horizonSeconds <= 0) return null;
+  const raw = Array.isArray(scratch['mkPend']) ? (scratch['mkPend'] as FillPendiente[]) : [];
+  const next = [...raw, [now, fill.price, fill.side] as FillPendiente];
+  return next.length > MAX_FILLS_PENDIENTES ? next.slice(next.length - MAX_FILLS_PENDIENTES) : next;
+}
+
+/**
+ * Resuelve los fills cuyo horizonte ha vencido contra el mid de AHORA.
+ *
+ * El markout es la medida canónica de selección adversa y no necesita un solo
+ * dato externo: dónde está el mercado N segundos después de que te ejecutaran
+ * dice si cobraste el diferencial o si te lo quitaron. Negativo = te eligieron.
+ *
+ * Media exponencial y no simple: lo que importa es el flujo de ahora, no el de
+ * hace una hora. Y por LADO, porque te pueden estar eligiendo solo en uno —que
+ * es además el caso normal en un mercado con deriva—.
+ */
+export function resolverMarkout(
+  scratch: Record<string, unknown>,
+  mid: Decimal,
+  now: number,
+  horizonSeconds: number | undefined | null,
+): MarkoutRead {
+  const bid0 = D((scratch['mkBid'] as string | undefined) ?? 0);
+  const ask0 = D((scratch['mkAsk'] as string | undefined) ?? 0);
+  const vistos = Number(scratch['mkN'] ?? 0);
+  if (!horizonSeconds || horizonSeconds <= 0) {
+    return { bidBps: bid0, askBps: ask0, muestras: vistos, patch: null };
+  }
+
+  const raw = Array.isArray(scratch['mkPend']) ? (scratch['mkPend'] as FillPendiente[]) : [];
+  const horizonMs = Math.floor(horizonSeconds) * 1000;
+  // Vencidos, pero no RANCIOS. Si el bot ha estado sin planificar —fuente
+  // externa caída, bot pausado, worker relevado—, un fill de hace diez minutos
+  // resuelto contra el mid de ahora entraría en la media como si fuera un
+  // markout de cuarenta y cinco segundos. Se descarta lo que pase de tres
+  // horizontes: no es medible, y una medida falsa es peor que ninguna
+  // (spec 041 R-4).
+  const utiles = raw.filter((f) => Array.isArray(f) && f.length === 3);
+  const vencidos = utiles.filter((f) => now - f[0] >= horizonMs && now - f[0] <= horizonMs * 3);
+  const rancios = utiles.filter((f) => now - f[0] > horizonMs * 3);
+  if (vencidos.length === 0 && rancios.length === 0) {
+    return { bidBps: bid0, askBps: ask0, muestras: vistos, patch: null };
+  }
+
+  let bid = bid0;
+  let ask = ask0;
+  for (const [, precio, lado] of vencidos) {
+    const px = D(precio);
+    if (!px.gt(0)) continue;
+    // Compra: gano si el mercado SUBE después. Venta: si baja.
+    const m = lado === 'BUY' ? mid.minus(px).div(px).mul(BPS) : px.minus(mid).div(px).mul(BPS);
+    if (lado === 'BUY') bid = bid.mul(D(1).minus(EWMA_ALPHA)).plus(m.mul(EWMA_ALPHA));
+    else ask = ask.mul(D(1).minus(EWMA_ALPHA)).plus(m.mul(EWMA_ALPHA));
+  }
+
+  const pendientes = utiles.filter((f) => !vencidos.includes(f) && !rancios.includes(f));
+  return {
+    bidBps: bid,
+    askBps: ask,
+    muestras: vistos + vencidos.length,
+    patch: {
+      mkPend: pendientes,
+      mkBid: bid.toFixed(4),
+      mkAsk: ask.toFixed(4),
+      mkN: vistos + vencidos.length,
+    },
+  };
+}
+
+/**
+ * Cuánto hay que ALEJAR un lado porque le están eligiendo, en bps.
+ *
+ * Suelo en cero: un markout bueno no acerca la cotización. Acercarse cuando te
+ * va bien es perseguir al mercado, que es el otro modo conocido de perder
+ * dinero haciendo de creador de mercado.
+ */
+export const penalizacionMarkout = (markoutBps: Decimal, sensibilidad: Numeric): Decimal =>
+  Decimal.max(D(0), markoutBps.negated()).mul(D(sensibilidad));
+
+// ── Deriva y eficiencia ───────────────────────────────────────────────────
+
+export interface DerivaRead {
+  /** Recorrido NETO en la ventana, en bps y con signo. */
+  bps: Decimal;
+  /**
+   * Eficiencia de Kaufman: `|recorrido neto| / suma de |movimientos|`, en [0,1].
+   *
+   * 1 = línea recta; 0 = ir y venir sin avanzar. Es la misma fórmula que el
+   * asesor usa en la API para elegir configuración, y la razón de mirarla aquí
+   * es la misma: una rejilla o un market maker viven del ir y venir, así que
+   * una eficiencia alta es el aviso de que este mercado no es para ellos.
+   */
+  eficiencia: Decimal;
+}
+
+/** Deriva y eficiencia del anillo de muestras. `null` con menos de tres. */
+export function deriva(muestras: unknown): DerivaRead | null {
+  const raw = Array.isArray(muestras) ? (muestras as VolSample[]) : [];
+  const s = raw.filter((m) => Array.isArray(m) && m.length === 2);
+  if (s.length < 3) return null;
+
+  const primero = D(s[0][1]);
+  const ultimo = D(s[s.length - 1][1]);
+  if (!primero.gt(0)) return null;
+
+  return {
+    bps: ultimo.minus(primero).div(primero).mul(BPS),
+    // La MISMA función que usa el asesor sobre cierres horarios: son entradas
+    // distintas y la misma pregunta, y dos implementaciones serían dos
+    // respuestas (spec 039).
+    eficiencia: eficienciaKaufman(s.map((m) => m[1])),
+  };
 }
 
 // ── Condición de activación ───────────────────────────────────────────────

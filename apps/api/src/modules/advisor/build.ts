@@ -489,7 +489,17 @@ function buildMarketMaker(k: Knobs, ctx: BuildContext, v2: boolean): Record<stri
     highRiskThresholdPct: alto,
     refreshSeconds: Math.max(15, refresco),
     layers: capas,
-    layerDistanceMultiplier: stepped(clamp(1.4 * FACTOR[k.spread], 1, 3), 1, 3, 0.05, 2),
+    // Con varias capas el suelo es 1,05 y no 1: con 1 todas caen al MISMO
+    // precio, y la banda MUY_BAJA daba justo eso (1,4 x 0,55 = 0,77, acotado a
+    // 1). El asesor generaba asi una configuracion que la estrategia rechaza
+    // (spec 037 R-2).
+    layerDistanceMultiplier: stepped(
+      clamp(1.4 * FACTOR[k.spread], capas > 1 ? 1.05 : 1, 3),
+      capas > 1 ? 1.05 : 1,
+      3,
+      0.05,
+      2,
+    ),
     layerSizeMultiplier: stepped(clamp(1 * FACTOR[k.sizeGrowth], 0.1, 3), 0.1, 3, 0.05, 2),
     // Al tocar el tope, el prudente cierra; los demas dejan de abrir pero
     // conservan lo que tengan.
@@ -558,6 +568,111 @@ function directionFor(kind: string, pedida: 'LONG' | 'SHORT' | 'NEUTRAL'): strin
  * `defaults()` de la estrategia, que el repo ya garantiza coherente con el
  * descriptor.
  */
+/**
+ * Seguimiento de tendencia (spec 040).
+ *
+ * Lo que hay que acertar aqui no es la senal, es el TAMANO: la posicion sale de
+ * `riesgo / (k x ATR)`, asi que el multiplicador del stop y el riesgo por
+ * operacion son los dos unicos numeros que mueven el dinero. Todo lo demas
+ * -intervalo, canal- cambia cuantas veces opera, no cuanto arriesga.
+ *
+ * Y una regla que no se negocia: el stop NUNCA por debajo de 1,5 ATR. Un stop
+ * mas pegado no es prudencia, es salirse en el primer respiro del mercado una y
+ * otra vez, pagando la comision cada vez. La estrategia lo avisa al validar; el
+ * asesor directamente no lo propone.
+ */
+function buildTrend(k: Knobs, ctx: BuildContext): Record<string, unknown> {
+  const f = ctx.features;
+  const lev = Math.min(leverageFor(k, ctx, 5), k.profile === 'PRUDENTE' ? 2 : 3);
+
+  // Mas apetito de cadencia, velas mas cortas. Con velas de 15 min el bot opera
+  // mucho mas y acierta menos: es una decision de caracter, no de mercado.
+  const intervalos = ['1d', '4h', '4h', '1h', '15m'] as const;
+  const candleInterval = intervalos[BANDS.indexOf(k.cadence)] ?? '4h';
+
+  // El canal: mas cobertura, mas velas, y por tanto rupturas mas raras y mas
+  // fiables.
+  const breakoutPeriod = Math.round(clamp(20 * FACTOR[k.coverage], 5, 100));
+
+  // El stop: mas holgura pedida, mas ATR de margen. Suelo duro en 1,5.
+  const atrStopMultiplier = stepped(clamp(2.5 * FACTOR[k.spread], 1.5, 6), 1.5, 6, 0.1, 1);
+
+  // El riesgo por operacion: el mando que de verdad decide cuanto se pierde en
+  // una mala racha. Con cuatro aciertos de cada diez, un 2 % encadena caidas muy
+  // profundas, asi que el techo es 2 aunque el campo admita 5.
+  const riskPerTradePct = stepped(clamp(1 * FACTOR[k.sizeGrowth], 0.2, 2), 0.1, 5, 0.1, 1);
+
+  // La exigencia de que el mercado vaya a algun sitio se calibra con el mercado
+  // que hay: en uno que ya va recto se puede pedir menos, porque la senal es
+  // mas limpia; en uno que va y viene, mas.
+  const entryEfficiency = stepped(
+    clamp(0.35 * (2 - FACTOR[k.coverage]) * (f.efficiency > 0.5 ? 0.8 : 1.2), 0.1, 0.9),
+    0,
+    1,
+    0.05,
+    2,
+  );
+
+  return {
+    leverage: lev,
+    candleInterval,
+    breakoutPeriod,
+    atrPeriod: 14,
+    atrStopMultiplier,
+    riskPerTradePct,
+    entryEfficiency,
+    stopRepriceBps: stepped(clamp(20 / FACTOR[k.cadence], 1, 200), 1, 200, 1, 0),
+    allowShort: k.profile !== 'PRUDENTE',
+    maxNotionalCap: dec(ctx.totalInvestment * lev, 2),
+  };
+}
+
+/**
+ * Seguimiento de beneficio (spec 043).
+ *
+ * Aqui solo hay dos numeros que decidan algo, y los dos se miden contra lo que
+ * RESPIRA el par, no contra un gusto:
+ *
+ * - El objetivo, a partir del cual empieza a seguir. Ponerlo por debajo del
+ *   recorrido tipico de un dia es pedirle al bot que se active con el ruido.
+ * - El retroceso, que decide cuando cierra. Por debajo del recorrido de una
+ *   hora, cualquier respiro del par lo dispara: esa es la unica forma de que
+ *   esta estrategia sea peor que un objetivo fijo, y es facil de evitar.
+ *
+ * El apalancamiento va corto a proposito: es una posicion direccional entera,
+ * sin escalera que promedie ni cotizacion que recupere.
+ */
+function buildTrailing(k: Knobs, ctx: BuildContext): Record<string, unknown> {
+  const f = ctx.features;
+  const lev = Math.min(leverageFor(k, ctx, 5), k.profile === 'PRUDENTE' ? 2 : 3);
+
+  // El objetivo: al menos un dia tipico de recorrido, y mas cuanto mas se pida
+  // cubrir. En un par que se mueve un 4 % al dia, un objetivo del 1 % se activa
+  // con el ruido de la mañana.
+  const objetivo = clamp(Math.max(f.atrPct1d * 1.5, 3) * FACTOR[k.coverage], 1, 100);
+
+  // El retroceso: por encima del recorrido de una hora, que es la sacudida que
+  // no significa nada. Mas cadencia pedida, retroceso mas fino y salidas mas
+  // tempranas: es una decision de caracter.
+  const retroceso = clamp(Math.max(f.atrPct1h, 0.5) * 1.5 * (2 - FACTOR[k.cadence]), 0.3, 10);
+
+  // El stop: el que de verdad manda hasta que se llega al objetivo. Se ata a la
+  // peor sesion del periodo para que no salte con una normal.
+  const stop = clamp(Math.max(Math.abs(f.worstDayPct), f.atrPct1d * 2), 1, 30);
+
+  return {
+    leverage: lev,
+    activationMode: 'NONE',
+    takeProfitPct: stepped(objetivo, 0.1, 500, 0.1, 1),
+    trailingCallbackPct: stepped(retroceso, 0.1, 10, 0.1, 1),
+    trailingRepriceBps: stepped(clamp(20 / FACTOR[k.cadence], 1, 200), 1, 200, 1, 0),
+    // Sin `trailingTakeProfit`: la estrategia no lo declara en su meta y aqui
+    // el seguimiento esta siempre encendido (spec 044 R-4).
+    stopLossPct: stepped(stop, 0.1, 90, 0.1, 1),
+    maxNotionalCap: dec(ctx.totalInvestment * lev, 2),
+  };
+}
+
 export function buildConfig(
   kind: string,
   knobs: Knobs,
@@ -587,6 +702,12 @@ export function buildConfig(
       break;
     case 'MARKET_MAKER_V2':
       propio = buildMarketMaker(knobs, ctx, true);
+      break;
+    case 'TREND_FOLLOW':
+      propio = buildTrend(knobs, ctx);
+      break;
+    case 'TRAILING_PROFIT':
+      propio = buildTrailing(knobs, ctx);
       break;
     default:
       propio = {};

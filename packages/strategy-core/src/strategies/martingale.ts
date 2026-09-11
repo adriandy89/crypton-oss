@@ -32,13 +32,28 @@ import {
   type RawLevel,
 } from '../common';
 import { baseLimitPrice, scaledLadder, takeProfitPrice } from '../ladder';
+import {
+  TRAILING_DEFAULTS,
+  camposTrailing,
+  limpiarTrailing,
+  trailingVigente,
+  validarTrailing,
+  type TrailingConfig,
+} from '../trailing-take-profit';
 import type { Strategy } from '../types';
 
-export interface MartingaleConfig extends CommonBotConfig {
+export interface MartingaleConfig extends CommonBotConfig, TrailingConfig {
   numLimitBuys: number;
   initialSeparationPct: string;
   volumeScale: string;
   stepScale: string;
+  /**
+   * Beneficio al que sale, sobre el precio medio real del venue.
+   *
+   * Con `trailingTakeProfit` encendido este campo NO cambia de unidad ni de
+   * sitio: cambia de papel. Deja de ser «el precio al que salgo» y pasa a ser
+   * «el precio en el que empiezo a seguir al máximo» (spec 042).
+   */
   takeProfitPct: string;
   /** Cómo se abre el ciclo: a mercado (entra ya) o limit al precio actual. */
   baseOrderType?: 'MARKET' | 'LIMIT';
@@ -131,6 +146,7 @@ export const MARTINGALE_FIELDS: readonly FieldMeta[] = [
     required: false,
     default: 'LIMIT',
   },
+  ...camposTrailing('martingale'),
 ] as const;
 
 const META: StrategyMeta = {
@@ -282,6 +298,7 @@ export const martingale: Strategy<MartingaleConfig> = {
       takeProfitPct: '1',
       baseOrderType: 'MARKET',
       tpMode: 'LIMIT',
+      ...TRAILING_DEFAULTS,
       leverage: 2,
       marginMode: 'ISOLATED',
       direction: 'LONG',
@@ -290,11 +307,13 @@ export const martingale: Strategy<MartingaleConfig> = {
   },
 
   validate(cfg: MartingaleConfig, market: MarketSpec): ValidationResult {
-    return toResult(validateLadderConfig(cfg, market));
+    // `validateLadderConfig` la comparte GridMart, que NO ofrece seguimiento:
+    // el aviso del retroceso va aquí para no colarle un campo que no tiene.
+    return toResult([...validateLadderConfig(cfg, market), ...validarTrailing(cfg)]);
   },
 
   preview(cfg: MartingaleConfig, market: MarketSpec, refPrice: string): PreviewResult {
-    const issues = validateLadderConfig(cfg, market);
+    const issues = [...validateLadderConfig(cfg, market), ...validarTrailing(cfg)];
     // Ver `invalidPreview`: sin config valida, calcular es reventar.
     if (issues.some((i) => i.severity === 'ERROR')) return invalidPreview(issues);
     return buildPreview({
@@ -423,25 +442,73 @@ export const martingale: Strategy<MartingaleConfig> = {
     // siguiente tick, que es exactamente lo que debe pasar.
     const avgEntry = ctx.position!.entryPrice;
     const tp = takeProfitPrice(avgEntry, cfg.takeProfitPct, cfg.direction);
-    const tpPrice = px(ctx.market, tp, exitSide(cfg.direction));
-    // «A mercado» es una orden CONDICIONAL: espera al objetivo y entonces cruza
-    // el libro. Sin `triggerPrice` salía como MARKET inmediata y el venue la
-    // ejecutaba al colocarla: cerraba la posición al instante, cerraba el ciclo,
-    // esperaba el cooldown y volvía a abrir — un bucle que quema comisiones
-    // (001/F-80). El adaptador traduce disparador + intención TP a la
-    // condicional nativa de cada venue, y el simulador la deja en reposo.
-    const aMercado = cfg.tpMode === 'MARKET';
-    orders.push({
-      clientOrderId: makeCoid(ctx.botId, seq, LevelKind.TAKE_PROFIT, 0),
-      levelKind: LevelKind.TAKE_PROFIT,
-      levelIndex: 0,
-      side: exitSide(cfg.direction),
-      type: aMercado ? 'MARKET' : 'LIMIT',
-      price: tpPrice,
-      ...(aMercado ? { triggerPrice: tpPrice } : {}),
-      qty: qy(ctx.market, pos),
-      reduceOnly: true,
-    });
+    const scratchPatch: Record<string, unknown> = {};
+    let notaSalida = '';
+
+    if (cfg.trailingTakeProfit) {
+      // Con el seguimiento encendido, `tp` deja de ser el precio de salida y
+      // pasa a ser el de ACTIVACIÓN. Y se recalcula solo: al llenarse una
+      // seguridad baja el precio medio, así que la activación baja con él —lo
+      // que NO baja nunca es el máximo ya alcanzado (spec 042 R-4 y R-5).
+      const t = trailingVigente({
+        scratch: ctx.cycle.scratch,
+        extremos: ctx.extremos,
+        mark,
+        activacion: tp,
+        direction: cfg.direction,
+        callbackPct: cfg.trailingCallbackPct ?? TRAILING_DEFAULTS.trailingCallbackPct,
+        repriceBps: cfg.trailingRepriceBps ?? TRAILING_DEFAULTS.trailingRepriceBps,
+        now: ctx.now,
+      });
+      Object.assign(scratchPatch, t.patch);
+      notaSalida = ' ' + t.nota;
+
+      if (t.disparo) {
+        const precio = px(ctx.market, t.disparo, exitSide(cfg.direction));
+        orders.push({
+          clientOrderId: makeCoid(ctx.botId, seq, LevelKind.TAKE_PROFIT, 0),
+          levelKind: LevelKind.TAKE_PROFIT,
+          levelIndex: 0,
+          side: exitSide(cfg.direction),
+          type: 'MARKET',
+          price: precio,
+          triggerPrice: precio,
+          // Un take profit que SIGUE al precio dispara a la BAJA en un largo:
+          // take profit en la contabilidad, stop en el disparo. Sin este
+          // `intent` el motor lo armaría al revés y el venue cerraría la
+          // posición al colocarlo — el fallo 001/F-80 otra vez (spec 042 R-1).
+          intent: 'SL',
+          qty: qy(ctx.market, pos),
+          reduceOnly: true,
+        });
+      }
+    } else {
+      // Apagado: se borra su estado. Sin esto, volver a encenderlo recupera el
+      // máximo de antes y coloca un disparador que puede estar ya por encima del
+      // mercado, o sea un cierre a mercado inmediato (spec 044 R-1).
+      const limpieza = limpiarTrailing(ctx.cycle.scratch);
+      if (limpieza) Object.assign(scratchPatch, limpieza);
+
+      // «A mercado» es una orden CONDICIONAL: espera al objetivo y entonces cruza
+      // el libro. Sin `triggerPrice` salía como MARKET inmediata y el venue la
+      // ejecutaba al colocarla: cerraba la posición al instante, cerraba el ciclo,
+      // esperaba el cooldown y volvía a abrir — un bucle que quema comisiones
+      // (001/F-80). El adaptador traduce disparador + intención TP a la
+      // condicional nativa de cada venue, y el simulador la deja en reposo.
+      const tpPrice = px(ctx.market, tp, exitSide(cfg.direction));
+      const aMercado = cfg.tpMode === 'MARKET';
+      orders.push({
+        clientOrderId: makeCoid(ctx.botId, seq, LevelKind.TAKE_PROFIT, 0),
+        levelKind: LevelKind.TAKE_PROFIT,
+        levelIndex: 0,
+        side: exitSide(cfg.direction),
+        type: aMercado ? 'MARKET' : 'LIMIT',
+        price: tpPrice,
+        ...(aMercado ? { triggerPrice: tpPrice } : {}),
+        qty: qy(ctx.market, pos),
+        reduceOnly: true,
+      });
+    }
 
     // El STOP_LOSS no se emite aquí: lo añade el motor para las siete
     // estrategias por igual. Ver `BotRunner.withStopLoss`.
@@ -450,7 +517,8 @@ export const martingale: Strategy<MartingaleConfig> = {
     return {
       orders,
       immediate,
-      note: 'Ciclo abierto: ' + Math.max(0, remaining) + ' seguridades pendientes.',
+      note: 'Ciclo abierto: ' + Math.max(0, remaining) + ' seguridades pendientes.' + notaSalida,
+      scratchPatch: Object.keys(scratchPatch).length ? scratchPatch : undefined,
     };
   },
 };

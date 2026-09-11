@@ -9,7 +9,7 @@ import { BotStore, type RiskGuards } from './bot-store';
 import { CommandInbox } from './command-inbox.service';
 import { LeaseService } from './lease.service';
 import { evaluarSalud } from './health';
-import { PriceSourceService } from '../marketdata';
+import { MarketDataService, PriceSourceService } from '../marketdata';
 
 /**
  * Estados en los que un bot debe tener un runner vivo.
@@ -64,6 +64,8 @@ export class EngineService implements OnModuleInit, OnModuleDestroy {
     private readonly audit: AuditService,
     private readonly config: ConfigService,
     private readonly priceSource: PriceSourceService,
+    /** Velas compartidas, para las estrategias que las declaran (spec 038). */
+    private readonly marketData: MarketDataService,
   ) {}
 
   async onModuleInit(): Promise<void> {
@@ -507,6 +509,7 @@ export class EngineService implements OnModuleInit, OnModuleDestroy {
       guards,
       reconcileIntervalMs: Number(this.config.get('RECONCILE_INTERVAL_MS', 15_000)),
       priceSource: this.priceSource,
+      candleSource: this.marketData,
       // Se adopta tal y como estaba: un bot pausado sigue pausado tras un
       // relevo de worker —arrancarlo sin más lo pondría a operar sin que nadie
       // se lo pidiera— y uno en STOPPING no debe colocar NADA: su siguiente

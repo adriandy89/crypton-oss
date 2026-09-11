@@ -1,7 +1,7 @@
 import { Injectable, Logger, OnModuleDestroy } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { Observable, Subject, concat, of, type Subscription } from 'rxjs';
-import { venueKey } from '@crypton/shared';
+import { candleSpanMs, venueKey } from '@crypton/shared';
 import type { Candle, CandleInterval, Ticker, Venue } from '@crypton/shared';
 import {
   createPublicAdapter,
@@ -27,6 +27,15 @@ const SHARED_TTL_SECONDS = 30;
  * escrituras en Redis como los mensajes del bus.
  */
 const SHARE_EVERY_MS = 500;
+
+/**
+ * Cuánto vale una ventana de velas antes de volver a pedirla.
+ *
+ * Un minuto: el intervalo más corto que una estrategia va a pedir para decidir
+ * es de minutos, así que refrescar más a menudo gasta cupo sin cambiar ni una
+ * vela CERRADA, que es lo único que se entrega (spec 038).
+ */
+const CANDLE_HISTORY_TTL_MS = 60_000;
 
 interface SymbolFeed {
   subject: Subject<Ticker>;
@@ -58,6 +67,23 @@ interface SymbolFeed {
  * resolucion. Diez usuarios en BTC/1h comparten una; uno de ellos que cambie a
  * 1m abre otra y suelta la primera.
  */
+/**
+ * Ventana de velas cerradas de un par Y una resolucion, para el MOTOR.
+ *
+ * Aparte de `CandleFeed`, que sirve al grafico: aquel guarda la ULTIMA vela que
+ * llega por WebSocket —incluida la que esta en curso— y este guarda un tramo de
+ * historico cerrado, que es lo unico con lo que se puede decidir sin romper la
+ * pureza de `plan()`.
+ */
+interface CandleHistory {
+  bars: Candle[];
+  fetchedAt: number;
+  /** Peticion en vuelo, para que N bots del mismo par no lancen N identicas. */
+  inflight: Promise<void> | null;
+  /** El tramo mas largo que alguien ha pedido: la ventana sirve a todos. */
+  want: number;
+}
+
 interface CandleFeed {
   last: Candle | null;
   refs: number;
@@ -99,6 +125,8 @@ export class MarketDataService implements OnModuleDestroy {
   private readonly feeds = new Map<string, SymbolFeed>();
   /** Clave `venue:symbol:interval`. Ver `CandleFeed`. */
   private readonly candleFeeds = new Map<string, CandleFeed>();
+  /** Misma clave, otro propósito: el histórico cerrado. Ver `CandleHistory`. */
+  private readonly candleHistories = new Map<string, CandleHistory>();
   private closed = false;
 
   constructor(
@@ -118,6 +146,7 @@ export class MarketDataService implements OnModuleDestroy {
     this.feeds.clear();
     for (const feed of this.candleFeeds.values()) feed.venueSub?.unsubscribe();
     this.candleFeeds.clear();
+    this.candleHistories.clear();
     await Promise.allSettled([...this.adapters.values()].map((a) => a.close()));
     this.adapters.clear();
   }
@@ -256,6 +285,78 @@ export class MarketDataService implements OnModuleDestroy {
   // ═══════════════════════════════════════════════════════════════
   // Lectura
   // ═══════════════════════════════════════════════════════════════
+
+  /**
+   * Ventana de velas CERRADAS, compartida por `(venue, símbolo, intervalo)`.
+   *
+   * Es **síncrona**: devuelve lo que hay y dispara el refresco por detrás, que
+   * es lo que el motor necesita —`buildContext` no puede esperar a una llamada
+   * de red sin convertir cada tick en una espera—. `null` significa «todavía no
+   * hay suficientes», y la estrategia decide qué hacer con eso; devolver una
+   * ventana corta sería peor, porque un ATR de catorce velas calculado sobre
+   * tres es un número con toda la pinta de ser válido.
+   *
+   * N bots del mismo par y resolución son UNA petición: la ventana se guarda
+   * por clave y `inflight` impide que N ticks simultáneos lancen N llamadas.
+   *
+   * Solo cerradas: la vela en curso cambia dentro de su propio intervalo, así
+   * que entregarla haría que dos `plan()` con el mismo estado dieran planes
+   * distintos (spec 038).
+   */
+  candleHistory(
+    venue: Venue,
+    symbol: string,
+    interval: CandleInterval,
+    bars: number,
+    testnet = false,
+  ): Candle[] | null {
+    const k = candleKey(venue, symbol, interval, testnet);
+    let hist = this.candleHistories.get(k);
+    if (!hist) {
+      hist = { bars: [], fetchedAt: 0, inflight: null, want: bars };
+      this.candleHistories.set(k, hist);
+    }
+    hist.want = Math.max(hist.want, bars);
+
+    const now = Date.now();
+    if (!hist.inflight && now - hist.fetchedAt > CANDLE_HISTORY_TTL_MS) {
+      hist.inflight = this.refreshCandles(venue, symbol, interval, testnet, hist).finally(() => {
+        hist.inflight = null;
+      });
+    }
+
+    const span = candleSpanMs(interval);
+    const cerradas = hist.bars.filter((c) => c.t + span <= now);
+    return cerradas.length >= bars ? cerradas.slice(-bars) : null;
+  }
+
+  private async refreshCandles(
+    venue: Venue,
+    symbol: string,
+    interval: CandleInterval,
+    testnet: boolean,
+    hist: CandleHistory,
+  ): Promise<void> {
+    try {
+      const span = candleSpanMs(interval);
+      // Dos de más: una por la vela en curso, que se descarta al entregar, y
+      // otra de holgura por si el venue recorta la primera.
+      const limit = hist.want + 2;
+      const bars = await this.adapterFor(venue, testnet).getCandles(symbol, interval, {
+        startMs: Date.now() - span * limit,
+        limit,
+      });
+      hist.bars = bars;
+      hist.fetchedAt = Date.now();
+    } catch (e) {
+      // No se vacía lo que ya había: una ventana de hace un minuto sirve mucho
+      // mejor que ninguna, y el motor ya sabe tratar que falte.
+      this.logger.warn(
+        `Velas de ${venueKey(venue, testnet)}:${symbol}:${interval} no disponibles: ` +
+          (e as Error).message,
+      );
+    }
+  }
 
   /** Último precio conocido, o null si no hay ninguno o ya está viejo. */
   peek(venue: Venue, symbol: string, testnet = false): Ticker | null {

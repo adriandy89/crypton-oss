@@ -459,3 +459,51 @@ describe('ventana de userTrades (F-74)', () => {
     expect(endTime - startTime).toBeLessThanOrEqual(7 * 24 * 3600_000);
   });
 });
+
+describe('lo que el venue ya mandaba y se tiraba (spec 038)', () => {
+  // Los nombres salen de la documentacion del venue, citada en el spec:
+  // bookTicker trae bidQty/askQty y premiumIndex lastFundingRate/nextFundingTime.
+  const responder = (extraBook: object, extraPremium: object) => (url: string) => {
+    if (url.includes('/ticker/bookTicker')) {
+      return { body: { symbol: 'BTCUSDT', bidPrice: '100.1', askPrice: '100.3', ...extraBook } };
+    }
+    if (url.includes('/premiumIndex')) {
+      return { body: { symbol: 'BTCUSDT', markPrice: '100.2', ...extraPremium } };
+    }
+    return { body: {} };
+  };
+
+  it('getTicker devuelve tamanos del toque, funding y proximo pago', async () => {
+    mockFetch(
+      responder(
+        { bidQty: '431.5', askQty: '9' },
+        { lastFundingRate: '0.00038246', nextFundingTime: 1597392000000 },
+      ),
+    );
+    const t = await new AsterAdapter(creds()).getTicker('BTCUSDT');
+
+    expect(t.bidSize).toBe('431.5');
+    expect(t.askSize).toBe('9');
+    expect(t.fundingRate).toBe('0.00038246');
+    expect(t.nextFundingAt).toBe(1597392000000);
+  });
+
+  it('si el venue deja de mandarlos quedan sin poner, y el resto sigue igual', async () => {
+    mockFetch(responder({}, {}));
+    const t = await new AsterAdapter(creds()).getTicker('BTCUSDT');
+
+    expect(t.bidSize).toBeUndefined();
+    expect(t.askSize).toBeUndefined();
+    expect(t.fundingRate).toBeUndefined();
+    expect(t.nextFundingAt).toBeUndefined();
+    expect(t.bid).toBe('100.1');
+    expect(t.mark).toBe('100.2');
+  });
+
+  it('un funding NEGATIVO se conserva con su signo', async () => {
+    // Importa: el signo es lo que dice quien paga a quien.
+    mockFetch(responder({}, { lastFundingRate: '-0.0004' }));
+    const t = await new AsterAdapter(creds()).getTicker('BTCUSDT');
+    expect(t.fundingRate).toBe('-0.0004');
+  });
+});

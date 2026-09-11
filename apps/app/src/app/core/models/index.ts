@@ -56,7 +56,9 @@ export type StrategyKind =
   | 'MARTINGALE'
   | 'GRIDMART'
   | 'MARKET_MAKER'
-  | 'MARKET_MAKER_V2';
+  | 'MARKET_MAKER_V2'
+  | 'TREND_FOLLOW'
+  | 'TRAILING_PROFIT';
 
 export interface SessionUser {
   id: string;
