@@ -250,9 +250,7 @@ describe('SupervisorPolicyService — el modo manual necesita donde avisar (spec
     // aparece encendido y no pasa nada nunca. El peor sintoma es el silencio.
     const { service, ajustes } = conTelegram(false);
 
-    await expect(service.set(ADMIN, 'bot-1', { mode: AiMode.MANUAL })).rejects.toThrow(
-      /Telegram/,
-    );
+    await expect(service.set(ADMIN, 'bot-1', { mode: AiMode.MANUAL })).rejects.toThrow(/Telegram/);
     expect(ajustes.upsert).not.toHaveBeenCalled();
   });
 
