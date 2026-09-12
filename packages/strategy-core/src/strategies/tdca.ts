@@ -1,5 +1,6 @@
 import {
   D,
+  Decimal,
   LevelKind,
   Mutability,
   StrategyKind,
@@ -388,13 +389,28 @@ export const tdca: Strategy<TdcaConfig> = {
     const topes = [cfg.maxPositionNotional, cfg.maxNotionalCap]
       .map((t) => (t ? D(t) : D(0)))
       .filter((t) => t.gt(0));
-    if (topes.length > 0 && pos.mul(mark).gte(topes.reduce((a, b) => (a.lt(b) ? a : b)))) {
+    const tope = topes.length > 0 ? topes.reduce((a, b) => (a.lt(b) ? a : b)) : null;
+    const abierto = pos.mul(mark);
+    if (tope != null && abierto.gte(tope)) {
       blockers.push('tope de posición alcanzado');
     }
 
     if (blockers.length === 0) {
-      const notional = D(cfg.amountPerBuy).mul(cfg.leverage);
-      const qty = mark.gt(0) ? notional.div(mark) : D(0);
+      // El tope acota lo que se COMPRA, no solo lo que ya hay abierto. Se
+      // comprobaba antes de emitir y sin proyectar la compra, asi que se
+      // rebasaba SIEMPRE por el importe de una entera: con el tope en 1000 y una
+      // posicion de 990, una compra de 200 lo dejaba en 1190. Es el mismo
+      // defecto que el spec 001 (F-87) corrigio en la rejilla clasica, y que
+      // martingala y gridmart ya evitaban proyectando (spec 048, H-02).
+      //
+      // Si no cabe entera se compra lo que quepa: un DCA al que le faltan diez
+      // unidades para el tope no tiene por que dejar de promediar, y recortar es
+      // exactamente lo que el tope pide. Lo que no cabe ni recortado —porque no
+      // llega al minimo del venue— lo corta `order-gate` despues.
+      const deseado = D(cfg.amountPerBuy).mul(cfg.leverage);
+      const hueco = tope != null ? tope.minus(abierto) : deseado;
+      const notional = Decimal.min(deseado, hueco);
+      const qty = mark.gt(0) && notional.gt(0) ? notional.div(mark) : D(0);
       if (qty.gt(0)) {
         // El índice es el número de compra: dos ticks seguidos generan el mismo
         // id y el motor descarta el duplicado antes de mandarlo al venue.

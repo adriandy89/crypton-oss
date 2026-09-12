@@ -3101,3 +3101,172 @@ describe('preview() con una config que no vale', () => {
     });
   }
 });
+
+// ═══════════════════════════════════════════════════════════════
+// LOS TOPES ACOTAN LO QUE SE TIENDE (spec 048)
+// ═══════════════════════════════════════════════════════════════
+
+/**
+ * La misma regla para las cinco estrategias que tienen tope de notional.
+ *
+ * Un tope que se comprueba contra lo que YA hay abierto no acota: deja pasar
+ * todo lo que se vaya a tender y solo reacciona cuando el limite se ha
+ * superado. El spec 001 (F-87) lo corrigio en la rejilla clasica, y la
+ * correccion no se propago ni a la neutral ni al DCA.
+ */
+describe('los topes acotan lo que se TIENDE, no lo que ya hay (spec 048)', () => {
+  it('H-02 · TDCA: la compra no puede rebasar el tope', () => {
+    const config = cfg({
+      strategy: StrategyKind.TDCA,
+      leverage: 2,
+      totalInvestment: '1000',
+      amountPerBuy: 100,
+      intervalMinutes: 1,
+      maxBuysPerCycle: 20,
+      buyOnlyIfImprovesAverage: false,
+      takeProfitPct: 1.5,
+      maxPositionNotional: 1000,
+    });
+    // Posicion de 990 de notional con el tope en 1000: cabe una compra de 10,
+    // no una de 200.
+    const ctx = makeContext({
+      strategy: StrategyKind.TDCA,
+      config,
+      price: '100',
+      position: makePosition('9.9', '100'),
+      cycle: { entriesFilled: 1, filledLevelIndexes: [0] },
+    });
+
+    const plan = getStrategy(StrategyKind.TDCA).plan(ctx);
+    const compras = plan.immediate.filter(
+      (o) => o.levelKind === LevelKind.BASE || o.levelKind === LevelKind.SAFETY,
+    );
+    const anadido = compras.reduce((a, o) => a.plus(D(o.qty).mul('100')), D(0));
+
+    expect(D('990').plus(anadido).lte(D('1000'))).toBe(true);
+  });
+
+  it('H-01 · NEUTRAL_GRID: la reticula tendida cabe en el tope', () => {
+    const config = cfg({
+      strategy: StrategyKind.NEUTRAL_GRID,
+      direction: 'NEUTRAL',
+      leverage: 2,
+      totalInvestment: '1000',
+      lowerPrice: '80',
+      upperPrice: '120',
+      anchorPrice: '100',
+      gridLevels: 10,
+      gridSpacing: 'ARITHMETIC',
+      sizeMultiplier: 1,
+      // El tope es una fraccion pequeña de lo que vale la reticula entera.
+      maxExposure: '200',
+    });
+    const ctx = makeContext({
+      strategy: StrategyKind.NEUTRAL_GRID,
+      config,
+      price: '100',
+      position: null,
+    });
+
+    const plan = getStrategy(StrategyKind.NEUTRAL_GRID).plan(ctx);
+    // Sin posicion, TODO lo que se tiende aumentaria la exposicion.
+    const tendido = plan.orders.reduce((a, o) => a.plus(D(o.qty).mul(D(o.price))), D(0));
+
+    expect(tendido.lte(D('200'))).toBe(true);
+  });
+
+  it('H-01 · NEUTRAL_GRID: y con el tope holgado se tiende la reticula entera', () => {
+    // La otra mitad: el corte no puede dejar el bot sin operar cuando cabe.
+    const base = {
+      strategy: StrategyKind.NEUTRAL_GRID,
+      direction: 'NEUTRAL',
+      leverage: 2,
+      totalInvestment: '1000',
+      lowerPrice: '80',
+      upperPrice: '120',
+      anchorPrice: '100',
+      gridLevels: 10,
+      gridSpacing: 'ARITHMETIC',
+      sizeMultiplier: 1,
+    };
+    const conTope = getStrategy(StrategyKind.NEUTRAL_GRID).plan(
+      makeContext({
+        strategy: StrategyKind.NEUTRAL_GRID,
+        config: cfg({ ...base, maxExposure: '999999' }),
+        price: '100',
+      }),
+    );
+    const sinTope = getStrategy(StrategyKind.NEUTRAL_GRID).plan(
+      makeContext({
+        strategy: StrategyKind.NEUTRAL_GRID,
+        config: cfg(base),
+        price: '100',
+      }),
+    );
+    expect(conTope.orders.length).toBe(sinTope.orders.length);
+  });
+});
+
+describe('H-03 · la reticula geometrica proyecta su ultima linea geometricamente', () => {
+  it('la venta de la linea superior sigue la progresion, no la resta', () => {
+    // Con 5 niveles entre 100 y 200 la progresion es 100 · 118,92 · 141,42 ·
+    // 168,18 · 200. La siguiente es 200 × (200/168,18) = 237,84, no
+    // 200 + (200 − 168,18) = 231,82: un 2,6 % menos de recorrido justo en el
+    // escalon que mas lejos esta.
+    const config = cfg({
+      strategy: StrategyKind.GRID_CLASSIC,
+      direction: 'LONG',
+      leverage: 2,
+      totalInvestment: '1000',
+      lowerPrice: '100',
+      upperPrice: '200',
+      gridLevels: 5,
+      gridSpacing: 'GEOMETRIC',
+      sizingMode: 'QUOTE',
+    });
+    // Con la linea superior comprada, su venta es la que se proyecta.
+    const ctx = makeContext({
+      strategy: StrategyKind.GRID_CLASSIC,
+      config,
+      price: '199',
+      position: makePosition('1', '200'),
+      cycle: { filledLevelIndexes: [4] },
+    });
+
+    const plan = getStrategy(StrategyKind.GRID_CLASSIC).plan(ctx);
+    const venta = plan.orders.find(
+      (o) => o.levelKind === LevelKind.GRID_SELL && o.levelIndex === 4,
+    );
+    expect(venta).toBeDefined();
+    expect(Number(venta!.price)).toBeGreaterThan(236);
+    expect(Number(venta!.price)).toBeLessThan(239);
+  });
+
+  it('y la aritmetica sigue proyectando con la resta', () => {
+    const config = cfg({
+      strategy: StrategyKind.GRID_CLASSIC,
+      direction: 'LONG',
+      leverage: 2,
+      totalInvestment: '1000',
+      lowerPrice: '100',
+      upperPrice: '200',
+      gridLevels: 5,
+      gridSpacing: 'ARITHMETIC',
+      sizingMode: 'QUOTE',
+    });
+    const ctx = makeContext({
+      strategy: StrategyKind.GRID_CLASSIC,
+      config,
+      price: '199',
+      position: makePosition('1', '200'),
+      cycle: { filledLevelIndexes: [4] },
+    });
+
+    const plan = getStrategy(StrategyKind.GRID_CLASSIC).plan(ctx);
+    const venta = plan.orders.find(
+      (o) => o.levelKind === LevelKind.GRID_SELL && o.levelIndex === 4,
+    );
+    // 100 · 125 · 150 · 175 · 200 → la siguiente es 225 en los dos criterios.
+    expect(Number(venta!.price)).toBeCloseTo(225, 0);
+  });
+});

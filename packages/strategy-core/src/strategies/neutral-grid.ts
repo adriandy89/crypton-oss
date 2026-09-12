@@ -394,7 +394,46 @@ export const neutralGrid: Strategy<NeutralGridConfig> = {
       .map((t) => (t ? D(t) : D(0)))
       .filter((t) => t.gt(0));
     const cap = topes.length ? topes.reduce((a, b) => (a.lt(b) ? a : b)) : null;
-    const capReached = cap != null && cap.gt(0) && exposure.gte(cap);
+
+    // El tope acota lo que se TIENDE, no solo lo que ya está abierto.
+    //
+    // Era una puerta binaria sobre la exposición actual: con la posición a cero
+    // se tendía la retícula ENTERA valiera lo que valiera, y el tope solo
+    // empezaba a actuar cuando ya se había superado. Es exactamente el defecto
+    // que el spec 001 (F-87) corrigió en la rejilla clásica y que no se propagó
+    // aquí (spec 048, H-01). El propio `validate()` avisa de que sin tope la
+    // posición crece hasta agotar el margen, lo que da a entender que CON tope
+    // no pasa.
+    //
+    // Se admiten líneas de la más cercana al precio hacia fuera y se corta en la
+    // primera que no quepa —igual que la clásica—, porque son las que antes se
+    // van a ejecutar: cortar por el otro extremo dejaría fuera justo las que el
+    // mercado va a tocar primero.
+    const admitidas = new Set<number>();
+    if (cap != null && cap.gt(0)) {
+      const aumentan = lines
+        .filter((l) => l.qty.gt(0) && lados[l.price.toFixed()] !== 'CRUZADA')
+        .filter((l) => {
+          const isBuy = lados[l.price.toFixed()] === 'BUY';
+          return (isBuy && posQty.gte(0)) || (!isBuy && posQty.lte(0));
+        })
+        .sort((a, b) => a.price.minus(mark).abs().cmp(b.price.minus(mark).abs()));
+
+      let proyectado = exposure;
+      for (const l of aumentan) {
+        const isBuy = lados[l.price.toFixed()] === 'BUY';
+        // Con el precio y la cantidad YA redondeados a la retícula del venue, no
+        // con los nominales: el redondeo de un precio de venta va hacia arriba,
+        // así que una línea que «cabía» por céntimos deja de caber al mandarse.
+        const notional = D(px(ctx.market, l.price, isBuy ? 'BUY' : 'SELL')).mul(
+          D(qy(ctx.market, l.qty)),
+        );
+        if (proyectado.plus(notional).gt(cap)) break;
+        proyectado = proyectado.plus(notional);
+        admitidas.add(l.index);
+      }
+    }
+    const capReached = cap != null && cap.gt(0);
 
     const orders: DesiredOrder[] = [];
 
@@ -405,11 +444,11 @@ export const neutralGrid: Strategy<NeutralGridConfig> = {
       if (lado === 'CRUZADA') continue;
       const isBuy = lado === 'BUY';
 
-      // Con el tope alcanzado solo se dejan vivas las órdenes que REDUCEN la
-      // posición neta; las que la aumentarían se retiran.
+      // Las que REDUCEN la posición neta se dejan siempre: retirarlas dejaría la
+      // posición sin contrapartida, que es lo que arruina una retícula.
       if (capReached) {
         const wouldIncrease = (isBuy && posQty.gte(0)) || (!isBuy && posQty.lte(0));
-        if (wouldIncrease) continue;
+        if (wouldIncrease && !admitidas.has(line.index)) continue;
       }
 
       const kind = isBuy ? LevelKind.GRID_BUY : LevelKind.GRID_SELL;

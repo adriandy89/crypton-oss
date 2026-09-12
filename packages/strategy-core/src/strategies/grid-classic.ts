@@ -145,21 +145,36 @@ function levelQty(cfg: GridClassicConfig, price: Decimal, refPrice: Decimal): De
 
 /**
  * Precio de venta de la línea `i`: la línea inmediatamente superior. Para la
- * última se proyecta un salto igual al anterior, porque si no el inventario
- * comprado en el techo del rango no tendría contrapartida y quedaría colgado.
+ * última se proyecta una, porque si no el inventario comprado en el techo del
+ * rango no tendría contrapartida y quedaría colgado.
+ *
+ * La proyección usa la MISMA ley que la retícula. Era siempre aritmética, y en
+ * una retícula geométrica —donde los saltos crecen— eso dejaba la línea más alta
+ * vendiendo por debajo de su propia progresión: con cinco niveles entre 100 y
+ * 200 salía 231,82 en vez de 237,84, un 2,6 % menos, y la diferencia crece con
+ * la amplitud del rango. No es una pérdida, es el escalón que más lejos está
+ * cobrando menos que los demás, que es justo lo que el modo geométrico promete
+ * que no pasa (spec 048, H-03).
  */
-function sellPriceFor(prices: Decimal[], i: number): Decimal {
+function sellPriceFor(cfg: GridClassicConfig, prices: Decimal[], i: number): Decimal {
   if (i + 1 < prices.length) return prices[i + 1];
   const last = prices[prices.length - 1];
   const prev = prices[prices.length - 2] ?? last;
-  return last.plus(last.minus(prev));
+  // Con un solo nivel efectivo no hay progresión que seguir: se devuelve el
+  // propio precio en vez de dividir por cero o proyectar un salto de cero.
+  if (prev.lte(0) || prev.eq(last)) return last;
+  return cfg.gridSpacing === 'GEOMETRIC' ? last.mul(last.div(prev)) : last.plus(last.minus(prev));
 }
 
-function buyPriceFor(prices: Decimal[], i: number): Decimal {
+/** El simétrico para la línea inferior, que es la que importa en un bot SHORT. */
+function buyPriceFor(cfg: GridClassicConfig, prices: Decimal[], i: number): Decimal {
   if (i - 1 >= 0) return prices[i - 1];
   const first = prices[0];
   const next = prices[1] ?? first;
-  return first.minus(next.minus(first));
+  if (first.lte(0) || next.eq(first)) return first;
+  return cfg.gridSpacing === 'GEOMETRIC'
+    ? first.mul(first.div(next))
+    : first.minus(next.minus(first));
 }
 
 export const gridClassic: Strategy<GridClassicConfig> = {
@@ -356,7 +371,7 @@ export const gridClassic: Strategy<GridClassicConfig> = {
       }
 
       if (holding.has(i)) {
-        const exitPrice = isLong ? sellPriceFor(prices, i) : buyPriceFor(prices, i);
+        const exitPrice = isLong ? sellPriceFor(cfg, prices, i) : buyPriceFor(cfg, prices, i);
         orders.push({
           clientOrderId: makeCoid(ctx.botId, seq, LevelKind.GRID_SELL, i),
           levelKind: LevelKind.GRID_SELL,
