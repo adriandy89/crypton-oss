@@ -17,6 +17,11 @@ import { OpenRouterClient } from './openrouter.client';
   imports: [MarketsModule, MarketDataModule, RiskModule],
   controllers: [AdvisorController],
   providers: [AdvisorService, OpenRouterClient],
-  exports: [AdvisorService],
+  // `OpenRouterClient` se exporta porque `SupervisorModule` lo inyecta directo
+  // (spec 046): el supervisor no pide consejo, llama a `revisar()` con su propio
+  // modelo y su propio cupo. Se comparte la instancia a proposito — es el unico
+  // fichero que habla con un LLM y asi sigue habiendo un solo sitio que lo haga.
+  // Faltaba, y la API no arrancaba (spec 049).
+  exports: [AdvisorService, OpenRouterClient],
 })
 export class AdvisorModule {}

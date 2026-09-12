@@ -164,4 +164,5 @@ ante un 429 se paran sin reintentar. A `findings.md` va solo la evidencia resumi
 | 046 | [Modo IA: un supervisor que vigila bots vivos](046-modo-ia-supervisor/spec.md) | cambio | hecho (falta CA-12 manual y aplicar la migracion) | `spec/046-modo-ia-supervisor` |
 | 047 | [Revision del spec 046](047-revision-046/spec.md) | revision | hecho (los 14 hallazgos corregidos dentro del 046) | `spec/046-modo-ia-supervisor` |
 | 048 | [Revision de las nueve estrategias](048-revision-de-estrategias/spec.md) | revision | hecho (falta CA-5 manual) | `spec/048-revision-de-estrategias` |
+| 049 | [La API no arranca: el supervisor no se puede inyectar](049-el-supervisor-no-se-inyecta/spec.md) | correccion | hecho (falta CA-5 manual) | `spec/049-el-supervisor-no-se-inyecta` |
 
