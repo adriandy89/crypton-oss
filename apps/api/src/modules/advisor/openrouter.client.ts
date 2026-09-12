@@ -73,6 +73,16 @@ export class OpenRouterClient {
   private readonly apiKey: string;
   private readonly model: string;
   private readonly referer: string;
+  /**
+   * La clave del supervisor, con su propio interruptor (spec 046).
+   *
+   * Es la MISMA clave de OpenRouter —la cuenta es una— pero el interruptor es
+   * otro, y eso es deliberado: el asesor responde a alguien que esta mirando la
+   * pantalla y el supervisor gasta solo, en bucle, sin que nadie lo pida. Tienen
+   * que poder encenderse y apagarse por separado.
+   */
+  private readonly agentKey: string;
+  private readonly agentModel: string;
 
   constructor(private readonly config: ConfigService) {
     // Se lee con `get` y NO con `requireSecret`: sin clave la API tiene que
@@ -84,6 +94,23 @@ export class OpenRouterClient {
     this.apiKey = enabled ? apiKey : '';
     this.model = this.config.get<string>('OPENROUTER_MODEL', 'anthropic/claude-sonnet-5');
     this.referer = referenteValido(this.config.get<string>('PUBLIC_APP_URL', ''));
+
+    const agentEnabled = this.config.get<string>('AI_AGENT_ENABLE', 'false') === 'true';
+    this.agentKey = agentEnabled ? apiKey : '';
+    // SIN caida a `OPENROUTER_MODEL` si esta vacia, y a proposito: no son el
+    // mismo trabajo. Clasificar un par de un solo disparo con quince
+    // enumeraciones de salida no es lo mismo que juzgar un expediente con
+    // historial, rendimiento y estado sobre un bot con dinero dentro. Se querra
+    // poder subir uno sin subir el otro, y ver las dos lineas separadas en la
+    // factura.
+    this.agentModel = this.config.get<string>('AI_AGENT_MODEL', 'anthropic/claude-sonnet-5');
+
+    if (agentEnabled && !apiKey) {
+      this.logger.warn(
+        'AI_AGENT_ENABLE está activo pero falta OPENROUTER_API_KEY: ' +
+          'el Modo IA no podrá revisar ningún bot.',
+      );
+    }
 
     if (enabled && !apiKey) {
       this.logger.warn(
@@ -105,6 +132,22 @@ export class OpenRouterClient {
     return this.apiKey !== '';
   }
 
+  /** Si el SUPERVISOR puede llamar. Independiente de `available`, ver el constructor. */
+  get agentAvailable(): boolean {
+    return this.agentKey !== '';
+  }
+
+  /**
+   * El modelo con el que decide el supervisor.
+   *
+   * Se expone para que quede EN LA FILA de cada decision: la columna existe para
+   * poder comparar despues decisiones tomadas por modelos distintos, y eso tiene
+   * que poder verse, no adivinarse (spec 047, F-03).
+   */
+  get agentModelId(): string {
+    return this.agentModel;
+  }
+
   /**
    * Pide tres combinaciones de perillas para este mercado.
    *
@@ -117,9 +160,72 @@ export class OpenRouterClient {
     features: MarketFeatures,
   ): Promise<{ knobs: Knobs; rationale: string }[] | null> {
     if (!this.available) return null;
+    const contenido = await this.pedir(this.body(strategy, symbol, features), 'recomendaciones');
+    return contenido === null ? null : this.parse(contenido);
+  }
 
+  /**
+   * Pide al modelo que revise un bot que YA esta operando (spec 046).
+   *
+   * Vive aqui y no en un cliente propio porque este sigue siendo, por diseño, el
+   * unico fichero del proyecto que habla con un modelo de lenguaje. Lo que
+   * cambia respecto del asesor es el modelo —`AI_AGENT_MODEL`, su propia
+   * variable—, el interruptor y el esquema; el transporte, con sus doscientas
+   * lineas de incidentes aprendidos, es el mismo.
+   *
+   * Devuelve el JSON en crudo: la forma la valida `parseRevision`, que es quien
+   * conoce el contrato. Aqui solo se sabe de HTTP.
+   */
+  async revisar(
+    esquema: { name: string; schema: Record<string, unknown> },
+    system: string,
+    usuario: string,
+  ): Promise<string | null> {
+    if (!this.agentAvailable) return null;
+    return this.pedir(
+      {
+        model: this.agentModel,
+        max_tokens: MAX_TOKENS,
+        // Mas esfuerzo que en el asesor, y a proposito: alli se eligen tres
+        // ternas de enumeraciones sobre unos rasgos de mercado; aqui se juzga un
+        // expediente con historial, rendimiento y estado, y la decision de
+        // MANTENER o no vale lo que vale.
+        reasoning: { effort: 'medium', exclude: true },
+        response_format: {
+          type: 'json_schema',
+          json_schema: { name: esquema.name, strict: true, schema: esquema.schema },
+        },
+        provider: { require_parameters: true },
+        messages: [
+          { role: 'system', content: system },
+          { role: 'user', content: usuario },
+        ],
+      },
+      'revision',
+      'Crypton bot supervisor',
+    );
+  }
+
+  /**
+   * El transporte: una peticion, dos intentos y un solo presupuesto de tiempo.
+   *
+   * Extraido del cuerpo de `knobsFor` al añadir la revision (spec 046). Todo lo
+   * que hay aqui es conocimiento pagado con averias —el reintento solo de lo que
+   * puede salir bien, el cuerpo que hay que cancelar a mano, los errores que
+   * llegan con HTTP 200, la negativa en su propio campo, el truncado por
+   * `max_tokens`, el `TypeError` que no es un fallo de red— y duplicarlo para el
+   * supervisor habria sido perderlo a la mitad.
+   *
+   * `que` solo entra en los mensajes de log, para que se sepa cual de las dos
+   * llamadas fallo.
+   */
+  private async pedir(
+    cuerpo: Record<string, unknown>,
+    que: string,
+    titulo = 'Crypton bot advisor',
+  ): Promise<string | null> {
     try {
-      const cuerpo = JSON.stringify(this.body(strategy, symbol, features));
+      const json = JSON.stringify(cuerpo);
 
       // Un solo presupuesto de tiempo para los dos intentos: dos esperas
       // completas de 25 s se comerian el interceptor global de 80 s entre esto y
@@ -135,8 +241,8 @@ export class OpenRouterClient {
 
         const r = await fetch(OPENROUTER_URL, {
           method: 'POST',
-          headers: this.headers(),
-          body: cuerpo,
+          headers: this.headers(titulo),
+          body: json,
           signal: AbortSignal.timeout(restante),
         });
 
@@ -179,7 +285,7 @@ export class OpenRouterClient {
 
       // Una negativa por seguridad tambien llega con 200, en su propio campo.
       if (eleccion.message?.refusal) {
-        this.logger.warn('El modelo declinó la petición de recomendaciones.');
+        this.logger.warn(`El modelo declinó la petición de ${que}.`);
         return null;
       }
       // Truncado: el JSON estara a medias y `parse()` fallaria igual, pero en
@@ -194,7 +300,7 @@ export class OpenRouterClient {
         return null;
       }
 
-      return this.parse(eleccion.message?.content ?? '');
+      return eleccion.message?.content ?? '';
     } catch (e) {
       // El tiempo de espera agotado llega como `TimeoutError` desde
       // `AbortSignal.timeout`. Se registra aparte porque significa otra cosa que
@@ -210,7 +316,7 @@ export class OpenRouterClient {
         // un fallo permanente nuestro se disfraza de caida ajena pasajera.
         this.logger.error(`Petición a OpenRouter mal formada, no llegó a salir: ${e.message}`);
       } else {
-        this.logger.debug(`Fallo al pedir recomendaciones: ${String(e)}`);
+        this.logger.debug(`Fallo al pedir ${que}: ${String(e)}`);
       }
       return null;
     }
@@ -228,7 +334,7 @@ export class OpenRouterClient {
    *
    * Todo lo que salga de aqui va en ASCII, y hay un test que lo comprueba.
    */
-  private headers(): Record<string, string> {
+  private headers(titulo: string): Record<string, string> {
     return {
       Authorization: `Bearer ${this.apiKey}`,
       'Content-Type': 'application/json',
@@ -236,7 +342,10 @@ export class OpenRouterClient {
       // gasto aparece como «desconocido», que es justo lo que no quieres cuando
       // hay que averiguar quien se esta comiendo el saldo.
       'HTTP-Referer': this.referer,
-      'X-Title': 'Crypton bot advisor',
+      // Distingue las dos cargas en el panel de OpenRouter. Es la forma barata
+      // de ver por separado lo que gasta el asesor y lo que gasta el supervisor
+      // sin abrir una segunda cuenta.
+      'X-Title': titulo,
     };
   }
 

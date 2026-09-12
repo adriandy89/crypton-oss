@@ -131,6 +131,18 @@ services:
       OPENROUTER_API_KEY: ${OPENROUTER_API_KEY:-}
       OPENROUTER_MODEL: ${OPENROUTER_MODEL:-anthropic/claude-sonnet-5}
       AI_ADVISOR_DAILY_LIMIT: ${AI_ADVISOR_DAILY_LIMIT:-20}
+      # Modo IA (spec 046). Todas con valor por defecto y ninguna obligatoria: sin
+      # ellas la funcion queda apagada y la API arranca igual.
+      AI_AGENT_ENABLE: ${AI_AGENT_ENABLE:-false}
+      AI_AGENT_MODEL: ${AI_AGENT_MODEL:-anthropic/claude-sonnet-5}
+      AI_AGENT_DAILY_LIMIT: ${AI_AGENT_DAILY_LIMIT:-24}
+      AI_AGENT_GLOBAL_DAILY_LIMIT: ${AI_AGENT_GLOBAL_DAILY_LIMIT:-500}
+      AI_AGENT_MAX_APPLIES_PER_DAY: ${AI_AGENT_MAX_APPLIES_PER_DAY:-6}
+      AI_MIN_GAP_MIN: ${AI_MIN_GAP_MIN:-10}
+      AI_AGENT_SUGGESTION_TTL_MIN: ${AI_AGENT_SUGGESTION_TTL_MIN:-60}
+      AI_AGENT_SWEEP_MAX: ${AI_AGENT_SWEEP_MAX:-5}
+      AI_AGENT_FORCE_MANUAL: ${AI_AGENT_FORCE_MANUAL:-false}
+      AI_AGENT_DRY_RUN_ONLY: ${AI_AGENT_DRY_RUN_ONLY:-true}
     depends_on:
       migrate:
         condition: service_completed_successfully
@@ -259,6 +271,7 @@ services:
       RETENTION_EVENT_DAYS: ${RETENTION_EVENT_DAYS:-90}
       RETENTION_CRITICAL_EVENT_DAYS: ${RETENTION_CRITICAL_EVENT_DAYS:-365}
       RETENTION_COMMAND_DAYS: ${RETENTION_COMMAND_DAYS:-90}
+      RETENTION_AI_DOSSIER_DAYS: ${RETENTION_AI_DOSSIER_DAYS:-90}
       AUDIT_LOG_ENABLE: ${AUDIT_LOG_ENABLE:-true}
       RETENTION_AUDIT_DAYS: ${RETENTION_AUDIT_DAYS:-180}
       # La curva de la cartera (spec 003): el cron que la escribe cada cinco

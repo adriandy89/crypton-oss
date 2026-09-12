@@ -123,3 +123,136 @@ describe('NotifierService — etiqueta del bot', () => {
     expect(label).toBe('real (BTC)');
   });
 });
+
+/**
+ * Entrega de los eventos que NACEN EN LA API.
+ *
+ * El filtro de origen de `onEvent` es correcto para lo que lo motivo —N workers
+ * publicando el mismo fill y los N mandando el mismo aviso— y equivocado para lo
+ * que no publica un worker. `ADMIN_COMMAND` lo publica la API
+ * (`admin-bots.service.ts`) y su comentario dice que sin el aviso «el dueño no
+ * se enteraria de que le han pausado el bot hasta que abriese esa pantalla. En
+ * una plataforma no custodial, que un tercero toque tu bot y no te enteres es
+ * indefendible». No se enteraba: el origen no casaba con ningun worker y el
+ * evento se descartaba en los N. Spec 046, R-27.
+ */
+function buildEntrega(prefs: Record<string, boolean> = {}, cerrojo = true) {
+  const db = {
+    telegramLink: {
+      findMany: jest.fn().mockResolvedValue([]),
+      findUnique: jest.fn().mockResolvedValue({
+        user_id: 'u-1',
+        chat_id: '111',
+        prefs,
+        verified_at: new Date(),
+      }),
+    },
+    botCycle: { findMany: jest.fn().mockResolvedValue([]) },
+    bot: {
+      findMany: jest.fn().mockResolvedValue([]),
+      findUnique: jest.fn().mockResolvedValue({ name: 'bot', symbol: 'BTC', dry_run: false }),
+    },
+  };
+  const bus = { originId: 'worker-1', listen: jest.fn(), publish: jest.fn() };
+  const leases = { tryLock: jest.fn().mockResolvedValue(cerrojo) };
+  const config = { get: jest.fn().mockReturnValue('token-de-prueba') };
+
+  const service = new NotifierService(db as never, bus as never, leases as never, config as never);
+  (service as unknown as { client: { enabled: boolean; sendMessage: unknown } }).client = {
+    enabled: true,
+    sendMessage: async () => true,
+  };
+
+  const onEvent = (m: Record<string, unknown>): Promise<void> =>
+    (service as unknown as { onEvent: (m: unknown) => Promise<void> }).onEvent(m);
+
+  // Lo encolado, sin esperar a la ventana de agrupacion de 4 s.
+  const lineas = (): string[] => {
+    const pending = (service as unknown as { pending: Map<string, { lines: string[] }> }).pending;
+    return [...pending.values()].flatMap((b) => b.lines);
+  };
+
+  return { service, onEvent, lineas, leases };
+}
+
+const deLaApi = (extra: Record<string, unknown> = {}) => ({
+  userId: 'u-1',
+  botId: 'bot-1',
+  type: 'ADMIN_COMMAND',
+  origin: 'api-7',
+  ts: 1_700_000_000_000,
+  data: { severity: 'WARN', message: 'Soporte ha pausado tu bot: revision de riesgo.' },
+  ...extra,
+});
+
+describe('NotifierService — entrega forzada (spec 046)', () => {
+  it('un evento de la API con entrega forzada llega al dueño', async () => {
+    const { onEvent, lineas } = buildEntrega();
+
+    await onEvent(deLaApi({ entregaForzada: true }));
+
+    expect(lineas()).toHaveLength(1);
+    expect(lineas()[0]).toContain('Soporte ha pausado tu bot');
+  });
+
+  it('sin la marca se sigue descartando por origen ajeno', async () => {
+    // El camino de alto volumen no cambia de conducta: es lo que impide que N
+    // workers manden N veces el mismo fill.
+    const { onEvent, lineas } = buildEntrega();
+
+    await onEvent(deLaApi());
+
+    expect(lineas()).toHaveLength(0);
+  });
+
+  it('con la marca, solo entrega la replica que gana el cerrojo', async () => {
+    // La segunda replica recibe el mismo mensaje del bus y pide el mismo
+    // cerrojo; al no concederselo, no encola nada. Sin esto, la escotilla
+    // convertiria un aviso en tantos como replicas haya.
+    const { onEvent, lineas } = buildEntrega({}, false);
+
+    await onEvent(deLaApi({ entregaForzada: true }));
+
+    expect(lineas()).toHaveLength(0);
+  });
+
+  it('el cerrojo es el mismo en todas las replicas', async () => {
+    // La clave la componen datos del MENSAJE —no del proceso—, y el `ts` lo
+    // pone quien publica: por eso dos replicas compiten por la misma clave.
+    const { onEvent, leases } = buildEntrega();
+
+    await onEvent(deLaApi({ entregaForzada: true }));
+
+    expect(leases.tryLock).toHaveBeenCalledWith(
+      'notify:bot-1:ADMIN_COMMAND:1700000000000',
+      expect.any(Number),
+    );
+  });
+
+  it('la preferencia manda: con los avisos de riesgo apagados no se entrega', async () => {
+    // Tener entrada propia en `EVENT_PREF` saca a `ADMIN_COMMAND` de la via
+    // generica, que dependia de que el publicador mandara la severidad.
+    const { onEvent, lineas } = buildEntrega({ risk: false });
+
+    await onEvent(deLaApi({ entregaForzada: true }));
+
+    expect(lineas()).toHaveLength(0);
+  });
+
+  it('un evento del propio worker no pide cerrojo', async () => {
+    // El camino normal no paga una ida y vuelta a Redis por cada fill.
+    const { onEvent, lineas, leases } = buildEntrega();
+
+    await onEvent({
+      userId: 'u-1',
+      botId: 'bot-1',
+      type: 'CYCLE_CLOSED',
+      origin: 'worker-1',
+      ts: 1,
+      data: { severity: 'INFO', message: 'Ciclo #1 cerrado.' },
+    });
+
+    expect(lineas()).toHaveLength(1);
+    expect(leases.tryLock).not.toHaveBeenCalled();
+  });
+});

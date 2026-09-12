@@ -1,6 +1,7 @@
 import { Injectable, Logger } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { Cron, CronExpression } from '@nestjs/schedule';
+import { Prisma } from '@crypton/db';
 import { DbService } from '../libs';
 import { LeaseService } from './lease.service';
 
@@ -61,6 +62,7 @@ export class RetentionService {
     const auditDays = Number(this.config.get('RETENTION_AUDIT_DAYS', 180));
     const portfolioDays = Number(this.config.get('RETENTION_PORTFOLIO_DAYS', 365));
     const commandDays = Number(this.config.get('RETENTION_COMMAND_DAYS', 90));
+    const aiDays = Number(this.config.get('RETENTION_AI_DOSSIER_DAYS', 90));
     // Todas entran en la guarda: sin eso, un despliegue con las demás purgas
     // desactivadas se saltaría también la que quedara EN SILENCIO, y esa tabla
     // crecería sin techo sin que nada lo dijera.
@@ -69,7 +71,8 @@ export class RetentionService {
       eventDays <= 0 &&
       auditDays <= 0 &&
       portfolioDays <= 0 &&
-      commandDays <= 0
+      commandDays <= 0 &&
+      aiDays <= 0
     ) {
       return;
     }
@@ -84,14 +87,37 @@ export class RetentionService {
       const audit = await this.purgeActivityLog(auditDays, criticalDays);
       const portfolio = await this.purgePortfolio(portfolioDays);
       const commands = await this.purgeCommands(commandDays);
-      if (snapshots + events + audit + portfolio + commands > 0) {
+      const dossiers = await this.purgeAiDossiers(aiDays);
+      if (snapshots + events + audit + portfolio + commands + dossiers > 0) {
         this.logger.log(
-          `Purga: ${snapshots} snapshot(s), ${events} evento(s), ${audit} registro(s) de actividad, ${portfolio} fila(s) de cartera y ${commands} comando(s).`,
+          `Purga: ${snapshots} snapshot(s), ${events} evento(s), ${audit} registro(s) de actividad, ` +
+            `${portfolio} fila(s) de cartera, ${commands} comando(s) y ${dossiers} expediente(s) de IA.`,
         );
       }
     } catch (e) {
       this.logger.warn(`Purga fallida: ${(e as Error).message}`);
     }
+  }
+
+  /**
+   * Vacia el expediente de las decisiones viejas del supervisor (spec 046).
+   *
+   * La FILA no se borra nunca, por lo mismo que `bot_config_revisions`: es la
+   * unica explicacion posible de por que un bot con dinero dentro cambio de
+   * configuracion solo, y eso no caduca. Lo que se vacia es `dossier`, que son
+   * unos kilobytes por decision y el grueso del peso de la tabla — y que pasado
+   * un tiempo ya no explica nada que no se pueda leer en el resto de la fila.
+   *
+   * Es un UPDATE y no un DELETE, asi que no usa `deleteInBatches`.
+   */
+  private async purgeAiDossiers(days: number): Promise<number> {
+    if (days <= 0) return 0;
+    const cutoff = new Date(Date.now() - days * 86_400_000);
+    const { count } = await this.db.botAiDecision.updateMany({
+      where: { created_at: { lt: cutoff }, dossier: { not: Prisma.DbNull } },
+      data: { dossier: Prisma.DbNull },
+    });
+    return count;
   }
 
   /**

@@ -371,19 +371,23 @@ model Bot {
   created_at DateTime  @default(now()) @db.Timestamptz(6)
   updated_at DateTime? @updatedAt @db.Timestamptz(6)
 
-  revisions   BotConfigRevision[]
-  levels      BotLevel[]
-  orders      BotOrder[]
-  cycles      BotCycle[]
-  events      BotEvent[]
-  commands    BotCommand[]
-  snapshots   BotSnapshot[]
-  mm_stats    BotMmStat?
-  share       BotShare?
+  revisions    BotConfigRevision[]
+  levels       BotLevel[]
+  orders       BotOrder[]
+  cycles       BotCycle[]
+  events       BotEvent[]
+  commands     BotCommand[]
+  snapshots    BotSnapshot[]
+  mm_stats     BotMmStat?
+  share        BotShare?
   /// Solo en los simulados: el sandbox contra el que operan.
-  paper_state PaperState?
+  paper_state  PaperState?
+  /// Modo IA y su historial de decisiones (spec 046). Opcional: la inmensa
+  /// mayoria de los bots no lo tienen encendido.
+  ai_setting   BotAiSetting?
+  ai_decisions BotAiDecision[]
   /// Backtests lanzados sobre su configuración. Ver `BacktestRun`.
-  backtests   BacktestRun[]
+  backtests    BacktestRun[]
 
   /// OJO: en la base hay además un índice ÚNICO PARCIAL que Prisma no sabe
   /// declarar y que por tanto NO aparece aquí:
@@ -788,6 +792,192 @@ model BotCommand {
 
   @@index([bot_id, created_at])
   @@map("bot_commands")
+}
+
+// ═══════════════════════════════════════════════════════════════
+// MODO IA (spec 046)
+// ═══════════════════════════════════════════════════════════════
+
+/// Qué hace el supervisor de IA con este bot.
+enum AiMode {
+  /// Lo que tiene todo bot que no lo haya encendido.
+  OFF
+  /// Propone y espera: notifica la sugerencia y no toca nada hasta que una
+  /// persona la aprueba.
+  MANUAL
+  /// Decide y aplica, dentro de los topes de `apply.ts`.
+  AUTO
+}
+
+/// Modo IA de un bot. Una fila solo si alguien lo ha encendido.
+///
+/// Vive aparte de `bots` por lo mismo que `bot_mm_stats`: son doce columnas que
+/// no aplican a la inmensa mayoria de los bots, y `bots` es la tabla mas leida
+/// del sistema —listados, leaderboard, guardas de riesgo—.
+///
+/// Y NO puede vivir en `bot_config_revisions.config`, que es donde vive el resto
+/// de la configuracion de un bot: aquello esta gobernado por `meta.fields` de la
+/// estrategia, y `diffConfig` trata como COLD todo campo que la estrategia no
+/// declare. Un `mode` ahi haria que cambiar el modo fuera un cambio COLD, es
+/// decir, rechazado. Ademas no es configuracion de trading: el motor no lo lee
+/// para planificar, lo lee el supervisor para decidir si revisa.
+model BotAiSetting {
+  bot_id String @id
+  bot    Bot    @relation(fields: [bot_id], references: [id], onDelete: Cascade)
+
+  mode AiMode @default(OFF)
+
+  /// Las perillas de referencia sobre las que el modelo emite DESPLAZAMIENTOS,
+  /// nunca valores. Existe porque `buildConfig` no es invertible: la
+  /// configuracion de un bot que lleva tres semanas —tocada a mano, reparada por
+  /// acoplamientos, ajustada por el capital— no dice con que perillas nacio, y
+  /// sin punto de partida no hay desde donde desplazarse. Se siembra con
+  /// `defaultKnobs(perfil, features)` al encender el modo.
+  knobs Json
+
+  /// PERIODICO | OPERACION | AMBOS. `VarChar` y no enum porque el vocabulario de
+  /// disparadores va a crecer; el precedente es `bot_commands.command`.
+  trigger String @default("AMBOS") @db.VarChar(16)
+
+  /// Minutos entre revisiones. Null = el que recomiende la estrategia.
+  review_every_minutes Int?
+
+  /// Tope de llamadas PAGADAS al dia para este bot. Null = el de la variable de
+  /// entorno.
+  daily_call_limit Int?
+
+  /// Si es false, el supervisor solo propone cambios HOT: nunca recoloca la
+  /// escalera. Recolocarla cuesta comisiones de verdad.
+  allow_warm Boolean @default(true)
+
+  /// Quien lo encendio. Es el dueno del bot, y ademas un ADMIN: ver la frontera
+  /// del spec 033 en `supervisor.policy.service.ts`.
+  enabled_by String?   @db.VarChar(64)
+  enabled_at DateTime? @db.Timestamptz(6)
+
+  last_review_at DateTime? @db.Timestamptz(6)
+  last_apply_at  DateTime? @db.Timestamptz(6)
+
+  /// Huella cuantizada del ultimo expediente. Si no ha cambiado, el regimen es
+  /// el mismo y no hace falta pagar otra llamada.
+  last_bucket String? @db.VarChar(64)
+
+  /// Los rasgos del par CUANDO SE ACTIVO el modo (spec 047, F-01).
+  ///
+  /// Es la referencia contra la que se mide el cambio de regimen, que es la
+  /// linea que de verdad decide: un bot no esta mal configurado en abstracto,
+  /// lo esta respecto de cuando se configuro. Sin esto el modelo ve la
+  /// volatilidad de hoy y no tiene con que compararla, asi que juzga por valores
+  /// absolutos — justo lo que el expediente cuantizado intenta evitar.
+  ///
+  /// Se siembra a la vez que `knobs` y NO se actualiza: si se moviera con cada
+  /// revision, la referencia perseguiria al mercado y el cambio de regimen
+  /// siempre saldria «parecido».
+  features_at_enable Json?
+
+  /// Fallos seguidos del modelo. Al llegar al tope, el modo se duerme solo.
+  /// Distinto de `mode = OFF`, que es una decision humana: esto se cura solo.
+  failures     Int       @default(0)
+  paused_until DateTime? @db.Timestamptz(6)
+  last_error   String?   @db.Text
+
+  created_at DateTime  @default(now()) @db.Timestamptz(6)
+  updated_at DateTime? @updatedAt @db.Timestamptz(6)
+
+  /// El barrido pregunta «que politicas tocan ya», y eso es exactamente esto.
+  @@index([mode, last_review_at])
+  @@map("bot_ai_settings")
+}
+
+/// Estado de una decision del supervisor.
+enum AiDecisionState {
+  /// Escrita, esperando a que alguien la apruebe. Solo en modo manual.
+  PROPUESTA
+  APLICADA
+  /// La rechazo una persona.
+  RECHAZADA
+  /// El modelo pidio que lo mirase una persona, sin proponer ningun cambio.
+  /// Nace terminal: un aviso no tiene nada que aprobar, y darle `APLICADA` haria
+  /// que el dia que alguien cuente los cambios del supervisor cuenten de mas
+  /// (spec 047, G-06).
+  AVISADA
+  /// Se le paso el plazo, o el mundo cambio debajo.
+  CADUCADA
+  /// El propio supervisor la tiro: sin cambios, COLD, reshape con inventario…
+  DESCARTADA
+  /// El modelo no contesto, o lo que contesto no cumplia el contrato.
+  FALLIDA
+}
+
+/// Cada vez que el supervisor se pronuncia sobre un bot.
+///
+/// La fila NO se borra nunca, por lo mismo que `bot_config_revisions`: es la
+/// unica explicacion posible de por que un bot con dinero dentro cambio de
+/// configuracion solo. Lo que si se vacia pasado el plazo de retencion es
+/// `dossier`, que es el grueso del peso.
+model BotAiDecision {
+  id     BigInt @id @default(autoincrement())
+  bot_id String
+  bot    Bot    @relation(fields: [bot_id], references: [id], onDelete: Cascade)
+
+  /// CRON | OPERACION | RIESGO | MANUAL.
+  trigger String @db.VarChar(16)
+  mode    AiMode
+
+  /// Lo que dijo el modelo, tal cual salio del esquema. Es lo unico suyo que se
+  /// guarda sin transformar, y se trata como lo que es: texto ajeno.
+  raw Json
+
+  /// MANTENER | AJUSTAR | AVISAR.
+  action     String  @db.VarChar(16)
+  confidence String? @db.VarChar(8)
+  /// La frase del modelo, ya recortada.
+  rationale  String? @db.Text
+
+  /// El expediente que VIO el modelo. Sin el, una decision rara es imposible de
+  /// explicar seis meses despues, y es lo primero que se mira cuando una
+  /// configuracion automatica sale mal. Se vacia con la retencion.
+  dossier Json?
+
+  knobs_before Json
+  knobs_after  Json?
+
+  /// La configuracion candidata, ya determinista y ya validada.
+  proposed_config Json?
+  /// Solo los campos que cambiaban, con su nivel. Mismo formato que
+  /// `bot_config_revisions.diff`.
+  diff            Json?
+  apply_level     String? @db.VarChar(8)
+
+  /// El hilo para revertir, y la comprobacion de frescura: si al aprobar la
+  /// version vigente ya no es esta, el mundo cambio debajo y la propuesta caduca.
+  config_version_before Int
+  config_version_after  Int?
+
+  state          AiDecisionState @default(PROPUESTA)
+  /// STALE | COLD | RESHAPE | LIMITES | VALIDACION | VENUE | CUPO | MODELO |
+  /// SIN_CAMBIOS | ESTADO.
+  discard_reason String?         @db.VarChar(24)
+  error          String?         @db.Text
+
+  expires_at DateTime? @db.Timestamptz(6)
+  decided_by String?   @db.VarChar(64)
+  decided_at DateTime? @db.Timestamptz(6)
+  applied_at DateTime? @db.Timestamptz(6)
+
+  /// Que modelo y que version del contrato la produjeron. Comparar decisiones de
+  /// versiones distintas tiene que poder VERSE, no adivinarse.
+  model          String? @db.VarChar(64)
+  prompt_version Int?
+  latency_ms     Int?
+
+  created_at DateTime @default(now()) @db.Timestamptz(6)
+
+  /// «Que ha decidido el supervisor sobre este bot», que es la pantalla.
+  @@index([bot_id, created_at(sort: Desc)])
+  /// El barrido que caduca las propuestas vencidas.
+  @@index([state, expires_at])
+  @@map("bot_ai_decisions")
 }
 
 /// Contadores propios de market making, uno por bot.

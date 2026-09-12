@@ -24,6 +24,43 @@ export const ETIQUETA_COMANDO: Record<AdminBotCommand, string> = {
   STOP_KEEP_POSITION: 'Parar conservando la posición',
 };
 
+/** Que hace el supervisor de IA con un bot. */
+export const AI_MODES = ['OFF', 'MANUAL', 'AUTO'] as const;
+export type AiMode = (typeof AI_MODES)[number];
+
+export const ETIQUETA_MODO_IA: Record<AiMode, string> = {
+  OFF: 'Apagado',
+  MANUAL: 'Propone y espera',
+  AUTO: 'Decide y aplica',
+};
+
+export const AYUDA_MODO_IA: Record<AiMode, string> = {
+  OFF: 'El bot funciona con la configuración que tú le pusiste. Nadie la toca.',
+  MANUAL: 'Te manda las sugerencias por Telegram con dos botones. No cambia nada hasta que pulses.',
+  AUTO: 'Aplica los ajustes y te avisa después. Nunca toca el capital, el par ni la posición.',
+};
+
+export interface AiSetting {
+  bot_id: string;
+  mode: AiMode;
+  trigger?: string;
+  review_every_minutes?: number | null;
+  allow_warm?: boolean;
+  last_review_at?: string | null;
+  last_apply_at?: string | null;
+  failures?: number;
+  paused_until?: string | null;
+  last_error?: string | null;
+}
+
+export interface SetAiMode {
+  mode: AiMode;
+  trigger?: string;
+  reviewEveryMinutes?: number;
+  allowWarm?: boolean;
+  reason: string;
+}
+
 export interface AdminBotRow {
   id: string;
   name: string;
@@ -121,5 +158,22 @@ export class AdminBotsService {
         reason,
       }),
     );
+  }
+
+  /**
+   * El Modo IA de un bot PROPIO (spec 046).
+   *
+   * Solo funciona sobre bots del propio administrador: sobre uno ajeno el
+   * servidor responde 403. Y eso no es una limitacion de esta pantalla, es la
+   * regla de la consola —mirar y contener, nunca disponer del dinero de nadie—:
+   * un agente que reescribe la configuracion de un bot de otro se la saltaria.
+   */
+  aiMode(id: string): Promise<AiSetting> {
+    return firstValueFrom(this.http.get<AiSetting>(`${this.base}/${id}/ai`));
+  }
+
+  /** El motivo es obligatorio, como en los comandos y por lo mismo. */
+  setAiMode(id: string, dto: SetAiMode): Promise<AiSetting> {
+    return firstValueFrom(this.http.put<AiSetting>(`${this.base}/${id}/ai`, dto));
   }
 }

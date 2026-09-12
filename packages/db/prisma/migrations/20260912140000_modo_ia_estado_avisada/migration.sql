@@ -1,0 +1,12 @@
+-- Un estado propio para los avisos del supervisor (spec 047, G-06).
+--
+-- Un valor nuevo en el enum: no altera ninguna fila ni ninguna columna. Es la
+-- misma migracion que los specs 040 y 043.
+--
+-- Por que hace falta: un aviso —el modelo dice «esto lo tiene que mirar una
+-- persona» sin proponer cambio— nace terminal, porque no hay nada que aprobar.
+-- Se le habia dado `APLICADA` para que no se quedara pendiente para siempre, y
+-- eso es falso: no se aplico nada. Hoy no rompe nada, pero el dia que alguien
+-- cuente las APLICADA como «cambios que hizo el supervisor», los avisos
+-- contarian de mas y nada lo avisaria.
+ALTER TYPE "AiDecisionState" ADD VALUE IF NOT EXISTS 'AVISADA';

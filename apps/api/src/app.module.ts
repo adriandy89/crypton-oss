@@ -28,6 +28,7 @@ import { MarketDataModule } from './modules/market-data';
 import { LeaderboardModule } from './modules/leaderboard';
 import { PortfolioModule } from './modules/portfolio';
 import { RiskModule } from './modules/risk';
+import { SupervisorModule } from './modules/supervisor';
 import { UsersModule } from './modules/users';
 import { TelegramModule } from './modules/telegram';
 
@@ -72,6 +73,9 @@ import { TelegramModule } from './modules/telegram';
     // Despues de `BotsModule` por legibilidad, no por dependencia: `AdvisorModule`
     // solo necesita mercados, velas y limites de riesgo.
     AdvisorModule,
+    // El supervisor de bots vivos (spec 046). Despues del asesor porque comparte
+    // su cliente del modelo; no depende de el de ninguna otra forma.
+    SupervisorModule,
     BacktestsModule,
     TelegramModule,
     LeaderboardModule,

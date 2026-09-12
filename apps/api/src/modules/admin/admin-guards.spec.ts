@@ -1,5 +1,6 @@
 import { ROLES_KEY } from '../auth/decorators/roles.decorator';
 import { JwtAuthGuard, RolesGuard } from '../auth/guards';
+import { AdminAiController } from './admin-ai.controller';
 import { AdminBotsController } from './admin-bots.controller';
 import { AdminMaintenanceController } from './admin-maintenance.controller';
 import { AdminUsersController } from './admin-users.controller';
@@ -22,6 +23,9 @@ describe('la consola de administracion esta cerrada por rol', () => {
     // El mas destructivo de los tres, y el que faltaba aqui: sus rutas borran
     // filas sin vuelta atras.
     ['AdminMaintenanceController', AdminMaintenanceController],
+    // El Modo IA (spec 046). Enciende un agente que reescribe la configuracion
+    // de un bot, asi que una ruta suya abierta seria de las peores.
+    ['AdminAiController', AdminAiController],
   ] as const;
 
   it.each(controladores)('%s exige el rol ADMIN', (_nombre, clase) => {

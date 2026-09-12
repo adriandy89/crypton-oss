@@ -12,12 +12,18 @@ import {
 } from '@ionic/angular/standalone';
 import { capitalActual } from '@crypton/shared';
 import { ToastService } from '../../core/services';
+import { AuthService } from '../../core/auth';
 import {
   ADMIN_BOT_COMMANDS,
+  AI_MODES,
+  AYUDA_MODO_IA,
   AdminBotsService,
   ETIQUETA_COMANDO,
+  ETIQUETA_MODO_IA,
   type AdminBotCommand,
   type AdminBotDetail,
+  type AiMode,
+  type AiSetting,
 } from '../../core/services/admin-bots.service';
 import { errorText, money, shortDate, signed, strategyLabel, venueLabel } from '../../core/utils';
 import {
@@ -137,6 +143,48 @@ const CONTENIBLES = ['STARTING', 'RUNNING', 'PAUSED'];
             <ui-notice tone="info" icon="information-circle-outline">{{ b.note }}</ui-notice>
           }
 
+          <!-- El Modo IA solo aparece en los bots del PROPIO administrador: sobre
+               uno ajeno el servidor responde 403, y ofrecer un interruptor que va
+               a fallar es peor que no ofrecerlo. -->
+          @if (esMio(b)) {
+            <ui-section title="Modo IA" />
+            <ui-notice tone="info" icon="sparkles-outline">
+              Un supervisor revisa este bot cada media hora y cuando cierra un ciclo. Puede mover
+              cinco ajustes como mucho dos posiciones cada uno. <b>Nunca</b> toca el capital, el
+              par, la cuenta ni la dirección, y no puede parar el bot, cerrar su posición ni
+              cancelar sus órdenes.
+            </ui-notice>
+
+            @if (ia(); as s) {
+              <div class="modos">
+                @for (m of modos; track m) {
+                  <button
+                    type="button"
+                    class="modo"
+                    [class.sel]="s.mode === m"
+                    [disabled]="guardando()"
+                    (click)="cambiarModo(m)"
+                  >
+                    <span class="modo-t">{{ etiquetaModo(m) }}</span>
+                    <span class="modo-a">{{ ayudaModo(m) }}</span>
+                  </button>
+                }
+              </div>
+
+              @if (s.paused_until) {
+                <ui-notice tone="warn" icon="warning-outline">
+                  El supervisor se ha dormido tras varios fallos seguidos. Se reactiva solo el
+                  {{ shortDate(s.paused_until) }}.
+                </ui-notice>
+              }
+              @if (s.last_review_at) {
+                <p class="fina">Última revisión: {{ shortDate(s.last_review_at) }}.</p>
+              }
+            } @else {
+              <div class="center"><ion-spinner name="crescent" /></div>
+            }
+          }
+
           <ui-section title="Contención" />
           <!-- Se dice lo que estas acciones NO hacen: es lo que un administrador
                con prisa da por supuesto al reves. -->
@@ -215,6 +263,45 @@ const CONTENIBLES = ['STARTING', 'RUNNING', 'PAUSED'];
         padding: var(--space-6) 0;
       }
 
+      .modos {
+        display: flex;
+        flex-direction: column;
+        gap: var(--space-2);
+        margin: var(--space-3) 0;
+      }
+
+      .modo {
+        display: flex;
+        flex-direction: column;
+        gap: 2px;
+        padding: var(--space-3);
+        text-align: left;
+        border: 1px solid var(--line-1);
+        border-radius: var(--radius-2);
+        background: transparent;
+        cursor: pointer;
+      }
+
+      .modo:disabled {
+        opacity: 0.6;
+        cursor: default;
+      }
+
+      .modo.sel {
+        border-color: var(--brand-2);
+        background: color-mix(in srgb, var(--brand-2) 8%, transparent);
+      }
+
+      .modo-t {
+        font-size: 12.5px;
+        color: var(--text-1);
+      }
+
+      .modo-a {
+        font-size: 11px;
+        color: var(--text-2);
+      }
+
       .fina {
         margin: 0 0 var(--space-6);
         font-size: 11px;
@@ -229,11 +316,17 @@ export class AdminBotDetailPage implements OnInit {
   private readonly toast = inject(ToastService);
   private readonly route = inject(ActivatedRoute);
 
+  private readonly auth = inject(AuthService);
+
   readonly bot = signal<AdminBotDetail | null>(null);
   readonly forbidden = signal(false);
   readonly noExiste = signal(false);
 
+  readonly ia = signal<AiSetting | null>(null);
+  readonly guardando = signal(false);
+
   readonly comandos = ADMIN_BOT_COMMANDS;
+  readonly modos = AI_MODES;
   readonly venueLabel = venueLabel;
   readonly strategyLabel = strategyLabel;
   readonly shortDate = shortDate;
@@ -250,6 +343,46 @@ export class AdminBotDetailPage implements OnInit {
 
   etiqueta(c: AdminBotCommand): string {
     return ETIQUETA_COMANDO[c];
+  }
+
+  etiquetaModo(m: AiMode): string {
+    return ETIQUETA_MODO_IA[m];
+  }
+
+  ayudaModo(m: AiMode): string {
+    return AYUDA_MODO_IA[m];
+  }
+
+  /**
+   * ¿Es un bot del propio administrador?
+   *
+   * El Modo IA solo se enciende sobre bots propios —lo impone el servidor, no
+   * esta pantalla— asi que sobre uno ajeno el panel ni aparece: ofrecer un
+   * interruptor que va a responder 403 es peor que no ofrecerlo.
+   */
+  esMio(b: AdminBotDetail): boolean {
+    return b.owner.id === this.auth.user()?.id;
+  }
+
+  /**
+   * Cambia el modo, pidiendo el motivo.
+   *
+   * El motivo es obligatorio en el servidor, igual que en la contencion y por lo
+   * mismo: encender un agente que reescribe la configuracion de un bot con
+   * dinero dentro tiene que quedar explicado en la bitacora, y que el bot sea
+   * propio no lo hace menos revisable — lo hace mas facil de olvidar.
+   */
+  async cambiarModo(mode: AiMode): Promise<void> {
+    const actual = this.ia();
+    const b = this.bot();
+    if (!actual || !b || actual.mode === mode || this.guardando()) return;
+
+    this.guardando.set(true);
+    try {
+      await this.acciones.modoIa(b, mode, (s) => this.ia.set(s));
+    } finally {
+      this.guardando.set(false);
+    }
   }
 
   contenible(b: AdminBotDetail): boolean {
@@ -277,9 +410,17 @@ export class AdminBotDetailPage implements OnInit {
 
   private async cargar(): Promise<void> {
     try {
-      this.bot.set(await this.api.detail(this.id));
+      const b = await this.api.detail(this.id);
+      this.bot.set(b);
       this.forbidden.set(false);
       this.noExiste.set(false);
+
+      // El Modo IA solo se pide si el bot es propio: sobre uno ajeno el servidor
+      // responde 403, y un 403 esperado no es un error que enseñar.
+      if (this.esMio(b)) {
+        const sinModo: AiSetting = { bot_id: this.id, mode: 'OFF' };
+        this.ia.set(await this.api.aiMode(this.id).catch(() => sinModo));
+      }
     } catch (e) {
       const status = (e as { status?: number }).status;
       if (status === 403) this.forbidden.set(true);

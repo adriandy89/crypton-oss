@@ -291,3 +291,34 @@ export const ActivationMode = {
   PRICE_BELOW: 'PRICE_BELOW',
 } as const;
 export type ActivationMode = (typeof ActivationMode)[keyof typeof ActivationMode];
+
+/**
+ * Que hace el supervisor de IA con un bot (spec 046).
+ *
+ * Calca `AiMode` de Prisma valor a valor, como el resto de este fichero.
+ *
+ * `OFF` es el estado de todo bot que no lo haya encendido, y no hay fila en
+ * `bot_ai_settings` para la inmensa mayoria: ausencia y `OFF` significan lo
+ * mismo, y quien lee tiene que tratarlos igual.
+ */
+export const AiMode = {
+  OFF: 'OFF',
+  /** Propone y espera: no toca nada hasta que una persona aprueba. */
+  MANUAL: 'MANUAL',
+  /** Decide y aplica, dentro de los topes de la traduccion determinista. */
+  AUTO: 'AUTO',
+} as const;
+export type AiMode = (typeof AiMode)[keyof typeof AiMode];
+
+/** En que acabo una decision del supervisor (spec 046). */
+export const AiDecisionState = {
+  PROPUESTA: 'PROPUESTA',
+  APLICADA: 'APLICADA',
+  /** El modelo pidio que lo mirase una persona, sin proponer cambio. */
+  AVISADA: 'AVISADA',
+  RECHAZADA: 'RECHAZADA',
+  CADUCADA: 'CADUCADA',
+  DESCARTADA: 'DESCARTADA',
+  FALLIDA: 'FALLIDA',
+} as const;
+export type AiDecisionState = (typeof AiDecisionState)[keyof typeof AiDecisionState];

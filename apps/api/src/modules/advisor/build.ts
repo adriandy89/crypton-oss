@@ -161,8 +161,14 @@ export function defaultKnobs(profile: Profile, f: MarketFeatures): Knobs {
   };
 }
 
-/** Mueve una banda `pasos` posiciones, sin salirse de la escala. */
-function shiftBand(band: Band, pasos: number): Band {
+/**
+ * Mueve una banda `pasos` posiciones, sin salirse de la escala.
+ *
+ * Se exporta desde el spec 046: el supervisor construye sobre ella su contrato
+ * de DESPLAZAMIENTOS, y tener dos implementaciones de «mover una banda» seria
+ * tener dos escalas que se separan el dia que alguien toque una.
+ */
+export function shiftBand(band: Band, pasos: number): Band {
   const i = BANDS.indexOf(band);
   return BANDS[clamp(i + pasos, 0, BANDS.length - 1)];
 }

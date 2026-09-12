@@ -1,0 +1,16 @@
+-- Los rasgos del par cuando se activo el Modo IA (spec 047, F-01).
+--
+-- Una columna nueva y nullable: no toca ninguna fila existente y es segura de
+-- aplicar con el sistema en marcha.
+--
+-- Por que hace falta: el expediente que ve el modelo incluye «cuanto ha cambiado
+-- la volatilidad desde que se configuro el bot», que el spec 046 llama la linea
+-- que de verdad decide. Esa comparacion necesita una referencia, y la referencia
+-- es el estado del par el dia que alguien encendio el modo. Sin ella la linea no
+-- se emitia NUNCA, y el prompt de sistema seguia pidiendole al modelo que la
+-- mirara: se le preguntaba por un dato que no se le daba.
+--
+-- Va en una migracion propia y no editando la del 046 a proposito: aquella
+-- podria estar ya aplicada en algun sitio, y reescribir una migracion aplicada
+-- es la peor forma de ahorrarse un fichero.
+ALTER TABLE "bot_ai_settings" ADD COLUMN "features_at_enable" JSONB;

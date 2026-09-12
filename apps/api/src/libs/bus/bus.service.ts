@@ -41,6 +41,22 @@ export interface BusMessage<T = Record<string, unknown>> {
    * es por definición uno solo—, sin necesidad de otro cerrojo.
    */
   origin?: string;
+  /**
+   * Entrega este mensaje aunque quien escuche no sea quien lo publico.
+   *
+   * El filtro de `origin` resuelve el caso para el que nacio —N workers
+   * publicando el mismo fill y los N mandando el mismo aviso— y no resuelve el
+   * contrario: un evento que nace en la API no casa con NINGUN worker, asi que
+   * no lo entregaba ninguno. `ADMIN_COMMAND` llevaba asi desde el spec 033,
+   * prometiendo en su comentario que el dueno se entera «en el momento» de que
+   * un tercero le ha tocado el bot. No se enteraba (spec 046, R-27).
+   *
+   * Es opt-in POR MENSAJE a proposito: sin la marca no cambia nada, y el camino
+   * de alto volumen —donde el filtro de origen hace su trabajo— se queda
+   * exactamente como estaba. Quien la enciende toma ademas un cerrojo con una
+   * clave que sale del propio mensaje, para que entregue una sola replica.
+   */
+  entregaForzada?: boolean;
 }
 
 /**

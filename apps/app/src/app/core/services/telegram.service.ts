@@ -10,6 +10,15 @@ export interface TelegramPrefs {
   risk: boolean;
   liquidation: boolean;
   daily: boolean;
+  /**
+   * Lo que propone o aplica el supervisor de IA (spec 046).
+   *
+   * Esta en el tipo para que no haya deriva con el servidor, pero todavia NO
+   * tiene fila en la pantalla: hoy el Modo IA solo lo puede encender un
+   * administrador sobre un bot suyo, y ofrecerle a todo el mundo un interruptor
+   * para avisos que nunca va a recibir es ruido.
+   */
+  ai: boolean;
 }
 
 export interface TelegramStatus {

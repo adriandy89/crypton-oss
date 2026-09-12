@@ -2,9 +2,13 @@ import { Injectable, inject } from '@angular/core';
 import { AlertController } from '@ionic/angular/standalone';
 import { ToastService } from '../../core/services';
 import {
+  AYUDA_MODO_IA,
   AdminBotsService,
   ETIQUETA_COMANDO,
+  ETIQUETA_MODO_IA,
   type AdminBotCommand,
+  type AiMode,
+  type AiSetting,
 } from '../../core/services/admin-bots.service';
 import { AdminUsersService } from '../../core/services/admin-users.service';
 import { errorText } from '../../core/utils';
@@ -82,6 +86,54 @@ export class AdminActionsService {
               () => this.bots.command(bot.id, command, reason),
               `${ETIQUETA_COMANDO[command]}: enviado.`,
               onDone,
+            );
+            return true;
+          },
+        },
+      ],
+    });
+    await alert.present();
+  }
+
+  /**
+   * Cambiar el Modo IA de un bot PROPIO (spec 046).
+   *
+   * Pide motivo como la contencion, y por lo mismo: encender un agente que
+   * reescribe la configuracion de un bot con dinero dentro tiene que quedar
+   * explicado en la bitacora. Que el bot sea propio no lo hace menos revisable —
+   * lo hace mas facil de olvidar.
+   *
+   * El mensaje dice lo que el supervisor NO puede hacer, que es lo que alguien
+   * con prisa da por supuesto al reves.
+   */
+  async modoIa(
+    bot: { id: string; name: string },
+    mode: AiMode,
+    onDone?: (s: AiSetting) => void | Promise<void>,
+  ): Promise<void> {
+    const apagar = mode === 'OFF';
+    const alert = await this.alerts.create({
+      header: apagar ? 'Apagar el Modo IA' : ETIQUETA_MODO_IA[mode],
+      message: apagar
+        ? `${bot.name} volverá a funcionar solo con la configuración que le pusiste. ` +
+          'Las sugerencias que estuvieran esperando se descartan.'
+        : `${AYUDA_MODO_IA[mode]} Nunca toca el capital, el par, la cuenta ni la dirección, ` +
+          'y no puede parar el bot, cerrar su posición ni cancelar sus órdenes.',
+      inputs: [this.campoMotivo],
+      buttons: [
+        { text: 'Cancelar', role: 'cancel' },
+        {
+          text: 'Confirmar',
+          handler: (datos: { reason?: string }) => {
+            const reason = this.motivoDe(datos);
+            if (!reason) return false;
+            void this.correr(
+              async () => {
+                const s = await this.bots.setAiMode(bot.id, { mode, reason });
+                await onDone?.(s);
+                return s;
+              },
+              apagar ? 'Modo IA apagado.' : 'Modo IA actualizado.',
             );
             return true;
           },

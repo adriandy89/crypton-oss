@@ -180,12 +180,26 @@ export class AdminBotsService {
     // worker con los suyos—, asi que sin esto el dueño no se enteraria de que le
     // han pausado el bot hasta que abriese esa pantalla. En una plataforma no
     // custodial, que un tercero toque tu bot y no te enteres es indefendible.
+    //
+    // Y durante un tiempo NO se enteraba, por dos motivos a la vez (spec 046,
+    // R-27): el notificador descartaba todo evento cuyo origen no fuera el suyo
+    // —y el de la API no es el de ningun worker—, y ademas esto se publicaba sin
+    // `severity` ni `message`, de modo que la via generica, que exige WARN o
+    // mas, tampoco lo habria entregado. `entregaForzada` arregla lo primero y
+    // estas dos claves lo segundo. El texto va aqui y no en el notificador
+    // porque es el unico sitio que sabe QUE se hizo y POR QUE.
     await this.bus
       .publish(BUS_CHANNELS.BOT_EVENTS, {
         userId: owner,
         botId,
         type: 'ADMIN_COMMAND',
-        data: { command: dto.command, reason: dto.reason },
+        entregaForzada: true,
+        data: {
+          command: dto.command,
+          reason: dto.reason,
+          severity: EventSeverity.WARN,
+          message: `Soporte ha ejecutado ${dto.command} sobre este bot: ${dto.reason}`,
+        },
       })
       .catch(() => undefined);
 

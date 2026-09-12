@@ -21,6 +21,8 @@ sitio web, ni infraestructura de nadie: todo lo que hace está disponible para q
 |---|---|
 | `apps/api` | NestJS 11. REST + SSE: cuentas, credenciales cifradas, CRUD de bots, preview, riesgo, backtest, bitácora. **No ejecuta nada**: escribe el comando en `bot_commands` y avisa por Redis. |
 | `apps/api` → `modules/admin` | La consola de administración (spec 033). **Mirar y contener**: lee cuentas y bots de todos, y sobre un bot ajeno solo puede `PAUSE` y `STOP_KEEP_POSITION`. Nunca importa `ExchangeAccountsModule`: es la puerta a descifrar la clave de firma. |
+| `apps/api` → `modules/advisor` | El asesor: propone tres configuraciones al **crear** un bot. Único fichero que habla con un LLM (`openrouter.client.ts`). El modelo emite **perillas**, nunca parámetros. |
+| `apps/api` → `modules/supervisor` | El **Modo IA** (spec 046): vigila bots que **ya operan**. El modelo emite **desplazamientos** sobre las perillas guardadas, y `apply.ts` los traduce aplicando solo el **delta**. Solo bots propios de un `ADMIN`; no manda comandos; aplica por `BotsService.updateConfig`, que es el único camino de escritura. |
 | `apps/worker` | NestJS 11 sin HTTP. **El motor**: lease en Redis → un `BotRunner` por bot → tick. Único proceso que descifra claves y firma. También escribe la curva de la cartera (`portfolio_snapshots`) y purga las series. |
 | `apps/app` | Ionic 8 + Angular 21 + Capacitor. Ejecuta `strategy-core` **también en cliente** (`features/bots/bot-create.page.ts`, `fullConfig`). |
 | `packages/shared` | Tipos, enums (calcan Prisma), `money.ts` (Decimal), `precision.ts` (redondeo), `liquidation.ts`, `series.ts` (la aritmética de las series y la analítica que pintan las pantallas: la app no suma dinero, lo pide aquí con test). |
@@ -51,6 +53,7 @@ Ficheros que hay que leer **enteros** antes de cambiarlos: `apps/worker/src/engi
 11. **Un solo bot real por par y cuenta** (índice único parcial en `bots`). Los simulados quedan fuera de la regla.
 12. **Mutabilidad HOT/WARM/COLD** de cada campo (`meta.fields`) decide lo que hace el motor al recargar la configuración. No es una etiqueta decorativa.
 13. **Una escritura con estado desconocido no se reenvía** (`withWriteRetry`): si no se puede saber si la orden entró, se lanza y el tick siguiente reconcilia contra el venue.
+14. **Ninguna IA escribe configuración por su cuenta.** El asesor y el supervisor emiten enumeraciones —nunca números, nunca importes— y un generador determinista las traduce; todo pasa por `validate()`, `preview()`, `assertWithinLimits` y `diffConfig`, y el supervisor aplica por `updateConfig` como cualquier usuario. No hay un segundo camino de escritura.
 
 ## Comandos
 

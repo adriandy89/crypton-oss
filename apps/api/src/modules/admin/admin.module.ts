@@ -1,10 +1,12 @@
 import { Module } from '@nestjs/common';
+import { SupervisorModule } from '../supervisor';
 import { AuthModule } from '../auth';
 import { BotsModule } from '../bots';
 import { AdminBotsController } from './admin-bots.controller';
 import { AdminBotsService } from './admin-bots.service';
 import { AdminMaintenanceController } from './admin-maintenance.controller';
 import { AdminMaintenanceService } from './admin-maintenance.service';
+import { AdminAiController } from './admin-ai.controller';
 import { AdminUsersController } from './admin-users.controller';
 import { AdminUsersService } from './admin-users.service';
 
@@ -28,10 +30,21 @@ import { AdminUsersService } from './admin-users.service';
  * claro, y la forma mas barata de garantizarlo es que este modulo no tenga con
  * que. Quien mañana necesite el saldo de una cuenta ajena y venga a importarlo:
  * eso es exactamente lo que este parrafo pide que no hagas.
+ *
+ * `SupervisorModule` SI entra (spec 046), y conviene decir por que no rompe nada
+ * de lo anterior: lo que aporta es encender el Modo IA sobre un bot PROPIO del
+ * administrador. Su servicio rechaza cualquier bot ajeno, asi que la superficie
+ * sobre bots de terceros sigue siendo exactamente la de antes — dos comandos de
+ * contencion y nada mas. Y tampoco trae adaptadores: solo mercados y velas.
  */
 @Module({
-  imports: [BotsModule, AuthModule],
-  controllers: [AdminUsersController, AdminBotsController, AdminMaintenanceController],
+  imports: [BotsModule, AuthModule, SupervisorModule],
+  controllers: [
+    AdminUsersController,
+    AdminBotsController,
+    AdminMaintenanceController,
+    AdminAiController,
+  ],
   providers: [AdminUsersService, AdminBotsService, AdminMaintenanceService],
 })
 export class AdminModule {}

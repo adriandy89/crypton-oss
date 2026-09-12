@@ -16,6 +16,24 @@ export interface TelegramUpdate {
     from?: { id: number; username?: string };
     text?: string;
   };
+  /**
+   * La pulsacion de un boton (spec 046).
+   *
+   * `data` es lo que se puso en el teclado al enviar el mensaje, y Telegram lo
+   * limita a 64 BYTES: por eso ahi solo viaja un identificador opaco y el verbo,
+   * nunca el id del bot ni nada que describa el cambio.
+   */
+  callback_query?: {
+    id: string;
+    from: { id: number; username?: string };
+    message?: { message_id: number; chat: { id: number } };
+    data?: string;
+  };
+}
+
+/** Un teclado en linea: filas de botones, cada uno con su `callback_data`. */
+export interface InlineKeyboard {
+  inline_keyboard: { text: string; callback_data: string }[][];
 }
 
 export class TelegramClient {
@@ -34,13 +52,14 @@ export class TelegramClient {
    * Envía un mensaje. Devuelve false en vez de lanzar: una alerta que no llega
    * no debe tumbar el tick de un bot que sí está operando bien.
    */
-  async sendMessage(chatId: string, text: string): Promise<boolean> {
+  async sendMessage(chatId: string, text: string, teclado?: InlineKeyboard): Promise<boolean> {
     if (!this.enabled) return false;
     try {
       const res = await this.call('sendMessage', {
         chat_id: chatId,
         text,
         parse_mode: 'HTML',
+        ...(teclado ? { reply_markup: teclado } : {}),
         // Los mensajes son cortos y autocontenidos; la vista previa de enlaces
         // solo añadiría ruido en un canal que se lee de un vistazo.
         disable_web_page_preview: true,
@@ -60,11 +79,36 @@ export class TelegramClient {
     if (!this.enabled) return [];
     const res = await this.call(
       'getUpdates',
-      { offset, timeout: timeoutSeconds, allowed_updates: ['message'] },
+      // `callback_query` desde el spec 046. Ampliar esto cambia lo que devuelve
+      // `getUpdates` para TODO el mundo, asi que el manejador ignora en silencio
+      // cualquier pulsacion que no reconozca.
+      { offset, timeout: timeoutSeconds, allowed_updates: ['message', 'callback_query'] },
       // El fetch debe aguantar más que el propio long poll, o lo cortaría él.
       (timeoutSeconds + 10) * 1000,
     );
     return (res.result as TelegramUpdate[]) ?? [];
+  }
+
+  /**
+   * Contesta a la pulsacion de un boton.
+   *
+   * No es opcional aunque no se quiera decir nada: hasta que Telegram recibe
+   * esto, el boton se queda con el reloj girando en el movil de quien lo pulso.
+   * Se traga los fallos como `sendMessage`, por lo mismo: que no se pueda
+   * confirmar una pulsacion no puede tumbar el sondeo.
+   */
+  async answerCallbackQuery(id: string, texto?: string): Promise<boolean> {
+    if (!this.enabled) return false;
+    try {
+      const res = await this.call('answerCallbackQuery', {
+        callback_query_id: id,
+        ...(texto ? { text: texto, show_alert: false } : {}),
+      });
+      return res.ok === true;
+    } catch (e) {
+      this.logger.warn(`No se pudo contestar a un botón: ${(e as Error).message}`);
+      return false;
+    }
   }
 
   async getMe(): Promise<{ username?: string } | null> {

@@ -1,7 +1,7 @@
 import { Injectable, Logger, OnApplicationShutdown, OnModuleInit } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { createClient, type RedisClientType } from 'redis';
-import { DbService } from '../libs';
+import { BUS_CHANNELS, BusService, DbService } from '../libs';
 import { LeaseService } from '../engine';
 import { TelegramClient, escapeHtml, type TelegramUpdate } from './telegram-client';
 
@@ -43,6 +43,7 @@ export class TelegramPollerService implements OnModuleInit, OnApplicationShutdow
     private readonly db: DbService,
     private readonly leases: LeaseService,
     private readonly config: ConfigService,
+    private readonly bus: BusService,
   ) {
     this.client = new TelegramClient(config.get<string>('TELEGRAM_BOT_TOKEN', ''));
   }
@@ -121,6 +122,57 @@ export class TelegramPollerService implements OnModuleInit, OnApplicationShutdow
   }
 
   /**
+   * Alguien ha pulsado un boton de una sugerencia del supervisor (spec 046).
+   *
+   * Este proceso hace de MENSAJERO y nada mas: no aplica, no consulta la
+   * decision y ni siquiera sabe de que bot es. Solo resuelve a quien pertenece
+   * el chat y publica el vale. Quien decide es la API, que es donde vive el
+   * unico camino de escritura de configuracion, y donde el vale se canjea con
+   * un GETDEL —atomico— que garantiza que dos pulsaciones apliquen una vez.
+   *
+   * Que el vale no diga nada tampoco es casual: en `callback_data` caben 64
+   * bytes, asi que es un identificador opaco. Quien lo intercepte no sabe de que
+   * bot es ni que cambio propone, y sin ser el chat del dueño no le sirve.
+   */
+  private async onBoton(cb: NonNullable<TelegramUpdate['callback_query']>): Promise<void> {
+    const chatId = cb.message ? String(cb.message.chat.id) : null;
+    const partes = (cb.data ?? '').split(':');
+
+    // Cualquier pulsacion que no reconozcamos se contesta y se ignora: ampliar
+    // `allowed_updates` cambia lo que llega para todo el mundo, y un update raro
+    // no puede dejar el sondeo dando vueltas.
+    if (!chatId || partes.length !== 3 || partes[0] !== 'ia') {
+      await this.client.answerCallbackQuery(cb.id);
+      return;
+    }
+    const [, token, verbo] = partes;
+
+    const link = await this.db.telegramLink.findFirst({
+      where: { chat_id: chatId, verified_at: { not: null } },
+      select: { user_id: true },
+    });
+    if (!link) {
+      // Neutro a proposito, como el canje de codigos: confirmar que el vale
+      // existe le diria a quien prueba que ha acertado uno.
+      await this.client.answerCallbackQuery(cb.id, 'No se ha podido procesar.');
+      return;
+    }
+
+    await this.bus
+      .publish(BUS_CHANNELS.BOT_EVENTS, {
+        userId: link.user_id,
+        type: 'AI_DECISION_TAKEN',
+        data: { token, aplicar: verbo === 'si', chatId },
+      })
+      .catch(() => undefined);
+
+    await this.client.answerCallbackQuery(
+      cb.id,
+      verbo === 'si' ? 'Aplicando…' : 'Sugerencia descartada.',
+    );
+  }
+
+  /**
    * ¿Puede este chat probar otro código?
    *
    * En memoria y no en Redis a propósito: solo un worker sondea Telegram a la
@@ -144,6 +196,8 @@ export class TelegramPollerService implements OnModuleInit, OnApplicationShutdow
   }
 
   private async handle(update: TelegramUpdate): Promise<void> {
+    if (update.callback_query) return this.onBoton(update.callback_query);
+
     const message = update.message;
     const text = message?.text?.trim();
     if (!message || !text) return;

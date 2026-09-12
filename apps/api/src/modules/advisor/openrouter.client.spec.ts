@@ -171,8 +171,8 @@ describe('cliente del modelo', () => {
 
   describe('la peticion tiene que poder salir', () => {
     /** Acceso al constructor de cabeceras: es lo que rompia la llamada entera. */
-    const headers = (c: OpenRouterClient): Record<string, string> =>
-      (c as unknown as { headers(): Record<string, string> }).headers();
+    const headers = (c: OpenRouterClient, titulo = 'Crypton bot advisor'): Record<string, string> =>
+      (c as unknown as { headers(t: string): Record<string, string> }).headers(titulo);
 
     it('las cabeceras se pueden mandar tal cual', () => {
       // El test que faltaba. Los valores de cabecera son ByteString: un guion
@@ -188,6 +188,9 @@ describe('cliente del modelo', () => {
         }),
       );
       expect(() => new Headers(headers(c))).not.toThrow();
+      // Y el titulo del supervisor, que es el otro que se manda (spec 046).
+      expect(() => new Headers(headers(c, 'Crypton bot supervisor'))).not.toThrow();
+      expect(headers(c, 'Crypton bot supervisor')['X-Title']).toBe('Crypton bot supervisor');
     });
 
     it('se queda con el PRIMER origen, no con la lista entera', () => {
@@ -273,5 +276,57 @@ describe('cliente del modelo', () => {
         expect(props[clave].enum.length).toBeGreaterThan(1);
       }
     });
+  });
+});
+
+describe('el supervisor y el asesor son independientes (spec 046)', () => {
+  // Son dos trabajos distintos con dos facturas distintas: clasificar un par de
+  // un disparo no es lo mismo que juzgar un bot vivo con historial. Encender uno
+  // no puede encender el otro, y el modelo de uno no es el del otro.
+  const clave = { OPENROUTER_API_KEY: 'sk-or-x' };
+
+  it('el asesor encendido no enciende al supervisor', () => {
+    const c = new OpenRouterClient(configCon({ ...clave, AI_ADVISOR_ENABLE: 'true' }));
+    expect(c.available).toBe(true);
+    expect(c.agentAvailable).toBe(false);
+  });
+
+  it('el supervisor encendido no enciende al asesor', () => {
+    const c = new OpenRouterClient(configCon({ ...clave, AI_AGENT_ENABLE: 'true' }));
+    expect(c.available).toBe(false);
+    expect(c.agentAvailable).toBe(true);
+  });
+
+  it('cada uno usa SU modelo, sin caer al del otro', () => {
+    const c = new OpenRouterClient(
+      configCon({
+        ...clave,
+        AI_ADVISOR_ENABLE: 'true',
+        AI_AGENT_ENABLE: 'true',
+        OPENROUTER_MODEL: 'un/modelo-barato',
+        AI_AGENT_MODEL: 'otro/modelo-capaz',
+      }),
+    );
+    const interno = c as unknown as { model: string; agentModel: string };
+    expect(interno.model).toBe('un/modelo-barato');
+    expect(interno.agentModel).toBe('otro/modelo-capaz');
+  });
+
+  it('sin AI_AGENT_MODEL el supervisor NO hereda OPENROUTER_MODEL', () => {
+    // Deliberado: si heredara, cambiar el modelo del asesor cambiaria en silencio
+    // el del proceso que reescribe configuraciones de bots vivos.
+    const c = new OpenRouterClient(
+      configCon({ ...clave, AI_AGENT_ENABLE: 'true', OPENROUTER_MODEL: 'un/modelo-barato' }),
+    );
+    expect((c as unknown as { agentModel: string }).agentModel).not.toBe('un/modelo-barato');
+  });
+
+  it('apagado, revisar() no llama a nadie', async () => {
+    const c = new OpenRouterClient(configCon({}));
+    const fetchSpy = jest.spyOn(globalThis, 'fetch');
+    const r = await c.revisar({ name: 'x', schema: {} }, 'sys', 'user');
+    expect(r).toBeNull();
+    expect(fetchSpy).not.toHaveBeenCalled();
+    fetchSpy.mockRestore();
   });
 });

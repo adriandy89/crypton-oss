@@ -4,7 +4,7 @@ import { Cron, CronExpression } from '@nestjs/schedule';
 import { D } from '@crypton/shared';
 import { LeaseService } from '../engine';
 import { BUS_CHANNELS, BusService, DbService, type BusMessage } from '../libs';
-import { TelegramClient, escapeHtml } from './telegram-client';
+import { TelegramClient, escapeHtml, type InlineKeyboard } from './telegram-client';
 
 interface TelegramPrefs {
   fills: boolean;
@@ -13,6 +13,8 @@ interface TelegramPrefs {
   risk: boolean;
   liquidation: boolean;
   daily: boolean;
+  /** Lo que propone o aplica el supervisor de IA (spec 046). */
+  ai: boolean;
 }
 
 const DEFAULT_PREFS: TelegramPrefs = {
@@ -22,6 +24,7 @@ const DEFAULT_PREFS: TelegramPrefs = {
   risk: true,
   liquidation: true,
   daily: true,
+  ai: true,
 };
 
 /** Qué preferencia gobierna cada tipo de evento. */
@@ -45,6 +48,20 @@ const EVENT_PREF: Record<string, keyof TelegramPrefs> = {
   // Un resto por debajo del mínimo del venue pide una acción del usuario —el
   // motor no puede cerrarlo con una orden—, así que va con los errores.
   POSITION_BELOW_MINIMUM: 'errors',
+  // Un tercero ha tocado este bot. Va con `risk` y no con `errors` porque no es
+  // una averia: es alguien de soporte conteniendo el bot, y quien silencia los
+  // errores no puede quedarse sin enterarse de ESTO. Tener entrada propia lo
+  // saca ademas de la via generica, que exige WARN o mas y por tanto dependia de
+  // que el publicador se acordara de mandar la severidad (spec 046, R-27).
+  ADMIN_COMMAND: 'risk',
+  // El supervisor de IA (spec 046). Preferencia propia porque no son averias:
+  // dicen que una configuracion ha cambiado o podria cambiar. `AI_FAILED` va con
+  // los errores a proposito — quien silencia al supervisor no quiere dejar de
+  // saber que esta roto.
+  AI_SUGGESTION: 'ai',
+  AI_ADVICE: 'ai',
+  AI_APPLIED: 'ai',
+  AI_FAILED: 'errors',
   // `EXIT_PENDING_MIN_SIZE` NO está aquí a propósito: es informativo y se cura
   // solo en cuanto entra otra ejecución. Notificarlo sería enseñar a silenciar
   // el canal justo antes del aviso que sí había que leer.
@@ -76,10 +93,25 @@ const ICON: Record<string, string> = {
   LIQUIDATED: '💥',
   AUTH_ERROR: '🔑',
   PANIC: '🛑',
+  ADMIN_COMMAND: '🛟',
+  AI_SUGGESTION: '🤖',
+  AI_ADVICE: '🤖',
+  AI_APPLIED: '🤖',
+  AI_FAILED: '🤖',
   BOT_STARTED: '▶',
   BOT_PAUSED: '⏸',
   BOT_STOPPED: '⏹',
 };
+
+/**
+ * Ventana del cerrojo que reparte la entrega de un evento ajeno.
+ *
+ * Un minuto: lo bastante largo para cubrir el desfase entre réplicas que
+ * reciben el mismo mensaje del bus, y lo bastante corto para que la clave no
+ * se quede ocupando sitio. No se reintenta nada al caducar — para entonces el
+ * aviso ya se mandó o ya no interesa.
+ */
+const FORCED_DELIVERY_LOCK_MS = 60_000;
 
 /** Cuánto se espera para agrupar eventos del mismo chat antes de enviar. */
 const BATCH_WINDOW_MS = 4000;
@@ -176,7 +208,15 @@ export class NotifierService implements OnModuleInit, OnModuleDestroy {
     // llegaba a los N y los N mandaban el mismo mensaje: el usuario recibía el
     // aviso tantas veces como réplicas hubiera. El sondeo de Telegram sí tenía
     // su cerrojo; el envío no tenía nada.
-    if (message.origin && message.origin !== this.bus.originId) return;
+    //
+    // La excepción son los eventos que NO publica un worker. El origen de uno
+    // que nace en la API no casa con ninguno, así que no lo entregaba NINGUNO:
+    // `ADMIN_COMMAND` prometía en su comentario que el dueño se entera «en el
+    // momento» de que un tercero le ha tocado el bot, y llevaba desde el spec
+    // 033 sin llegar nunca (spec 046, R-27). Esos vienen marcados, y para ellos
+    // el cerrojo de `reservarEntrega` hace el papel que aquí hace el origen.
+    const ajeno = message.origin !== undefined && message.origin !== this.bus.originId;
+    if (ajeno && message.entregaForzada !== true) return;
 
     const data = message.data as { severity?: string; message?: string };
     const severity = data.severity ?? 'INFO';
@@ -199,7 +239,63 @@ export class NotifierService implements OnModuleInit, OnModuleDestroy {
     const icon = ICON[message.type] ?? (severity === 'CRITICAL' ? '🔥' : '·');
     const line = `${icon} <b>${escapeHtml(bot)}</b> — ${escapeHtml(data.message ?? message.type)}`;
 
+    // Se reserva lo más tarde posible: un evento que el usuario no quiere no
+    // debe costar una ida y vuelta a Redis, y el camino normal —el del origen
+    // propio— no pasa por aquí en absoluto.
+    if (ajeno && !(await this.reservarEntrega(message))) return;
+
+    // Una sugerencia con botones NO puede ir en el lote: el teclado pertenece a
+    // UN mensaje, y fundirla con otras once lineas dejaria dos botones colgando
+    // de un texto que habla de otras cosas. Se manda sola y al momento.
+    const teclado = this.tecladoDe(message);
+    if (teclado) {
+      await this.client.sendMessage(link.chatId, line, teclado);
+      return;
+    }
+
     this.enqueue(link.chatId, line);
+  }
+
+  /**
+   * Reserva la entrega de un evento ajeno, para que la haga UNA sola réplica.
+   *
+   * La clave se compone solo con datos del MENSAJE —bot, tipo y marca de
+   * tiempo—, nunca con nada del proceso: el `ts` lo pone quien publica
+   * (`BusService.publish`), así que las N réplicas que reciben el mismo mensaje
+   * compiten por la misma clave y gana una. Con el identificador del worker
+   * dentro, cada una se concedería el suyo y volveríamos a los N avisos.
+   *
+   * `tryLock` devuelve `false` con Redis caído, y aquí eso significa no
+   * entregar. Es lo correcto para este camino: duplicar avisos es peor que
+   * saltarse uno, y lo que se juega es un aviso, no una orden.
+   */
+  private reservarEntrega(message: BusMessage): Promise<boolean> {
+    return this.leases.tryLock(
+      `notify:${message.botId}:${message.type}:${message.ts}`,
+      FORCED_DELIVERY_LOCK_MS,
+    );
+  }
+
+  /**
+   * El teclado de aprobar y descartar, si el evento lo lleva.
+   *
+   * El vale (`token`) lo genera quien publica y vive en Redis con un solo uso:
+   * aqui solo se copia al boton. En `callback_data` caben 64 bytes, asi que no
+   * entra nada mas — ni el id del bot ni una descripcion del cambio.
+   */
+  private tecladoDe(message: BusMessage): InlineKeyboard | null {
+    if (message.type !== 'AI_SUGGESTION') return null;
+    const token = (message.data as { token?: string })?.token;
+    if (typeof token !== 'string' || token.length === 0) return null;
+
+    return {
+      inline_keyboard: [
+        [
+          { text: '✅ Aplicar', callback_data: `ia:${token}:si` },
+          { text: '✖ Descartar', callback_data: `ia:${token}:no` },
+        ],
+      ],
+    };
   }
 
   private enqueue(chatId: string, line: string): void {

@@ -147,3 +147,98 @@ solo tiene sentido durante un incidente concreto y sabiendo esto.
 
 Si la marca no se pudo escribir, la pantalla lo dice: la cuenta queda deshabilitada, pero su token
 en curso aguanta lo que le quede de vida (`JWT_ACCESS_TTL`, 15 minutos por defecto).
+
+## Modo IA: un supervisor que vigila bots vivos (spec 046)
+
+CRYPTON ya tenía un asistente que propone configuraciones **al crear** un bot. Esto es lo
+contrario: un supervisor que mira un bot **que ya está operando** —sus parámetros, su rendimiento
+real y el estado del par— y decide si esa configuración sigue teniendo sentido.
+
+Se enciende **bot a bot**, y hoy solo puede hacerlo un administrador **sobre un bot suyo**. Con las
+variables de entorno sin tocar, la función no existe.
+
+### Los dos modos
+
+| Modo | Qué hace |
+|---|---|
+| **Manual** | Propone y espera. La sugerencia llega a tu Telegram con dos botones —aplicar o descartar— y el bot no se toca hasta que pulses. Al pulsar, el ajuste se **recalcula contra el mercado de ese momento**: si ya no cabe, caduca y se te dice. |
+| **Automático** | Aplica el cambio y te avisa después. Sigue sin poder cruzar ninguno de los límites de abajo. |
+
+### Qué puede hacer, y qué no
+
+Lo que **sí**: mover cinco perillas —apalancamiento, cobertura, diferencial, crecimiento del tamaño
+y cadencia— como mucho **dos posiciones cada una**, y solo si el cambio pasa exactamente la misma
+validación que un cambio hecho a mano.
+
+Lo que **no**, pase lo que pase:
+
+- **Tocar el capital, el par, la cuenta o la dirección.** Nunca. Decidir cuánto dinero pones no es
+  asunto suyo.
+- **Parar, pausar, cerrar una posición o cancelar órdenes.** No emite ni un comando. Si cree que
+  hace falta algo de eso, avisa y lo decides tú.
+- **Ensanchar o apagar un stop loss.** Solo puede estrecharlo.
+- **Subir el apalancamiento más de un punto** por revisión, ni por encima de tus propios límites.
+- **Cambiar más de cuatro parámetros de una vez.** Más que eso no es un ajuste, es otro bot.
+- **Recolocar la escalera con escalones ya ejecutados**, ni tocar un bot que no esté operando.
+
+Y una propiedad que conviene conocer: **solo cambia lo que el ajuste significa**. Si has
+configurado tu bot a mano, todo lo que el supervisor no mueva se queda exactamente como lo dejaste.
+
+### Cuándo mira
+
+Cada media hora, y además cuando pasa algo que merece mirarse: un ciclo cerrado, una guarda de
+riesgo, un aviso de liquidación, falta de margen o un rechazo grave del exchange.
+
+**Nunca con cada ejecución.** Para un market maker un fill es su conducta normal —decenas por
+minuto— y lo que hay que juzgar es una media, no un evento. Lo que aquí cuenta como «una operación»
+es un **ciclo cerrado**.
+
+Antes de preguntarle nada al modelo se interponen cinco filtros: el tipo de disparo, un hueco
+mínimo entre consultas del mismo bot, la coalescencia entre réplicas, una huella del estado —si
+nada material ha cambiado, la respuesta anterior sigue valiendo— y dos cupos diarios, uno por bot y
+otro de toda la plataforma.
+
+### Qué ve el modelo
+
+Rasgos ya calculados y cuantizados: volatilidad, recorrido típico, tendencia, cómo ha cambiado el
+régimen desde que se configuró el bot, su rendimiento por ciclos, su exposición y su distancia a
+liquidación **en porcentajes y tramos**, las incidencias de las últimas 24 horas, y sus tres últimas
+decisiones sobre ese mismo bot.
+
+**No ve dinero.** Ni un importe, ni un precio absoluto. Tampoco el nombre ni la nota del bot, que
+son texto que escribes tú. Y no emite números: emite desplazamientos sobre bandas, que un generador
+determinista traduce a parámetros respetando la retícula del venue y tus límites.
+
+### Si algo falla
+
+Si el modelo no contesta o responde algo que no cumple el contrato, **no se toca nada**. No hay
+plan B: aquí un plan B reescribiría la configuración de un bot vivo porque el modelo estaba caído.
+Se avisa —como mucho un aviso por bot y hora— y tras cinco fallos seguidos el modo se duerme unas
+horas.
+
+Con **Redis caído** el Modo IA se apaga solo: sin poder contar el gasto no se llama a nadie.
+
+### Los interruptores
+
+| Cuándo | Qué |
+|---|---|
+| Quieres apagarlo todo | `AI_AGENT_ENABLE=false` |
+| Quieres que deje de aplicar pero siga sugiriendo | `AI_AGENT_FORCE_MANUAL=true` |
+| Quieres que solo actúe sobre bots simulados | `AI_AGENT_DRY_RUN_ONLY=true` (así viene) |
+| Quieres apagarlo en un bot concreto | Poner su Modo IA en `OFF` |
+
+### El rastro
+
+Cada decisión queda guardada con el expediente que vio el modelo, lo que propuso y en qué acabó. La
+fila **no se borra nunca** —es la única forma de explicar por qué un bot cambió solo—; lo que se
+vacía a los noventa días es el expediente, que es el grueso del peso.
+
+Un cambio aplicado aparece en el historial de configuración del bot como cualquier otro, firmado por
+el supervisor. **Deshacerlo es volver a la versión anterior**, igual que cualquier cambio a mano.
+
+### Por qué solo sobre bots propios
+
+Porque la regla de esta consola es *mirar y contener, nunca disponer del dinero de nadie*. Un agente
+que reescribe la configuración de un bot ajeno la rompería. Al limitarlo a bots propios no es un
+administrador operando el bot de otro: es el dueño operando el suyo con una herramienta, y lo que se
+puede hacer sobre bots de terceros sigue siendo exactamente lo de antes — pausar y sacar del motor.

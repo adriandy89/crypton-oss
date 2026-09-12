@@ -142,6 +142,19 @@ export interface CommandOptions {
   requestedBy?: string;
 }
 
+/**
+ * Quien firma una revision de configuracion cuando no la pide una persona.
+ *
+ * Misma forma que `CommandOptions`, y por la misma razon: `bot_config_revisions`
+ * tiene que poder decir QUIEN escribio cada version. Desde el spec 046 hay un
+ * escritor que no es un usuario —el supervisor de IA—, y sin esto su rastro
+ * seria indistinguible del de su dueño en el historial de configuracion, que es
+ * justo lo que hay que poder mirar cuando un bot cambio solo.
+ */
+export interface UpdateConfigOptions {
+  appliedBy?: string;
+}
+
 @Injectable()
 export class BotsService implements OnModuleInit {
   private readonly logger = new Logger(BotsService.name);
@@ -972,7 +985,12 @@ export class BotsService implements OnModuleInit {
    *          pero el usuario tiene que confirmarlo antes.
    *   COLD → se rechaza: sería otro bot distinto.
    */
-  async updateConfig(userId: string, id: string, dto: UpdateBotConfigDto) {
+  async updateConfig(
+    userId: string,
+    id: string,
+    dto: UpdateBotConfigDto,
+    opts: UpdateConfigOptions = {},
+  ) {
     const bot = await this.mustOwn(userId, id);
     const market = await this.markets.getSpec(
       bot.venue,
@@ -1070,7 +1088,7 @@ export class BotsService implements OnModuleInit {
           config: next as never,
           diff: diff.changed as never,
           apply_level: diff.level,
-          applied_by: userId,
+          applied_by: opts.appliedBy ?? userId,
         },
       });
       await tx.bot.update({
