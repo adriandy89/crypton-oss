@@ -89,7 +89,8 @@ solo la de liquidación puede cerrar, y solo si tú se lo pediste en «Al acerca
 | Liquidación a menos del % de aviso (10 por defecto) | con posición; aviso CRITICAL con enfriamiento; acción según `liquidationAction` |
 | Pérdida acumulada del bot ≥ kill-switch (%) | sobre el capital asignado; es un tope de pérdida, no un drawdown desde máximo |
 | Pérdida diaria de la cuenta o del bot | PnL realizado de hoy |
-| 20 colocaciones fallidas seguidas · 5 revisiones fallidas seguidas | fallos técnicos persistentes |
+| 20 colocaciones fallidas seguidas · 5 revisiones fallidas seguidas **del propio bot** | fallos técnicos persistentes |
+| Venue sin servicio (5xx, timeouts, error de red, 429) | **no** pausa: el bot espera y avisa `VENUE_UNAVAILABLE` / `VENUE_RECOVERED` |
 | Precio externo desfasado (> 15 s) | la estrategia deja de cotizar; el bot **no** se pausa |
 
 ---
