@@ -8,7 +8,7 @@ import { AccountHub } from './account-hub.service';
 import { BotStore, type RiskGuards } from './bot-store';
 import { CommandInbox } from './command-inbox.service';
 import { LeaseService } from './lease.service';
-import { evaluarSalud } from './health';
+import { evaluarSalud, runnersAtascados } from './health';
 import { MarketDataService, PriceSourceService } from '../marketdata';
 
 /**
@@ -602,9 +602,8 @@ export class EngineService implements OnModuleInit, OnModuleDestroy {
    */
   private stalledRunners(): string[] {
     const limit = Number(this.config.get('RECONCILE_INTERVAL_MS', 15_000)) * 4;
-    return [...this.runners.entries()]
-      .filter(([, runner]) => runner.msSinceLastTick > limit)
-      .map(([botId]) => botId);
+    // Sin contar a los que esperan a un venue caído: ver `runnersAtascados` (spec 050).
+    return runnersAtascados(this.runners.entries(), limit);
   }
 
   status() {

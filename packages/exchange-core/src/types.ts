@@ -104,6 +104,13 @@ export interface AdapterOptions {
    * lo que consulta `VENUE_ENDPOINTS`.
    */
   wsUrl?: string;
+  /**
+   * Lo más que se espera a una respuesta HTTP. Por defecto `HTTP_TIMEOUT_MS`.
+   *
+   * Solo para pruebas, como `wsUrl`: la batería provoca una conexión colgada y no
+   * puede esperar diez segundos por intento (spec 050).
+   */
+  httpTimeoutMs?: number;
 }
 
 /**

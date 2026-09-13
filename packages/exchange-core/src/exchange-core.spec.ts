@@ -17,7 +17,7 @@ import {
 import { DryRunAdapter } from './adapters/dry-run';
 import { esLiquidacionHl } from './adapters/hyperliquid';
 import { asterCodec, codecFor, hyperliquidCodec, lighterCodec } from './coid';
-import { classify, isRetryable, messageOf, toExchangeError } from './errors';
+import { classify, isRetryable, isVenueUnavailable, messageOf, toExchangeError } from './errors';
 import { MarketSpecCache, decimalsOf } from './market-cache';
 import {
   capabilitiesOf,
@@ -142,6 +142,101 @@ describe('clasificación de errores', () => {
     expect(isRetryable(new ExchangeError('RETRYABLE', 'timeout'))).toBe(true);
     expect(isRetryable(new ExchangeError('RULES', 'tick size'))).toBe(false);
     expect(isRetryable(new ExchangeError('AUTH', 'clave mala'))).toBe(false);
+  });
+});
+
+/**
+ * La caída de Hyperliquid del 2026-09-13 (spec 050). Su SDK lanza
+ * `HttpRequestError` con tres caras, y una de ellas —la de red— salía FATAL:
+ * «Unknown HTTP request error: fetch failed» no casaba con ningún patrón, así que
+ * `withRetry` se rendía al primer intento y el tick fallaba sin haberlo intentado
+ * de nuevo. El error de red de verdad viaja en `cause`, con su código.
+ */
+describe('clasificación de las caídas del venue (spec 050)', () => {
+  /** Lo que lanza `@nktkas/hyperliquid` cuando `fetch` ni siquiera conecta. */
+  const errorDeRed = (codigo: string, texto = 'fetch failed') =>
+    Object.assign(new Error(`Unknown HTTP request error: ${texto}`), {
+      name: 'HttpRequestError',
+      cause: Object.assign(new TypeError(texto), {
+        cause: Object.assign(new Error(`connect ${codigo} 1.2.3.4:443`), { code: codigo }),
+      }),
+    });
+
+  it('«fetch failed» se reintenta', () => {
+    expect(classify(errorDeRed('ECONNREFUSED'))).toBe('RETRYABLE');
+  });
+
+  it('un fallo de red con texto desconocido se reconoce por el código de su causa', () => {
+    // undici no siempre dice «fetch failed»; el código de la causa es lo estable.
+    expect(classify(errorDeRed('UND_ERR_SOCKET', 'other thing'))).toBe('RETRYABLE');
+    expect(classify(errorDeRed('UND_ERR_CONNECT_TIMEOUT', 'other thing'))).toBe('RETRYABLE');
+  });
+
+  it('una causa sin código de red no convierte en pasajero lo que no lo es', () => {
+    const raro = Object.assign(new Error('algo raro que nadie ha visto'), {
+      cause: new Error('otra cosa'),
+    });
+    expect(classify(raro)).toBe('FATAL');
+  });
+
+  it('cualquier 5xx es del venue, no solo 502-504', () => {
+    // Cloudflare devuelve 520-524 cuando el origen no contesta, y un 500 de un
+    // proxy es tan pasajero como un 502.
+    for (const status of [500, 520, 524, 599]) {
+      const sinCuerpo = Object.assign(new Error('Bad'), { response: { status, data: {} } });
+      expect(classify(sinCuerpo)).toBe('RETRYABLE');
+    }
+  });
+
+  it('un 5xx cuyo cuerpo no explica nada es del venue: manda el estado (revisión 050, M-2)', () => {
+    // Así llegan de Aster y de Lighter: el adaptador pasa `res.status` aparte y el
+    // cuerpo es `{}`, un `{code,msg}` sin palabras conocidas o el resumen de una
+    // página HTML. Sin mirar el estado, salían FATAL y pausaban el bot.
+    expect(classify({}, 500)).toBe('RETRYABLE');
+    expect(classify('500 Internal Server Error — el venue no está sirviendo la API.', 520)).toBe(
+      'RETRYABLE',
+    );
+    expect(
+      toExchangeError({ code: -1000, msg: 'An unknown error occured' }, Venue.ASTER, 503).kind,
+    ).toBe('RETRYABLE');
+  });
+
+  it('con un 5xx, el texto de una regla sigue mandando', () => {
+    expect(classify('Order notional below min_notional', 500)).toBe('RULES');
+  });
+
+  it('el código numérico de un DOMException no ensucia el mensaje (revisión 050, B-5)', () => {
+    // En Node un DOMException es `instanceof Error` y trae `code: 23`: salía
+    // «23: The operation was aborted due to timeout» en la tarjeta y en Telegram.
+    const abortado = Object.assign(new Error('The operation was aborted due to timeout'), {
+      name: 'TimeoutError',
+      code: 23,
+    });
+    expect(messageOf(abortado)).toBe('The operation was aborted due to timeout');
+  });
+
+  it('un número suelto con cinco no es un 5xx', () => {
+    // Un precio o una cantidad no pueden volver pasajero un rechazo cualquiera.
+    expect(classify('order 500 rejected for unknown reason')).toBe('FATAL');
+  });
+
+  it('el aborto por timeout de fetch se reintenta', () => {
+    // `AbortSignal.timeout()` rechaza con un DOMException `TimeoutError`: es lo
+    // que lanzarán Lighter y Aster al cortar una conexión colgada.
+    const abortado = new DOMException('The operation was aborted due to timeout', 'TimeoutError');
+    expect(classify(abortado)).toBe('RETRYABLE');
+  });
+
+  it('isVenueUnavailable: pasajero o limitado sí; reglas, fondos, credencial y fatal no', () => {
+    expect(isVenueUnavailable(new ExchangeError('RETRYABLE', 'HTTP 502'))).toBe(true);
+    expect(isVenueUnavailable(new ExchangeError('THROTTLED', 'limitado'))).toBe(true);
+    expect(isVenueUnavailable(new ExchangeError('RULES', 'tick size'))).toBe(false);
+    expect(isVenueUnavailable(new ExchangeError('INSUFFICIENT_FUNDS', 'margen'))).toBe(false);
+    expect(isVenueUnavailable(new ExchangeError('AUTH', 'clave'))).toBe(false);
+    expect(isVenueUnavailable(new ExchangeError('FATAL', 'bug'))).toBe(false);
+    // Lo que no es un ExchangeError —la base de datos, un fallo de la
+    // estrategia— no es una caída del venue, diga lo que diga su texto.
+    expect(isVenueUnavailable(new Error('timeout'))).toBe(false);
   });
 });
 
@@ -373,6 +468,76 @@ describe('DryRunAdapter', () => {
     await sim.getTicker('BTC');
     // Si delegara, StubSource.placeOrder lanzaría.
     await expect(sim.placeOrder(order())).resolves.toMatchObject({ status: 'OPEN' });
+  });
+
+  /**
+   * La caída de Hyperliquid del 2026-09-13 (spec 050). Un bot real lee el precio
+   * del feed compartido, que tolera veinte segundos sin dato
+   * (`MarketDataService.STALE_MS`). El simulado no: iba por REST en cada tick y
+   * el primer 502 le tumbaba el tick. Se le da el mismo colchón, aquí dentro,
+   * porque sacar al simulador del camino de precios lo deja sin casar órdenes.
+   */
+  describe('caída de la fuente de precios (spec 050)', () => {
+    const caida = new ExchangeError('RETRYABLE', 'HTTP 502', Venue.HYPERLIQUID);
+
+    const conPrecioPrevio = async () => {
+      let ahora = 1_000_000;
+      const source = new StubSource();
+      const sim = new DryRunAdapter(source, { now: () => ahora });
+      await sim.getTicker('BTC');
+      return {
+        sim,
+        source,
+        pasan: (ms: number) => {
+          ahora += ms;
+        },
+      };
+    };
+
+    it('con un precio de hace menos de 20 s, lo sirve en vez de fallar', async () => {
+      const { sim, source, pasan } = await conPrecioPrevio();
+      source.getTicker = () => Promise.reject(caida);
+      pasan(15_000);
+
+      await expect(sim.getTicker('BTC')).resolves.toMatchObject({ mark: '100' });
+    });
+
+    it('con un precio más viejo, relanza: no se planifica sobre un dato caducado', async () => {
+      const { sim, source, pasan } = await conPrecioPrevio();
+      source.getTicker = () => Promise.reject(caida);
+      pasan(25_000);
+
+      await expect(sim.getTicker('BTC')).rejects.toBe(caida);
+    });
+
+    it('un error que no es del venue se relanza aunque haya precio reciente', async () => {
+      const { sim, source, pasan } = await conPrecioPrevio();
+      const simbolo = new ExchangeError('RULES', 'Mercado desconocido', Venue.HYPERLIQUID);
+      source.getTicker = () => Promise.reject(simbolo);
+      pasan(1_000);
+
+      await expect(sim.getTicker('BTC')).rejects.toBe(simbolo);
+    });
+
+    it('sin precio previo, relanza', async () => {
+      const source = new StubSource();
+      source.getTicker = () => Promise.reject(caida);
+      const sim = new DryRunAdapter(source);
+
+      await expect(sim.getTicker('BTC')).rejects.toBe(caida);
+    });
+
+    it('el precio del stream también cuenta como reciente', async () => {
+      let ahora = 1_000_000;
+      const source = new StubSource();
+      const sim = new DryRunAdapter(source, { now: () => ahora });
+      sim.streamTicker('BTC').subscribe();
+      source.move('101', '101.2');
+      source.getTicker = () => Promise.reject(caida);
+      ahora += 5_000;
+
+      await expect(sim.getTicker('BTC')).resolves.toMatchObject({ mark: '101' });
+    });
   });
 
   describe('reloj y semilla inyectables', () => {

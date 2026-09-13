@@ -21,7 +21,7 @@ import {
 } from '@crypton/shared';
 import { hyperliquidCodec, type ExchangeAdapter, type StreamHealth } from '@crypton/exchange-core';
 import { makeCoid } from '@crypton/strategy-core';
-import { BotRunner } from './bot-runner';
+import { BotRunner, type BotRunnerDeps } from './bot-runner';
 import type { BotRecord, BotStore } from './bot-store';
 
 const BOT_ID = '1a2b3c4d-0000-0000-0000-000000000000';
@@ -74,6 +74,13 @@ class FakeAdapter implements ExchangeAdapter {
 
   /** Si es null, `getTicker` falla: simula un venue que no responde. */
   ticker: Ticker | null = TICKER;
+  /**
+   * Si se pone, `getTicker` falla con esto. Con `kind` a elegir: un RETRYABLE es
+   * el venue caído y un FATAL es un fallo del propio bot (spec 050).
+   */
+  tickerError: ExchangeError | null = null;
+  /** Retraso artificial de `getTicker`, para provocar un tick lento. */
+  tickerDelayMs = 0;
   position: Position | null = null;
   placeError: ExchangeError | null = null;
   /** Falla SOLO la primera colocación: para ver si las siguientes salen igual. */
@@ -92,6 +99,8 @@ class FakeAdapter implements ExchangeAdapter {
 
   async getTicker(): Promise<Ticker> {
     this.calls.push('getTicker');
+    if (this.tickerDelayMs > 0) await new Promise((r) => setTimeout(r, this.tickerDelayMs));
+    if (this.tickerError) throw this.tickerError;
     if (!this.ticker) throw new ExchangeError('RETRYABLE', 'sin precio', this.venue);
     return this.ticker;
   }
@@ -176,6 +185,7 @@ function fakeStore(over: Partial<BotStore> = {}) {
     payloads,
     cycleCalls,
     setStatus: jest.fn().mockResolvedValue(undefined),
+    setLastError: jest.fn().mockResolvedValue(undefined),
     touchTick: jest.fn().mockResolvedValue(undefined),
     event: jest.fn(
       async (
@@ -279,6 +289,7 @@ function build(
   storeOver: Partial<BotStore> = {},
   configOver: Record<string, unknown> = {},
   guardsOver: Record<string, string | null> = {},
+  depsOver: Partial<BotRunnerDeps> = {},
 ): Harness {
   const adapter = new FakeAdapter();
   const store = fakeStore(storeOver);
@@ -303,6 +314,7 @@ function build(
     // Muy largo: el latido no debe dispararse solo durante un test.
     reconcileIntervalMs: 600_000,
     onDetach: (id) => detached.push(id),
+    ...depsOver,
   });
 
   // La estrategia se sustituye para que el test controle el plan sin depender
@@ -1691,9 +1703,10 @@ describe('reutilización de ids por estrategia', () => {
      * con su temporizador y su lease, escribiendo un WARN cada quince segundos
      * para siempre, mientras la app lo pintaba en verde.
      */
-    it('pausa tras varios ticks seguidos fallando', async () => {
+    it('pausa tras varios ticks seguidos fallando por un fallo propio', async () => {
       const adapter = new FakeAdapter();
-      adapter.ticker = null; // `getTicker` lanza RETRYABLE.
+      // FATAL y no RETRYABLE: desde el spec 050 una caída del venue ya no pausa.
+      adapter.tickerError = new ExchangeError('FATAL', 'algo raro', Venue.HYPERLIQUID);
       const store = fakeStore();
 
       const runner = new BotRunner({
@@ -1733,6 +1746,337 @@ describe('reutilización de ids por estrategia', () => {
 
       expect(runner.msSinceLastTick).toBeLessThan(1000);
       expect(store.events).not.toContain('RISK_GUARD_TRIPPED');
+      await runner.dispose();
+    });
+  });
+
+  // ─── Spec 050: la caída de Hyperliquid del 2026-09-13 ────────────────────
+  //
+  // Cuatro bots fallando a la vez por un 502 del venue: un TICK_ERROR por tick y
+  // por bot en Telegram, los tres simulados pausados a los cinco y sin volver
+  // cuando el venue se recuperó, y una alerta que decía «la posición sigue
+  // abierta… SIN stop loss» a un bot que no tenía posición.
+
+  const tickDe = (runner: BotRunner) => (runner as unknown as { tick(): Promise<void> }).tick();
+  const latidoDe = (runner: BotRunner) => (runner as unknown as { latido(): void }).latido();
+  const espera = (ms: number) => new Promise((r) => setTimeout(r, ms));
+  const caidaDelVenue = () => new ExchangeError('RETRYABLE', 'HTTP 502', Venue.HYPERLIQUID);
+  const falloPropio = (motivo = 'algo raro') =>
+    new ExchangeError('FATAL', motivo, Venue.HYPERLIQUID);
+  const lecturasDePrecio = (adapter: FakeAdapter) =>
+    adapter.calls.filter((c) => c === 'getTicker').length;
+  const cuantos = (store: ReturnType<typeof fakeStore>, tipo: string) =>
+    store.events.filter((e) => e === tipo).length;
+  const mensajesDe = (store: ReturnType<typeof fakeStore>, tipo: string): string[] =>
+    (store.event as jest.Mock).mock.calls
+      .filter((c: unknown[]) => c[1] === tipo)
+      .map((c: unknown[]) => c[3] as string);
+  const POSICION: Position = {
+    venue: Venue.HYPERLIQUID,
+    symbol: 'BTC',
+    qty: '1',
+    entryPrice: '100',
+    markPrice: '100',
+    unrealizedPnl: '0',
+    leverage: 1,
+    marginMode: 'ISOLATED',
+    liquidationPrice: null,
+    marginUsed: '0',
+  };
+
+  describe('una caída del venue no es un fallo del bot (spec 050)', () => {
+    it('no pausa: avisa UNA vez y deja el motivo a la vista sin tocar el estado', async () => {
+      const { runner, adapter, store } = build({ orders: [], immediate: [] });
+      await runner.start();
+      adapter.tickerError = caidaDelVenue();
+
+      for (let i = 0; i < 8; i++) await tickDe(runner);
+
+      expect(store.events).not.toContain('RISK_GUARD_TRIPPED');
+      expect(store.events).not.toContain('TICK_ERROR');
+      expect(cuantos(store, 'VENUE_UNAVAILABLE')).toBe(1);
+      expect(mensajesDe(store, 'VENUE_UNAVAILABLE')[0]).toMatch(/HYPERLIQUID.*HTTP 502/);
+      expect(store.setLastError).toHaveBeenCalledWith(BOT_ID, expect.stringContaining('HTTP 502'));
+      expect(store.setStatus).not.toHaveBeenCalledWith(BOT_ID, 'PAUSED', expect.anything());
+      // Nada de cancelar la escalera ni el take profit por un corte del venue.
+      expect(adapter.calls).not.toContain('cancelOwn');
+      expect(runner.esperandoAlVenue).toBe(true);
+      await runner.dispose();
+    });
+
+    it('al volver lo dice una vez y limpia el motivo que puso', async () => {
+      const { runner, adapter, store } = build({ orders: [], immediate: [] });
+      await runner.start();
+      adapter.tickerError = caidaDelVenue();
+      for (let i = 0; i < 4; i++) await tickDe(runner);
+
+      adapter.tickerError = null;
+      await tickDe(runner);
+      await tickDe(runner);
+
+      expect(cuantos(store, 'VENUE_RECOVERED')).toBe(1);
+      expect(store.setLastError).toHaveBeenLastCalledWith(BOT_ID, null);
+      expect(runner.esperandoAlVenue).toBe(false);
+      await runner.dispose();
+    });
+
+    it('un hipo de dos ticks no avisa ni al caer ni al volver', async () => {
+      const { runner, adapter, store } = build({ orders: [], immediate: [] });
+      await runner.start();
+      adapter.tickerError = caidaDelVenue();
+      await tickDe(runner);
+      await tickDe(runner);
+      adapter.tickerError = null;
+      await tickDe(runner);
+
+      expect(store.events).not.toContain('VENUE_UNAVAILABLE');
+      expect(store.events).not.toContain('VENUE_RECOVERED');
+      expect(store.setLastError).not.toHaveBeenCalled();
+      await runner.dispose();
+    });
+
+    it('con el bot pausado no pisa el motivo de la pausa', async () => {
+      // `last_error` de un bot pausado dice POR QUÉ se pausó. Una caída del venue
+      // que lo sobrescribiera, y una vuelta que lo borrara, se llevarían ese
+      // motivo por delante.
+      const { runner, adapter, store } = build({ orders: [], immediate: [] });
+      await runner.start();
+      await runner.handleCommand('PAUSE');
+      adapter.tickerError = caidaDelVenue();
+      for (let i = 0; i < 5; i++) await tickDe(runner);
+      adapter.tickerError = null;
+      await tickDe(runner);
+
+      expect(store.setLastError).not.toHaveBeenCalled();
+      await runner.dispose();
+    });
+
+    it('el latido no encola ticks detrás de uno lento', async () => {
+      // Con ticks de 72 s y un temporizador de 15 s se amontonaban cuatro en la
+      // cola del cerrojo, que corrían después uno detrás de otro.
+      const { runner, adapter } = build({ orders: [], immediate: [] });
+      await runner.start();
+      const antes = lecturasDePrecio(adapter);
+      adapter.tickerDelayMs = 50;
+
+      latidoDe(runner);
+      latidoDe(runner);
+      latidoDe(runner);
+      await espera(250);
+
+      expect(lecturasDePrecio(adapter) - antes).toBe(1);
+      await runner.dispose();
+    });
+
+    it('durante la caída el latido se espacia, pero lo pedido entra sin esperar', async () => {
+      const { runner, adapter } = build({ orders: [], immediate: [] });
+      await runner.start();
+      adapter.tickerError = caidaDelVenue();
+      await tickDe(runner);
+      await tickDe(runner);
+      const antes = lecturasDePrecio(adapter);
+
+      latidoDe(runner);
+      await espera(20);
+      expect(lecturasDePrecio(adapter)).toBe(antes);
+
+      // Un fill o un comando piden tick por su cuenta, y ese no espera nunca.
+      (runner as unknown as { requestTick(): void }).requestTick();
+      await espera(20);
+      expect(lecturasDePrecio(adapter)).toBe(antes + 1);
+      await runner.dispose();
+    });
+
+    it('un tick caído por el venue no suma el aviso de ritmo', async () => {
+      // «La revisión ha tardado 72 s… Suele ser el cupo de peticiones del venue»:
+      // el cupo no tenía nada que ver, y la caída ya se cuenta aparte.
+      const { runner, adapter, store } = build(
+        { orders: [], immediate: [] },
+        {},
+        {},
+        {},
+        { reconcileIntervalMs: 10 },
+      );
+      adapter.tickerDelayMs = 30;
+      adapter.tickerError = caidaDelVenue();
+      await tickDe(runner);
+      expect(store.events).not.toContain('TICK_SLOW');
+
+      // Y un tick lento que NO es una caída sigue avisando.
+      adapter.tickerError = null;
+      await tickDe(runner);
+      expect(store.events).toContain('TICK_SLOW');
+      await runner.dispose();
+    });
+
+    // Revisión del 050: lo que la primera versión dejaba colgado.
+
+    it('pausar durante una caída anunciada borra el motivo de la caída (B-1)', async () => {
+      // Si no, la tarjeta decía PAUSADO con «el bot espera sin pausar» debajo, y
+      // nada lo borraba: la vuelta del venue no toca el motivo de un bot pausado.
+      const { runner, adapter, store } = build({ orders: [], immediate: [] });
+      await runner.start();
+      adapter.tickerError = caidaDelVenue();
+      for (let i = 0; i < 3; i++) await tickDe(runner);
+
+      await runner.handleCommand('PAUSE');
+
+      expect(store.setStatus).toHaveBeenCalledWith(BOT_ID, 'PAUSED', { clearError: true });
+      await runner.dispose();
+    });
+
+    it('la vuelta se anuncia aunque esa misma revisión acabe en una guarda (B-2)', async () => {
+      // La revisión que encuentra el venue de vuelta y salta una guarda sale del
+      // tick antes de su final: la vuelta no se anunciaba y el latido seguía
+      // espaciado como si el venue siguiera caído.
+      const { runner, adapter, store } = build({ orders: [], immediate: [] });
+      await runner.start();
+      adapter.tickerError = caidaDelVenue();
+      for (let i = 0; i < 3; i++) await tickDe(runner);
+
+      (
+        runner as unknown as { deps: { guards: { maxLeverage: number | null } } }
+      ).deps.guards.maxLeverage = 0.5;
+      adapter.tickerError = null;
+      await tickDe(runner);
+
+      expect(cuantos(store, 'RISK_GUARD_TRIPPED')).toBe(1);
+      expect(cuantos(store, 'VENUE_RECOVERED')).toBe(1);
+      expect(runner.esperandoAlVenue).toBe(false);
+      await runner.dispose();
+    });
+
+    it('reanudar durante una caída vuelve a dejar el motivo a la vista (B-3)', async () => {
+      // RESUME borra `last_error`, y el motivo solo se reescribía con el aviso,
+      // que tiene enfriamiento de media hora: la tarjeta se quedaba en blanco.
+      const { runner, adapter, store } = build({ orders: [], immediate: [] });
+      await runner.start();
+      await runner.handleCommand('PAUSE');
+      adapter.tickerError = caidaDelVenue();
+      for (let i = 0; i < 3; i++) await tickDe(runner);
+      expect(store.setLastError).not.toHaveBeenCalled();
+
+      await runner.handleCommand('RESUME');
+      await espera(30);
+
+      expect(store.setLastError).toHaveBeenCalledWith(
+        BOT_ID,
+        expect.stringContaining('no responde'),
+      );
+      await runner.dispose();
+    });
+
+    it('esperar al venue no tapa para siempre a un runner colgado (B-4)', async () => {
+      const { runner, adapter } = build({ orders: [], immediate: [] });
+      await runner.start();
+      adapter.tickerError = caidaDelVenue();
+      await tickDe(runner);
+      expect(runner.esperandoAlVenue).toBe(true);
+
+      // Diez minutos sin un fallo del venue ni un tick completo: eso ya no es
+      // esperar al venue, es un runner atascado.
+      (runner as unknown as { ultimoFalloVenueEn: number }).ultimoFalloVenueEn =
+        Date.now() - 10 * 60_000;
+      expect(runner.esperandoAlVenue).toBe(false);
+      await runner.dispose();
+    });
+  });
+
+  describe('un fallo propio sigue pausando, pero avisa una vez por racha (spec 050)', () => {
+    it('pausa a los cinco con un solo TICK_ERROR, y ninguno más ya pausado', async () => {
+      const { runner, adapter, store } = build({ orders: [], immediate: [] });
+      await runner.start();
+      adapter.tickerError = falloPropio();
+
+      for (let i = 0; i < 5; i++) await tickDe(runner);
+      expect(cuantos(store, 'RISK_GUARD_TRIPPED')).toBe(1);
+      expect(cuantos(store, 'TICK_ERROR')).toBe(1);
+
+      for (let i = 0; i < 3; i++) await tickDe(runner);
+      expect(cuantos(store, 'TICK_ERROR')).toBe(1);
+      expect(cuantos(store, 'RISK_GUARD_TRIPPED')).toBe(1);
+      await runner.dispose();
+    });
+
+    it('un motivo distinto sí vuelve a avisar', async () => {
+      const { runner, adapter, store } = build({ orders: [], immediate: [] });
+      await runner.start();
+      adapter.tickerError = falloPropio('uno');
+      await tickDe(runner);
+      await tickDe(runner);
+      adapter.tickerError = falloPropio('otro');
+      await tickDe(runner);
+
+      expect(cuantos(store, 'TICK_ERROR')).toBe(2);
+      await runner.dispose();
+    });
+  });
+
+  describe('la alerta dice si había posición (spec 050)', () => {
+    it('recién leída y plana, la pausa dice que no tenía posición', async () => {
+      const { runner, store } = build({ orders: [], immediate: [] });
+      await runner.start();
+
+      await runner.handleCommand('PAUSE');
+
+      const [mensaje] = mensajesDe(store, 'BOT_PAUSED');
+      expect(mensaje).toContain('no tenía posición abierta');
+      expect(mensaje).not.toContain('SIN stop loss');
+      await runner.dispose();
+    });
+
+    it('con posición, la coletilla del stop sigue saliendo', async () => {
+      const { runner, adapter, store } = build({ orders: [], immediate: [] });
+      adapter.position = POSICION;
+      await runner.start();
+
+      await runner.handleCommand('PAUSE');
+
+      const [mensaje] = mensajesDe(store, 'BOT_PAUSED');
+      expect(mensaje).toContain('la posición sigue abierta');
+      expect(mensaje).toContain('SIN stop loss');
+      await runner.dispose();
+    });
+
+    it('tras una racha de fallos no presume que siga plano (revisión, M-1)', async () => {
+      // La última lectura buena tiene más de un minuto, y el venue puede haber
+      // ejecutado una entrada entretanto. Decir «no tenía posición» quitaba el
+      // aviso de que no hay stop justo en el sentido peligroso.
+      const { runner, adapter, store } = build({ orders: [], immediate: [] });
+      await runner.start();
+      adapter.tickerError = falloPropio();
+      for (let i = 0; i < 5; i++) await tickDe(runner);
+
+      const [mensaje] = mensajesDe(store, 'RISK_GUARD_TRIPPED');
+      expect(mensaje).not.toContain('no tenía posición abierta');
+      expect(mensaje).toContain('si tenía posición abierta, sigue abierta');
+      expect(mensaje).toContain('SIN stop loss');
+      await runner.dispose();
+    });
+
+    it('una ejecución deja de dar por buena la lectura plana (revisión, M-1)', async () => {
+      const { runner, store } = build({ orders: [], immediate: [] });
+      await runner.start();
+      const fill: Fill = {
+        venue: Venue.HYPERLIQUID,
+        symbol: 'BTC',
+        venueFillId: 'f-050',
+        venueOrderId: 'v-050',
+        clientOrderId: makeCoid(BOT_ID, 1, 'GRID_BUY', 0),
+        side: 'BUY',
+        price: '100',
+        qty: '1',
+        fee: '0',
+        feeAsset: 'USDC',
+        isTaker: false,
+        ts: Date.now(),
+      };
+
+      // El fill entra y la pausa llega ANTES de que el tick que pide lo relea.
+      await (runner as unknown as { onFill(f: Fill): Promise<void> }).onFill(fill);
+      await runner.handleCommand('PAUSE');
+
+      expect(mensajesDe(store, 'BOT_PAUSED')[0]).not.toContain('no tenía posición abierta');
       await runner.dispose();
     });
   });

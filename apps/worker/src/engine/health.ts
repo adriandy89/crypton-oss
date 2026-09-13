@@ -27,3 +27,22 @@ export function evaluarSalud(s: SaludEntrada): boolean {
   if (s.runners === 0) return true;
   return s.stalled < s.runners;
 }
+
+/**
+ * Los runners atascados DE VERDAD: sin completar un tick más allá del límite y
+ * sin un venue caído que lo explique.
+ *
+ * Sin la segunda condición, la caída de un venue marcaba atascados a todos sus
+ * bots, y un worker con todos sus bots en ese venue se declaraba enfermo: el
+ * proceso estaba perfecto, el que no respondía era el venue (spec 050).
+ */
+export function runnersAtascados(
+  runners: Iterable<[string, { msSinceLastTick: number; esperandoAlVenue: boolean }]>,
+  limiteMs: number,
+): string[] {
+  const atascados: string[] = [];
+  for (const [id, runner] of runners) {
+    if (runner.msSinceLastTick > limiteMs && !runner.esperandoAlVenue) atascados.push(id);
+  }
+  return atascados;
+}

@@ -39,7 +39,7 @@ import { lighterCodec } from '../coid';
 import { endpointsFor } from '../endpoints';
 import { isThrottled, messageOf, shortMessage, toExchangeError } from '../errors';
 import { MarketSpecCache, canonicalSymbol } from '../market-cache';
-import { RateLimiter, withRetry, withWriteRetry } from '../rate-limit';
+import { HTTP_TIMEOUT_MS, RateLimiter, withRetry, withWriteRetry } from '../rate-limit';
 import {
   NO_BUDGET,
   prioridadDeOrden,
@@ -346,6 +346,8 @@ export class LighterAdapter implements ExchangeAdapter {
   private readonly limiter: RateLimiter;
   private readonly pollLimiter: RateLimiter;
   private readonly budget: VenueBudget;
+  /** Lo más que se espera a una respuesta de `publicGet`. Ver `HTTP_TIMEOUT_MS`. */
+  private readonly httpTimeoutMs: number;
   /**
    * Red del venue. Se guarda porque el presupuesto de caudal lleva depósitos
    * separados por red: mainnet y testnet son hosts distintos y cada uno tiene
@@ -467,6 +469,7 @@ export class LighterAdapter implements ExchangeAdapter {
     this.accountApi = new AccountApi(config);
     this.limiter = new RateLimiter(opts.rateLimitPerSecond ?? 8);
     this.budget = opts.budget ?? NO_BUDGET;
+    this.httpTimeoutMs = opts.httpTimeoutMs ?? HTTP_TIMEOUT_MS;
     // Limitador APARTE para el sondeo. Compartirlo con la ejecución hacía que
     // una orden —o peor, una cancelación de pánico— esperase en la cola detrás
     // de un barrido de estado que no tiene ninguna urgencia.
@@ -1139,6 +1142,10 @@ export class LighterAdapter implements ExchangeAdapter {
     const res = await fetch(`${this.url}${path}?${search.toString()}`, {
       method: 'GET',
       headers: this.restHeaders(),
+      // Con tope. Sin él, una conexión que el venue deja colgada esperaba lo que
+      // quisiera undici, dentro del cerrojo del bot. El aborto sale RETRYABLE y
+      // `call()` lo reintenta como cualquier corte (spec 050).
+      signal: AbortSignal.timeout(this.httpTimeoutMs),
     });
     const text = await res.text();
     let body: unknown;

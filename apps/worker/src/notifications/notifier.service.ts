@@ -62,6 +62,11 @@ const EVENT_PREF: Record<string, keyof TelegramPrefs> = {
   AI_ADVICE: 'ai',
   AI_APPLIED: 'ai',
   AI_FAILED: 'errors',
+  // La caída del venue y su vuelta (spec 050). Con entrada propia porque la
+  // vuelta es INFO, y la vía genérica exige WARN: sin esto el aviso de caída
+  // llegaba y el de vuelta no, y el usuario se quedaba creyendo que seguía caído.
+  VENUE_UNAVAILABLE: 'errors',
+  VENUE_RECOVERED: 'errors',
   // `EXIT_PENDING_MIN_SIZE` NO está aquí a propósito: es informativo y se cura
   // solo en cuanto entra otra ejecución. Notificarlo sería enseñar a silenciar
   // el canal justo antes del aviso que sí había que leer.
@@ -92,6 +97,8 @@ const ICON: Record<string, string> = {
   LIQUIDATION_NEAR: '🔥',
   LIQUIDATED: '💥',
   AUTH_ERROR: '🔑',
+  VENUE_UNAVAILABLE: '📡',
+  VENUE_RECOVERED: '✅',
   PANIC: '🛑',
   ADMIN_COMMAND: '🛟',
   AI_SUGGESTION: '🤖',

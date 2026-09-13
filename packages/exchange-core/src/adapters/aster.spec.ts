@@ -507,3 +507,43 @@ describe('lo que el venue ya mandaba y se tiraba (spec 038)', () => {
     expect(t.fundingRate).toBe('-0.0004');
   });
 });
+
+describe('una conexion colgada no retiene el cerrojo del bot (spec 050)', () => {
+  /**
+   * `http` llamaba a `fetch` sin tope: una conexion que el venue deja abierta sin
+   * contestar esperaba lo que quisiera undici, y la llamada vive dentro del
+   * cerrojo del bot, asi que un PANIC esperaba con ella.
+   */
+  it('fetch lleva un timeout y su aborto es pasajero, asi que se reintenta', async () => {
+    const senales: AbortSignal[] = [];
+    (globalThis as unknown as { fetch: unknown }).fetch = jest.fn(
+      (_url: string, init?: { signal?: AbortSignal }) =>
+        new Promise((_resolve, reject) => {
+          const signal = init?.signal;
+          if (!signal) return; // sin tope: se queda colgada para siempre
+          senales.push(signal);
+          signal.addEventListener('abort', () => reject(signal.reason as Error));
+        }),
+    );
+
+    const e = (await new AsterAdapter(creds(), { httpTimeoutMs: 20 })
+      .getTicker('BTCUSDT')
+      .catch((err: unknown) => err)) as { kind?: string };
+
+    expect(e.kind).toBe('RETRYABLE');
+    // Mas de las dos del primer intento (libro y marca): el aborto se reintenta.
+    expect(senales.length).toBeGreaterThan(2);
+  }, 15_000);
+
+  it('un 5xx con el cuerpo vacio es una caida del venue, no un fallo propio (revision, M-2)', async () => {
+    // Salia FATAL: `http` pasa el estado aparte y el cuerpo `{}` no casa con nada,
+    // asi que el bot se pausaba a los cinco durante una caida de Aster.
+    mockFetch(() => ({ status: 500, body: {} }));
+
+    const e = (await new AsterAdapter(creds())
+      .getTicker('BTCUSDT')
+      .catch((err: unknown) => err)) as { kind?: string };
+
+    expect(e.kind).toBe('RETRYABLE');
+  }, 15_000);
+});

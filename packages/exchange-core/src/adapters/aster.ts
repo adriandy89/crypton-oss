@@ -34,7 +34,7 @@ import { asterCodec } from '../coid';
 import { endpointsFor } from '../endpoints';
 import { isRetryable, messageOf, toExchangeError } from '../errors';
 import { MarketSpecCache, canonicalSymbol, decimalsOf } from '../market-cache';
-import { RateLimiter, withRetry, withWriteRetry } from '../rate-limit';
+import { HTTP_TIMEOUT_MS, RateLimiter, withRetry, withWriteRetry } from '../rate-limit';
 import {
   NO_BUDGET,
   prioridadDeOrden,
@@ -151,6 +151,8 @@ export class AsterAdapter implements ExchangeAdapter {
   private signingWallet?: Wallet;
   private readonly limiter: RateLimiter;
   private readonly budget: VenueBudget;
+  /** Lo más que se espera a una respuesta de `http`. Ver `HTTP_TIMEOUT_MS`. */
+  private readonly httpTimeoutMs: number;
   /**
    * Red del venue. Se guarda porque el presupuesto de caudal lleva depósitos
    * separados por red: mainnet y testnet son hosts distintos y cada uno tiene
@@ -216,6 +218,7 @@ export class AsterAdapter implements ExchangeAdapter {
     this.ws = opts.wsUrl ?? endpoints.ws;
     this.limiter = new RateLimiter(opts.rateLimitPerSecond ?? 8);
     this.budget = opts.budget ?? NO_BUDGET;
+    this.httpTimeoutMs = opts.httpTimeoutMs ?? HTTP_TIMEOUT_MS;
     this.markets = new MarketSpecCache(() => this.loadMarkets());
   }
 
@@ -329,6 +332,11 @@ export class AsterAdapter implements ExchangeAdapter {
         'Content-Type': 'application/x-www-form-urlencoded',
         'User-Agent': 'crypton/0.1',
       },
+      // Con tope. Sin él, una conexión que el venue deja colgada esperaba lo que
+      // quisiera undici, dentro del cerrojo del bot: también un PANIC. El aborto
+      // sale RETRYABLE; en una escritura, `withWriteRetry` pregunta al venue
+      // antes de reenviar, igual que tras cualquier otro timeout (spec 050).
+      signal: AbortSignal.timeout(this.httpTimeoutMs),
     });
     const text = await res.text();
     // Realimentación del presupuesto con lo que el venue dice haber contado:

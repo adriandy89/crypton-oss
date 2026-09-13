@@ -179,6 +179,8 @@ export const EVENT_LABELS: Record<string, string> = {
   TICK_SLOW: 'El bot no mantiene su ritmo',
   STREAM_ERROR: 'Error en la conexion en vivo',
   STREAM_RECOVERED: 'Conexion en vivo restablecida',
+  VENUE_UNAVAILABLE: 'El exchange no responde',
+  VENUE_RECOVERED: 'El exchange vuelve a responder',
   AUTH_ERROR: 'Credencial rechazada por el exchange',
   ACTION_FAILED: 'Accion fallida',
 };

@@ -24,7 +24,12 @@ import {
   type Venue,
   type VenueOrder,
 } from '@crypton/shared';
-import { codecFor, shortMessage, type ExchangeAdapter } from '@crypton/exchange-core';
+import {
+  codecFor,
+  isVenueUnavailable,
+  shortMessage,
+  type ExchangeAdapter,
+} from '@crypton/exchange-core';
 import {
   getStrategy,
   liquidationDistancePct,
@@ -109,7 +114,7 @@ const TICKER_MAX_AGE_MS = 10_000;
 const LIQUIDATION_ALERT_COOLDOWN_MS = 10 * 60_000;
 
 /**
- * Ticks seguidos fallando tras los cuales el bot se pausa solo.
+ * Ticks seguidos fallando POR UN FALLO PROPIO tras los cuales el bot se pausa solo.
  *
  * Antes no había cuenta ninguna: solo `AUTH` detenía a un bot, así que uno cuyo
  * tick fallara SIEMPRE —símbolo retirado, veto de IP, caída del venue— seguía
@@ -118,8 +123,49 @@ const LIQUIDATION_ALERT_COOLDOWN_MS = 10 * 60_000;
  *
  * Cinco, con el latido por defecto, son algo más de un minuto: de sobra para
  * que un corte pasajero se recupere solo y sin llegar a molestar.
+ *
+ * «Propio» desde el spec 050: una caída del VENUE ya no cuenta aquí. Pausar
+ * durante una caída no protege nada —el venue no acepta órdenes, las
+ * cancelaciones de la pausa fallan igual y el stop nativo sigue donde estaba— y
+ * deja al bot sin volver cuando el venue vuelve. Es lo que pasó con la caída de
+ * Hyperliquid del 2026-09-13: tres bots pausados a los cinco 502 y ahí se
+ * quedaron. Lo que no llega a verse en verde ya lo dice `VENUE_UNAVAILABLE`.
  */
 const MAX_CONSECUTIVE_TICK_ERRORS = 5;
+
+/**
+ * Fallos seguidos del venue antes de avisar de la caída.
+ *
+ * Tres, unos cuarenta y cinco segundos con el latido por defecto: un hipo de uno
+ * o dos ticks se cura solo y no merece despertar a nadie (spec 050).
+ */
+const VENUE_FALLOS_ANTES_DE_AVISAR = 3;
+
+/** Cada cuánto se recuerda una caída que sigue (spec 050). */
+const VENUE_AVISO_COOLDOWN_MS = 30 * 60_000;
+
+/**
+ * Espera extra máxima entre latidos mientras el venue no responde.
+ *
+ * Insistir cada quince segundos contra un venue caído no lo levanta antes, y
+ * cada tick paga cuatro reintentos por lectura. La espera se dobla hasta un
+ * minuto (spec 050).
+ */
+const VENUE_ESPERA_MAX_MS = 60_000;
+
+/**
+ * Cuánto se sigue dando por «esperando al venue» a un runner sin fallos nuevos.
+ *
+ * Tres minutos. Un runner que de verdad espera vuelve a fallar contra el venue
+ * bastante antes: un minuto de espera máxima más un tick de cuatro reintentos.
+ * Pasado esto, sin fallo nuevo ni tick completo, está atascado, y la salud del
+ * worker tiene que poder verlo (revisión del spec 050, B-4).
+ */
+const VENUE_ESPERA_SANA_MS = 3 * 60_000;
+
+/** «45 s», «3 min»: la duración de una caída, dicha para una persona. */
+const duracionLegible = (ms: number): string =>
+  ms < 60_000 ? `${Math.max(1, Math.round(ms / 1000))} s` : `${Math.round(ms / 60_000)} min`;
 
 /**
  * Colocaciones seguidas sin salir antes de rendirse.
@@ -381,8 +427,39 @@ export class BotRunner {
   private lastNote: string | null = null;
   /** Hasta cuándo NO se repite el aviso de liquidación cercana. */
   private liquidationAlertUntil = 0;
-  /** Ticks seguidos fallando. Alimenta el cortacircuitos. */
+  /** Ticks seguidos fallando, por lo que sea. Solo lo lee el log. */
   private tickErrors = 0;
+  /** Fallos PROPIOS de la racha: son los que alimentan el cortacircuitos (spec 050). */
+  private fallosPropios = 0;
+  /** Último motivo propio anunciado con `TICK_ERROR`, para no repetirlo en cada tick. */
+  private motivoAvisado: string | null = null;
+  /** Fallos seguidos del venue en la racha en curso (spec 050). */
+  private fallosDelVenue = 0;
+  /** Cuándo empezó la caída en curso. */
+  private caidaDesde = 0;
+  /** Cuándo falló el venue por última vez. Ver `esperandoAlVenue`. */
+  private ultimoFalloVenueEn = 0;
+  /** Hasta cuándo no se repite el aviso de caída; 0 = la caída no se ha anunciado. */
+  private caidaAvisoHasta = 0;
+  /** ¿Escribió la caída el `last_error` del bot? Solo entonces lo borra al volver. */
+  private motivoDeCaidaPuesto = false;
+  /** El temporizador no lanza un tick antes de esto. Ver `latido`. */
+  private proximoLatidoEn = 0;
+  /** Hay un tick del temporizador en curso o esperando el cerrojo. Ver `latido`. */
+  private latidoEnCola = false;
+  /**
+   * ¿Hay posición? `null` = no se sabe.
+   *
+   * Lo lee la coletilla de las alertas: «la posición sigue abierta… SIN stop
+   * loss» salía también a bots planos, y en la caída de Hyperliquid se lo dijo a
+   * uno que no tenía nada abierto (spec 050).
+   *
+   * Solo vale mientras nada pueda haberla cambiado: una ejecución y el primer
+   * fallo de una racha la devuelven a `null`. Afirmar «plano» con una lectura
+   * vieja quitaría el aviso de que no hay stop justo en el sentido peligroso
+   * (revisión del spec 050, M-1).
+   */
+  private posicionAbierta: boolean | null = null;
   /** ¿Se ha contrastado ya el ciclo con el venue tras adoptar? */
   private startupChecked = false;
   /**
@@ -650,7 +727,7 @@ export class BotRunner {
         this.startTimer = null;
         if (this.stopped) return;
         this.timer = setInterval(
-          () => void this.exclusive(() => this.tick()),
+          () => this.latido(),
           period + Math.floor((Math.random() - 0.5) * period * 0.2),
         );
       },
@@ -695,6 +772,7 @@ export class BotRunner {
     if (this.stopped) return;
     this.ticks++;
     const empezado = Date.now();
+    let caidaDelVenue = false;
 
     try {
       const { adapter, bot, store } = this.deps;
@@ -736,7 +814,14 @@ export class BotRunner {
         );
       }
 
+      // El venue ha contestado a todo lo que se le ha pedido, y con precio. La
+      // vuelta se anuncia AQUÍ y no al final del tick: una revisión que acaba en
+      // una guarda o en una parada sale antes, y la vuelta se quedaba sin decir
+      // con el latido todavía espaciado (revisión del spec 050, B-2).
+      await this.venueRespondio();
+
       const position = positions[0] ?? null;
+      this.posicionAbierta = position !== null && !D(position.qty).isZero();
 
       // Solo en el primer tick tras adoptar, y con el barrido de ejecuciones ya
       // hecho: es el único momento en que el ciclo puede venir de un hueco que
@@ -834,9 +919,13 @@ export class BotRunner {
       }
       this.markTickOk();
     } catch (e) {
+      caidaDelVenue = isVenueUnavailable(e);
       await this.onTickError(e);
     } finally {
-      await this.avisarSiElLatidoSeEstira(Date.now() - empezado);
+      // Un tick que muere porque el venue no responde no está «lento»: la caída
+      // ya se cuenta aparte, y el aviso culpaba al cupo de peticiones, que no
+      // tenía nada que ver (spec 050).
+      if (!caidaDelVenue) await this.avisarSiElLatidoSeEstira(Date.now() - empezado);
     }
   }
 
@@ -877,6 +966,30 @@ export class BotRunner {
    * `tickScheduled` agrupa: veinte fills seguidos —un market maker en un
    * minuto movido— encolan UN tick, no veinte.
    */
+  /**
+   * Un latido del temporizador.
+   *
+   * No encola si ya hay uno en camino. `exclusive()` serializa pero no agrupa:
+   * con ticks de 72 s —la caída de Hyperliquid, cuatro reintentos de diez
+   * segundos por lectura— el temporizador de quince dejaba cuatro en la cola, y
+   * corrían después uno detrás de otro fallando todos. Y mientras el venue no
+   * responda, respeta la espera de `proximoLatidoEn` (spec 050).
+   *
+   * Solo el temporizador pasa por aquí. Los comandos y `requestTick` —un fill,
+   * una recarga— van directos al cerrojo: un PANIC no espera a nadie.
+   */
+  private latido(): void {
+    if (this.stopped || this.latidoEnCola || Date.now() < this.proximoLatidoEn) return;
+    this.latidoEnCola = true;
+    void this.exclusive(async () => {
+      try {
+        await this.tick();
+      } finally {
+        this.latidoEnCola = false;
+      }
+    });
+  }
+
   private requestTick(): void {
     if (this.stopped || this.tickScheduled) return;
     this.tickScheduled = true;
@@ -1415,6 +1528,10 @@ export class BotRunner {
 
       if (!id) return; // duplicado, o la ejecución no es de este bot
 
+      // La posición ha cambiado y todavía no se ha releído: ya no se sabe si el
+      // bot está plano (revisión del spec 050, M-1).
+      this.posicionAbierta = null;
+
       // A partir de aquí el fill lleva el id CANÓNICO. El venue lo entrega en su
       // propio espacio —hash o entero— y ni la contabilidad del ciclo ni la
       // memoria de la estrategia saben leer eso; el ledger ya resolvió la fila.
@@ -1536,6 +1653,8 @@ export class BotRunner {
       : 'El venue ha liquidado parte de la posición.';
 
     await this.deps.store.setStatus(this.botId, 'PAUSED', { error: motivo });
+    // El motivo de la liquidación ha pisado el de una caída: ya no es suyo.
+    this.motivoDeCaidaPuesto = false;
 
     await this.event(
       'LIQUIDATED',
@@ -1644,11 +1763,11 @@ export class BotRunner {
         // sigue abierto mientras el bot no planifica.
         this.paused = true;
         await this.cancelOwnOrders(true);
-        await store.setStatus(this.botId, 'PAUSED');
+        await this.cambiarEstadoSinCaida('PAUSED');
         await this.event(
           'BOT_PAUSED',
           'INFO',
-          'Bot pausado: órdenes canceladas, posición intacta.' + this.protectionNote,
+          'Bot pausado: órdenes canceladas; ' + this.notaDePosicion,
         );
         break;
 
@@ -1660,6 +1779,8 @@ export class BotRunner {
         // seguía diciendo RUNNING sobre un bot que ya no operaba.
         this.liquidationAnnounced = false;
         await store.setStatus(this.botId, 'RUNNING', { clearError: true });
+        // El motivo ya está borrado: una vuelta del venue no tiene nada que limpiar.
+        this.motivoDeCaidaPuesto = false;
         await this.event('BOT_RESUMED', 'INFO', 'Bot reanudado: se vuelve a tender la escalera.');
         this.requestTick();
         break;
@@ -1672,12 +1793,8 @@ export class BotRunner {
       case 'STOP_KEEP_POSITION':
         this.paused = true;
         await this.cancelOwnOrders(true);
-        await store.setStatus(this.botId, 'STOPPED');
-        await this.event(
-          'BOT_STOPPED',
-          'INFO',
-          'Bot parado. La posición sigue abierta.' + this.protectionNote,
-        );
+        await this.cambiarEstadoSinCaida('STOPPED');
+        await this.event('BOT_STOPPED', 'INFO', 'Bot parado; ' + this.notaDePosicion);
         break;
 
       case 'STOP_AND_CLOSE':
@@ -1695,7 +1812,7 @@ export class BotRunner {
         const cerrada = await this.closePositionAtMarket(motivo);
         if (cerrada) {
           await this.cancelOwnOrders();
-          await store.setStatus(this.botId, 'STOPPED');
+          await this.cambiarEstadoSinCaida('STOPPED');
           await this.event(
             command === 'PANIC' ? 'PANIC' : 'BOT_STOPPED',
             'WARN',
@@ -1708,6 +1825,7 @@ export class BotRunner {
           await store.setStatus(this.botId, 'PAUSED', {
             error: `No se pudo cerrar la posición (${motivo})`,
           });
+          this.motivoDeCaidaPuesto = false;
           await this.event(
             'ACTION_FAILED',
             'CRITICAL',
@@ -2016,6 +2134,34 @@ export class BotRunner {
           'exchange. Revísalo: la posición puede estar sin red.';
   }
 
+  /**
+   * Qué queda abierto al pausar o parar, y con qué red.
+   *
+   * Tres casos y no dos. «No tenía posición» solo cuando lo SABE (ver
+   * `posicionAbierta`); sin saberlo se dice «si tenía» con la coletilla del stop,
+   * que es el lado prudente (spec 050 y su revisión, M-1).
+   */
+  private get notaDePosicion(): string {
+    if (this.posicionAbierta === false) return 'no tenía posición abierta.';
+    if (this.posicionAbierta === true) return 'la posición sigue abierta.' + this.protectionNote;
+    return 'si tenía posición abierta, sigue abierta.' + this.protectionNote;
+  }
+
+  /**
+   * Cambia el estado y, si el motivo visible era el de una caída del venue, lo
+   * borra de paso.
+   *
+   * Sin esto, un bot pausado o parado durante una caída anunciada enseñaba
+   * «el bot espera sin pausar» bajo su estado para siempre: la vuelta del venue
+   * no toca el motivo de un bot pausado, y uno parado ya no late (revisión del
+   * spec 050, B-1).
+   */
+  private async cambiarEstadoSinCaida(status: 'PAUSED' | 'STOPPED'): Promise<void> {
+    if (!this.motivoDeCaidaPuesto) return this.deps.store.setStatus(this.botId, status);
+    this.motivoDeCaidaPuesto = false;
+    return this.deps.store.setStatus(this.botId, status, { clearError: true });
+  }
+
   // ═══════════════════════════════════════════════════════════════
   // Riesgo
   // ═══════════════════════════════════════════════════════════════
@@ -2160,11 +2306,13 @@ export class BotRunner {
     // es la única defensa que le queda a la posición.
     await this.cancelOwnOrders(true);
     await this.deps.store.setStatus(this.botId, 'PAUSED', { error: reason });
+    // El motivo de la pausa ha pisado el de una caída: al volver el venue no se
+    // puede borrar, porque ya no es el suyo.
+    this.motivoDeCaidaPuesto = false;
     await this.event(
       'RISK_GUARD_TRIPPED',
       'CRITICAL',
-      `Guarda de riesgo disparada: ${reason}. Bot pausado; la posición sigue abierta.` +
-        this.protectionNote,
+      `Guarda de riesgo disparada: ${reason}. Bot pausado; ${this.notaDePosicion}`,
       { reason },
     );
   }
@@ -2695,31 +2843,155 @@ export class BotRunner {
       return;
     }
     this.tickErrors++;
+    // Desde el primer fallo, la última posición leída se va haciendo vieja: el
+    // venue puede ejecutar una entrada mientras el bot no consigue leer (revisión
+    // del spec 050, M-1).
+    if (this.tickErrors === 1) this.posicionAbierta = null;
     // RECORTADO antes de salir de aqui. `err.message` puede ser la pagina de
     // error del proxy del venue —cuatro kilobytes de HTML—, y de aqui va a la
     // bitacora, a `last_error` y a la ficha del bot en la app. `messageOf` ya
     // resume el HTML en una linea; esto acota lo demas.
     const motivo = shortMessage(err.message);
     this.logger.warn(`Tick fallido (${this.tickErrors}): ${motivo}`);
+
+    // El venue no responde: se espera, no se pausa. Ver `esperarAlVenue`.
+    if (isVenueUnavailable(e)) {
+      await this.esperarAlVenue(motivo);
+      return;
+    }
+
+    this.fallosPropios++;
+    // Un aviso por racha, y otro si cambia el motivo. Era uno por tick: en la
+    // caída de Hyperliquid cuatro bots mandaban cada uno su línea a Telegram
+    // cada pocos segundos, y seguían tras la pausa porque un bot pausado también
+    // late. Con el bot ya pausado no se avisa: el aviso de la pausa ya lo ha
+    // dicho todo (spec 050).
+    //
     // Registrar el evento también puede fallar (base caída). Si se propagara,
     // sería un rechazo sin manejar dentro de un setInterval: en Node eso tumba
     // el proceso entero y con él TODOS los bots de este worker.
-    await this.event('TICK_ERROR', 'WARN', `Tick fallido: ${motivo}`).catch(() => undefined);
+    if (!this.paused && motivo !== this.motivoAvisado) {
+      this.motivoAvisado = motivo;
+      await this.event('TICK_ERROR', 'WARN', `Tick fallido: ${motivo}`).catch(() => undefined);
+    }
 
     // Cortacircuitos. Un bot que no consigue completar un tick no está
     // operando: no tiende la escalera, no recoloca el take profit y no ve los
     // fills. Seguir fingiendo que corre es lo peor de las dos opciones, porque
     // nadie va a mirar un WARN cada quince segundos.
-    if (!this.paused && this.tickErrors >= MAX_CONSECUTIVE_TICK_ERRORS) {
+    if (!this.paused && this.fallosPropios >= MAX_CONSECUTIVE_TICK_ERRORS) {
       await this.pauseForRisk(
-        `${this.tickErrors} ticks seguidos fallidos (último: ${motivo})`,
+        `${this.fallosPropios} ticks seguidos fallidos (último: ${motivo})`,
       ).catch(() => undefined);
     }
   }
 
-  /** Un tick llegó al final: el bot está vivo y la racha de fallos se rompe. */
+  /**
+   * El venue no responde. Se espera; no se pausa.
+   *
+   * Pausar no protegería nada: el venue no acepta órdenes, las cancelaciones de
+   * la pausa fallarían igual y el stop nativo sigue donde estaba (invariante 6).
+   * Lo que sí haría es dejar al bot pausado cuando el venue vuelve, que es lo que
+   * pasó en la caída de Hyperliquid del 2026-09-13. Esperando, el primer tick
+   * sano reconcilia contra el venue igual que tras reiniciar el worker.
+   *
+   * Tres cosas mientras dura (spec 050):
+   *   · el latido se espacia —el primer reintento a su ritmo, luego el doble
+   *     cada vez hasta un minuto—;
+   *   · al tercer fallo, UN aviso, recordado cada media hora;
+   *   · el motivo a la vista en la tarjeta, sin tocar el estado.
+   */
+  private async esperarAlVenue(motivo: string): Promise<void> {
+    const ahora = Date.now();
+    this.fallosDelVenue++;
+    this.ultimoFalloVenueEn = ahora;
+    if (this.fallosDelVenue === 1) this.caidaDesde = ahora;
+    this.proximoLatidoEn =
+      ahora +
+      Math.min(
+        this.deps.reconcileIntervalMs * (2 ** (this.fallosDelVenue - 1) - 1),
+        VENUE_ESPERA_MAX_MS,
+      );
+
+    if (this.fallosDelVenue < VENUE_FALLOS_ANTES_DE_AVISAR) return;
+    const venue = this.deps.bot.venue;
+
+    // El motivo a la vista va APARTE del aviso. Atado a él, un RESUME en plena
+    // caída borraba el motivo y no volvía hasta el siguiente aviso, media hora
+    // después (revisión del spec 050, B-3). Un bot pausado conserva el suyo: es
+    // el de la pausa, y es el que importa.
+    if (!this.paused && !this.motivoDeCaidaPuesto) {
+      this.motivoDeCaidaPuesto = true;
+      await this.deps.store
+        .setLastError(this.botId, `${venue} no responde (${motivo}): el bot espera sin pausar.`)
+        .catch(() => undefined);
+    }
+
+    if (ahora < this.caidaAvisoHasta) return;
+    const primera = this.caidaAvisoHasta === 0;
+    this.caidaAvisoHasta = ahora + VENUE_AVISO_COOLDOWN_MS;
+
+    const mensaje = primera
+      ? `${venue} no responde (${motivo}). El bot espera sin pausar y lo reintenta solo; ` +
+        'sus órdenes en el exchange siguen como estaban.'
+      : `${venue} sigue sin responder tras ${duracionLegible(ahora - this.caidaDesde)} ` +
+        `(${motivo}). El bot sigue esperando sin pausar.`;
+    const nota = this.notaDePosicion;
+    await this.event(
+      'VENUE_UNAVAILABLE',
+      'WARN',
+      `${mensaje} ${nota.charAt(0).toUpperCase()}${nota.slice(1)}`,
+      { venue, motivo, desde: this.caidaDesde },
+    ).catch(() => undefined);
+  }
+
+  /**
+   * ¿Está este bot esperando a un venue que no responde?
+   *
+   * El chequeo de salud lo descuenta: un runner así no está atascado, el que está
+   * caído es el venue (spec 050). Pero caduca: un runner que dejó de fallar
+   * contra el venue sin completar un tick está colgado, no esperando, y taparlo
+   * para siempre lo escondería de la salud (revisión, B-4).
+   */
+  get esperandoAlVenue(): boolean {
+    return this.fallosDelVenue > 0 && Date.now() - this.ultimoFalloVenueEn < VENUE_ESPERA_SANA_MS;
+  }
+
+  /**
+   * El venue ha contestado: se acaba la caída, se anuncia la vuelta si se
+   * anunció la caída —solo entonces, igual que `STREAM_RECOVERED`— y se borra el
+   * motivo que ella puso (spec 050).
+   *
+   * Aparte de `markTickOk` a propósito: la llama el tick en cuanto las lecturas
+   * salen bien, antes de las salidas tempranas (revisión, B-2).
+   */
+  private async venueRespondio(): Promise<void> {
+    if (this.fallosDelVenue === 0 && this.caidaAvisoHasta === 0) return;
+    const anunciada = this.caidaAvisoHasta > 0;
+    const duracion = Date.now() - this.caidaDesde;
+    this.fallosDelVenue = 0;
+    this.caidaAvisoHasta = 0;
+    this.proximoLatidoEn = 0;
+    if (!anunciada) return;
+
+    const venue = this.deps.bot.venue;
+    await this.event(
+      'VENUE_RECOVERED',
+      'INFO',
+      `${venue} vuelve a responder tras ${duracionLegible(duracion)}.` +
+        (this.paused ? '' : ' El bot vuelve a reconciliar con el exchange.'),
+      { venue, duracionMs: duracion },
+    ).catch(() => undefined);
+    if (!this.motivoDeCaidaPuesto || this.paused) return;
+    this.motivoDeCaidaPuesto = false;
+    await this.deps.store.setLastError(this.botId, null).catch(() => undefined);
+  }
+
+  /** Un tick llegó al final: el bot está vivo y la racha de fallos propios se rompe. */
   private markTickOk(): void {
     this.tickErrors = 0;
+    this.fallosPropios = 0;
+    this.motivoAvisado = null;
     this.lastTickOkAt = Date.now();
   }
 

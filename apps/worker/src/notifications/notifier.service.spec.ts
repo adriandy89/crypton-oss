@@ -239,6 +239,46 @@ describe('NotifierService — entrega forzada (spec 046)', () => {
     expect(lineas()).toHaveLength(0);
   });
 
+  it('la caída del venue y su vuelta se entregan con los avisos de errores (spec 050)', async () => {
+    // La vuelta es INFO: por la vía genérica, que exige WARN, no llegaba nunca, y
+    // un aviso de caída sin su vuelta deja al usuario creyendo que sigue caído.
+    const { onEvent, lineas } = buildEntrega();
+    const delWorker = (type: string, severity: string) => ({
+      userId: 'u-1',
+      botId: 'bot-1',
+      type,
+      origin: 'worker-1',
+      ts: 1,
+      data: { severity, message: `HYPERLIQUID ${type}` },
+    });
+
+    await onEvent(delWorker('VENUE_UNAVAILABLE', 'WARN'));
+    await onEvent(delWorker('VENUE_RECOVERED', 'INFO'));
+
+    expect(lineas()).toHaveLength(2);
+    expect(lineas()[0]).toContain('📡');
+    expect(lineas()[1]).toContain('✅');
+  });
+
+  it('con los avisos de errores apagados no llega ni la caída ni la vuelta (spec 050)', async () => {
+    const { onEvent, lineas } = buildEntrega({ errors: false });
+    for (const [type, severity] of [
+      ['VENUE_UNAVAILABLE', 'WARN'],
+      ['VENUE_RECOVERED', 'INFO'],
+    ]) {
+      await onEvent({
+        userId: 'u-1',
+        botId: 'bot-1',
+        type,
+        origin: 'worker-1',
+        ts: 1,
+        data: { severity, message: 'x' },
+      });
+    }
+
+    expect(lineas()).toHaveLength(0);
+  });
+
   it('un evento del propio worker no pide cerrojo', async () => {
     // El camino normal no paga una ida y vuelta a Redis por cada fill.
     const { onEvent, lineas, leases } = buildEntrega();

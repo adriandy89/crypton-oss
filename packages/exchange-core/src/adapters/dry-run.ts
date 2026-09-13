@@ -30,7 +30,18 @@ import {
   type VenueCapabilities,
 } from '@crypton/shared';
 import { codecFor } from '../coid';
+import { isVenueUnavailable } from '../errors';
 import type { CandleQuery, ExchangeAdapter, StreamHealth } from '../types';
+
+/**
+ * Cuánto vale el último precio conocido si la fuente deja de responder.
+ *
+ * Veinte segundos, los mismos que tolera el feed compartido de los bots reales
+ * (`STALE_MS` de `MarketDataService` en el worker). Sin esto, un simulado moría
+ * al primer 502 del venue mientras el real, con el mismo precio en la mano,
+ * seguía (spec 050).
+ */
+const PRECIO_TOLERADO_MS = 20_000;
 
 export interface DryRunOptions {
   /** Saldo inicial simulado, en la quote del mercado. */
@@ -179,6 +190,13 @@ export class DryRunAdapter implements ExchangeAdapter {
   private readonly positions = new Map<string, SimPosition>();
   private readonly leverage = new Map<string, { value: number; mode: MarginMode }>();
   private readonly lastTicker = new Map<string, Ticker>();
+  /**
+   * Cuándo llegó cada `lastTicker`, con el reloj de la simulación.
+   *
+   * No se usa `ticker.ts`: ese es el reloj del venue, y en el backtest el de la
+   * simulación es otro. Lo que importa es cuánto hace que ESTE simulador lo vio.
+   */
+  private readonly tickerRecibidoEn = new Map<string, number>();
   private readonly tickerSubs = new Map<string, Subscription>();
 
   private readonly orders$ = new Subject<OrderUpdate>();
@@ -367,10 +385,36 @@ export class DryRunAdapter implements ExchangeAdapter {
   }
 
   async getTicker(symbol: string): Promise<Ticker> {
-    const ticker = await this.source.getTicker(symbol);
-    this.lastTicker.set(symbol, ticker);
+    let ticker: Ticker;
+    try {
+      ticker = await this.source.getTicker(symbol);
+    } catch (e) {
+      // Con el venue caído, el último precio reciente vale igual que en el feed
+      // de los bots reales. Se devuelve SIN casar órdenes: ese precio ya se casó
+      // cuando llegó, y repetirlo no trae nada nuevo. Fuera de la tolerancia, o
+      // si el fallo no es del venue, se relanza: planificar sobre un precio
+      // caducado es peor que no planificar (spec 050).
+      const previo = this.lastTicker.get(symbol);
+      const recibido = this.tickerRecibidoEn.get(symbol);
+      if (
+        isVenueUnavailable(e) &&
+        previo &&
+        recibido !== undefined &&
+        this.clock() - recibido < PRECIO_TOLERADO_MS
+      ) {
+        return previo;
+      }
+      throw e;
+    }
+    this.anotarTicker(symbol, ticker);
     this.matchRestingOrders(symbol, ticker);
     return ticker;
+  }
+
+  /** Guarda el último precio y cuándo llegó. Ver `tickerRecibidoEn`. */
+  private anotarTicker(symbol: string, ticker: Ticker): void {
+    this.lastTicker.set(symbol, ticker);
+    this.tickerRecibidoEn.set(symbol, this.clock());
   }
 
   streamTicker(symbol: string): Observable<Ticker> {
@@ -378,7 +422,7 @@ export class DryRunAdapter implements ExchangeAdapter {
     // oportunidad de comprobar si alguna orden en reposo se ha tocado.
     if (!this.tickerSubs.has(symbol)) {
       const sub = this.source.streamTicker(symbol).subscribe((t) => {
-        this.lastTicker.set(symbol, t);
+        this.anotarTicker(symbol, t);
         this.matchRestingOrders(symbol, t);
       });
       this.tickerSubs.set(symbol, sub);

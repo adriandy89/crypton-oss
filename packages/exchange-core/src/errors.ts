@@ -72,10 +72,41 @@ const PATTERNS: { kind: ExchangeErrorKind; re: RegExp }[] = [
     // «Nonce Expired. Please retry» (-4225) es lo que dice Aster cuando una
     // peticion firmada llega mas de diez segundos despues de generar su nonce;
     // se reintenta con un nonce nuevo, no es una averia (001/F-75).
+    //
+    // Y los fallos de RED tal y como los cuenta `fetch` de Node (undici): el SDK
+    // de Hyperliquid los envuelve en «Unknown HTTP request error: fetch failed»,
+    // que no casaba con nada y salía FATAL, así que ni se reintentaba. Un 5xx
+    // cualquiera también: un 500 de proxy o un 520 de Cloudflare son tan
+    // pasajeros como un 502. Solo con «HTTP » delante, para que un precio o una
+    // cantidad con un 5 no vuelvan pasajero un rechazo (spec 050).
     kind: 'RETRYABLE',
-    re: /timeout|timed out|ETIMEDOUT|ECONNRESET|ECONNREFUSED|ENOTFOUND|EAI_AGAIN|socket hang up|rate.?limit|too many requests|429|502|503|504|temporarily|try again|nonce.?expired|order book is full/i,
+    re: /timeout|timed out|ETIMEDOUT|ECONNRESET|ECONNREFUSED|ECONNABORTED|ENOTFOUND|EAI_AGAIN|EPIPE|socket hang up|other side closed|fetch failed|UND_ERR_|HTTP 5\d\d\b|rate.?limit|too many requests|429|502|503|504|temporarily|try again|nonce.?expired|order book is full/i,
   },
 ];
+
+/**
+ * Códigos de error de red de Node y de undici.
+ *
+ * El texto de un fallo de red cambia con la versión de Node —«fetch failed»,
+ * «other side closed», el mensaje del SDK que lo envuelva—; el `code` de la causa
+ * no. Por eso se mira también la cadena de `cause`, que es donde lo deja undici y
+ * donde lo conserva el `HttpRequestError` de Hyperliquid (spec 050).
+ */
+const CODIGOS_DE_RED =
+  /^(ECONNRESET|ECONNREFUSED|ECONNABORTED|ETIMEDOUT|ENOTFOUND|EAI_AGAIN|EPIPE|ENETUNREACH|EHOSTUNREACH|UND_ERR_\w+)$/;
+
+/** ¿Hay un fallo de red en `raw` o en su cadena de causas? Tres niveles bastan. */
+function esFalloDeRed(raw: unknown): boolean {
+  let actual: unknown = raw;
+  for (let nivel = 0; nivel < 4 && actual !== null && typeof actual === 'object'; nivel++) {
+    const { code, name, cause } = actual as { code?: unknown; name?: unknown; cause?: unknown };
+    if (typeof code === 'string' && CODIGOS_DE_RED.test(code)) return true;
+    // `AbortSignal.timeout()` rechaza con un DOMException de este nombre.
+    if (name === 'TimeoutError') return true;
+    actual = cause;
+  }
+  return false;
+}
 
 /**
  * Extrae un mensaje legible de cualquier cosa que lance un SDK o axios.
@@ -138,7 +169,21 @@ export function messageOf(raw: unknown): string {
     }
     const status = anyErr.response?.status;
     if (typeof status === 'number') return `HTTP ${status}`;
-    return anyErr.code ? anyErr.code + ': ' + raw.message : raw.message;
+    // Solo un código de TEXTO dice algo («ECONNRESET: …»). Un DOMException trae
+    // `code: 23` y salía «23: The operation was aborted due to timeout» en la
+    // tarjeta del bot y en Telegram (revisión del spec 050).
+    return typeof anyErr.code === 'string' && anyErr.code
+      ? anyErr.code + ': ' + raw.message
+      : raw.message;
+  }
+  // El aborto de `fetch` es un DOMException, que no siempre es `instanceof
+  // Error`: sin esto salía como «{}» y se clasificaba FATAL (spec 050).
+  const abortado = raw as { name?: unknown; message?: unknown };
+  if (
+    (abortado.name === 'TimeoutError' || abortado.name === 'AbortError') &&
+    typeof abortado.message === 'string'
+  ) {
+    return abortado.message;
   }
   try {
     return JSON.stringify(raw);
@@ -152,11 +197,21 @@ export function messageOf(raw: unknown): string {
 }
 
 export function classify(raw: unknown, status?: number): ExchangeErrorKind {
+  const codigo = status ?? statusOf(raw);
   // El cortafuegos va PRIMERO: su respuesta contiene basura suficiente para
   // hacer saltar cualquiera de los patrones de abajo por casualidad.
-  if (isThrottled(raw, status ?? statusOf(raw))) return 'THROTTLED';
+  if (isThrottled(raw, codigo)) return 'THROTTLED';
   const msg = messageOf(raw);
   for (const p of PATTERNS) if (p.re.test(msg)) return p.kind;
+  // Después de los patrones: si el texto ya dice qué es —una credencial, una
+  // regla—, manda el texto. Esto solo rescata lo que habría salido FATAL.
+  if (esFalloDeRed(raw)) return 'RETRYABLE';
+  // Un 5xx cuyo cuerpo no explica nada es el venue caído. Aster y Lighter pasan
+  // el estado APARTE y el cuerpo llega como `{}`, un `{code,msg}` sin palabras
+  // conocidas o el resumen de una página HTML: sin mirar el estado salía FATAL,
+  // contaba como fallo propio y pausaba el bot durante una caída (revisión del
+  // spec 050, M-2).
+  if (typeof codigo === 'number' && codigo >= 500 && codigo <= 599) return 'RETRYABLE';
   return 'FATAL';
 }
 
@@ -259,3 +314,20 @@ function throttledMessage(venue: Venue | undefined, status: number | undefined):
 
 export const isRetryable = (e: unknown): boolean =>
   e instanceof ExchangeError ? e.kind === 'RETRYABLE' : classify(e) === 'RETRYABLE';
+
+/**
+ * ¿Es esto el venue que no responde, y no algo que el bot haya hecho mal?
+ *
+ * Pasajero (5xx, timeout, red) o limitado (429, cortafuegos). Es la pregunta que
+ * el motor no se hacía: su cortacircuitos contaba igual un 502 que un bug, y a
+ * los cinco pausaba. En la caída de Hyperliquid del 2026-09-13 eso dejó pausados
+ * —y sin volver— a todos los bots del venue, cuando pausar no protegía nada: con
+ * el venue caído las cancelaciones de la pausa fallan igual y el stop nativo
+ * sigue donde estaba (spec 050).
+ *
+ * Solo mira `ExchangeError` ya clasificados, a propósito. Lo que llega sin
+ * clasificar al motor no viene de un adaptador —viene de la base o de la
+ * estrategia—, y un «timeout» de Postgres no es una caída del venue.
+ */
+export const isVenueUnavailable = (e: unknown): boolean =>
+  e instanceof ExchangeError && (e.kind === 'RETRYABLE' || e.kind === 'THROTTLED');

@@ -118,6 +118,18 @@ export class BotStore {
   }
 
   /**
+   * Escribe o borra el motivo visible del bot SIN tocar su estado.
+   *
+   * `setStatus` los ata, y para una caída del venue no vale: el bot sigue
+   * `RUNNING` —espera, no está pausado— pero la tarjeta tiene que decir por qué
+   * no opera. Escribir el estado aquí habría despausado a un bot pausado por su
+   * dueño en cuanto el venue volviera (spec 050).
+   */
+  async setLastError(botId: string, error: string | null): Promise<void> {
+    await this.db.bot.update({ where: { id: botId }, data: { last_error: error } });
+  }
+
+  /**
    * Latido del bot en la tabla `bots`.
    *
    * `force` existe porque este UPDATE se hacía en CADA tick de CADA bot: con

@@ -44,6 +44,17 @@ export class RateLimiter {
 export const sleep = (ms: number): Promise<void> =>
   new Promise((resolve) => setTimeout(resolve, ms));
 
+/**
+ * Lo más que se espera a UNA respuesta HTTP de un venue.
+ *
+ * Diez segundos, los mismos que trae de serie el SDK de Hyperliquid. Lighter y
+ * Aster llaman a `fetch` a pelo y no tenían ninguno: una conexión que el venue
+ * deja colgada esperaba lo que undici quisiera —cinco minutos—, y la llamada
+ * vive dentro del cerrojo del bot, así que un PANIC pulsado mientras tanto
+ * esperaba con ella (spec 050).
+ */
+export const HTTP_TIMEOUT_MS = 10_000;
+
 export interface RetryOptions {
   attempts?: number;
   baseDelayMs?: number;

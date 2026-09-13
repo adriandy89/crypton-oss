@@ -38,6 +38,8 @@ interface Respuesta {
 /** Servidor REST de mentira: devuelve lo que se le diga por ruta. */
 class ServidorRest {
   readonly rutas = new Map<string, Respuesta>();
+  /** Rutas que aceptan la conexion y no contestan nunca (spec 050). */
+  readonly colgadas = new Set<string>();
   readonly pedidos: string[] = [];
   /** Cabeceras de la ultima peticion, para comprobar la autenticacion. */
   ultimasCabeceras: Record<string, string | string[] | undefined> = {};
@@ -47,6 +49,7 @@ class ServidorRest {
     this.server = createServer((req, res) => {
       this.pedidos.push(req.url ?? '');
       this.ultimasCabeceras = req.headers;
+      if (this.colgadas.has((req.url ?? '').split('?')[0])) return;
       const ruta = this.rutas.get((req.url ?? '').split('?')[0]);
       if (!ruta) {
         res.writeHead(404, { 'content-type': 'application/json' });
@@ -67,6 +70,9 @@ class ServidorRest {
   }
 
   cerrar(): Promise<void> {
+    // Las conexiones colgadas no terminan solas: sin cortarlas, `close` esperaria
+    // a que el cliente las soltara y el `afterEach` no acabaria nunca.
+    this.server.closeAllConnections();
     return new Promise((r) => this.server.close(() => r()));
   }
 }
@@ -149,6 +155,26 @@ describe('Lighter REST — los casos que el venue no deja provocar', () => {
     // El cuerpo entero sigue disponible para el log.
     expect(String(e.raw)).toContain('Human Verification');
   });
+
+  /**
+   * `publicGet` llamaba a `fetch` sin tope: una conexion que el venue deja
+   * abierta sin contestar esperaba lo que quisiera undici, dentro del cerrojo
+   * del bot (spec 050).
+   */
+  it('una peticion que el venue deja colgada falla por timeout y se reintenta', async () => {
+    rest.colgadas.add('/api/v1/candles');
+    adapter = new LighterAdapter(
+      { venue: 'LIGHTER', accountIndex: 0, apiKeyIndex: 0, apiPrivateKey: '', baseUrl: rest.url },
+      { httpTimeoutMs: 50 },
+    );
+
+    const e = (await adapter
+      .getCandles('BTC', '4h', { startMs: 0, limit: 2 })
+      .catch((err: unknown) => err)) as { kind?: string };
+
+    expect(e.kind).toBe('RETRYABLE');
+    expect(rest.pedidos.filter((p) => p.startsWith('/api/v1/candles')).length).toBeGreaterThan(1);
+  }, 15_000);
 
   /**
    * Este fallaba en SILENCIO: un 200 con HTML pasaba las dos comprobaciones y

@@ -157,7 +157,9 @@ a más viejo**. Cada evento tiene una severidad: **INFO** (sin borde), **WARN** 
 
 | Evento | Qué hacer |
 |---|---|
-| `TICK_ERROR` (WARN) | Error en una revisión. Aislado no importa; 5 seguidos pausan el bot. Mira la consola del worker. |
+| `TICK_ERROR` (WARN) | Error **del propio bot** en una revisión (no del venue). Se avisa una vez por racha, y otra si cambia el motivo; 5 seguidos pausan el bot. Mira la consola del worker. |
+| `VENUE_UNAVAILABLE` (WARN) | El exchange lleva tres revisiones sin responder (5xx, timeouts, error de red, 429). **El bot no se pausa**: espera, espacia sus revisiones y conserva órdenes y stop. Se recuerda cada 30 min. Si se alarga y tienes posición, vigílala desde el propio exchange. |
+| `VENUE_RECOVERED` (INFO) | El exchange vuelve a responder y el bot ya ha reconciliado. Solo se anuncia si se anunció la caída. Nada que hacer. |
 | `STREAM_ERROR` | La conexión en vivo con el venue se cortó; el bot rebarre por REST mientras tanto. Se avisa **una vez cada cinco minutos** por stream, no en cada reintento. Si persiste, revisa red o límites de peticiones (Lighter: 60/min por IP). |
 | `STREAM_RECOVERED` (INFO) | La conexión volvió. Solo se anuncia si su caída llegó a anunciarse. Nada que hacer. |
 | `AUTH_ERROR` (CRITICAL) | El exchange rechazó la credencial. El bot no puede operar: revisa la clave en Cuenta → conexiones. |

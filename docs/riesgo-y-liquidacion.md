@@ -140,7 +140,8 @@ el sangrado y te deja la decisión.
 | Pérdida diaria de la cuenta | PnL realizado de hoy de todos tus bots < −límite | Pausa |
 | Pérdida diaria del bot (%) | `stopLoss diario` del propio bot sobre su capital | Pausa |
 | Colocaciones fallidas | 20 fallos pasajeros seguidos al colocar órdenes | Pausa |
-| Revisiones fallidas | 5 errores seguidos en el ciclo del motor (algo más de un minuto) | Pausa |
+| Revisiones fallidas | 5 errores seguidos **del propio bot** en el ciclo del motor (algo más de un minuto) | Pausa |
+| Venue sin servicio | El exchange no responde: HTTP 5xx, timeouts, error de red, 429 | **No pausa**: el bot espera (ver abajo) |
 | Precio externo desfasado | El bot cotiza contra Binance y lleva > 15 s sin dato | La estrategia deja de cotizar; aviso `FAIR_PRICE_STALE` |
 
 **Qué significa «pausa» aquí** (`pauseForRisk`): el bot deja de planificar, **cancela sus órdenes
@@ -152,7 +153,24 @@ estas tres coletillas:
 - «Atención: la posición queda SIN stop loss.» (no configuraste `stopLossPct`)
 - «Atención: hay un stop loss configurado pero NO consta colocado en el exchange. Revísalo.»
 
+Si el bot consta **sin posición** —la ha leído una revisión y no ha entrado ninguna ejecución desde
+entonces—, la alerta dice «no tenía posición abierta» en lugar de cualquiera de las tres. Si no se sabe,
+por ejemplo tras una racha de revisiones fallidas, dice «si tenía posición abierta, sigue abierta» con la
+coletilla del stop: el motor no presume que siga plano.
+
 Un bot pausado sigue latiendo: mira su posición y avisa de la liquidación, pero no toca el libro.
+
+**Una caída del venue no pausa.** Pausar mientras el exchange no responde no protege nada: no acepta
+órdenes, la cancelación de la pausa fallaría igual y el stop nativo sigue donde estaba. Lo único que
+conseguía era dejar el bot pausado cuando el venue volvía. Ahora el bot **espera**:
+
+- Espacia sus revisiones, el doble cada vez, hasta una por minuto.
+- A la tercera revisión fallida avisa una vez con `VENUE_UNAVAILABLE`, y lo recuerda cada 30 minutos.
+- Deja «<venue> no responde…» en su tarjeta sin cambiar de estado.
+- Cuando el venue contesta, avisa con `VENUE_RECOVERED` y reconcilia como tras un reinicio del worker.
+
+Un bot simulado aguanta además hasta 20 s con el último precio conocido, igual que uno real. Los fallos
+que **no** son del venue (un error del propio bot) siguen pausando a los cinco.
 
 > ℹ️ **Semántica fijada (F-11, 2026-09-06).** El kill-switch del bot mide la **pérdida acumulada sobre el
 > capital asignado**, no la caída desde el máximo: es un tope de pérdida absoluta, y así se rotula en la
