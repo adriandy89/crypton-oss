@@ -6,6 +6,7 @@ import { LeaseService } from '../engine';
 import { BUS_CHANNELS, BusService, DbService, type BusMessage } from '../libs';
 import {
   TelegramClient,
+  bienFormado,
   escapeHtml,
   recortar,
   trocear,
@@ -140,6 +141,13 @@ const LABEL_TTL_MS = 10 * 60_000;
 /** Líneas máximas por mensaje; el resto se resume en una sola. */
 const MAX_LINES = 12;
 
+/**
+ * Pausa entre los trozos de un mismo lote (spec 056, R-5). Telegram admite
+ * ráfagas cortas, pero pide no pasar de un mensaje por segundo por chat, y lo
+ * que corta con un 429 no se reintenta.
+ */
+const PAUSA_ENTRE_TROZOS_MS = 1_100;
+
 interface PendingBatch {
   lines: string[];
   dropped: number;
@@ -160,6 +168,10 @@ export class NotifierService implements OnModuleInit, OnModuleDestroy {
   private readonly logger = new Logger(NotifierService.name);
   private readonly client: TelegramClient;
   private readonly pending = new Map<string, PendingBatch>();
+  /** El último envío en curso de cada chat: los lotes salen en fila (spec 056, R-5). */
+  private readonly envios = new Map<string, Promise<void>>();
+  /** Entre dos trozos del mismo lote. Telegram pide no pasar de uno por segundo por chat. */
+  private readonly pausaEntreTrozosMs = PAUSA_ENTRE_TROZOS_MS;
 
   /** Cache de vinculación por usuario; evita una consulta por evento. */
   private readonly linkCache = new Map<
@@ -253,7 +265,9 @@ export class NotifierService implements OnModuleInit, OnModuleDestroy {
     // Recortada aquí, antes de encolarla o de mandarla sola: una línea que no cabe
     // en un mensaje lo tumba entero (spec 054).
     const line = recortar(
-      `${icon} <b>${escapeHtml(bot)}</b> — ${escapeHtml(data.message ?? message.type)}`,
+      bienFormado(
+        `${icon} <b>${escapeHtml(bot)}</b> — ${escapeHtml(data.message ?? message.type)}`,
+      ),
     );
 
     // Se reserva lo más tarde posible: un evento que el usuario no quiere no
@@ -344,9 +358,31 @@ export class NotifierService implements OnModuleInit, OnModuleDestroy {
     // cada aviso era una frase; los del supervisor listan ahora sus cambios
     // (spec 054), y un error del venue ya podía ser largo antes. Uno de más de
     // 4096 caracteres Telegram lo rechaza entero.
-    for (const texto of trocear(parts)) {
-      await this.client.sendMessage(chatId, texto);
+    //
+    // Y en fila por chat, con una pausa entre trozos (spec 056, R-5): sin la fila,
+    // un envío lento dejaba que el lote siguiente se colara entre los trozos del
+    // anterior; sin la pausa, una ráfaga seguida al mismo chat es lo que Telegram
+    // corta con un 429, y el cliente no reintenta.
+    const trozos = trocear(parts);
+    const anterior = this.envios.get(chatId) ?? Promise.resolve();
+    const este = anterior.then(async () => {
+      for (const [i, texto] of trozos.entries()) {
+        if (i > 0) await this.esperar(this.pausaEntreTrozosMs);
+        await this.client.sendMessage(chatId, texto);
+      }
+    });
+    const cola = este.catch(() => undefined);
+    this.envios.set(chatId, cola);
+    try {
+      await este;
+    } finally {
+      if (this.envios.get(chatId) === cola) this.envios.delete(chatId);
     }
+  }
+
+  /** Espera; aparte para que un test pueda contar las pausas sin dormir. */
+  private esperar(ms: number): Promise<void> {
+    return new Promise((resolve) => setTimeout(resolve, ms));
   }
 
   private async linkOf(userId: string): Promise<{ chatId: string; prefs: TelegramPrefs } | null> {

@@ -23,7 +23,7 @@
         <ion-list inset="true">
           <ion-list-header><ion-label>Qué quieres recibir</ion-label></ion-list-header>
 
-          @for (row of rows; track row.key) {
+          @for (row of rows(); track row.key) {
             <ion-item>
               <ion-toggle
                 [checked]="!!telegram.status()?.prefs?.[row.key]"

@@ -1,9 +1,10 @@
 import { Injectable, computed, effect, inject, signal, untracked } from '@angular/core';
 import { filter, throttleTime } from 'rxjs';
 import { AuthService } from '../auth/auth.service';
-import { insigniaIa, type BotParaIa, type InsigniaIa } from '../utils/modo-ia';
+import { conCanalEfectivo, insigniaIa, type BotParaIa, type InsigniaIa } from '../utils/modo-ia';
 import { AdminBotsService, type AiSetting, type AiSwitches } from './admin-bots.service';
 import { StreamService } from './stream.service';
+import { TelegramService } from './telegram.service';
 
 /** Ventana de agrupación de los eventos `AI_*`: rafagas de revisiones, una lectura. */
 const AGRUPAR_EVENTOS_IA_MS = 2_000;
@@ -36,6 +37,7 @@ export class ModoIaService {
   private readonly auth = inject(AuthService);
   private readonly api = inject(AdminBotsService);
   private readonly stream = inject(StreamService);
+  private readonly telegram = inject(TelegramService);
 
   /** Inmutable a proposito: las señales comparan por identidad. */
   private readonly porBot = signal<ReadonlyMap<string, AiSetting>>(new Map());
@@ -112,6 +114,10 @@ export class ModoIaService {
   async refrescar(): Promise<void> {
     if (!this.clave()) return;
     const turno = ++this.secuencia;
+    // El Telegram de quien mira, a la vez: es el primer dato del canal
+    // (`canalEfectivo`), y leido una sola vez por sesion se quedaba mas viejo
+    // que el del servidor (spec 056, A-4).
+    void this.telegram.refresh().catch(() => undefined);
     try {
       const resumen = await this.api.aiOverview();
       if (turno !== this.secuencia) return;
@@ -152,9 +158,18 @@ export class ModoIaService {
     return lista.includes(kind);
   }
 
+  /**
+   * Unos interruptores con el canal de quien mira ya resuelto: el de su Telegram
+   * si se conoce, que cambia en el acto al vincular o al apagar los avisos, y si
+   * no, el que dijo el servidor (spec 056, A-4).
+   */
+  conCanal(interruptores: AiSwitches | null | undefined): AiSwitches | null {
+    return conCanalEfectivo(interruptores, this.telegram.status());
+  }
+
   /** La pastilla de un bot, solo para un administrador. */
   insignia(botId: string, bot: BotParaIa): InsigniaIa | null {
     if (!this.esAdmin()) return null;
-    return insigniaIa(this.de(botId), this._interruptores(), bot);
+    return insigniaIa(this.de(botId), this.conCanal(this._interruptores()), bot);
   }
 }

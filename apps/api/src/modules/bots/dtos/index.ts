@@ -13,6 +13,7 @@ import {
   Max,
   MaxLength,
   Min,
+  ValidateIf,
 } from 'class-validator';
 import { BotStatus, StrategyKind, Venue } from '@crypton/db';
 
@@ -98,6 +99,19 @@ export class UpdateBotConfigDto {
   @IsOptional()
   @IsBoolean()
   acceptRelayout?: boolean;
+
+  /**
+   * La versión de la configuración sobre la que se editó (spec 055, 053/H-05).
+   *
+   * Guardar manda la configuración ENTERA: si el bot cambió entretanto —un ajuste
+   * del Modo IA, otro dispositivo—, esto lo rechaza con un 409 `STALE_VERSION`
+   * en vez de deshacer en silencio lo que cambió. Opcional: sin ella todo sigue
+   * como siempre. Un `null` es un 400, no «sin versión».
+   */
+  @ValidateIf((_, valor) => valor !== undefined)
+  @IsInt()
+  @Min(1)
+  expectedVersion?: number;
 }
 
 export class RenameBotDto {

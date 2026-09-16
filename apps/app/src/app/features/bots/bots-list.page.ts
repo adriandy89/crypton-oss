@@ -305,6 +305,10 @@ const VIVOS = ['STARTING', 'RUNNING', 'PAUSED'];
                           [attr.title]="ia.porQue"
                         >
                           {{ ia.texto }}
+                          <!-- El title no lo lee todo el mundo (spec 056, A-11). -->
+                          @if (ia.porQue) {
+                            <span class="solo-lector">(no actúa: {{ ia.porQue }})</span>
+                          }
                         </ui-badge>
                       }
                     </p>

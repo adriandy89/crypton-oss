@@ -168,7 +168,14 @@ export interface UpdateConfigOptions {
   expectedVersion?: number;
 }
 
-/** Lo que se devuelve cuando el bot cambio debajo de quien iba a escribir. */
+/**
+ * Lo que se devuelve cuando el bot cambio debajo de quien iba a escribir.
+ *
+ * Va dos veces en el cuerpo del 409, y las dos hacen falta: `reason` es lo que
+ * lee el supervisor de la excepcion, y `code` es lo que hace que el filtro de
+ * excepciones la reenvie entera a la app, que asi puede reconocerla y
+ * recolocar el borrador (spec 055, 053/H-05).
+ */
 const RAZON_VERSION_RANCIA = 'STALE_VERSION';
 
 @Injectable()
@@ -1013,6 +1020,7 @@ export class BotsService implements OnModuleInit {
         message:
           'La configuración del bot ha cambiado desde que se leyó, así que este cambio ya no vale.',
         reason: RAZON_VERSION_RANCIA,
+        code: RAZON_VERSION_RANCIA,
         expectedVersion: opts.expectedVersion,
         currentVersion: bot.config_version,
       });
@@ -1106,25 +1114,17 @@ export class BotsService implements OnModuleInit {
 
     const version = bot.config_version + 1;
     await this.db.$transaction(async (tx) => {
-      await tx.botConfigRevision.create({
-        data: {
-          bot_id: id,
-          version,
-          config: next as never,
-          diff: diff.changed as never,
-          apply_level: diff.level,
-          applied_by: opts.appliedBy ?? userId,
-        },
-      });
-      // Con la version en el `where`, y contando filas: entre la lectura de
-      // arriba y esta transaccion cabe otra escritura, y quien pidio una version
-      // concreta tiene que enterarse. Sin `expectedVersion` el `where` es el de
-      // siempre y no cambia nada para nadie.
+      // PRIMERO la fila del bot, con la versión que se acaba de leer en el
+      // `where` y contando filas. Entre la lectura de arriba y esta transacción
+      // cabe otra escritura: con la fila bloqueada por la primera, la segunda
+      // vuelve a evaluar el `where` al desbloquearse, no escribe nada y responde
+      // 409. Al revés —la revisión antes—, la segunda chocaba con el índice único
+      // de la revisión y salía un 500 con el mensaje de Prisma, que el supervisor
+      // llevaba tal cual a Telegram (spec 056, R-3). La versión va siempre, se
+      // pida o no: la que se leyó es sobre la que se calculó todo esto, y quien
+      // pidió una concreta ya se comprobó arriba que es esta.
       const escritas = await tx.bot.updateMany({
-        where: {
-          id,
-          ...(opts.expectedVersion === undefined ? {} : { config_version: opts.expectedVersion }),
-        },
+        where: { id, config_version: bot.config_version },
         data: {
           config_version: version,
           leverage: Number(next.leverage ?? bot.leverage),
@@ -1136,9 +1136,20 @@ export class BotsService implements OnModuleInit {
           message:
             'La configuración del bot ha cambiado mientras se escribía, así que no se ha aplicado.',
           reason: RAZON_VERSION_RANCIA,
-          expectedVersion: opts.expectedVersion,
+          code: RAZON_VERSION_RANCIA,
+          expectedVersion: opts.expectedVersion ?? bot.config_version,
         });
       }
+      await tx.botConfigRevision.create({
+        data: {
+          bot_id: id,
+          version,
+          config: next as never,
+          diff: diff.changed as never,
+          apply_level: diff.level,
+          applied_by: opts.appliedBy ?? userId,
+        },
+      });
       await tx.botEvent.create({
         data: {
           bot_id: id,

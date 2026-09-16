@@ -1,4 +1,4 @@
-import { Component, OnInit, inject, signal } from '@angular/core';
+import { Component, OnInit, computed, inject, signal } from '@angular/core';
 import {
   AlertController,
   IonBackButton,
@@ -21,7 +21,9 @@ import { Clipboard } from '@capacitor/clipboard';
 import { Browser } from '@capacitor/browser';
 import { addIcons } from 'ionicons';
 import { copyOutline, openOutline, paperPlaneOutline } from 'ionicons/icons';
+import { AuthService } from '../../core/auth';
 import { TelegramService, ToastService, type TelegramPrefs } from '../../core/services';
+import { ModoIaService } from '../../core/services/modo-ia.service';
 import { errorText, shortDate } from '../../core/utils';
 
 /** Los avisos, en orden de utilidad para quien acaba de vincular. */
@@ -58,6 +60,21 @@ const PREF_ROWS: { key: keyof TelegramPrefs; label: string; help: string }[] = [
   },
 ];
 
+/**
+ * Los avisos del Modo IA, solo para quien puede encenderlo: hoy, un
+ * administrador sobre un bot suyo. Ofrecérselo a todo el mundo sería un
+ * interruptor para avisos que nunca va a recibir. Y un administrador lo
+ * necesita: con estos avisos apagados, el supervisor no revisa sus bots en
+ * «propone y espera», porque sus sugerencias no llegarían (spec 055, 053/H-03).
+ */
+const FILA_IA: (typeof PREF_ROWS)[number] = {
+  key: 'ai',
+  label: 'Modo IA',
+  help:
+    'Las sugerencias del supervisor, con sus botones para aplicarlas, y los cambios que aplica ' +
+    'solo. Si lo apagas, los bots en «propone y espera» dejan de revisarse.',
+};
+
 @Component({
   selector: 'app-telegram',
   standalone: true,
@@ -83,15 +100,23 @@ const PREF_ROWS: { key: keyof TelegramPrefs; label: string; help: string }[] = [
 })
 export class TelegramPage implements OnInit {
   readonly telegram = inject(TelegramService);
+  private readonly auth = inject(AuthService);
   private readonly toast = inject(ToastService);
   private readonly alerts = inject(AlertController);
+  /**
+   * El canal de las sugerencias sale de aquí: tras vincular, desvincular o tocar
+   * un aviso, las pastillas y los avisos del Modo IA se releen en vez de quedarse
+   * con lo de antes (spec 056, A-4). Para quien no es administrador no hace nada.
+   */
+  private readonly modoIa = inject(ModoIaService);
 
   readonly loading = signal(true);
   readonly busy = signal(false);
   readonly code = signal<string | null>(null);
   readonly deepLink = signal<string | null>(null);
 
-  readonly rows = PREF_ROWS;
+  private readonly esAdmin = computed(() => this.auth.user()?.role === 'ADMIN');
+  readonly rows = computed(() => (this.esAdmin() ? [...PREF_ROWS, FILA_IA] : PREF_ROWS));
   readonly shortDate = shortDate;
 
   constructor() {
@@ -114,6 +139,8 @@ export class TelegramPage implements OnInit {
       const result = await this.telegram.link();
       this.code.set(result.code);
       this.deepLink.set(result.deepLink);
+      // Un código nuevo invalida la vinculación que hubiera.
+      void this.modoIa.refrescar();
     } catch (e) {
       await this.toast.error(errorText(e));
     } finally {
@@ -144,6 +171,7 @@ export class TelegramPage implements OnInit {
   async toggle(key: keyof TelegramPrefs, value: boolean): Promise<void> {
     try {
       await this.telegram.updatePrefs({ [key]: value });
+      if (key === 'ai') void this.modoIa.refrescar();
     } catch (e) {
       await this.toast.error(errorText(e));
       // Se recarga para que el interruptor vuelva a reflejar lo que hay de
@@ -153,9 +181,15 @@ export class TelegramPage implements OnInit {
   }
 
   async unlink(): Promise<void> {
+    // A un administrador, además, lo que pasa con su Modo IA: sin canal, sus bots
+    // en «propone y espera» dejan de revisarse (spec 056, A-12).
+    const modoIa = this.esAdmin()
+      ? ' Y tus bots en «propone y espera» dejarán de revisarse: sus sugerencias no tendrían ' +
+        'por dónde llegar.'
+      : '';
     const alert = await this.alerts.create({
       header: 'Desvincular Telegram',
-      message: 'Dejarás de recibir avisos, incluidos los de cercanía a liquidación.',
+      message: `Dejarás de recibir avisos, incluidos los de cercanía a liquidación.${modoIa}`,
       buttons: [
         { text: 'Cancelar', role: 'cancel' },
         {
@@ -165,6 +199,7 @@ export class TelegramPage implements OnInit {
             void (async () => {
               try {
                 await this.telegram.unlink();
+                void this.modoIa.refrescar();
                 this.code.set(null);
                 this.deepLink.set(null);
                 await this.toast.success('Telegram desvinculado.');

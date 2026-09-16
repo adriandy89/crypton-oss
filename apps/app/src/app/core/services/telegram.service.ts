@@ -13,10 +13,9 @@ export interface TelegramPrefs {
   /**
    * Lo que propone o aplica el supervisor de IA (spec 046).
    *
-   * Esta en el tipo para que no haya deriva con el servidor, pero todavia NO
-   * tiene fila en la pantalla: hoy el Modo IA solo lo puede encender un
-   * administrador sobre un bot suyo, y ofrecerle a todo el mundo un interruptor
-   * para avisos que nunca va a recibir es ruido.
+   * Solo tiene fila en la pantalla para un administrador, que es el único que
+   * puede encender el Modo IA (spec 055). Apagarlo deja sin revisar sus bots en
+   * «propone y espera»: sus sugerencias no llegarían a ninguna parte.
    */
   ai: boolean;
 }

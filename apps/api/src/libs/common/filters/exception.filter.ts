@@ -12,6 +12,25 @@ import { AuditOutcome, EventSeverity } from '@crypton/shared';
 import { AuditService, actorOf, safeRoute, type AuditableRequest } from '../../audit';
 
 /**
+ * Los campos que la app lee de un error, además del mensaje.
+ *
+ * Un cuerpo que lleve cualquiera de ellos llega ENTERO. Hasta el spec 055 solo
+ * pasaba el que traía `code`, y tres rechazos de configuración que no lo traen
+ * llegaban como un texto suelto:
+ *
+ *   - la confirmación de un cambio WARM (`requiresConfirmation`): la app la
+ *     espera para preguntar y reenviar confirmando, y sin ella ningún cambio
+ *     que recoloca órdenes se podía aplicar desde Ajustes;
+ *   - los motivos de una configuración no válida (`issues`);
+ *   - los campos que no se pueden cambiar en caliente (`coldFields`).
+ *
+ * Son cuerpos que construye nuestro propio código para el cliente, así que la
+ * regla 1 del filtro, más abajo, se sigue cumpliendo: un error que no es HTTP
+ * —Prisma, Redis, un SDK— nunca llega hasta aquí con uno de estos campos.
+ */
+const CAMPOS_DEL_CONTRATO = ['code', 'requiresConfirmation', 'issues', 'coldFields'] as const;
+
+/**
  * Filtro global de excepciones.
  *
  * Dos reglas, y las dos importan:
@@ -59,11 +78,11 @@ export class AllExceptionFilter implements ExceptionFilter {
       const body = exception.getResponse();
       const esObjeto = typeof body === 'object' && body !== null;
 
-      if (esObjeto && 'code' in body) {
-        // Cuerpo con código estable (`STEP_UP_REQUIRED`, `EMAIL_TAKEN`…): se
-        // pasa ENTERO. Quedarse solo con `message` obligaba al cliente a
-        // adivinar el caso leyendo el texto en español, que es justo lo que el
-        // código viene a evitar.
+      if (esObjeto && CAMPOS_DEL_CONTRATO.some((campo) => campo in body)) {
+        // Cuerpo con código estable (`STEP_UP_REQUIRED`, `EMAIL_TAKEN`…) o con
+        // algo que el cliente tiene que poder leer: se pasa ENTERO. Quedarse solo
+        // con `message` obligaba al cliente a adivinar el caso leyendo el texto
+        // en español, que es justo lo que el código viene a evitar.
         error = body;
       } else if (esObjeto && 'message' in body) {
         error = body.message;

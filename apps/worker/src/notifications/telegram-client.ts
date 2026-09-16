@@ -149,6 +149,18 @@ export const escapeHtml = (text: string): string =>
   text.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
 
 /**
+ * El texto con cada sustituto suelto cambiado por «�».
+ *
+ * Un sustituto suelto —medio emoji, de un texto recortado por unidades UTF-16—
+ * no es UTF-8 válido, y Telegram rechaza el mensaje ENTERO, con las demás líneas
+ * del lote dentro. Los textos de los avisos vienen de muchos sitios (el motivo
+ * del modelo, un error del venue), así que se sanea aquí, al final
+ * (spec 056, R-7).
+ */
+export const bienFormado = (texto: string): string =>
+  texto.replace(/[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/g, '�');
+
+/**
  * Lo más largo que se manda en un mensaje.
  *
  * Telegram rechaza entero, con un 400, un texto de más de 4096 caracteres

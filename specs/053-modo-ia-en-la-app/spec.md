@@ -65,6 +65,8 @@ Decisiones del usuario, preguntadas antes de planificar:
   Aquí solo se avisa cuando la versión cambió mientras se editaba. El arreglo de fondo es de la API
   y de todos los usuarios, y pide spec propio.
 
+Los dos se corrigieron en el spec 055, y su revisión (056) afinó el de H-05.
+
 ## Alcance
 
 - `apps/api/src/modules/admin/admin-ai.controller.ts`, `admin.module.ts` (comentario) y un test de

@@ -1315,6 +1315,40 @@ ion-toast {
   white-space: pre-line;
 }
 
+/* El aviso de que la configuración cambió debajo del borrador va DENTRO de la
+   barra fija de guardar, en su propia fila y encima de los botones: debajo del
+   historial no lo veía quien guardaba desde la barra (spec 056, A-2). */
+.bd-save {
+  flex-wrap: wrap;
+  align-items: center;
+}
+
+.bd-save-aviso {
+  flex: 1 0 100%;
+}
+
+/* Un diálogo que enseña una lista, un cambio por línea (spec 056, A-2). */
+.bd-alert-lista .alert-message {
+  white-space: pre-line;
+}
+
+/* Texto solo para lectores de pantalla: el motivo de una pastilla que no está
+   actuando, que en pantalla solo va en el `title` (spec 056, A-11). Sin
+   mayúsculas aunque la pastilla las ponga: hay lectores que deletrean lo que va
+   en mayúsculas. */
+.solo-lector {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  margin: -1px;
+  padding: 0;
+  overflow: hidden;
+  clip-path: inset(50%);
+  white-space: nowrap;
+  border: 0;
+  text-transform: none;
+}
+
 /* ── Cartera: la curva del héroe (spec 003) ──
    Aquí y no en `portfolio.page.scss` por el presupuesto de 6 kB por
    componente, como `bd-*`. Reutiliza `.bd-range` para el selector: es el

@@ -174,7 +174,7 @@ bot suyo. Ver [Administración](./administracion.md#modo-ia-un-supervisor-que-vi
 | Evento | Etiqueta | Qué hacer |
 |---|---|---|
 | `AI_MODE` (INFO) | Modo IA cambiado | Nada: es el rastro de un cambio de modo u opciones, con su motivo. No llega a Telegram. |
-| `AI_SUGGESTION` | Sugerencia de la IA | En «propone y espera»: la propuesta te ha llegado por Telegram con sus dos botones. Dice qué parámetros cambiaría, de cuánto a cuánto y qué perilla lo pide. |
+| `AI_SUGGESTION` | Sugerencia de la IA | En «propone y espera»: la propuesta te ha llegado por Telegram con sus dos botones. Dice qué parámetros cambiaría, de cuánto a cuánto y qué perilla lo pide. Sin Telegram vinculado o con los avisos del Modo IA apagados, un bot en este modo no se revisa y no llega ninguna. |
 | `AI_APPLIED` | Ajuste aplicado por la IA | El cambio ya está hecho, con la misma lista de parámetros y valores. Si lo aprobaste tú, lo dice, y los valores son los recalculados al aprobar. Lo ves en el historial de Ajustes con la marca **IA**; deshacerlo es volver a la versión anterior. |
 | `AI_ADVICE` | La IA pide revisar el bot | La IA cree que hace falta una persona. Como mucho uno por bot y día. |
 | `AI_FAILED` (WARN) | La IA no pudo revisar el bot | No se ha tocado nada. Si se repite cinco veces seguidas, el Modo IA se duerme unas horas. |

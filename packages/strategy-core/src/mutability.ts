@@ -1,4 +1,4 @@
-import { Mutability, type BotConfig, type FieldMeta } from '@crypton/shared';
+import { Mutability, mismoValorDeConfig, type BotConfig, type FieldMeta } from '@crypton/shared';
 import type { Strategy } from './types';
 
 export interface ChangedField {
@@ -22,26 +22,6 @@ export interface ConfigDiff {
   level: 'NONE' | Mutability;
   /** Campos COLD que el usuario ha intentado cambiar; se devuelven al rechazar. */
   coldFields: string[];
-}
-
-/**
- * Igualdad laxa a propósito: los números llegan del formulario como string
- * ('2' vs 2) y compararlos en crudo marcaría cambios que no existen, lo que
- * haría que el bot retendiera la escalera sin motivo.
- */
-function sameValue(a: unknown, b: unknown): boolean {
-  if (a === b) return true;
-  if (a == null && b == null) return true;
-  if (a == null || b == null) return false;
-  if (typeof a === 'boolean' || typeof b === 'boolean') return Boolean(a) === Boolean(b);
-  const na = Number(a);
-  const nb = Number(b);
-  if (Number.isFinite(na) && Number.isFinite(nb)) return na === nb;
-  // Ultimo escalon, con null, booleanos y numeros ya descartados arriba: lo que
-  // queda de un config son cadenas y enums. Dos objetos distintos se verian
-  // iguales aqui, pero un config no los contiene.
-  // eslint-disable-next-line @typescript-eslint/no-base-to-string
-  return String(a) === String(b);
 }
 
 const RANK: Record<Mutability, number> = {
@@ -69,7 +49,10 @@ export function diffConfig(
   for (const key of keys) {
     const from = (previous as Record<string, unknown>)?.[key];
     const to = (next as Record<string, unknown>)?.[key];
-    if (sameValue(from, to)) continue;
+    // La igualdad laxa de `shared`, que es también la de la pantalla: si las dos
+    // decidieran distinto qué ha cambiado, recolocar un borrador podría deshacer
+    // un ajuste que el servidor no veía como edición (spec 056, A-1).
+    if (mismoValorDeConfig(from, to)) continue;
 
     const meta = byKey.get(key);
     changed.push({

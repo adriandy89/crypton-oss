@@ -338,6 +338,8 @@ export class AdminBotDetailPage implements OnInit {
         this.secuenciaIa++;
         // Lo que no trae la respuesta del guardado —los interruptores— se conserva.
         this.ia.set({ ...actual, ...nuevo });
+        // Una relectura que fallara con el guardado en vuelo ya no vale (spec 056, A-9).
+        this.iaError.set(false);
       }
     } finally {
       this.guardandoIa.set(false);

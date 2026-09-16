@@ -194,16 +194,22 @@ export class BotsService {
    * `acceptRelayout` es la confirmación explícita para los cambios WARM. Sin
    * ella la API responde 409 con el detalle de lo que cambiaría, que es
    * exactamente lo que la pantalla usa para preguntar antes de aplicar.
+   *
+   * `expectedVersion` es la versión sobre la que se editó (spec 055, H-05): si
+   * el bot cambió entretanto, la API responde 409 `STALE_VERSION` en vez de
+   * deshacer lo que cambió.
    */
   updateConfig(
     id: string,
     config: Record<string, unknown>,
     acceptRelayout = false,
+    expectedVersion: number | null = null,
   ): Promise<ConfigUpdateResult> {
     return firstValueFrom(
       this.http.patch<ConfigUpdateResult>(`${this.base}/${id}/config`, {
         config,
         acceptRelayout,
+        ...(expectedVersion === null ? {} : { expectedVersion }),
       }),
     );
   }

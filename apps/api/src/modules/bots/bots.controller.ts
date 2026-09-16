@@ -157,7 +157,9 @@ export class BotsController {
     @Param() { id }: IdParamDto,
     @Body() dto: UpdateBotConfigDto,
   ) {
-    return this.bots.updateConfig(user.id, id, dto);
+    // La versión sobre la que se editó: un borrador guardado tarde no deshace lo
+    // que cambió entretanto (spec 055, 053/H-05).
+    return this.bots.updateConfig(user.id, id, dto, { expectedVersion: dto.expectedVersion });
   }
 
   // El comando SÍ se guarda: PANIC y STOP_AND_CLOSE cierran posiciones a

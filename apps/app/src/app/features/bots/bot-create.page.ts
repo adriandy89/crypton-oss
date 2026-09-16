@@ -94,7 +94,9 @@ import {
 import { ModoIaService } from '../../core/services/modo-ia.service';
 import {
   BORRADOR_APAGADO,
+  FALTA_PARA_PROPONER,
   cambiosDe,
+  canalEfectivo,
   minutosValidos,
   type BorradorIa,
 } from '../../core/utils/modo-ia';
@@ -315,8 +317,11 @@ export class BotCreatePage implements OnInit, OnDestroy {
     if (!minutosValidos(b.reviewEveryMinutes)) {
       return 'Los minutos entre revisiones del Modo IA van de 10 a 1440, o se dejan vacíos.';
     }
-    if (b.mode === 'MANUAL' && this.telegram.status()?.linked === false) {
-      return 'El modo «propone y espera» necesita un chat de Telegram vinculado.';
+    // Con la misma regla que el editor: si su Telegram aún no se conoce, lo que
+    // dijo el servidor (spec 056, A-4).
+    const falta = canalEfectivo(this.telegram.status(), this.modoIa.interruptores());
+    if (b.mode === 'MANUAL' && falta) {
+      return `El modo «propone y espera» necesita ${FALTA_PARA_PROPONER[falta]}.`;
     }
     if (!motivoValido(this.iaMotivo())) {
       return 'Escribe el motivo del Modo IA: queda en la bitácora.';

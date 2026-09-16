@@ -2,6 +2,7 @@ import {
   D,
   FairPriceOrigin,
   LevelKind,
+  edicionesDe,
   estimateLiquidationPrice,
   Mutability,
   PriceSource,
@@ -1385,6 +1386,23 @@ describe('diffConfig', () => {
   it('un campo desconocido se trata como COLD, nunca se aplica a ciegas', () => {
     const diff = diffConfig(strategy, base, cfg({ ...(base as object), campoRaro: 'x' }));
     expect(diff.level).toBe(Mutability.COLD);
+  });
+
+  it('decide lo mismo que la pantalla sobre qué está editado (spec 056, A-1)', () => {
+    // La pantalla recoloca un borrador conservando solo lo que ELLA ve editado.
+    // Si el servidor viera cambios distintos, guardar podría deshacer un ajuste
+    // del Modo IA que la pantalla daba por no tocado.
+    const borradores: Record<string, unknown>[] = [
+      { ...(base as object), takeProfitPct: '1.0', stepScale: 2, numLimitBuys: '2' },
+      { ...(base as object), takeProfitPct: '1.50', volumeScale: '2.00' },
+      { ...(base as object), numLimitBuys: 3, stopLossPct: null },
+      { ...(base as object), stopLossPct: '0' },
+      { ...(base as object), direction: 'LONG' },
+    ];
+    for (const borrador of borradores) {
+      const servidor = diffConfig(strategy, base, cfg(borrador)).changed.map((c) => c.key);
+      expect(edicionesDe(base as Record<string, unknown>, borrador)).toEqual(servidor);
+    }
   });
 });
 

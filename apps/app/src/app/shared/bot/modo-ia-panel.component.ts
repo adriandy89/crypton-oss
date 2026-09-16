@@ -12,17 +12,26 @@ import { IonButton, IonSpinner } from '@ionic/angular/standalone';
 import { addIcons } from 'ionicons';
 import { informationCircleOutline, sparklesOutline, warningOutline } from 'ionicons/icons';
 import { TelegramService } from '../../core/services';
-import { AI_MODES, type AiMode, type AiSetting } from '../../core/services/admin-bots.service';
+import {
+  AI_MODES,
+  type AiMode,
+  type AiSetting,
+  type SinCanalIa,
+} from '../../core/services/admin-bots.service';
 import { ModoIaService } from '../../core/services/modo-ia.service';
 import type { StrategyKind } from '../../core/models';
 import { shortDate } from '../../core/utils';
 import {
   LIMITES_IA,
+  TEXTO_SIN_CANAL,
   borradorDe,
   cambiosDe,
+  canalEfectivo,
   dormidaHasta,
   minutosValidos,
   mismoBorrador,
+  propone,
+  rebasarBorradorIa,
   textoDeRevision,
   type BorradorIa,
   type CambioIa,
@@ -91,10 +100,10 @@ const SOLO_APAGAR: readonly AiMode[] = ['OFF'];
           </ui-notice>
         }
 
-        @if (manualSinTelegram()) {
+        @if (sinCanalParaProponer(); as falta) {
           <ui-notice tone="danger" icon="warning-outline">
-            Este bot está en «propone y espera» y no tienes Telegram vinculado: las sugerencias no
-            llegan a ninguna parte. <a routerLink="/telegram">Vincúlalo</a> o cambia de modo.
+            Este bot propone por Telegram y {{ textoSinCanal[falta] }}: el supervisor no lo revisa
+            hasta que lo arregles. <a routerLink="/telegram">Ir a Telegram</a> o cambia de modo.
           </ui-notice>
         }
       </div>
@@ -106,6 +115,7 @@ const SOLO_APAGAR: readonly AiMode[] = ['OFF'];
           [simulado]="bot().dryRun"
           [enMarcha]="bot().status === 'RUNNING'"
           [interruptores]="interruptores()"
+          [modoGuardado]="guardado().mode"
           [deshabilitado]="ocupado()"
           [modos]="modos()"
         />
@@ -201,29 +211,44 @@ export class ModoIaPanelComponent {
 
   readonly limites = LIMITES_IA;
 
-  private readonly guardado = computed(() => borradorDe(this.ajuste()));
+  readonly guardado = computed(() => borradorDe(this.ajuste()));
 
   /**
-   * El borrador, que sigue a lo guardado MIENTRAS no se esté editando.
+   * El borrador: lo guardado, con lo que se esté editando encima.
    *
    * Si llega una recarga con cambios a medio escribir —un evento del supervisor,
    * otro dispositivo—, lo escrito se conserva: perderlo por un refresco que el
    * usuario no ha pedido es la clase de sorpresa que hace desconfiar de una
-   * pantalla. Lo que se manda al guardar se calcula contra lo guardado NUEVO.
+   * pantalla. Pero SOLO lo escrito: lo que no se tocó toma el valor nuevo, y lo
+   * que se manda al guardar se calcula contra lo guardado nuevo (spec 056, A-5).
    */
   readonly borrador = linkedSignal<BorradorIa, BorradorIa>({
     source: this.guardado,
     computation: (nuevo, previo) =>
-      previo && !mismoBorrador(previo.value, previo.source) ? previo.value : nuevo,
+      previo ? rebasarBorradorIa(previo.source, previo.value, nuevo) : nuevo,
   });
 
   /**
-   * Los interruptores: los que trae la lectura del bot, o los del resumen si
-   * esta no los trae (la respuesta de un guardado no los lleva).
+   * Los interruptores que se leyeron: los de la lectura del bot, o los del
+   * resumen si esta no los trae (la respuesta de un guardado no los lleva).
    */
-  readonly interruptores = computed(
+  private readonly interruptoresLeidos = computed(
     () => this.ajuste()?.interruptores ?? this.modoIa.interruptores(),
   );
+
+  /**
+   * Por qué no le llegarían las sugerencias a quien mira, o `null`: su Telegram
+   * si se conoce, y si no, lo que dijo el servidor (spec 056, A-4).
+   */
+  private readonly canal = computed(() =>
+    canalEfectivo(this.telegram.status(), this.interruptoresLeidos()),
+  );
+
+  /** Los interruptores con ese canal: es lo que ven el editor y los avisos. */
+  readonly interruptores = computed(() => {
+    const leidos = this.interruptoresLeidos();
+    return leidos ? { ...leidos, sinCanal: this.canal() } : null;
+  });
 
   /** Solo `false` si alguien lo sabe: sin dato, decide el servidor. */
   readonly noCubierta = computed(
@@ -234,19 +259,24 @@ export class ModoIaPanelComponent {
   readonly frase = computed(() => textoDeRevision(this.guardado()));
   readonly dormida = computed(() => dormidaHasta(this.ajuste()));
 
-  /** H-03 del spec 053: el servidor no lo impide si Telegram se desvincula despues. */
-  readonly manualSinTelegram = computed(
-    () => this.guardado().mode === 'MANUAL' && this.telegram.status()?.linked === false,
+  /**
+   * Por qué el supervisor no revisa este bot, si propone y no hay canal
+   * (spec 055, 053/H-03). Quien mira es el dueño: su canal es el del bot.
+   */
+  readonly sinCanalParaProponer = computed((): SinCanalIa | null =>
+    propone(this.guardado().mode, this.interruptores()) ? this.canal() : null,
   );
+  readonly textoSinCanal = TEXTO_SIN_CANAL;
 
   readonly sucio = computed(() => !mismoBorrador(this.borrador(), this.guardado()));
   readonly cambio = computed(() => cambiosDe(this.guardado(), this.borrador()));
   readonly valido = computed(() => {
     const b = this.borrador();
     if (!minutosValidos(b.reviewEveryMinutes)) return false;
-    // Pasar a manual sin Telegram: el servidor lo rechazaria.
+    // Pasar a manual sin canal: el servidor lo rechazaria. Uno que ya lo esta
+    // puede cambiar sus opciones (spec 056, R-6).
     const aManual = b.mode === 'MANUAL' && this.guardado().mode !== 'MANUAL';
-    return !(aManual && this.telegram.status()?.linked === false);
+    return !(aManual && this.canal());
   });
 
   constructor() {

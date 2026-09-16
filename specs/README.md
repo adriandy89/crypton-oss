@@ -168,6 +168,8 @@ ante un 429 se paran sin reintentar. A `findings.md` va solo la evidencia resumi
 | 050 | [Una caida del venue no es un fallo del bot](050-caida-del-venue/spec.md) | cambio | hecho (falta CA-10 manual) | `spec/050-caida-del-venue` |
 | 051 | [El supervisor que solo avisa](051-el-supervisor-que-solo-avisa/spec.md) | cambio | hecho (falta CA-10 manual) | `spec/051-el-supervisor-que-solo-avisa` |
 | 052 | [Revision del spec 051](052-revision-051/spec.md) | revision | hecho (18 hallazgos corregidos dentro) | `spec/052-revision-051` |
-| 053 | [La lista de bots alineada y el Modo IA en la app](053-modo-ia-en-la-app/spec.md) | cambio | hecho (faltan CA-2 y CA-10 manuales; H-03 y H-05 a un spec propio) | `spec/053-modo-ia-en-la-app` |
-| 054 | [Lo que cambia la IA: los avisos con sus valores, y su alcance medido](054-lo-que-cambia-la-ia/spec.md) | cambio | hecho (falta CA-9 manual; H-01 y H-02 del V2 reportados, a decidir por el usuario) | `spec/054-lo-que-cambia-la-ia` |
+| 053 | [La lista de bots alineada y el Modo IA en la app](053-modo-ia-en-la-app/spec.md) | cambio | hecho (faltan CA-2 y CA-10 manuales; H-03 y H-05 corregidos en el 055) | `spec/053-modo-ia-en-la-app` |
+| 054 | [Lo que cambia la IA: los avisos con sus valores, y su alcance medido](054-lo-que-cambia-la-ia/spec.md) | cambio | hecho (falta CA-9 manual; H-01 y H-02 del V2 corregidos en el 055) | `spec/054-lo-que-cambia-la-ia` |
+| 055 | [Los pendientes del Modo IA, y los errores que la app no veia](055-los-pendientes-del-modo-ia/spec.md) | cambio | hecho (falta CA-8 manual; desplegar primero la API) | `spec/055-los-pendientes-del-modo-ia` |
+| 056 | [Revision de los specs 053 a 055](056-revision-053-055/spec.md) | revision | hecho (20 hallazgos, ninguno Critico; 2 descartados, el resto corregido dentro; falta CA-4 manual) | `spec/055-los-pendientes-del-modo-ia` |
 

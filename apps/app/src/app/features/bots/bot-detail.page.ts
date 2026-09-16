@@ -49,6 +49,8 @@ import {
   aCsv,
   cronologiaPorCiclo,
   sumaExacta,
+  edicionesDe,
+  recolocarBorrador,
   type FieldMeta,
 } from '@crypton/shared';
 import { Clipboard } from '@capacitor/clipboard';
@@ -236,20 +238,43 @@ export class BotDetailPage implements OnInit {
   });
 
   /**
-   * La versión de la configuración sobre la que nació el borrador de Ajustes.
+   * La configuración de la que nació el borrador de Ajustes, y su versión.
    *
    * Guardar manda el borrador ENTERO, así que si la configuración cambió
    * mientras había cambios a medio escribir —un ajuste del Modo IA, otro
-   * dispositivo—, guardar lo desharía en silencio (spec 053, H-05). Aquí solo se
-   * avisa; impedirlo es asunto de la API.
+   * dispositivo—, guardar lo desharía en silencio (spec 053, H-05). Por eso:
+   *
+   *   - lo editado se mide contra ESTA configuración y no contra la actual. Con
+   *     la actual, tras un ajuste de la IA un borrador sin tocar parecía
+   *     editado, no se refrescaba y guardarlo deshacía el ajuste (spec 055, G-01);
+   *   - si la versión cambia con ediciones a medias, el borrador se recoloca en
+   *     el acto sobre la nueva, con solo esas ediciones encima;
+   *   - y se guarda diciendo esta versión, para que la API rechace la carrera
+   *     que aún cabe entre leer y escribir (spec 055, H-05).
    */
   private readonly borradorBase = signal<number | null>(null);
-  readonly borradorViejo = computed(() => {
-    const b = this.bot();
-    const base = this.borradorBase();
-    if (!b || base === null || !this.dirty() || b.config_version === base) return null;
-    return { de: base, a: b.config_version };
-  });
+  private readonly configBase = signal<Record<string, unknown> | null>(null);
+  /**
+   * El último cambio de versión por debajo de un borrador a medias, para decirlo,
+   * con los campos editados que también cambiaron debajo: ahí gana lo editado,
+   * y es lo que hay que ver antes de guardar (spec 056, A-2).
+   */
+  private readonly cambioDebajo = signal<{ de: number; a: number; choques: string[] } | null>(null);
+  /**
+   * Sube cada vez que el borrador vuelve a nacer, anclado o recolocado. Un
+   * guardado que termina sobre OTRO borrador no le cambia la base: pulsar
+   * «Descartar» con el guardado en vuelo dejaba el borrador viejo como ediciones
+   * sobre la versión recién guardada, y guardar otra vez la revertía
+   * (spec 056, A-8).
+   */
+  private generacionBorrador = 0;
+  /**
+   * Las lecturas del detalle, pedidas y aplicada. Una respuesta que llega
+   * después de otra más nueva traería el bot de antes, y con él el borrador
+   * anclado a la versión de antes (spec 056, A-6).
+   */
+  private detallesPedidos = 0;
+  private detalleAplicado = 0;
   /**
    * La serie temporal y los ciclos cerrados. Los dos endpoints existían desde el
    * principio con su método cliente escrito y ninguna pantalla los llamaba
@@ -495,13 +520,37 @@ export class BotDetailPage implements OnInit {
   /** El ranking exige 6 h de recorrido: se publica igual, pero no aparece aún. */
   readonly demasiadoJoven = computed(() => (this.bot()?.uptimeSeconds ?? 0) < 6 * 3600);
 
+  /**
+   * Los campos editados, contra la configuración de la que nació el borrador
+   * (spec 055, G-01), y con la igualdad del servidor (spec 056, A-1). Sin base
+   * todavía —antes de la primera carga— no hay nada editado.
+   */
+  readonly ediciones = computed(() => {
+    const base = this.configBase();
+    return base ? edicionesDe(base, this.draft()) : [];
+  });
   /** true si algún campo editable ha cambiado respecto de lo guardado. */
-  readonly dirty = computed(() => {
-    const original = this.bot()?.config ?? {};
-    const current = this.draft();
-    return Object.keys(current).some(
-      (k) => textoDeConfig(current[k]) !== textoDeConfig(original[k]),
-    );
+  readonly dirty = computed(() => this.ediciones().length > 0);
+
+  /**
+   * El aviso de que la configuración cambió debajo del borrador, o `null`.
+   *
+   * Va dentro de la barra de guardar, que es fija: debajo del historial no lo
+   * veía quien editaba arriba y guardaba desde la barra (spec 056, A-2). Los
+   * choques se nombran solo mientras sigan editados.
+   */
+  readonly avisoDebajo = computed(() => {
+    const v = this.cambioDebajo();
+    if (!v || !this.dirty()) return null;
+    const editados = new Set(this.ediciones());
+    const campos = this.bot()?.fields ?? [];
+    const choques = v.choques
+      .filter((clave) => editados.has(clave))
+      .map((clave) => `«${labelDeClave(campos.find((f) => f.key === clave)?.labelKey, clave)}»`);
+    // El Modo IA solo existe para un administrador: a los demás la versión les
+    // cambia desde otro dispositivo, o al aportar margen (spec 056, A-7).
+    const origen = this.esAdmin() ? ', quizá por un ajuste del Modo IA' : '';
+    return { de: v.de, a: v.a, origen, choques: choques.join(', ') };
   });
 
   constructor() {
@@ -583,6 +632,9 @@ export class BotDetailPage implements OnInit {
         this.secuenciaIa++;
         // Lo que no trae la respuesta del guardado —los interruptores— se conserva.
         this.ia.set({ ...actual, ...nuevo });
+        // Una relectura que fallara con el guardado en vuelo ya no vale: lo que
+        // hay es la respuesta del servidor (spec 056, A-9).
+        this.iaError.set(false);
       }
     } finally {
       this.guardandoIa.set(false);
@@ -598,22 +650,34 @@ export class BotDetailPage implements OnInit {
     const ia = this.ia();
     return insigniaIa(
       ia ?? this.modoIa.de(b.id),
-      ia?.interruptores ?? this.modoIa.interruptores(),
+      this.modoIa.conCanal(ia?.interruptores ?? this.modoIa.interruptores()),
       b,
     );
   }
 
   private async load(withSpinner: boolean): Promise<void> {
     if (withSpinner) this.loading.set(true);
+    const turno = ++this.detallesPedidos;
     try {
       const detail = await this.bots.detail(this.id);
+      if (turno < this.detalleAplicado) return;
+      this.detalleAplicado = turno;
       this.bot.set(detail);
       // El borrador solo se reinicia si el usuario no tiene cambios sin
       // guardar: refrescar por un evento no debe borrarle lo que estaba
-      // escribiendo. Con él se anota la versión de la que nace (spec 053, H-05).
-      if (!this.dirty()) {
-        this.draft.set({ ...detail.config });
-        this.borradorBase.set(detail.config_version);
+      // escribiendo. Con ediciones a medias y otra versión debajo, se recoloca
+      // encima de la nueva y se dice (spec 055, H-05).
+      //
+      // Y nunca hacia atrás: tras guardar, la base ya es la versión nueva, y un
+      // detalle pedido antes de que el guardado terminara trae la vieja. Ese
+      // borrador se queda como está: la lectura que sigue trae la buena
+      // (spec 056, A-6).
+      const base = this.borradorBase();
+      const haciaAtras = base !== null && detail.config_version < base;
+      if (!haciaAtras && !this.dirty()) {
+        this.anclarBorrador(detail.config, detail.config_version);
+      } else if (!haciaAtras && base !== detail.config_version) {
+        this.recolocarBorrador();
       }
       // La serie y los ciclos van con `catch`: son analítica, y si fallan la
       // pantalla se pinta igual con lo que sí llegó.
@@ -624,6 +688,7 @@ export class BotDetailPage implements OnInit {
         this.bots.cycles(this.id, 60).catch((): BotCycle[] => []),
         this.bots.revisions(this.id).catch((): BotConfigRevision[] => []),
       ]);
+      if (turno < this.detalleAplicado) return;
       this.orders.set(orders);
       this.events.set(events);
       this.snapshots.set(snapshots);
@@ -710,12 +775,62 @@ export class BotDetailPage implements OnInit {
   }
 
   setValue(key: string, value: unknown): void {
-    this.draft.update((d) => ({ ...d, [key]: value }));
+    // Una edición que empieza sobre un borrador limpio no arrastra el aviso de
+    // una recolocación anterior: lo que avisaba ya no está editado (spec 056, A-7).
+    if (!this.dirty()) this.cambioDebajo.set(null);
+    // Vaciar un campo que ya estaba vacío no es editarlo. El campo entrega '', y
+    // con la igualdad del servidor '' frente a null es un cambio: teclear y
+    // borrar dejaba la barra de guardar puesta sin nada que guardar
+    // (spec 056, A-1).
+    const base = this.configBase()?.[key];
+    const valor = value === '' && base == null ? base : value;
+    this.draft.update((d) => ({ ...d, [key]: valor }));
   }
 
   discard(): void {
-    this.draft.set({ ...(this.bot()?.config as Record<string, unknown>) });
-    this.borradorBase.set(this.bot()?.config_version ?? null);
+    const b = this.bot();
+    if (b) this.anclarBorrador(b.config, b.config_version);
+  }
+
+  /** El borrador vuelve a nacer de esta configuración, sin ediciones. */
+  private anclarBorrador(config: Record<string, unknown>, version: number): void {
+    this.generacionBorrador++;
+    this.draft.set({ ...config });
+    this.configBase.set({ ...config });
+    this.borradorBase.set(version);
+    this.cambioDebajo.set(null);
+  }
+
+  /**
+   * El borrador, sobre la configuración que hay ahora: la nueva, con solo lo que
+   * el usuario editó encima (spec 055, H-05). Lo que cambió debajo —un ajuste del
+   * Modo IA, otro dispositivo— se conserva, y el formulario lo enseña.
+   */
+  private recolocarBorrador(): void {
+    const b = this.bot();
+    const base = this.configBase();
+    const de = this.borradorBase();
+    if (!b || !base || de === null) return;
+    const actual = b.config;
+    const r = recolocarBorrador(base, this.draft(), actual);
+    // Si lo editado ya coincide con la versión nueva, no queda nada que avisar:
+    // el borrador vuelve a nacer de ella (spec 056, A-7).
+    if (edicionesDe(actual, r.borrador).length === 0) {
+      this.anclarBorrador(actual, b.config_version);
+      return;
+    }
+    this.generacionBorrador++;
+    this.draft.set(r.borrador);
+    this.configBase.set({ ...actual });
+    this.borradorBase.set(b.config_version);
+    // Si ya había un aviso, se conserva la versión de la que se partió, y los
+    // choques se suman.
+    const previo = this.cambioDebajo();
+    this.cambioDebajo.set({
+      de: previo?.de ?? de,
+      a: b.config_version,
+      choques: [...new Set([...(previo?.choques ?? []), ...r.choques])],
+    });
   }
 
   /**
@@ -728,38 +843,70 @@ export class BotDetailPage implements OnInit {
    */
   async save(confirmRelayout = false): Promise<void> {
     if (!this.dirty()) return;
-    // El borrador nació sobre otra versión: guardarlo desharía lo que cambió
-    // entretanto (spec 053, H-05). La segunda pasada —la de recolocar— ya viene
-    // confirmada.
-    const viejo = this.borradorViejo();
-    if (viejo && !confirmRelayout && !(await this.confirmarBorradorViejo(viejo))) return;
     this.saving.set(true);
+    // Lo que se manda, y la versión sobre la que está: si el bot cambió desde la
+    // última lectura, la API lo rechaza en vez de deshacer lo que cambió
+    // (spec 055, H-05).
+    const enviado = this.draft();
+    const version = this.borradorBase();
+    const generacion = this.generacionBorrador;
 
     try {
-      const result = await this.bots.updateConfig(this.id, this.draft(), confirmRelayout);
+      const result = await this.bots.updateConfig(this.id, enviado, confirmRelayout, version);
+      // Si mientras tanto el borrador volvió a nacer —«Descartar», una
+      // recolocación—, lo enviado ya no es su base (spec 056, A-8).
+      const mismoBorrador = generacion === this.generacionBorrador;
       if (!result.applied) {
+        // Para el servidor no hay nada que cambiar: el borrador vuelve a lo
+        // guardado, o la barra seguía ofreciendo guardar lo mismo (spec 056, A-1).
+        const b = this.bot();
+        if (mismoBorrador && b) this.anclarBorrador(b.config, b.config_version);
         await this.toast.show(result.message ?? 'Sin cambios.');
         return;
+      }
+      // Lo que se acaba de guardar ES la base del borrador: la recarga lo ancla a
+      // lo que devuelve el servidor, con sus valores normalizados. Antes del
+      // aviso, y no después: mientras se ve, puede llegar el evento del propio
+      // guardado, y con la base vieja parecería un cambio de otro.
+      if (mismoBorrador && result.version !== undefined) {
+        this.configBase.set({ ...enviado });
+        this.borradorBase.set(result.version);
+        this.cambioDebajo.set(null);
       }
       const nivel =
         result.level === 'HOT'
           ? 'Se aplicará en el próximo ciclo; la posición no se toca.'
           : 'Se cancelan y vuelven a tender las órdenes; la posición sigue abierta.';
       await this.toast.success(`Configuración v${result.version} guardada. ${nivel}`);
-      // Lo que se acaba de guardar ES la base del borrador, aunque el servidor
-      // normalice algún valor y el borrador siga contando como cambiado.
-      if (result.version !== undefined) this.borradorBase.set(result.version);
       await this.load(false);
     } catch (e) {
       const parsed = parseHttpError(e);
 
+      // El bot cambió justo entre la última lectura y el guardado. La recarga
+      // recoloca el borrador sobre la versión nueva, con solo lo editado; no se
+      // reintenta sola: lo que cambió puede ser justo lo que se estaba mirando.
+      if (parsed.code === 'STALE_VERSION') {
+        await this.load(false);
+        await this.toast.warn(
+          'La configuración cambió mientras guardabas. Tus cambios siguen en el formulario, ' +
+            'sobre la versión nueva: revísalos y vuelve a guardar.',
+        );
+        return;
+      }
+
       if (parsed.requiresConfirmation && !confirmRelayout) {
-        const changed = parsed.issues.length
-          ? parsed.issues.map((i) => i.message).join('\n')
-          : 'Se recolocarán las órdenes del bot.';
+        // Con la lista de lo que cambia, que el 409 trae: es lo que se confirma
+        // (spec 056, A-2).
+        const changed = parsed.changed.length
+          ? parsed.changed.map((c) => this.cambioTexto(c)).join('\n')
+          : parsed.issues.length
+            ? parsed.issues.map((i) => i.message).join('\n')
+            : 'Se recolocarán las órdenes del bot.';
         const alert = await this.alerts.create({
           header: 'Este cambio recoloca las órdenes',
           message: `${parsed.message}\n\n${changed}`,
+          // Los saltos de línea de la lista se respetan (`global.scss`).
+          cssClass: 'bd-alert-lista',
           buttons: [
             { text: 'Cancelar', role: 'cancel' },
             { text: 'Aplicar', handler: () => void this.save(true) },
@@ -780,24 +927,6 @@ export class BotDetailPage implements OnInit {
     } finally {
       this.saving.set(false);
     }
-  }
-
-  /** `true` si se confirma guardar un borrador nacido sobre otra versión. */
-  private async confirmarBorradorViejo(v: { de: number; a: number }): Promise<boolean> {
-    const alerta = await this.alerts.create({
-      header: 'La configuración ha cambiado',
-      message:
-        `Empezaste a editar sobre la versión ${v.de} y ahora está en la ${v.a}, quizá por un ` +
-        'ajuste del Modo IA o desde otro dispositivo. Guardar aplica tu borrador ENTERO y ' +
-        'deshace lo que cambió entretanto.',
-      buttons: [
-        { text: 'Cancelar', role: 'cancel' },
-        { text: 'Guardar igualmente', role: 'confirm' },
-      ],
-    });
-    await alerta.present();
-    const { role } = await alerta.onDidDismiss();
-    return role === 'confirm';
   }
 
   /**

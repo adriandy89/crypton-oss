@@ -1,6 +1,6 @@
 # 054 — Lo que cambia la IA: los avisos con sus valores, y su alcance medido
 
-Estado: `hecho` (falta CA-9 manual; H-01 y H-02 reportados, a decidir por el usuario) · Tipo: `cambio` · Rama: `spec/054-lo-que-cambia-la-ia`
+Estado: `hecho` (falta CA-9 manual; H-01 y H-02 corregidos en el 055) · Tipo: `cambio` · Rama: `spec/054-lo-que-cambia-la-ia`
 
 ## Objetivo
 

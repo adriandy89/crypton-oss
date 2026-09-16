@@ -1,4 +1,5 @@
 import { HttpErrorResponse } from '@angular/common/http';
+import type { ConfigChange } from '../models';
 
 /**
  * Traduce un error HTTP al mensaje que se le enseña al usuario.
@@ -20,6 +21,12 @@ export interface ParsedHttpError {
   /** Presente cuando el servidor pide confirmación explícita (409). */
   requiresConfirmation: boolean;
   coldFields: string[];
+  /**
+   * Los campos que cambiarían, con su valor de antes y el de después: los manda
+   * el 409 que pide confirmar un cambio que recoloca órdenes, y el diálogo los
+   * enseña (spec 056, A-2).
+   */
+  changed: ConfigChange[];
   status: number;
   /**
    * Código estable del error, cuando la API lo manda: hoy, `STEP_UP_REQUIRED`.
@@ -37,6 +44,7 @@ export function parseHttpError(e: unknown): ParsedHttpError {
     issues: [],
     requiresConfirmation: false,
     coldFields: [],
+    changed: [],
     status: 0,
     code: null,
   };
@@ -64,6 +72,7 @@ export function parseHttpError(e: unknown): ParsedHttpError {
   let message = `Error ${e.status}`;
   let issues: ValidationIssue[] = [];
   let coldFields: string[] = [];
+  let changed: ConfigChange[] = [];
   let requiresConfirmation = false;
   let code: string | null = null;
 
@@ -75,11 +84,12 @@ export function parseHttpError(e: unknown): ParsedHttpError {
     message = typeof inner['message'] === 'string' ? inner['message'] : message;
     issues = (inner['issues'] as ValidationIssue[]) ?? [];
     coldFields = (inner['coldFields'] as string[]) ?? [];
+    changed = Array.isArray(inner['changed']) ? (inner['changed'] as ConfigChange[]) : [];
     requiresConfirmation = inner['requiresConfirmation'] === true;
     code = typeof inner['code'] === 'string' ? inner['code'] : null;
   }
 
-  return { message, issues, coldFields, requiresConfirmation, status: e.status, code };
+  return { message, issues, coldFields, changed, requiresConfirmation, status: e.status, code };
 }
 
 /** Mensaje único, con las issues concatenadas. Para toasts. */

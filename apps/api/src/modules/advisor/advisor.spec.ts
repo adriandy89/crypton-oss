@@ -280,6 +280,8 @@ describe('recomendaciones de configuracion', () => {
           market: MERCADOS[0].spec,
           features: { ...regimen.f, mark: MERCADOS[0].mark },
           totalInvestment: 5000,
+          maxLeverageUsuario: null,
+          direction: 'NEUTRAL',
         };
         const { config } = materializar(StrategyKind.MARKET_MAKER_V2, PROFILES[1], ctx);
 

@@ -8,6 +8,7 @@ export * from './backtest';
 export * from './orders';
 export * from './config-meta';
 export * from './bot';
+export * from './borrador';
 export * from './price-source';
 export * from './wallet';
 export * from './liquidation';

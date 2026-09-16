@@ -30,7 +30,16 @@ function build(bot: Record<string, unknown> | null) {
     botEvent: eventos,
     // Vinculado por defecto: el modo MANUAL lo exige, y lo que se prueba en la
     // mayoria de estos casos es otra cosa.
-    telegramLink: { findUnique: jest.fn().mockResolvedValue({ verified_at: new Date() }) },
+    telegramLink: {
+      findUnique: jest
+        .fn()
+        .mockResolvedValue({ chat_id: '111', verified_at: new Date(), prefs: {} }),
+      findMany: jest
+        .fn()
+        .mockResolvedValue([
+          { user_id: ADMIN, chat_id: '111', verified_at: new Date(), prefs: {} },
+        ]),
+    },
   };
   const marketData = { features: jest.fn().mockResolvedValue(null) };
   const bus = { publish: jest.fn().mockResolvedValue(undefined) };
@@ -192,20 +201,90 @@ describe('SupervisorPolicyService — a quien se barre', () => {
   it('no barre los que estan dormidos por fallos', async () => {
     const { service, ajustes } = build(bot());
     const ahora = new Date('2026-09-12T00:00:00Z');
-    await service.pendientesDeRevision(5, ahora);
+    await service.pendientesDeRevision(5, {}, ahora);
 
     const where = (ajustes.findMany.mock.calls[0][0] as { where: Record<string, unknown> }).where;
     expect(where['OR']).toEqual([{ paused_until: null }, { paused_until: { lt: ahora } }]);
   });
 
-  it('atiende primero a los que llevan mas sin revisar', async () => {
+  it('atiende primero a los que llevan mas sin revisar, y el tope se aplica al final', async () => {
     const { service, ajustes } = build(bot());
-    await service.pendientesDeRevision(5);
+    ajustes.findMany.mockResolvedValue(
+      Array.from({ length: 7 }, (_, i) => politica(`bot-${i}`, AiMode.AUTO, ADMIN)),
+    );
+    const elegidos = await service.pendientesDeRevision(5);
     const args = ajustes.findMany.mock.calls[0][0] as { orderBy: unknown; take: number };
     expect(args.orderBy).toEqual({ last_review_at: { sort: 'asc', nulls: 'first' } });
-    expect(args.take).toBe(5);
+    // Se leen mas: el tope cuenta solo a los que de verdad se van a revisar.
+    expect(args.take).toBeGreaterThan(5);
+    expect(elegidos.map((e) => e.bot_id)).toEqual(['bot-0', 'bot-1', 'bot-2', 'bot-3', 'bot-4']);
+  });
+
+  describe('lo que se saltaria no entra en la cola (spec 056, R-1)', () => {
+    // Un bot saltado no actualiza su ultima revision: si entrara, se quedaria en
+    // cabeza para siempre, y con cinco como el no se barreria ningun otro.
+    it('con «solo simulados», la consulta deja fuera los reales', async () => {
+      const { service, ajustes } = build(bot());
+      await service.pendientesDeRevision(5, { soloSimulados: true });
+      await service.pendientesDeRevision(5, { soloSimulados: false });
+      const filtros = ajustes.findMany.mock.calls.map(
+        (c) => (c[0] as { where: { bot: Record<string, unknown> } }).where.bot,
+      );
+      expect(filtros[0]['dry_run']).toBe(true);
+      expect(filtros[1]).not.toHaveProperty('dry_run');
+    });
+
+    it('los que proponen sin canal no entran ni gastan sitio del tope', async () => {
+      const { service, ajustes, db } = build(bot());
+      const SIN_CANAL = 'admin-sin-telegram';
+      ajustes.findMany.mockResolvedValue([
+        ...Array.from({ length: 6 }, (_, i) =>
+          politica(`manual-sin-${i}`, AiMode.MANUAL, SIN_CANAL),
+        ),
+        politica('auto-sin', AiMode.AUTO, SIN_CANAL),
+        politica('manual-con', AiMode.MANUAL, ADMIN),
+      ]);
+      db.telegramLink.findMany.mockResolvedValue([
+        { user_id: ADMIN, chat_id: '111', verified_at: new Date(), prefs: {} },
+        // Vinculado, pero con los avisos del Modo IA apagados.
+        { user_id: SIN_CANAL, chat_id: '222', verified_at: new Date(), prefs: { ai: false } },
+      ]);
+
+      const elegidos = await service.pendientesDeRevision(5);
+
+      // El automatico no necesita canal: aplica y avisa despues.
+      expect(elegidos.map((e) => e.bot_id)).toEqual(['auto-sin', 'manual-con']);
+      expect(db.telegramLink.findMany).toHaveBeenCalledWith({
+        where: { user_id: { in: [SIN_CANAL, ADMIN] } },
+        select: { user_id: true, chat_id: true, verified_at: true, prefs: true },
+      });
+    });
+
+    it('con el automatico forzado a manual, los automaticos tambien necesitan canal', async () => {
+      const { service, ajustes, db } = build(bot());
+      ajustes.findMany.mockResolvedValue([
+        politica('auto-sin', AiMode.AUTO, 'sin-vinculo'),
+        politica('auto-con', AiMode.AUTO, ADMIN),
+      ]);
+      const elegidos = await service.pendientesDeRevision(5, { forzarManual: true });
+      expect(elegidos.map((e) => e.bot_id)).toEqual(['auto-con']);
+      expect(db.telegramLink.findMany).toHaveBeenCalledTimes(1);
+    });
+
+    it('si nadie propone, no se pregunta por Telegram', async () => {
+      const { service, ajustes, db } = build(bot());
+      ajustes.findMany.mockResolvedValue([politica('auto', AiMode.AUTO, 'sin-vinculo')]);
+      const elegidos = await service.pendientesDeRevision(5);
+      expect(elegidos).toHaveLength(1);
+      expect(db.telegramLink.findMany).not.toHaveBeenCalled();
+    });
   });
 });
+
+/** Una politica tal como la devuelve la consulta del barrido. */
+function politica(botId: string, mode: AiMode, userId: string) {
+  return { bot_id: botId, mode, bot: { id: botId, user_id: userId } };
+}
 
 describe('SupervisorPolicyService — la referencia de regimen no se inventa (spec 047, G-02)', () => {
   it('sin velas suficientes no se guarda referencia: se guarda nada', async () => {
@@ -240,12 +319,14 @@ describe('SupervisorPolicyService — la referencia de regimen no se inventa (sp
 });
 
 describe('SupervisorPolicyService — el modo manual necesita donde avisar (spec 047, G-03)', () => {
-  function conTelegram(verificado: boolean) {
+  function conTelegram(verificado: boolean, prefs: unknown = {}) {
     const { service, ajustes, db } = build(bot());
     (db as unknown as { telegramLink: { findUnique: jest.Mock } }).telegramLink = {
-      findUnique: jest.fn().mockResolvedValue(verificado ? { verified_at: new Date() } : null),
+      findUnique: jest
+        .fn()
+        .mockResolvedValue(verificado ? { chat_id: '111', verified_at: new Date(), prefs } : null),
     };
-    return { service, ajustes };
+    return { service, ajustes, db };
   }
 
   it('sin Telegram vinculado, MANUAL se rechaza diciendo por que', async () => {
@@ -274,6 +355,59 @@ describe('SupervisorPolicyService — el modo manual necesita donde avisar (spec
     const { service, ajustes } = conTelegram(false);
     await service.set(ADMIN, 'bot-1', { mode: AiMode.OFF });
     expect(ajustes.upsert).toHaveBeenCalled();
+  });
+
+  it('con los avisos de IA apagados, MANUAL tambien se rechaza, y dice cual falta (spec 055)', async () => {
+    // El notificador no manda un AI_SUGGESTION con `prefs.ai` apagado: estar
+    // vinculado no basta, y el servidor no lo miraba (053/H-03).
+    const { service, ajustes } = conTelegram(true, { ai: false });
+    const intento = service.set(ADMIN, 'bot-1', { mode: AiMode.MANUAL });
+    await expect(intento).rejects.toBeInstanceOf(ForbiddenException);
+    await expect(intento).rejects.toThrow(/apagados los avisos del Modo IA/);
+    expect(ajustes.upsert).not.toHaveBeenCalled();
+  });
+
+  it('un chat sin verificar no es un canal (spec 055)', async () => {
+    // Pedir un codigo nuevo borra la verificacion: queda la fila y no el chat.
+    const { service, ajustes, db } = conTelegram(true);
+    (
+      db as unknown as { telegramLink: { findUnique: jest.Mock } }
+    ).telegramLink.findUnique.mockResolvedValue({ chat_id: null, verified_at: null, prefs: {} });
+    await expect(service.set(ADMIN, 'bot-1', { mode: AiMode.MANUAL })).rejects.toThrow(
+      /ningún chat vinculado/,
+    );
+    expect(ajustes.upsert).not.toHaveBeenCalled();
+  });
+
+  it('un bot que ya esta en manual puede cambiar sus opciones sin canal (spec 056, R-6)', async () => {
+    // Negarselo solo dejaba la salida de cambiar de modo: el supervisor ya no lo
+    // revisa mientras no haya canal, y eso es lo que importa.
+    const { service, ajustes } = conTelegram(false);
+    ajustes.findUnique.mockResolvedValue({ bot_id: 'bot-1', mode: AiMode.MANUAL, knobs: {} });
+    await service.set(ADMIN, 'bot-1', { mode: AiMode.MANUAL, trigger: 'PERIODICO' });
+    expect(ajustes.upsert).toHaveBeenCalled();
+  });
+
+  it('pasar de automatico a manual sin canal sigue sin poder (spec 056, R-6)', async () => {
+    const { service, ajustes } = conTelegram(false);
+    ajustes.findUnique.mockResolvedValue({ bot_id: 'bot-1', mode: AiMode.AUTO, knobs: {} });
+    await expect(service.set(ADMIN, 'bot-1', { mode: AiMode.MANUAL })).rejects.toThrow(
+      /ningún chat vinculado/,
+    );
+    expect(ajustes.upsert).not.toHaveBeenCalled();
+  });
+
+  it('sinCanalDe dice por que no llegarian las sugerencias de un usuario (spec 055)', async () => {
+    const conCanal = conTelegram(true);
+    await expect(conCanal.service.sinCanalDe(ADMIN)).resolves.toBeNull();
+    expect(conCanal.db.telegramLink.findUnique).toHaveBeenCalledWith({
+      where: { user_id: ADMIN },
+      select: { chat_id: true, verified_at: true, prefs: true },
+    });
+    await expect(conTelegram(false).service.sinCanalDe(ADMIN)).resolves.toBe('SIN_TELEGRAM');
+    await expect(conTelegram(true, { ai: false }).service.sinCanalDe(ADMIN)).resolves.toBe(
+      'AVISOS_IA_APAGADOS',
+    );
   });
 });
 

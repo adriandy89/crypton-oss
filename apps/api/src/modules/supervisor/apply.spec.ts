@@ -10,7 +10,14 @@ import {
   type MarketSpec,
   type Numeric,
 } from '@crypton/shared';
-import { camposEfectivos, diffConfig, getStrategy, VENUE_MARKETS } from '@crypton/strategy-core';
+import {
+  camposEfectivos,
+  composeSpreadBps,
+  diffConfig,
+  getStrategy,
+  VENUE_MARKETS,
+  type MarketMakerV2Config,
+} from '@crypton/strategy-core';
 import { buildConfig, defaultKnobs, type BuildContext, type Knobs } from '../advisor/build';
 import { coerceConfig, enforceCouplings } from '../advisor/sanitize';
 import {
@@ -1926,5 +1933,241 @@ describe('apply — la fusion, probada directamente', () => {
     expect(out['buyDistanceBps']).toBe(42);
     // Y el resultado no es COLD para `diffConfig`, que es la red de detras.
     expect(diffConfig(strategy, vigente, out as unknown as BotConfig).coldFields).toEqual([]);
+  });
+});
+
+describe('apply — el suelo que puso el dueño de una V2 (spec 055, 054/H-01)', () => {
+  // En la V2, una distancia minima por encima de las distancias es legitima: el
+  // validador solo avisa («se elevaran hasta ahi») y el suelo compuesto hace lo
+  // que el dueño pidio. `enforceCouplings` la bajaba hasta la menor distancia con
+  // CUALQUIER perilla —20 → 10 bps con «apalancamiento»—, sin banda.
+  const OTRAS = ['leverage', 'coverage', 'sizeGrowth', 'cadence'] as const;
+
+  function conSueloAlto(kind: StrategyKind, nombre: string): Caso {
+    const m = VENUE_MARKETS.find((x) => x.nombre === nombre)!;
+    const ctx = contexto(m.spec, m.mark);
+    const knobs = defaultKnobs('EQUILIBRADA', ctx.features);
+    const base = botVivo(kind, ctx, knobs);
+    if (!base) throw new Error(`sin punto de partida en ${nombre}`);
+    const vigente = {
+      ...cfgDe(base),
+      minAllowedDistanceBps: 20,
+      buyDistanceBps: 10,
+      sellDistanceBps: 10,
+    } as unknown as BotConfig;
+    return { kind, mercado: nombre, vigente, ctx, mark: m.mark, knobs };
+  }
+
+  const MERCADOS = ['LIGHTER BTC', 'LIGHTER ETH', 'LIGHTER SOL'];
+
+  it('la configuracion de partida es valida: el validador de la V2 solo avisa', () => {
+    for (const nombre of MERCADOS) {
+      const caso = conSueloAlto(StrategyKind.MARKET_MAKER_V2, nombre);
+      const v = getStrategy(caso.kind).validate(caso.vigente, caso.ctx.market);
+      expect(`${nombre}: ${v.ok}`).toBe(`${nombre}: true`);
+      expect(v.issues.some((i) => i.field === 'minAllowedDistanceBps')).toBe(true);
+    }
+  });
+
+  it('ninguna perilla que no sea el diferencial le baja el suelo', () => {
+    let propuestas = 0;
+    for (const nombre of MERCADOS) {
+      const caso = conSueloAlto(StrategyKind.MARKET_MAKER_V2, nombre);
+      for (const perilla of OTRAS) {
+        for (const mov of MOVIMIENTOS) {
+          if (mov === 'IGUAL') continue;
+          const r = decidirCambio({
+            strategy: getStrategy(caso.kind),
+            vigente: caso.vigente,
+            knobs: caso.knobs,
+            ajustes: { ...SIN_MOVIMIENTO, [perilla]: mov },
+            ctx: caso.ctx,
+            refPrice: caso.mark,
+            inventario: 0,
+            permitirWarm: true,
+          });
+          if (typeof r === 'string') continue;
+          propuestas++;
+          const suelo = r.diff.changed.find((c) => c.key === 'minAllowedDistanceBps');
+          expect(`${nombre} / ${perilla} ${mov} → ${JSON.stringify(suelo ?? null)}`).toBe(
+            `${nombre} / ${perilla} ${mov} → null`,
+          );
+          expect(cfgDe(r.config)['minAllowedDistanceBps']).toBe(20);
+        }
+      }
+    }
+    // Que no pase por no proponer nada: la cadencia y la cobertura mueven otros
+    // campos de verdad.
+    expect(propuestas).toBeGreaterThan(5);
+  });
+
+  it('con el apalancamiento, que solo arrastraba la reparacion, no se propone nada', () => {
+    const caso = conSueloAlto(StrategyKind.MARKET_MAKER_V2, 'LIGHTER BTC');
+    for (const mov of ['MENOS', 'MAS'] as const) {
+      const r = decidirCambio({
+        strategy: getStrategy(caso.kind),
+        vigente: caso.vigente,
+        knobs: caso.knobs,
+        ajustes: { ...SIN_MOVIMIENTO, leverage: mov },
+        ctx: caso.ctx,
+        refPrice: caso.mark,
+        inventario: 0,
+        permitirWarm: true,
+      });
+      expect(`${mov}: ${typeof r === 'string' ? r : JSON.stringify(r.diff.changed)}`).toBe(
+        `${mov}: SIN_CAMBIOS`,
+      );
+    }
+  });
+
+  it('en la V1 la reparacion sigue: alli el validador exige el suelo bajo las distancias', () => {
+    // Con el suelo igual a las distancias, estrechar el diferencial baja las
+    // distancias, y el suelo tiene que bajar con ellas o la V1 lo rechaza. En un
+    // par que se mueve: en calma el objetivo del generador esta en el suelo por
+    // coste y estrechar no mueve nada.
+    const m = VENUE_MARKETS.find((x) => x.nombre === 'LIGHTER BTC')!;
+    const base0 = contexto(m.spec, m.mark);
+    const ctx = { ...base0, features: { ...base0.features, atrPct1h: 1.6 } };
+    const knobs = { ...defaultKnobs('EQUILIBRADA', ctx.features), spread: 'ALTA' as const };
+    const base = botVivo(StrategyKind.MARKET_MAKER, ctx, knobs);
+    if (!base) throw new Error('sin punto de partida');
+    const distancia = cfgDe(base)['buyDistanceBps'];
+    const vigente = {
+      ...cfgDe(base),
+      sellDistanceBps: distancia,
+      minAllowedDistanceBps: distancia,
+    } as unknown as BotConfig;
+    const strategy = getStrategy(StrategyKind.MARKET_MAKER);
+    expect(strategy.validate(vigente, m.spec).ok).toBe(true);
+
+    const r = decidirCambio({
+      strategy,
+      vigente,
+      knobs,
+      ajustes: { ...SIN_MOVIMIENTO, spread: 'MUCHO_MENOS' },
+      ctx,
+      refPrice: m.mark,
+      inventario: 0,
+      permitirWarm: true,
+    });
+    if (typeof r === 'string') throw new Error(`sin propuesta: ${r}`);
+    const nuevo = cfgDe(r.config);
+    expect(Number(nuevo['buyDistanceBps'])).toBeLessThan(Number(distancia));
+    expect(Number(nuevo['minAllowedDistanceBps'])).toBeLessThanOrEqual(
+      Math.min(Number(nuevo['buyDistanceBps']), Number(nuevo['sellDistanceBps'])),
+    );
+    expect(strategy.validate(r.config, m.spec).ok).toBe(true);
+  });
+});
+
+describe('apply — el diferencial va en el sentido pedido (spec 055, 054/H-02)', () => {
+  // El generador de la V2 reparte el diferencial objetivo entre la distancia base
+  // y el multiplicador de volatilidad, y los mueve en sentidos contrarios; el
+  // traslado acota cada uno por su lado y no conserva la suma. En torno a una de
+  // cada cuatro propuestas, «diferencial MAS» estrechaba lo que de verdad cotiza.
+  const TODOS = casos().filter(
+    (c) => c.kind === StrategyKind.MARKET_MAKER || c.kind === StrategyKind.MARKET_MAKER_V2,
+  );
+  const DISTANCIAS = ['buyDistanceBps', 'sellDistanceBps', 'minAllowedDistanceBps'];
+
+  /** El diferencial de la primera capa, como lo compone `plan()`, con techo y suelo. */
+  function efectivo(cfg: unknown, lado: 'buyDistanceBps' | 'sellDistanceBps', vol: number) {
+    const c = cfg as MarketMakerV2Config;
+    const x = composeSpreadBps(c, D(c[lado]), D(vol));
+    const conTecho = x.capBps.gt(0) ? Decimal.min(x.capBps, x.bps) : x.bps;
+    return Decimal.max(x.floorBps, conTecho);
+  }
+
+  function puntosDePartida(): Caso[] {
+    const r = semilla(20550916);
+    const out: Caso[] = [];
+    for (const caso of TODOS) {
+      out.push(caso);
+      const aMano = botAMano(caso, r);
+      if (aMano) out.push({ ...caso, vigente: aMano });
+    }
+    return out;
+  }
+
+  it('ninguna distancia se mueve al reves, y el diferencial de la V2 tampoco', () => {
+    const vistos = { MARKET_MAKER: 0, MARKET_MAKER_V2: 0 } as Record<string, number>;
+    for (const caso of puntosDePartida()) {
+      const strategy = getStrategy(caso.kind);
+      // La referencia es la del propio generador: el recorrido a cinco minutos.
+      const ref = (caso.ctx.features.atrPct1h * 100) / Math.sqrt(12);
+      for (const mov of MOVIMIENTOS) {
+        if (mov === 'IGUAL') continue;
+        const sentido = mov.endsWith('MAS') ? 1 : -1;
+        const r = decidirCambio({
+          strategy,
+          vigente: caso.vigente,
+          knobs: caso.knobs,
+          ajustes: { ...SIN_MOVIMIENTO, spread: mov },
+          ctx: caso.ctx,
+          refPrice: caso.mark,
+          inventario: 0,
+          permitirWarm: true,
+        });
+        if (typeof r === 'string') continue;
+        vistos[caso.kind]++;
+        const donde = `${caso.kind} / ${caso.mercado} / ${mov}`;
+
+        for (const c of r.diff.changed) {
+          if (!DISTANCIAS.includes(c.key)) continue;
+          const real = D(c.to as Numeric).comparedTo(D(c.from as Numeric));
+          expect(`${donde} → ${c.key} ${String(c.from)}→${String(c.to)}: ${real === sentido}`).toBe(
+            `${donde} → ${c.key} ${String(c.from)}→${String(c.to)}: true`,
+          );
+        }
+
+        if (caso.kind !== StrategyKind.MARKET_MAKER_V2) continue;
+        for (const lado of ['buyDistanceBps', 'sellDistanceBps'] as const) {
+          for (const vol of [0, ref, 2 * ref]) {
+            const antes = efectivo(caso.vigente, lado, vol);
+            const despues = efectivo(r.config, lado, vol);
+            const cambio = despues.comparedTo(antes);
+            expect(
+              `${donde} → ${lado} a ${vol.toFixed(1)} bps: ${antes.toFixed(2)}→${despues.toFixed(2)} ` +
+                `${cambio === -sentido ? 'AL REVES' : 'bien'}`,
+            ).toBe(
+              `${donde} → ${lado} a ${vol.toFixed(1)} bps: ${antes.toFixed(2)}→${despues.toFixed(2)} bien`,
+            );
+          }
+        }
+      }
+    }
+    // Que no pase por no proponer nada, en ninguno de los dos.
+    expect(vistos['MARKET_MAKER']).toBeGreaterThan(20);
+    expect(vistos['MARKET_MAKER_V2']).toBeGreaterThan(20);
+  });
+
+  it('en la V2 el diferencial sigue sirviendo: a la volatilidad de referencia, «mas» ensancha', () => {
+    // Quedarse quietas las distancias no puede dejar la perilla sin efecto: el
+    // multiplicador de volatilidad, el techo y la separacion siguen moviendose.
+    let ensancha = 0;
+    let total = 0;
+    for (const caso of puntosDePartida()) {
+      if (caso.kind !== StrategyKind.MARKET_MAKER_V2) continue;
+      const r = decidirCambio({
+        strategy: getStrategy(caso.kind),
+        vigente: caso.vigente,
+        knobs: caso.knobs,
+        ajustes: { ...SIN_MOVIMIENTO, spread: 'MAS' },
+        ctx: caso.ctx,
+        refPrice: caso.mark,
+        inventario: 0,
+        permitirWarm: true,
+      });
+      if (typeof r === 'string') continue;
+      total++;
+      const ref = (caso.ctx.features.atrPct1h * 100) / Math.sqrt(12);
+      if (
+        efectivo(r.config, 'buyDistanceBps', ref).gt(efectivo(caso.vigente, 'buyDistanceBps', ref))
+      ) {
+        ensancha++;
+      }
+    }
+    expect(total).toBeGreaterThan(10);
+    expect(ensancha).toBeGreaterThan(total / 2);
   });
 });

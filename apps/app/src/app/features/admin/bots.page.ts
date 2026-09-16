@@ -188,6 +188,9 @@ const ESTRATEGIAS: StrategyKind[] = [
                         [attr.title]="ia.porQue"
                       >
                         {{ ia.texto }}
+                        @if (ia.porQue) {
+                          <span class="solo-lector">(no actúa: {{ ia.porQue }})</span>
+                        }
                       </ui-badge>
                     }
                   </div>

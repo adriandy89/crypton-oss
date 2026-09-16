@@ -84,6 +84,9 @@
                     [attr.title]="ia.porQue"
                   >
                     {{ ia.texto }}
+                    @if (ia.porQue) {
+                      <span class="solo-lector">(no actúa: {{ ia.porQue }})</span>
+                    }
                   </ui-badge>
                 }
               </div>
@@ -788,21 +791,24 @@
           </ui-card>
         }
 
-        <!-- El borrador nació sobre otra versión (spec 053, H-05): guardar lo
-             aplicaría entero y desharía lo que cambió entretanto. Guardar además
-             lo confirma; esto lo dice antes. -->
-        @if (borradorViejo(); as v) {
-          <ui-notice tone="warn" icon="warning-outline">
-            La configuración ha cambiado mientras editabas (versión {{ v.de }} → {{ v.a }}), quizá
-            por un ajuste del Modo IA. Si guardas, se aplica tu borrador entero y se deshace lo que
-            cambió.
-            <ion-button size="small" fill="clear" (click)="discard()">Descartar mis cambios</ion-button>
-          </ui-notice>
-        }
-
         @if (dirty()) {
-          <div class="save-bar">
-            <ion-button fill="clear" (click)="discard()">Descartar</ion-button>
+          <div class="save-bar bd-save">
+            <!-- La versión cambió debajo de un borrador a medias (spec 055, H-05):
+                 el borrador ya está recolocado sobre la nueva, con solo lo
+                 editado. Dentro de la barra fija, que es desde donde se guarda
+                 (spec 056, A-2). -->
+            @if (avisoDebajo(); as v) {
+              <ui-notice class="bd-save-aviso" tone="warn" icon="warning-outline">
+                La configuración ha cambiado mientras editabas (versión {{ v.de }} → {{ v.a }}){{
+                  v.origen
+                }}. El formulario ya enseña la nueva con tus cambios encima, y al guardar se aplican
+                solo ellos.
+                @if (v.choques) {
+                  Lo que editaste en {{ v.choques }} sustituye a lo que cambió ahí.
+                }
+              </ui-notice>
+            }
+            <ion-button fill="clear" [disabled]="saving()" (click)="discard()">Descartar</ion-button>
             <ion-button [disabled]="saving()" (click)="save()">
               @if (saving()) {
                 <ion-spinner name="crescent" />

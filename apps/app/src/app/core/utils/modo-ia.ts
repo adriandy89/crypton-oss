@@ -6,7 +6,9 @@ import {
   type AiSwitches,
   type AiTrigger,
   type SetAiMode,
+  type SinCanalIa,
 } from '../services/admin-bots.service';
+import type { TelegramStatus } from '../services/telegram.service';
 import { shortDate } from './format';
 
 /**
@@ -108,6 +110,31 @@ export function mismoBorrador(a: BorradorIa, b: BorradorIa): boolean {
 }
 
 /**
+ * El borrador del Modo IA sobre lo guardado NUEVO (spec 056, A-5).
+ *
+ * Lo que el administrador tocó conserva su valor; lo demás toma el de la
+ * lectura nueva. Antes se conservaba el borrador ENTERO en cuanto había una
+ * edición, y guardar mandaba también lo no tocado: si otro dispositivo había
+ * apagado el modo, cambiar aquí «recolocar» lo volvía a encender. Es la regla
+ * de `recolocarBorrador` en `shared`, campo a campo.
+ */
+export function rebasarBorradorIa(
+  base: BorradorIa,
+  borrador: BorradorIa,
+  nuevo: BorradorIa,
+): BorradorIa {
+  return {
+    mode: borrador.mode === base.mode ? nuevo.mode : borrador.mode,
+    trigger: borrador.trigger === base.trigger ? nuevo.trigger : borrador.trigger,
+    reviewEveryMinutes:
+      borrador.reviewEveryMinutes === base.reviewEveryMinutes
+        ? nuevo.reviewEveryMinutes
+        : borrador.reviewEveryMinutes,
+    allowWarm: borrador.allowWarm === base.allowWarm ? nuevo.allowWarm : borrador.allowWarm,
+  };
+}
+
+/**
  * Hasta cuándo esta dormido por fallos, o `null` si no lo esta.
  *
  * `paused_until` NO se limpia cuando el supervisor se recupera —solo al apagar
@@ -122,6 +149,73 @@ export function dormidaHasta(
   const fecha = new Date(ajuste.paused_until);
   return Number.isFinite(fecha.getTime()) && fecha.getTime() > ahora ? fecha : null;
 }
+
+/**
+ * Si el modo, tal como lo va a ejercer el servidor, propone y espera: el manual,
+ * o el automático cuando el servidor lo degrada.
+ */
+export function propone(
+  mode: AiMode,
+  interruptores: Pick<AiSwitches, 'forzarManual'> | null | undefined,
+): boolean {
+  return mode === 'MANUAL' || (mode === 'AUTO' && !!interruptores?.forzarManual);
+}
+
+/**
+ * Por qué no le llegarían las sugerencias a quien mira, según su Telegram, o
+ * `null` si le llegan (spec 055, 053/H-03). `undefined` mientras no se sabe: sin
+ * dato no se bloquea nada, y decide el servidor.
+ *
+ * Es la regla del servidor (`supervisor/canal.ts`): un chat verificado y los
+ * avisos del Modo IA sin apagar. Las preferencias llegan ya fundidas con las de
+ * fábrica, donde `ai` vale `true`.
+ */
+export function sinCanalDe(
+  status: Pick<TelegramStatus, 'linked' | 'prefs'> | null | undefined,
+): SinCanalIa | null | undefined {
+  if (!status) return undefined;
+  if (!status.linked) return 'SIN_TELEGRAM';
+  if (status.prefs && 'ai' in status.prefs && !status.prefs.ai) return 'AVISOS_IA_APAGADOS';
+  return null;
+}
+
+/**
+ * El canal que cuenta: lo que esta app sabe del Telegram de quien mira, y si aún
+ * no lo sabe, lo que dijo el servidor (spec 056, A-4).
+ *
+ * Primero el del cliente porque cambia en el acto al vincular o al apagar los
+ * avisos, y el del servidor solo con la siguiente lectura del Modo IA. Con `??`
+ * un `null` del cliente —«sí hay canal»— caía al del servidor, y tras vincular
+ * seguía el aviso rojo.
+ */
+export function canalEfectivo(
+  status: Pick<TelegramStatus, 'linked' | 'prefs'> | null | undefined,
+  interruptores: Pick<AiSwitches, 'sinCanal'> | null | undefined,
+): SinCanalIa | null {
+  const cliente = sinCanalDe(status);
+  return cliente !== undefined ? cliente : (interruptores?.sinCanal ?? null);
+}
+
+/** Los interruptores con el canal ya resuelto por `canalEfectivo`. */
+export function conCanalEfectivo(
+  interruptores: AiSwitches | null | undefined,
+  status: Pick<TelegramStatus, 'linked' | 'prefs'> | null | undefined,
+): AiSwitches | null {
+  if (!interruptores) return null;
+  return { ...interruptores, sinCanal: canalEfectivo(status, interruptores) };
+}
+
+/** El motivo, para completar una frase: «… y {motivo}». */
+export const TEXTO_SIN_CANAL: Readonly<Record<SinCanalIa, string>> = {
+  SIN_TELEGRAM: 'no tienes Telegram vinculado',
+  AVISOS_IA_APAGADOS: 'tienes apagados los avisos del Modo IA en Telegram',
+};
+
+/** Lo que falta, para completar «necesita …». */
+export const FALTA_PARA_PROPONER: Readonly<Record<SinCanalIa, string>> = {
+  SIN_TELEGRAM: 'un chat de Telegram vinculado',
+  AVISOS_IA_APAGADOS: 'los avisos del Modo IA encendidos en Telegram',
+};
 
 /** El bot, en lo que a la pastilla le importa. */
 export interface BotParaIa {
@@ -154,6 +248,12 @@ export function porQueNoActua(
     return `Dormida tras varios fallos seguidos, hasta el ${shortDate(dormida)}.`;
   }
   if (bot.status !== 'RUNNING') return 'La IA solo revisa bots en marcha.';
+  if (interruptores?.sinCanal && propone(ajuste.mode, interruptores)) {
+    return (
+      `Propone por Telegram y ${TEXTO_SIN_CANAL[interruptores.sinCanal]}: no revisa este bot ` +
+      'hasta que lo arregles.'
+    );
+  }
   if (interruptores?.forzarManual && ajuste.mode === 'AUTO') {
     return 'El servidor obliga a proponer y esperar: no aplicará nada sola.';
   }
@@ -222,7 +322,13 @@ export function textoDeRevision(
   );
 }
 
-/** Lo que el supervisor NO puede hacer. Es lo que alguien con prisa supone al revés. */
+/**
+ * Lo que el supervisor NO puede hacer. Es lo que alguien con prisa supone al revés.
+ *
+ * Las órdenes sí puede moverlas, si se le deja: un cambio que recoloca cancela
+ * y vuelve a tender la escalera. Decir que no las cancela nunca contradecía el
+ * interruptor de las opciones avanzadas (spec 056, A-12).
+ */
 export const LIMITES_IA =
-  'Nunca toca el capital, el par, la cuenta ni la dirección, y no puede parar el bot, cerrar su ' +
-  'posición ni cancelar sus órdenes.';
+  'Nunca toca el capital, el par, la cuenta ni la dirección, y no puede parar el bot ni cerrar ' +
+  'su posición. Solo recoloca las órdenes si se lo permites en las opciones avanzadas.';

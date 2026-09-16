@@ -53,7 +53,7 @@ export class AdminAiController {
   @ApiOperation({ summary: 'Modo IA de los bots propios, interruptores y alcance (solo ADMIN)' })
   async resumen(@GetUserInfo() admin: SessionUser) {
     return {
-      interruptores: this.supervisor.interruptores(),
+      interruptores: await this.interruptoresPara(admin.id),
       estrategias: this.policy.estrategias(),
       bots: await this.policy.encendidosDe(admin.id),
     };
@@ -64,9 +64,22 @@ export class AdminAiController {
   async get(@GetUserInfo() admin: SessionUser, @Param() { id }: IdParamDto) {
     // Con los interruptores: el panel del bot no puede depender de que el
     // resumen de la lista haya llegado para decir la verdad.
+    const ajuste = await this.policy.get(admin.id, id);
+    return { ...ajuste, interruptores: await this.interruptoresPara(admin.id) };
+  }
+
+  /**
+   * Los interruptores del servidor, más si a ESTE administrador le llegarían las
+   * sugerencias (spec 055, 053/H-03).
+   *
+   * Sin canal, el supervisor no revisa un bot en «propone y espera», y la
+   * pastilla tiene que poder decirlo. Va aquí y no en cada bot porque es del
+   * dueño, y los bots del Modo IA son siempre del administrador que pregunta.
+   */
+  private async interruptoresPara(adminId: string) {
     return {
-      ...(await this.policy.get(admin.id, id)),
-      interruptores: this.supervisor.interruptores(),
+      ...this.supervisor.interruptores(),
+      sinCanal: await this.policy.sinCanalDe(adminId),
     };
   }
 

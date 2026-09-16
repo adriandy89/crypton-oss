@@ -169,3 +169,35 @@ describe('SupervisorScheduler — lo que un evento NO adelanta', () => {
     expect(supervisor.revisarBot).not.toHaveBeenCalled();
   });
 });
+
+describe('El barrido pide solo lo que se va a revisar (spec 056, R-1)', () => {
+  // Un bot que una barrera salta no actualiza su ultima revision, y la cola se
+  // ordena por ella: sin los interruptores, los que el supervisor saltaria se
+  // quedaban en cabeza y tapaban a los demas.
+  it('pasa los interruptores del servidor a la eleccion', async () => {
+    const interruptores = { encendido: true, forzarManual: true, soloSimulados: true };
+    const elegido = { bot_id: 'bot-1', bot: { id: 'bot-1' } };
+    const policy = { pendientesDeRevision: jest.fn().mockResolvedValue([elegido]) };
+    const supervisor = {
+      interruptores: jest.fn().mockReturnValue(interruptores),
+      revisarBot: jest.fn().mockResolvedValue(null),
+    };
+    const config = {
+      get: (clave: string, porDefecto?: string) =>
+        clave === 'AI_AGENT_ENABLE' ? 'true' : porDefecto,
+    };
+    const scheduler = new SupervisorScheduler(
+      {} as never,
+      { setnx: jest.fn().mockResolvedValue(true) } as never,
+      {} as never,
+      config as never,
+      policy as never,
+      supervisor as never,
+    );
+
+    await scheduler.barrer();
+
+    expect(policy.pendientesDeRevision).toHaveBeenCalledWith(5, interruptores);
+    expect(supervisor.revisarBot).toHaveBeenCalledWith(elegido, elegido.bot, 'CRON');
+  });
+});

@@ -5,6 +5,7 @@ import {
   Mutability,
   StrategyKind,
   type BotConfig,
+  type MarketFeatures,
   type Numeric,
 } from '@crypton/shared';
 import { camposEfectivos, getStrategy, VENUE_MARKETS } from '@crypton/strategy-core';
@@ -125,19 +126,20 @@ const ALCANCE: Readonly<Record<string, Readonly<Record<Perilla, readonly string[
  * aplica despues del traslado (`enforceCouplings` y sus acoplamientos propios).
  *
  *   - `leverage` baja al menor de los topes (el del usuario, el del venue, 18x).
- *   - `minAllowedDistanceBps` baja hasta la menor de las distancias. En la V2 eso
- *     pisa una distancia minima que su dueño puso a proposito por encima: es el
- *     hallazgo H-01 del spec 054, reportado y sin corregir.
+ *   - En la V1, `minAllowedDistanceBps` baja hasta la menor de las distancias:
+ *     alli el validador lo exige. En la V2 ya no (spec 055, 054/H-01): un suelo
+ *     por encima de las distancias es legitimo, y bajarlo con cualquier perilla
+ *     pisaba lo que su dueño puso a proposito.
  *   - `layerDistanceMultiplier` sube a 1,05 cuando hay varias capas.
  */
 const ACOPLAMIENTOS: Readonly<Record<string, readonly string[]>> = {
   MARKET_MAKER: ['leverage', 'minAllowedDistanceBps', 'layerDistanceMultiplier'],
-  MARKET_MAKER_V2: ['leverage', 'minAllowedDistanceBps', 'layerDistanceMultiplier'],
+  MARKET_MAKER_V2: ['leverage', 'layerDistanceMultiplier'],
   TREND_FOLLOW: ['leverage'],
   TRAILING_PROFIT: ['leverage'],
 };
 
-const RASGOS = {
+const RASGOS: MarketFeatures = {
   mark: 0,
   volAnnualPct: 68,
   atrPct1h: 0.45,
@@ -152,7 +154,7 @@ const RASGOS = {
 };
 
 /** Un mercado que va en linea recta y se mueve mucho: el generador ensancha. */
-const RASGOS_VIOLENTOS = {
+const RASGOS_VIOLENTOS: MarketFeatures = {
   ...RASGOS,
   volAnnualPct: 140,
   atrPct1h: 1.6,
@@ -167,7 +169,7 @@ interface Escenario {
   capital: number;
   /** El tope de apalancamiento del usuario HOY. El bot nacio sin el. */
   tope: number | null;
-  rasgos: typeof RASGOS;
+  rasgos: MarketFeatures;
   perfiles: readonly Profile[];
   /** Perillas de partida distintas de las del perfil. */
   perillas?: Partial<Knobs>;

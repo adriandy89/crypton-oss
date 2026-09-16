@@ -153,8 +153,21 @@ export function parseRevision(raw: string): Revision | null {
     // como lo que es: texto ajeno. Se exige que SEA una cadena en vez de
     // convertirla — `String()` sobre un objeto da «[object Object]», y eso
     // acabaria de explicacion en una tarjeta.
-    motivo: typeof o['motivo'] === 'string' ? o['motivo'].slice(0, MAX_MOTIVO) : '',
+    motivo: typeof o['motivo'] === 'string' ? recortarSinPartir(o['motivo'], MAX_MOTIVO) : '',
   };
+}
+
+/**
+ * Recorta sin dejar medio par sustituto.
+ *
+ * `slice` cuenta unidades UTF-16, y un emoji justo en el limite quedaba partido.
+ * El motivo viaja dentro de los avisos de Telegram (spec 054), y un texto con un
+ * sustituto suelto no es UTF-8 valido: Telegram rechaza el mensaje ENTERO, con
+ * las demas lineas del lote dentro (spec 056, R-7).
+ */
+function recortarSinPartir(texto: string, max: number): string {
+  const corte = texto.slice(0, max);
+  return /[\uD800-\uDBFF]$/.test(corte) ? corte.slice(0, -1) : corte;
 }
 
 const esAccion = (v: unknown): v is Accion => ACCIONES.includes(v as Accion);

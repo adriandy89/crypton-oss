@@ -89,3 +89,26 @@
   - CA-1 a CA-8: tests, builds, lint y mutaciones.
   - **CA-9 queda para la comprobación manual del usuario.**
 - [x] Índice de `specs/README.md` en `hecho`, y memoria
+
+## Fase 7 — Fork OSS (pedido por el usuario)
+
+- [x] **Antes de portar, un nombre de bot de producción que se había escapado.**
+  - La limpieza de `5a2b892` buscó los nombres línea a línea, y uno estaba partido por el salto de
+    un comentario de `supervisor.service.ts`.
+  - Se quitó en `d604c99`.
+- [x] **El parche.**
+  - Ocho commits: los dos de `main` posteriores a la última sincronización (las tareas del 052),
+    todo el 053 y todo el 054.
+  - 3-way desde `5a2b892` con las exclusiones de siempre: **46 ficheros y un solo conflicto**, el de
+    siempre en `bot-detail.page.ts` por los planes.
+  - Las dos filas del índice, a mano.
+- [x] **Verificación.**
+  - 42/46 idénticos por md5 sin retorno de carro, 0 ausentes y **0 líneas nuevas perdidas**.
+  - Los 4 distintos lo son solo por planes: el e2e de Telegram, el aviso de «plan Pro», el
+    `PlansService` del detalle y la columna «plan» de la guía.
+  - Sin ruido de fin de línea.
+  - OSS con 7113 tests: API 5706 frente a 5742; la diferencia son los 36 de planes y de la puerta de
+    Telegram.
+  - Lint con 0 errores, `check:env` coherente y `nest build` y `ng build` en verde.
+- [x] Commit local `a51083d`, **sin push**. Limpieza de los objetos privados del clon: `git cat-file
+      -e` ya no encuentra ninguno de los commits portados.

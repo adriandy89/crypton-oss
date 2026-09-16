@@ -57,6 +57,7 @@ describe('Rutas del Modo IA (spec 053)', () => {
     set: jest.fn(),
     encendidosDe: jest.fn(),
     estrategias: jest.fn(),
+    sinCanalDe: jest.fn(),
   };
   const supervisor = { interruptores: jest.fn() };
   const audit = { record: jest.fn(), recordNow: jest.fn() };
@@ -97,6 +98,7 @@ describe('Rutas del Modo IA (spec 053)', () => {
     policy.set.mockResolvedValue({ bot_id: BOT_ID, mode: 'AUTO', cubierta: true });
     policy.encendidosDe.mockResolvedValue([{ bot_id: BOT_ID, mode: 'AUTO' }]);
     policy.estrategias.mockReturnValue(['MARKET_MAKER']);
+    policy.sinCanalDe.mockResolvedValue(null);
     supervisor.interruptores.mockReturnValue(INTERRUPTORES);
     audit.recordNow.mockResolvedValue(undefined);
     bots.detail.mockResolvedValue({ id: BOT_ID, owner: { id: 'otra' } });
@@ -109,7 +111,7 @@ describe('Rutas del Modo IA (spec 053)', () => {
     const res = await http().get('/admin/ai').set('x-rol', 'ADMIN').expect(200);
 
     expect(res.body).toEqual({
-      interruptores: INTERRUPTORES,
+      interruptores: { ...INTERRUPTORES, sinCanal: null },
       estrategias: ['MARKET_MAKER'],
       bots: [{ bot_id: BOT_ID, mode: 'AUTO' }],
     });
@@ -121,7 +123,26 @@ describe('Rutas del Modo IA (spec 053)', () => {
     const res = await http().get(`/admin/bots/${BOT_ID}/ai`).set('x-rol', 'ADMIN').expect(200);
 
     expect(policy.get).toHaveBeenCalledWith(ADMIN_ID, BOT_ID);
-    expect(res.body).toMatchObject({ mode: 'AUTO', cubierta: true, interruptores: INTERRUPTORES });
+    expect(res.body).toMatchObject({
+      mode: 'AUTO',
+      cubierta: true,
+      interruptores: { ...INTERRUPTORES, sinCanal: null },
+    });
+  });
+
+  it('las dos lecturas dicen si al administrador le llegarian las sugerencias (spec 055)', async () => {
+    // Sin canal, el supervisor no revisa un bot en «propone y espera»: la app lo
+    // pinta en gris con el motivo en vez de dar a entender que esta actuando.
+    policy.sinCanalDe.mockResolvedValue('AVISOS_IA_APAGADOS');
+    const resumen = await http().get('/admin/ai').set('x-rol', 'ADMIN').expect(200);
+    const uno = await http().get(`/admin/bots/${BOT_ID}/ai`).set('x-rol', 'ADMIN').expect(200);
+
+    for (const res of [resumen, uno]) {
+      expect(res.body.interruptores).toEqual({ ...INTERRUPTORES, sinCanal: 'AVISOS_IA_APAGADOS' });
+    }
+    // Del administrador que pregunta: los bots del Modo IA son siempre suyos.
+    expect(policy.sinCanalDe).toHaveBeenCalledTimes(2);
+    expect(policy.sinCanalDe).toHaveBeenCalledWith(ADMIN_ID);
   });
 
   it('PUT /admin/bots/:id/ai sigue en su sitio, pasa el motivo y audita', async () => {
@@ -188,5 +209,6 @@ describe('Rutas del Modo IA (spec 053)', () => {
     expect(policy.set).not.toHaveBeenCalled();
     expect(policy.encendidosDe).not.toHaveBeenCalled();
     expect(supervisor.interruptores).not.toHaveBeenCalled();
+    expect(policy.sinCanalDe).not.toHaveBeenCalled();
   });
 });

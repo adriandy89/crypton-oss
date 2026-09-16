@@ -131,6 +131,20 @@ describe('decision — el parseo no repara, descarta', () => {
     expect(r?.ajustes.leverage).toBe('IGUAL');
   });
 
+  it('el motivo se recorta sin partir un emoji (spec 056, R-7)', () => {
+    // Un sustituto suelto no es UTF-8 valido, y Telegram rechaza el lote entero.
+    const largo = `${'a'.repeat(239)}🤖 y sigue`;
+    const r = parseRevision(JSON.stringify({ ...JSON.parse(buena), motivo: largo }));
+    expect(r?.motivo).toBe('a'.repeat(239));
+    const ultimo = r!.motivo.charCodeAt(r!.motivo.length - 1);
+    expect(ultimo >= 0xd800 && ultimo <= 0xdbff).toBe(false);
+    // Y un emoji entero dentro del limite se queda.
+    const cabe = `${'a'.repeat(238)}🤖`;
+    expect(parseRevision(JSON.stringify({ ...JSON.parse(buena), motivo: cabe }))?.motivo).toBe(
+      cabe,
+    );
+  });
+
   it('una banda fuera del enum tira la respuesta ENTERA', () => {
     // No se repara la perilla mala dejando pasar las otras cuatro: si el modelo
     // se ha salido del contrato, lo que dijo no es de fiar, y al otro lado esta

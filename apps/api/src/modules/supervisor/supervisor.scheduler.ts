@@ -117,7 +117,12 @@ export class SupervisorScheduler implements OnModuleInit {
     if (!(await this.cache.setnx('lock:ai-sweep', Date.now(), 280).catch(() => false))) return;
 
     const tope = Number(this.config.get<string>('AI_AGENT_SWEEP_MAX', '5')) || 5;
-    const pendientes = await this.policy.pendientesDeRevision(tope);
+    // Con los interruptores: lo que el supervisor saltaria no entra en la cola, o
+    // se quedaria en cabeza para siempre (spec 056, R-1).
+    const pendientes = await this.policy.pendientesDeRevision(
+      tope,
+      this.supervisor.interruptores(),
+    );
 
     for (const ajuste of pendientes) {
       try {

@@ -4,6 +4,7 @@ import { EventSeverity } from '@crypton/shared';
 import { BUS_CHANNELS, BusService, DbService } from 'src/libs';
 import { MarketDataService } from '../market-data';
 import { defaultKnobs } from '../advisor/build';
+import { MENSAJE_SIN_CANAL, motivoSinCanal, SELECT_VINCULO, type SinCanal } from './canal';
 
 /** Lo que se pide al cambiar el Modo IA. `reason` lo exige el DTO de la ruta. */
 export interface CambioDeModoIa {
@@ -133,6 +134,21 @@ export class SupervisorPolicyService {
     });
   }
 
+  /**
+   * Por que no le llegarian a este usuario las sugerencias, o `null` si le llegan
+   * (spec 055, 053/H-03).
+   *
+   * Lo usan encender «propone y espera» y las respuestas del Modo IA, para que la
+   * app pinte en gris un bot que el supervisor no va a revisar.
+   */
+  async sinCanalDe(userId: string): Promise<SinCanal | null> {
+    const vinculo = await this.db.telegramLink.findUnique({
+      where: { user_id: userId },
+      select: SELECT_VINCULO,
+    });
+    return motivoSinCanal(vinculo);
+  }
+
   /** Las estrategias que cubre el Modo IA, para que la app no tenga una copia. */
   estrategias(): string[] {
     return [...ESTRATEGIAS_CON_SUPERVISOR];
@@ -167,21 +183,20 @@ export class SupervisorPolicyService {
     // modo aparece encendido y no pasa nada nunca, y quien lo enciende concluye
     // que el supervisor no propone —no que le falta vincular un chat—. El peor
     // sintoma posible es el silencio (spec 047, G-03).
-    if (dto.mode === AiMode.MANUAL) {
-      const link = await this.db.telegramLink.findUnique({
-        where: { user_id: adminId },
-        select: { verified_at: true },
-      });
-      if (!link?.verified_at) {
-        throw new ForbiddenException(
-          'El modo «propone y espera» manda las sugerencias por Telegram, y no tienes ' +
-            'ningún chat vinculado: no te llegaría ninguna. Vincúlalo en Cuenta → Telegram ' +
-            'y vuelve a intentarlo.',
-        );
-      }
+    //
+    // Con la MISMA regla con la que el supervisor decide si revisa y el
+    // notificador si entrega: tambien los avisos de IA encendidos, que antes no se
+    // miraban (spec 055, 053/H-03).
+    //
+    // Solo al PASAR a manual. Un bot que ya lo esta y perdio el canal tiene que
+    // poder cambiar sus opciones: el supervisor no lo revisa mientras tanto, y
+    // negarselo solo dejaba la salida de cambiar de modo (spec 056, R-6).
+    const previa = await this.db.botAiSetting.findUnique({ where: { bot_id: botId } });
+    if (dto.mode === AiMode.MANUAL && previa?.mode !== AiMode.MANUAL) {
+      const sinCanal = await this.sinCanalDe(adminId);
+      if (sinCanal) throw new ForbiddenException(MENSAJE_SIN_CANAL[sinCanal]);
     }
 
-    const previa = await this.db.botAiSetting.findUnique({ where: { bot_id: botId } });
     // Los rasgos del par se siembran A LA VEZ que las perillas y por el mismo
     // motivo: son la referencia contra la que se mide el cambio de regimen, y
     // sin ella esa linea —la que de verdad decide— no se emite nunca
@@ -341,9 +356,26 @@ export class SupervisorPolicyService {
     };
   }
 
-  /** Los bots que toca revisar, ya filtrados por la frontera. */
-  async pendientesDeRevision(limite: number, ahora = new Date()) {
-    return this.db.botAiSetting.findMany({
+  /**
+   * Los bots que toca revisar, ya filtrados por la frontera.
+   *
+   * Solo entran los que el supervisor va a revisar de verdad (spec 056, R-1). La
+   * cola se ordena por la ultima revision, y un bot que una barrera salta no la
+   * actualiza: si entrara, se quedaria en cabeza para siempre y, con cinco
+   * como el, ningun otro bot se barreria nunca. Por eso se quedan fuera:
+   *
+   *   - con el servidor en «solo simulados», los bots reales, en la consulta;
+   *   - los que proponen y esperan sin canal para las sugerencias (spec 055),
+   *     en codigo y ANTES del tope. En la consulta no: `prefs` es JSON, y en SQL
+   *     una clave ausente compara como NULL, asi que un filtro sobre ella dejaria
+   *     fuera a quien tiene las preferencias de antes del Modo IA, sin `ai`.
+   */
+  async pendientesDeRevision(
+    limite: number,
+    opciones: { soloSimulados?: boolean; forzarManual?: boolean } = {},
+    ahora = new Date(),
+  ) {
+    const candidatos = await this.db.botAiSetting.findMany({
       where: {
         mode: { in: [AiMode.MANUAL, AiMode.AUTO] },
         // El disparador se respeta en los DOS sentidos. El manejador de eventos
@@ -359,10 +391,13 @@ export class SupervisorPolicyService {
           // quitan el rol de administrador, sus politicas dejan de barrerse sin
           // que nadie tenga que acordarse de apagarlas una por una.
           user: DUENO_CON_MODO_IA,
+          ...(opciones.soloSimulados ? { dry_run: true } : {}),
         },
       },
       orderBy: { last_review_at: { sort: 'asc', nulls: 'first' } },
-      take: limite,
+      // El tope va DESPUES de quitar a los que no tienen canal. El Modo IA solo
+      // lo tienen bots de administradores: la poblacion es de decenas.
+      take: CANDIDATOS_POR_BARRIDO,
       include: {
         bot: {
           select: {
@@ -382,8 +417,28 @@ export class SupervisorPolicyService {
         },
       },
     });
+
+    // Lo que no se aplica solo se propone por Telegram (spec 055, 053/H-03).
+    const propone = (modo: AiMode) => modo === AiMode.MANUAL || opciones.forzarManual === true;
+    const duenos = [
+      ...new Set(candidatos.filter((c) => propone(c.mode)).map((c) => c.bot.user_id)),
+    ];
+    const conCanal = new Set<string>();
+    if (duenos.length > 0) {
+      const vinculos = await this.db.telegramLink.findMany({
+        where: { user_id: { in: duenos } },
+        select: { user_id: true, ...SELECT_VINCULO },
+      });
+      for (const v of vinculos) if (motivoSinCanal(v) === null) conCanal.add(v.user_id);
+    }
+    return candidatos
+      .filter((c) => !propone(c.mode) || conCanal.has(c.bot.user_id))
+      .slice(0, limite);
   }
 }
+
+/** Cuantas politicas se leen como mucho para elegir las de un barrido. */
+const CANDIDATOS_POR_BARRIDO = 200;
 
 /**
  * El dueño de un bot al que el supervisor puede tocar: administrador y con la

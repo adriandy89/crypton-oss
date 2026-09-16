@@ -72,6 +72,9 @@ export const AYUDA_DISPARO: Record<AiTrigger, string> = {
   OPERACION: 'Solo al cerrar un ciclo o ante un aviso de riesgo, nunca por reloj.',
 };
 
+/** Por qué no le llegarían las sugerencias del Modo IA a su dueño (spec 055). */
+export type SinCanalIa = 'SIN_TELEGRAM' | 'AVISOS_IA_APAGADOS';
+
 /**
  * Lo que los interruptores del servidor dejan hacer hoy (spec 053).
  *
@@ -85,6 +88,12 @@ export interface AiSwitches {
   forzarManual: boolean;
   /** Solo actua sobre bots simulados. */
   soloSimulados: boolean;
+  /**
+   * Si al administrador que pregunta le llegarían las sugerencias, o por qué no
+   * (spec 055, 053/H-03). Sin canal, el supervisor no revisa sus bots en
+   * «propone y espera». Opcional: una API anterior no lo manda.
+   */
+  sinCanal?: SinCanalIa | null;
 }
 
 export interface AiSetting {

@@ -1,5 +1,5 @@
 import { NotifierService } from './notifier.service';
-import { MAX_TEXTO, recortar, trocear } from './telegram-client';
+import { MAX_TEXTO, bienFormado, recortar, trocear } from './telegram-client';
 
 /**
  * El resumen diario sumaba el PnL de los bots SIMULADOS al de los reales.
@@ -181,7 +181,14 @@ function buildEntrega(prefs: Record<string, boolean> = {}, cerrojo = true) {
   const vaciar = (): Promise<void> =>
     (service as unknown as { flush: (chatId: string) => Promise<void> }).flush('111');
 
-  return { service, onEvent, lineas, leases, enviados, vaciar };
+  // Las pausas entre trozos se cuentan, no se duermen.
+  const esperas: number[] = [];
+  (service as unknown as { esperar: (ms: number) => Promise<void> }).esperar = (ms) => {
+    esperas.push(ms);
+    return Promise.resolve();
+  };
+
+  return { service, onEvent, lineas, leases, enviados, vaciar, esperas };
 }
 
 const deLaApi = (extra: Record<string, unknown> = {}) => ({
@@ -390,6 +397,61 @@ describe('NotifierService — mensajes que Telegram acepta (spec 054)', () => {
     // Y una etiqueta a medio escribir no se deja.
     const aMedias = recortar(`${'z'.repeat(83)}</b>${'r'.repeat(100)}`, 101);
     expect(aMedias).toBe(`${'z'.repeat(83)}…`);
+  });
+
+  it('entre dos trozos de un lote hay una pausa, y con uno solo no (spec 056, R-5)', async () => {
+    // Una rafaga seguida al mismo chat es lo que Telegram corta con un 429, y el
+    // cliente no reintenta: el trozo se perderia.
+    const largo = buildEntrega();
+    for (let i = 0; i < 12; i++) {
+      await largo.onEvent(delSupervisor(i, `aviso ${i}: ${'x'.repeat(900)}`));
+    }
+    await largo.vaciar();
+    expect(largo.esperas).toHaveLength(largo.enviados.length - 1);
+    expect(largo.esperas.every((ms) => ms >= 1000)).toBe(true);
+
+    const corto = buildEntrega();
+    await corto.onEvent(delSupervisor(0, 'uno'));
+    await corto.vaciar();
+    expect(corto.esperas).toHaveLength(0);
+  });
+
+  it('los lotes de un chat salen en fila, aunque un envio tarde (spec 056, R-5)', async () => {
+    const { service, onEvent, vaciar } = buildEntrega();
+    const orden: string[] = [];
+    let soltar: () => void = () => undefined;
+    const primeroLento = new Promise<void>((r) => (soltar = r));
+    let llamadas = 0;
+    (service as unknown as { client: { sendMessage: unknown } }).client.sendMessage = async (
+      _chat: string,
+      texto: string,
+    ) => {
+      llamadas++;
+      if (llamadas === 1) await primeroLento;
+      orden.push(texto.includes('primero') ? 'primero' : 'segundo');
+      return true;
+    };
+
+    await onEvent(delSupervisor(0, 'primero'));
+    const uno = vaciar();
+    await onEvent(delSupervisor(1, 'segundo'));
+    const dos = vaciar();
+    soltar();
+    await Promise.all([uno, dos]);
+
+    expect(orden).toEqual(['primero', 'segundo']);
+  });
+
+  it('un sustituto suelto no llega a Telegram (spec 056, R-7)', async () => {
+    // No es UTF-8 valido: Telegram rechazaria el mensaje entero.
+    const { onEvent, lineas } = buildEntrega();
+    await onEvent(delSupervisor(0, `emoji partido: ${'🤖'.slice(0, 1)} y sigue`));
+    const linea = lineas()[0];
+    expect(linea).toContain('emoji partido: � y sigue');
+    expect(/[\uD800-\uDBFF](?![\uDC00-\uDFFF])/.test(linea)).toBe(false);
+    // Los emojis enteros, en cambio, se quedan como estan.
+    expect(bienFormado('🤖 ok')).toBe('🤖 ok');
+    expect(bienFormado(`a${'🤖'.slice(1)}b`)).toBe('a�b');
   });
 
   it('lo que cabe no se toca, y un lote corto sigue siendo un mensaje', () => {

@@ -30,11 +30,15 @@ import {
 } from '../../core/services/admin-bots.service';
 import { isMarketMaker } from '../../core/utils';
 import {
+  FALTA_PARA_PROPONER,
   INTERVALO_IA_MAX,
   INTERVALO_IA_MIN,
   INTERVALO_IA_POR_DEFECTO,
+  TEXTO_SIN_CANAL,
   aDisparo,
+  canalEfectivo,
   minutosValidos,
+  propone,
   type BorradorIa,
 } from '../../core/utils/modo-ia';
 import { MOTIVO_MAXIMO } from './motivo';
@@ -81,33 +85,40 @@ const aviso = (tone: AvisoIa['tone'], texto: string): AvisoIa => ({
     UiSettingRowComponent,
   ],
   template: `
-    <div class="modos" role="radiogroup" aria-label="Modo IA">
+    <!-- Un grupo de botones que se quedan pulsados, y no un «radiogroup»: ese
+         patrón promete moverse con las flechas, y estos se recorren con el
+         tabulador (spec 056, A-11). -->
+    <div class="modos" role="group" aria-label="Modo IA">
       @for (m of modos(); track m) {
-        @let bloqueado = sinTelegram(m);
+        @let bloqueado = sinCanalPara(m);
         <button
           type="button"
-          role="radio"
           class="modo"
           [class.sel]="valor().mode === m"
-          [attr.aria-checked]="valor().mode === m"
+          [attr.aria-pressed]="valor().mode === m"
           [disabled]="deshabilitado() || bloqueado"
           (click)="elegir(m)"
         >
           <span class="modo-t">{{ etiquetaModo(m) }}</span>
           <span class="modo-a">{{ ayudaModo(m) }}</span>
-          @if (bloqueado) {
+          @if (bloqueado && sinCanal(); as falta) {
             <span class="modo-a falta">
-              Necesita un chat de Telegram vinculado: es por donde llegan las sugerencias.
+              Necesita {{ faltaParaProponer[falta] }}: es por donde llegan las sugerencias.
             </span>
           }
         </button>
       }
     </div>
 
-    @if (telegramVinculado() === false && valor().mode !== 'AUTO') {
-      <p class="fina">
-        <a routerLink="/telegram">Vincular Telegram</a> para usar «propone y espera».
-      </p>
+    @if (sinCanal(); as falta) {
+      @if (valor().mode !== 'AUTO') {
+        <p class="fina">
+          <a routerLink="/telegram">{{
+            falta === 'SIN_TELEGRAM' ? 'Vincular Telegram' : 'Encender los avisos del Modo IA'
+          }}</a>
+          para usar «propone y espera».
+        </p>
+      }
     }
 
     @if (valor().mode !== 'OFF') {
@@ -130,6 +141,7 @@ const aviso = (tone: AvisoIa['tone'], texto: string): AvisoIa => ({
           <ion-segment
             [value]="valor().trigger"
             [disabled]="deshabilitado()"
+            aria-label="Cuándo revisa"
             (ionChange)="setDisparo($event.detail.value)"
           >
             @for (t of disparos; track t) {
@@ -159,7 +171,7 @@ const aviso = (tone: AvisoIa['tone'], texto: string): AvisoIa => ({
             [value]="valor().reviewEveryMinutes"
             [disabled]="deshabilitado()"
             aria-label="Minutos entre revisiones"
-            (ionInput)="setMinutos($any($event.target).value)"
+            (ionInput)="setMinutos($event.detail)"
           />
           <p class="opt-a" [class.mal]="!minutosOk()">
             @if (minutosOk()) {
@@ -336,6 +348,12 @@ export class ModoIaEditorComponent implements OnInit {
   readonly simulado = input(true);
   readonly enMarcha = input(true);
   readonly interruptores = input<AiSwitches | null>(null);
+  /**
+   * El modo que el bot tiene GUARDADO, o `null` si aún no existe (al crearlo).
+   * Un bot que ya propone y espera puede volver a ese modo aunque haya perdido
+   * el canal: el servidor solo exige canal al pasar a él (spec 056, A-10).
+   */
+  readonly modoGuardado = input<AiMode | null>(null);
   readonly deshabilitado = input(false);
   /** Los modos que se ofrecen. Fuera del alcance, solo apagarlo. */
   readonly modos = input<readonly AiMode[]>(AI_MODES);
@@ -346,8 +364,13 @@ export class ModoIaEditorComponent implements OnInit {
   readonly porDefecto = INTERVALO_IA_POR_DEFECTO;
   readonly motivoMaximo = MOTIVO_MAXIMO;
 
-  /** `null` mientras no se sabe: no se bloquea nada por una suposicion. */
-  readonly telegramVinculado = computed(() => this.telegram.status()?.linked ?? null);
+  /**
+   * Por qué no llegarían las sugerencias a quien mira (spec 055): su Telegram si
+   * se conoce, y si no, lo que dijo el servidor (spec 056, A-4). Sin ninguno de
+   * los dos no se bloquea nada por una suposición.
+   */
+  readonly sinCanal = computed(() => canalEfectivo(this.telegram.status(), this.interruptores()));
+  readonly faltaParaProponer = FALTA_PARA_PROPONER;
   readonly minutosOk = computed(() => minutosValidos(this.valor().reviewEveryMinutes));
   readonly esMarketMaker = computed(() => {
     const kind = this.estrategia();
@@ -379,7 +402,17 @@ export class ModoIaEditorComponent implements OnInit {
         ),
       );
     }
-    if (i?.forzarManual && modo === 'AUTO') {
+    // Sin canal, el supervisor no revisa lo que propone y espera (spec 055).
+    const falta = this.sinCanal();
+    if (falta && propone(modo, i)) {
+      avisos.push(
+        aviso(
+          'warn',
+          `Las sugerencias llegan por Telegram y ${TEXTO_SIN_CANAL[falta]}: el supervisor no ` +
+            'revisará este bot hasta que lo arregles.',
+        ),
+      );
+    } else if (i?.forzarManual && modo === 'AUTO') {
       avisos.push(
         aviso(
           'info',
@@ -403,9 +436,11 @@ export class ModoIaEditorComponent implements OnInit {
   }
 
   ngOnInit(): void {
-    // Una vez y en silencio: sin saber si hay Telegram no se bloquea el modo
-    // manual, y el servidor lo rechaza igual con un mensaje que lo explica.
-    if (this.telegram.status() === null) void this.telegram.refresh().catch(() => undefined);
+    // En silencio: sin saber si hay Telegram no se bloquea el modo manual, y el
+    // servidor lo rechaza igual con un mensaje que lo explica. Siempre, y no
+    // solo la primera vez: el dato del cliente manda sobre el del servidor, y
+    // leído una vez por sesión se quedaba viejo (spec 056, A-4).
+    void this.telegram.refresh().catch(() => undefined);
   }
 
   etiquetaModo(m: AiMode): string {
@@ -425,12 +460,17 @@ export class ModoIaEditorComponent implements OnInit {
   }
 
   /**
-   * «Propone y espera» sin un chat vinculado no llega a ninguna parte. Se
-   * bloquea solo si no es el modo actual: quien ya lo tiene tiene que poder
-   * verlo marcado, y cambiarlo.
+   * «Propone y espera» sin canal no llega a ninguna parte, y el servidor rechaza
+   * PASAR a él. Se bloquea solo si no es el modo elegido ni el guardado: quien ya
+   * lo tiene tiene que poder verlo marcado, cambiarlo y volver a él.
    */
-  sinTelegram(m: AiMode): boolean {
-    return m === 'MANUAL' && this.telegramVinculado() === false && this.valor().mode !== 'MANUAL';
+  sinCanalPara(m: AiMode): boolean {
+    return (
+      m === 'MANUAL' &&
+      !!this.sinCanal() &&
+      this.valor().mode !== 'MANUAL' &&
+      this.modoGuardado() !== 'MANUAL'
+    );
   }
 
   elegir(mode: AiMode): void {
@@ -446,8 +486,18 @@ export class ModoIaEditorComponent implements OnInit {
    * Vacío es «el de la estrategia». Lo que no es un número se guarda como `NaN`
    * a proposito: deja el borrador invalido —y el guardado bloqueado— en vez de
    * convertirse en silencio en «vacío».
+   *
+   * Un campo numérico con texto que no es un número entrega `''`, igual que uno
+   * vacío: solo `validity.badInput` los distingue. Sin mirarlo, «1e» se
+   * guardaba como «el de la estrategia» (spec 056, A-10).
    */
-  setMinutos(texto: unknown): void {
+  setMinutos(detalle: { value?: unknown; event?: Event } | null | undefined): void {
+    const nativo = detalle?.event?.target;
+    if (nativo instanceof HTMLInputElement && nativo.validity.badInput) {
+      this.valor.update((v) => ({ ...v, reviewEveryMinutes: Number.NaN }));
+      return;
+    }
+    const texto = detalle?.value;
     const crudo =
       typeof texto === 'number' ? String(texto) : typeof texto === 'string' ? texto : '';
     const reviewEveryMinutes = crudo.trim() === '' ? null : Number(crudo);

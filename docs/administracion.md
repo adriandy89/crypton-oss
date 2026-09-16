@@ -166,8 +166,9 @@ Todo lo que sigue solo lo ve una cuenta `ADMIN`; para el resto de usuarios no ex
   **configurado**, y sale **en gris y con contorno cuando la IA no está actuando**: el interruptor del
   servidor está apagado, el servidor solo deja actuar sobre simulados y el bot es real, está dormida
   tras varios fallos, el bot no está en marcha, o el servidor obliga a proponer aunque el modo sea
-  automático. El motivo sale al pasar el ratón; en el móvil, el gris ya dice que no actúa. En la
-  consola solo sale en **tus** bots: el Modo IA de otros administradores no se puede consultar.
+  automático. El motivo sale al pasar el ratón, y un lector de pantalla lo lee; en el móvil, el gris
+  ya dice que no actúa. En la consola solo sale en **tus** bots: el Modo IA de otros administradores
+  no se puede consultar.
 - **El panel.** En la pestaña **Ajustes** del bot, encima de los campos: el modo y tres opciones
   avanzadas —cuándo revisa (reloj y eventos, solo reloj o solo eventos), cada cuántos minutos (de 10
   a 1440; vacío es el de la estrategia) y si puede recolocar las órdenes—. Guardar pide un
@@ -181,9 +182,17 @@ Todo lo que sigue solo lo ve una cuenta `ADMIN`; para el resto de usuarios no ex
   R-3, que hasta el 053 no se cumplía), y los cambios de configuración que aplica el supervisor llevan
   la marca **IA** en el historial.
 
-«Propone y espera» necesita un chat de Telegram **vinculado**: sin él, el panel no deja elegirlo. Y
-si lo desvinculas con un bot ya en manual, el panel te avisa de que sus sugerencias no llegan a
-ninguna parte: el servidor todavía no lo impide.
+«Propone y espera» necesita que sus sugerencias te puedan llegar: un chat de Telegram **vinculado** y
+los avisos del **Modo IA** encendidos (en Cuenta → Telegram, fila que solo ve un administrador). Sin
+eso, ni el panel ni el servidor dejan **pasar** a él; un bot que ya estaba en «propone y espera» sí
+puede seguir en él y cambiar sus opciones (spec 056). La pantalla usa lo que sabe de tu Telegram en
+cuanto lo tocas: vincular o encender esos avisos se nota al volver al bot, sin recargar.
+
+Si lo pierdes después —desvinculas Telegram, pides un código nuevo o apagas esos avisos—, el
+supervisor **deja de revisar** tus bots en «propone y espera»: no paga llamadas para escribir
+sugerencias que no verías. No se toca nada más, y en cuanto el canal vuelve, el bot se revisa solo.
+Mientras tanto, su pastilla sale en gris con el motivo (spec 055). En automático no hace falta: el
+cambio se aplica y el aviso es informativo.
 
 ### Los dos modos
 
@@ -234,10 +243,17 @@ Y si tocas el bot mientras el supervisor está pensando —tarda unos segundos e
 tuyo**: su cambio se calculó sobre la configuración que leyó, así que al ver que ya no es la misma
 lo descarta y lo dice en el historial de decisiones. No te deshace una edición.
 
-Al revés hay que tener cuidado: **guardar Ajustes manda tu borrador entero**. Si el supervisor
-aplica un cambio mientras tienes campos a medio editar, guardar lo desharía. La pantalla lo avisa
-—«la configuración ha cambiado mientras editabas»— y pide confirmación antes de guardar; el servidor
-todavía no lo impide.
+Y al revés tampoco (spec 055). Si el supervisor aplica un cambio mientras tienes campos a medio
+editar en Ajustes, el formulario pasa a la versión nueva **con tus cambios encima** y te lo dice
+en la barra de guardar —«la configuración ha cambiado mientras editabas»—. Al guardar se aplican
+**solo los campos que editaste**, y lo que cambió el supervisor se queda. Si el cambio llega justo
+mientras guardas, el servidor lo rechaza, la pantalla vuelve a poner tus cambios sobre la versión
+nueva y te pide que guardes otra vez. Si tocaste el mismo campo que el supervisor, gana lo tuyo, y
+el aviso nombra esos campos.
+
+Qué cuenta como editado lo decide la misma regla que usa el servidor para decidir qué cambia
+(spec 056): los números se comparan como números, así que escribir `12.5` donde ponía `12.50` no es
+una edición, y no se conserva encima de lo que cambió el supervisor.
 
 ### Qué parámetros toca cada perilla (spec 054)
 
@@ -286,10 +302,23 @@ igual que el resto:
 
 - **El apalancamiento baja** al menor de tus topes, el del exchange y 18x. Pasa si lo bajaste
   después de encender el Modo IA. Sin esa reparación, el servidor rechazaría cualquier cambio.
-- **En los market makers, la distancia mínima permitida baja** hasta la menor de las dos
-  distancias.
+- **En el market maker (V1), la distancia mínima permitida baja** hasta la menor de las dos
+  distancias: allí no puede quedar por encima. En el **V2 no se toca** (spec 055): si la pusiste por
+  encima de las distancias, es tu suelo, y se queda donde lo pusiste.
 - **En los market makers, el multiplicador de distancia sube a 1,05** cuando hay varias capas: con
   1, todas caerían al mismo precio.
+
+**El sentido del diferencial.** Con la perilla del diferencial, las distancias de un market maker y
+su distancia mínima solo se mueven **en el sentido pedido**: si «más» las fuera a bajar, se quedan
+donde están (spec 055).
+
+- **Por qué pasaba.** En el V2 la perilla reparte el diferencial entre la distancia base y el
+  multiplicador de volatilidad, y el generador los movía en sentidos contrarios. Así, «más» llegaba
+  a estrechar lo que se cotiza.
+- **Qué hace ahora.** Se mueve el resto —el multiplicador, el techo dinámico, el umbral de
+  recotización y la separación entre niveles—, que ya va en el sentido pedido.
+- **Qué implica en calma.** En un mercado en calma, el diferencial de un V2 puede no ensanchar nada:
+  su objetivo está en el suelo por comisiones, y la perilla no tiene nada que mover.
 
 **Lo que no ha cambiado en ninguna de las 241 717 propuestas de la exploración:**
 
@@ -302,26 +331,6 @@ igual que el resto:
 - en el market maker V2, la estimación de comisión, el buffer de seguridad, el margen mínimo de
   beneficio, el margen del libro y la muestra de volatilidad;
 - el spread dinámico, el ajuste de precio por inventario, las velas del ATR y el «solo post-only».
-
-> ⚠️ **Limitación conocida (054/H-01, abierta a 2026-09-16).** En un **market maker V2**, si pusiste
-> la distancia mínima permitida **por encima** de las distancias de compra y venta —la app lo admite
-> y avisa de que «se elevarán hasta ahí»—, **cualquier decisión** de la IA la baja hasta la menor de
-> las dos. Pasa aunque la perilla sea otra: «apalancamiento» propone ese cambio y ningún otro.
-> Con 20 bps de mínimo y 10 de distancia, el diferencial en calma pasa de 20 a 16,5 bps. Esto
-> contradice dos promesas de arriba: lo que el supervisor no mueve se queda como estaba, y ningún
-> parámetro se mueve más de un cuarto por escalón.
-> **Hasta que se corrija:** el aviso lo enseña («Distancia mínima permitida: 20 → 10 bps»). En manual,
-> descártalo. En automático, no dejes la distancia mínima por encima de las distancias en un bot
-> con Modo IA. Estado: `specs/054-lo-que-cambia-la-ia/spec.md` § Hallazgos.
-
-> ⚠️ **Limitación conocida (054/H-02, abierta a 2026-09-16).** En un **market maker V2**, «diferencial
-> más» puede **estrechar** un poco el diferencial efectivo, y «diferencial menos», ensancharlo. Pasa
-> porque la perilla mueve a la vez la distancia base y el multiplicador de volatilidad, en sentidos
-> contrarios. Con la volatilidad que el propio generador supone, ocurre en torno a una de cada
-> cuatro propuestas. Casi siempre es menos de 1 bps, nunca más de 3, y nunca por debajo del suelo por
-> comisiones.
-> **Hasta que se corrija:** mira las distancias y el multiplicador del aviso antes de aprobar.
-> Estado: `specs/054-lo-que-cambia-la-ia/spec.md` § Hallazgos.
 
 ### Cómo es un aviso
 
@@ -357,10 +366,14 @@ ciclos— solo se revisaría ante avisos de riesgo.
 minuto— y lo que hay que juzgar es una media, no un evento. Lo que aquí cuenta como «una operación»
 es un **ciclo cerrado**. Un market maker no cierra ciclos nunca, así que a él lo revisa el reloj.
 
-Antes de preguntarle nada al modelo se interponen cinco filtros: el tipo de disparo, un hueco
-mínimo entre consultas del mismo bot, la coalescencia entre réplicas, una huella del estado —si
-nada material ha cambiado desde la última respuesta, sigue valiendo— y dos cupos diarios, uno por
-bot y otro de toda la plataforma.
+Antes de preguntarle nada al modelo se interponen seis filtros:
+
+- el tipo de disparo;
+- en «propone y espera», que haya canal para las sugerencias;
+- un hueco mínimo entre consultas del mismo bot;
+- la coalescencia entre réplicas;
+- una huella del estado: si nada material ha cambiado desde la última respuesta, sigue valiendo;
+- dos cupos diarios, uno por bot y otro de toda la plataforma.
 
 Cuando cree que hace falta una persona, te avisa **como mucho una vez al día por bot**. Los avisos
 repetidos quedan guardados en el historial de decisiones, pero no llegan a Telegram ni al registro

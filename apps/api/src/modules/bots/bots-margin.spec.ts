@@ -97,7 +97,11 @@ function build(botOver: Record<string, unknown> = {}, available: string | null =
 /** Igual que `build`, pero el venue no responde al saldo. */
 function buildVenueCaido() {
   const b = build();
-  jest.spyOn(b.service as never, 'fetchWallet').mockRejectedValue(new Error('venue caido'));
+  // `fetchWallet` es privado: se espía con el tipo de su firma, no con `never`,
+  // que dejaba el test sin comprobar tipos (spec 055).
+  jest
+    .spyOn(b.service as unknown as { fetchWallet: () => Promise<unknown> }, 'fetchWallet')
+    .mockRejectedValue(new Error('venue caido'));
   return b;
 }
 

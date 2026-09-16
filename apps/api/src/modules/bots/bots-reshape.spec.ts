@@ -159,13 +159,25 @@ describe('BotsService.updateConfig — forma de la escalera con inventario (F-90
 describe('BotsService.updateConfig — la version que se leyo (spec 052, F-06)', () => {
   const cambioHot = () => revision({ leverage: 2 });
 
-  it('sin `expectedVersion` todo sigue igual: el formulario no la necesita', async () => {
+  it('sin `expectedVersion` se aplica, y la escritura exige la version que se leyo', async () => {
+    // Una escritura simultanea sin version chocaba con el indice unico de la
+    // revision y salia un 500 con el mensaje de Prisma. Con la version leida en
+    // el `where`, es un 409 como los demas (spec 056, R-3).
     const { service, db } = build([]);
     const res = (await service.updateConfig(USER_ID, BOT_ID, cambioHot())) as { applied: boolean };
     expect(res.applied).toBe(true);
-    // Y el `where` de la escritura no exige ninguna version.
     const args = db.bot.updateMany.mock.calls[0][0] as { where: Record<string, unknown> };
-    expect(args.where['config_version']).toBeUndefined();
+    expect(args.where).toEqual({ id: BOT_ID, config_version: 1 });
+  });
+
+  it('la fila del bot se escribe ANTES que la revision (spec 056, R-3)', async () => {
+    // Asi la segunda de dos escrituras simultaneas espera al bloqueo de la fila,
+    // no escribe nada y responde 409, en vez de chocar con el indice unico.
+    const { service, db } = build([]);
+    await service.updateConfig(USER_ID, BOT_ID, cambioHot());
+    const fila = db.bot.updateMany.mock.invocationCallOrder[0] as number;
+    const revision = db.botConfigRevision.create.mock.invocationCallOrder[0] as number;
+    expect(fila).toBeLessThan(revision);
   });
 
   it('con la version que el bot tiene, se aplica y la escritura la exige', async () => {
@@ -190,6 +202,9 @@ describe('BotsService.updateConfig — la version que se leyo (spec 052, F-06)',
     expect(error).toBeInstanceOf(ConflictException);
     expect((error as ConflictException).getResponse()).toMatchObject({
       reason: 'STALE_VERSION',
+      // Con `code`, el filtro de excepciones lo reenvia entero y la app puede
+      // reconocerlo (spec 055, 053/H-05). `reason` es lo que lee el supervisor.
+      code: 'STALE_VERSION',
       expectedVersion: 0,
       currentVersion: 1,
     });
@@ -208,6 +223,27 @@ describe('BotsService.updateConfig — la version que se leyo (spec 052, F-06)',
       .catch((e: ConflictException) => e);
 
     expect(error).toBeInstanceOf(ConflictException);
-    expect((error as ConflictException).getResponse()).toMatchObject({ reason: 'STALE_VERSION' });
+    expect((error as ConflictException).getResponse()).toMatchObject({
+      reason: 'STALE_VERSION',
+      code: 'STALE_VERSION',
+    });
+    // Y sin revision a medias: la transaccion se corta antes de crearla.
+    expect(db.botConfigRevision.create).not.toHaveBeenCalled();
+  });
+
+  it('sin `expectedVersion`, una escritura simultanea tambien es un 409 (spec 056, R-3)', async () => {
+    const { service, db } = build([]);
+    db.bot.updateMany.mockResolvedValue({ count: 0 });
+
+    const error = await service
+      .updateConfig(USER_ID, BOT_ID, cambioHot())
+      .catch((e: ConflictException) => e);
+
+    expect(error).toBeInstanceOf(ConflictException);
+    expect((error as ConflictException).getResponse()).toMatchObject({
+      code: 'STALE_VERSION',
+      expectedVersion: 1,
+    });
+    expect(db.botConfigRevision.create).not.toHaveBeenCalled();
   });
 });

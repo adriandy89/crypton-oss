@@ -429,6 +429,70 @@ function acoplamientosDelSupervisor(
   };
 }
 
+/** Las distancias de un market maker que forman lo que cotiza. */
+const DISTANCIAS_MM = ['buyDistanceBps', 'sellDistanceBps', 'minAllowedDistanceBps'] as const;
+
+/**
+ * Con la perilla del diferencial, las distancias de un market maker y su suelo
+ * solo se mueven en el sentido pedido (spec 055, 054/H-02).
+ *
+ * El generador de la V2 reparte el diferencial objetivo entre la distancia base
+ * y el multiplicador de volatilidad —lo que ya suma `composeSpreadBps` no se
+ * escribe en la distancia—, asi que al pedir MAS la distancia base BAJA mientras
+ * el multiplicador sube. En la configuracion generada la suma cuadra; en un bot
+ * vivo no, porque el traslado acota cada campo por su lado con su propia banda.
+ * En torno a una de cada cuatro propuestas «diferencial MAS» estrechaba lo que de
+ * verdad cotiza, y en calma —sin volatilidad que multiplicar— casi siempre.
+ *
+ * Se quedan quietas en vez de descartar la propuesta entera: el resto de lo que
+ * mueve la perilla —el multiplicador, el techo dinamico, el umbral de
+ * recotizacion y la separacion entre capas— ya va en el sentido pedido, y con
+ * las distancias quietas ningun componente del diferencial compuesto va al
+ * reves, sea cual sea la volatilidad. En la V1 no cambia nada: su generador
+ * mueve las distancias siempre con la perilla.
+ */
+function distanciasEnElSentidoPedido(
+  kind: string,
+  config: Record<string, unknown>,
+  vigente: BotConfig,
+  ajustes: Desplazamientos,
+): Record<string, unknown> {
+  const sentido = Math.sign(PASOS[ajustes.spread]);
+  if (!esMarketMaker(kind) || sentido === 0) return config;
+  const base = vigente as unknown as Record<string, unknown>;
+  const out = { ...config };
+  for (const clave of DISTANCIAS_MM) {
+    const de = base[clave];
+    const a = out[clave];
+    if (!isFiniteNum(de) || !isFiniteNum(a)) continue;
+    const movido = D(a as Numeric).comparedTo(D(de as Numeric));
+    if (movido !== 0 && movido !== sentido) out[clave] = de;
+  }
+  return out;
+}
+
+/**
+ * En una V2, el suelo que puso su dueño se queda donde lo puso (spec 055,
+ * 054/H-01).
+ *
+ * `enforceCouplings` baja la distancia minima hasta la menor de las distancias,
+ * y para el ASESOR esta bien: una configuracion recien generada no debe nacer
+ * incoherente. Pero en la V2 un suelo por encima de las distancias no es una
+ * incoherencia —el validador solo avisa de que «se elevaran hasta ahi», y el
+ * suelo compuesto hace justo eso—, y aplicada a un bot vivo la reparacion lo
+ * bajaba con CUALQUIER perilla y sin banda: 20 → 10 bps con «apalancamiento». La
+ * V1 si la necesita —alli el validador la exige— y nunca sale de la banda de la
+ * distancia que la provoca, asi que alli se queda.
+ */
+function conElSueloDeLaV2(
+  kind: string,
+  reparada: Record<string, unknown>,
+  trasladada: Record<string, unknown>,
+): Record<string, unknown> {
+  if (kind !== 'MARKET_MAKER_V2' || !('minAllowedDistanceBps' in trasladada)) return reparada;
+  return { ...reparada, minAllowedDistanceBps: trasladada['minAllowedDistanceBps'] };
+}
+
 // ─────────────────────────────────────────────────────────────────────────────
 // La guarda de posicion (spec 051)
 // ─────────────────────────────────────────────────────────────────────────────
@@ -694,9 +758,16 @@ export function decidirCambio(input: EntradaDeCambio): CambioPropuesto | MotivoD
   const escalones = Math.max(...PERILLAS.map((p) => Math.abs(PASOS[input.ajustes[p]])));
   let config = trasladarDelta(strategy, vigente, antes, despues, market, escalones);
 
+  // 3b. Con la perilla del diferencial, las distancias de un market maker solo
+  //     van en el sentido pedido (spec 055, 054/H-02).
+  config = distanciasEnElSentidoPedido(strategy.kind, config, vigente, input.ajustes);
+
   // 4. Los acoplamientos que ninguna validacion deduce de un campo aislado, los
-  //    del asesor y los que solo aparecen al trasladar.
+  //    del asesor y los que solo aparecen al trasladar. Salvo el suelo de una
+  //    V2, que no es una incoherencia (spec 055, 054/H-01).
+  const trasladada = config;
   config = enforceCouplings(strategy.kind, config, market, ctx.maxLeverageUsuario);
+  config = conElSueloDeLaV2(strategy.kind, config, trasladada);
   config = acoplamientosDelSupervisor(strategy.kind, config);
 
   // 5. Y la fusion OTRA VEZ. `enforceCouplings` puede tocar campos que en alguna

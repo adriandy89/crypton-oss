@@ -1,5 +1,5 @@
 import { randomUUID } from 'node:crypto';
-import { ConflictException, Injectable, Logger } from '@nestjs/common';
+import { ConflictException, HttpException, Injectable, Logger } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { AiDecisionState, AiMode } from '@crypton/db';
 import {
@@ -44,6 +44,8 @@ import {
   type CambioAnterior,
   type Expediente,
 } from './dossier';
+import { motivoSinCanal, SELECT_VINCULO, type SinCanal } from './canal';
+import { DUENO_CON_MODO_IA } from './supervisor.policy.service';
 import { textoDeCambio } from './mensajes';
 
 /**
@@ -57,10 +59,11 @@ import { textoDeCambio } from './mensajes';
  * perdiendo una de esas comprobaciones, no el primer dia pero si el dia que
  * alguien toque uno de los dos y no el otro.
  *
- * Antes de gastar una sola llamada pasan CINCO barreras, todas deterministas:
- * el filtro por tipo de disparo, el hueco minimo entre llamadas del mismo bot,
- * la coalescencia en Redis, la huella del expediente, y las dos cuotas. Ninguna
- * depende de lo que diga el modelo, porque todas ocurren antes de preguntarle.
+ * Antes de gastar una sola llamada pasan SEIS barreras, todas deterministas:
+ * el filtro por tipo de disparo, el canal por el que llegarian las sugerencias
+ * (spec 055), el hueco minimo entre llamadas del mismo bot, la coalescencia en
+ * Redis, la huella del expediente, y las dos cuotas. Ninguna depende de lo que
+ * diga el modelo, porque todas ocurren antes de preguntarle.
  */
 @Injectable()
 export class SupervisorService {
@@ -244,6 +247,19 @@ export class SupervisorService {
       .catch(() => false);
   }
 
+  /**
+   * Por que no le llegaria una sugerencia al dueño, o `null` si le llega.
+   *
+   * Si no se puede leer, se da por que no hay canal: una revision que no se
+   * hace no cuesta nada, y una sugerencia que no llega cuesta una llamada.
+   */
+  private sinCanal(userId: string): Promise<SinCanal | null> {
+    return this.db.telegramLink
+      .findUnique({ where: { user_id: userId }, select: SELECT_VINCULO })
+      .then(motivoSinCanal)
+      .catch((): SinCanal => 'SIN_TELEGRAM');
+  }
+
   /** Por que una revision no llego a ninguna parte. Solo para el log. */
   private saltar(botId: string, motivo: string): null {
     this.logger.debug(`Bot ${botId}: revisión saltada (${motivo}).`);
@@ -294,6 +310,20 @@ export class SupervisorService {
     // al principio de la casa de no cambiarle la conducta a un bot en marcha.
     if (this.soloSimulados && !bot.dry_run) return this.saltar(bot.id, 'no es simulado');
 
+    // `AI_AGENT_FORCE_MANUAL` degrada el automatico a manual, asi que decide
+    // igual que el modo guardado: lo que importa es si esto se va a aplicar solo.
+    const seAplicaSolo = ajuste.mode === AiMode.AUTO && !this.forzarManual;
+
+    // Lo que no se aplica solo se propone por Telegram, y sus botones son la
+    // unica forma de aprobarlo. Sin canal no se revisa: se pagaba cada llamada
+    // para escribir propuestas que caducaban sin que nadie las viera
+    // (spec 055, 053/H-03). Antes del turno, para que al volver el canal el bot se
+    // revise enseguida y no tras el enfriamiento.
+    if (!seAplicaSolo) {
+      const sinCanal = await this.sinCanal(bot.user_id);
+      if (sinCanal) return this.saltar(bot.id, `sin canal para las sugerencias (${sinCanal})`);
+    }
+
     const intervalo = ajuste.review_every_minutes ?? INTERVALO_POR_ESTRATEGIA[bot.strategy] ?? 30;
     const hueco = Math.max(this.num('AI_MIN_GAP_MIN', 10), 0);
     if (!(await this.reservarTurno(bot.id, Math.max(intervalo, hueco)))) {
@@ -304,9 +334,6 @@ export class SupervisorService {
     if (!contexto) return this.saltar(bot.id, 'sin datos de mercado');
 
     const knobs = ajuste.knobs as Knobs;
-    // `AI_AGENT_FORCE_MANUAL` degrada el automatico a manual, asi que decide
-    // igual que el modo guardado: lo que importa es si esto se va a aplicar solo.
-    const seAplicaSolo = ajuste.mode === AiMode.AUTO && !this.forzarManual;
     const permitirWarm = await this.warmPermitido(bot.id, ajuste.allow_warm, seAplicaSolo);
     const efectos = this.efectosDe(bot.strategy, knobs, contexto, permitirWarm);
 
@@ -653,10 +680,21 @@ export class SupervisorService {
         where: { id: decisionId },
         data: { state: AiDecisionState.FALLIDA, discard_reason: 'ESCRITURA', error: mensaje },
       });
+      // A Telegram y a la bitacora del bot, solo el motivo de un rechazo HTTP:
+      // ese lo escribio nuestro codigo para una persona. El de un error que no lo
+      // es —Prisma, un SDK— trae la invocacion y detalles internos, y se queda en
+      // la decision y en el log (spec 056, R-3).
+      if (!(e instanceof HttpException)) {
+        this.logger.error(
+          `Bot ${bot.id}: el cambio del supervisor no se pudo escribir: ${mensaje}`,
+        );
+      }
+      const motivo =
+        e instanceof HttpException ? mensaje : 'un error interno al escribir la configuración';
       await this.avisar(
         bot,
         'AI_FAILED',
-        `El supervisor no pudo aplicar su cambio: ${mensaje}`,
+        `El supervisor no pudo aplicar su cambio: ${motivo}`,
         EventSeverity.WARN,
       );
       return;
@@ -810,7 +848,7 @@ export class SupervisorService {
   /**
    * Canjea el vale de un boton de Telegram y aplica —o descarta— la sugerencia.
    *
-   * Cuatro comprobaciones, y ninguna sobra:
+   * Cinco comprobaciones, y ninguna sobra:
    *
    *   1. `getDel` es ATOMICO: el vale existe una vez. Dos pulsaciones del mismo
    *      boton aplican una sola vez, sin necesidad de ningun otro cerrojo, y con
@@ -820,7 +858,9 @@ export class SupervisorService {
    *      la decision.
    *   3. La decision tiene que seguir PENDIENTE. Una ya aplicada, caducada o
    *      descartada no revive.
-   *   4. Y la version de configuracion tiene que ser la misma. Si el bot cambio
+   *   4. El dueño tiene que seguir siendo administrador, con la cuenta
+   *      habilitada: la sugerencia pudo proponerse antes de que perdiera el rol.
+   *   5. Y la version de configuracion tiene que ser la misma. Si el bot cambio
    *      mientras la sugerencia esperaba, el mundo cambio debajo: la propuesta
    *      se calculo sobre otra cosa y no se aplica.
    */
@@ -840,11 +880,29 @@ export class SupervisorService {
             strategy: true,
             status: true,
             config_version: true,
+            user: { select: { role: true, disabled: true } },
           },
         },
       },
     });
     if (!decision || decision.state !== AiDecisionState.PROPUESTA) return;
+
+    // La frontera del spec 033 tambien al aprobar (spec 056, R-4). El barrido y
+    // la revision por evento ya exigen un dueño administrador y habilitado; el
+    // boton no, y durante la vida de una sugerencia —una hora— quien habia
+    // perdido el rol, o la cuenta, podia seguir aplicandola.
+    const { user: dueno } = decision.bot;
+    if (dueno.role !== DUENO_CON_MODO_IA.role || dueno.disabled !== DUENO_CON_MODO_IA.disabled) {
+      await this.db.botAiDecision.update({
+        where: { id: decision.id },
+        data: {
+          state: AiDecisionState.DESCARTADA,
+          discard_reason: 'DUENO',
+          decided_at: new Date(),
+        },
+      });
+      return;
+    }
 
     if (!aplicar) {
       await this.db.botAiDecision.update({

@@ -1,4 +1,4 @@
-import { ConflictException } from '@nestjs/common';
+import { ConflictException, ForbiddenException } from '@nestjs/common';
 import { AiDecisionState, AiMode } from '@crypton/db';
 import { D, StrategyKind } from '@crypton/shared';
 import { getStrategy, VENUE_MARKETS } from '@crypton/strategy-core';
@@ -88,7 +88,8 @@ const BOT = {
 
 const AJUSTE = {
   bot_id: 'bot-1',
-  mode: AiMode.MANUAL,
+  // Con el tipo del enum y no el del literal: los tests lo copian con otros modos.
+  mode: AiMode.MANUAL as AiMode,
   knobs: KNOBS,
   review_every_minutes: null,
   daily_call_limit: null,
@@ -118,7 +119,11 @@ interface Opciones {
   decision?: Record<string, unknown> | null;
   ajuste?: Record<string, unknown>;
   allowWarm?: boolean;
+  /** El vinculo de Telegram del dueño. Por defecto, verificado y con los avisos de fabrica. */
+  vinculo?: { chat_id: string | null; verified_at: Date | null; prefs: unknown } | null;
 }
+
+const VINCULADO = { chat_id: '111', verified_at: new Date(), prefs: {} };
 
 function build(opts: Opciones = {}) {
   const env: Record<string, string> = {
@@ -154,6 +159,11 @@ function build(opts: Opciones = {}) {
     botAiSetting: {
       update: jest.fn().mockResolvedValue({}),
       findUnique: jest.fn().mockResolvedValue({ allow_warm: opts.allowWarm ?? true }),
+    },
+    telegramLink: {
+      findUnique: jest
+        .fn()
+        .mockResolvedValue(opts.vinculo === undefined ? VINCULADO : opts.vinculo),
     },
   };
 
@@ -318,6 +328,64 @@ describe('SupervisorService — las barreras antes de gastar', () => {
     );
     await service.revisarBot(AJUSTE, BOT, 'CRON');
     expect(modelo.revisar).not.toHaveBeenCalled();
+  });
+
+  describe('sin canal para las sugerencias (spec 055, 053/H-03)', () => {
+    // «Propone y espera» solo se aprueba con los botones de Telegram. Sin canal,
+    // el supervisor pagaba cada revision y escribia propuestas que caducaban sin
+    // que nadie las viera.
+    const sinCanal = [
+      ['sin vinculo', null],
+      ['sin verificar', { ...VINCULADO, verified_at: null }],
+      ['con los avisos de IA apagados', { ...VINCULADO, prefs: { ai: false } }],
+    ] as const;
+
+    for (const [nombre, vinculo] of sinCanal) {
+      it(`en manual y ${nombre} no gasta nada`, async () => {
+        const { service, modelo, cache, creadas } = build({ respuesta: respuesta(), vinculo });
+        await service.revisarBot(AJUSTE, BOT, 'CRON');
+        expect(modelo.revisar).not.toHaveBeenCalled();
+        // Ni siquiera el turno: al volver el canal, el bot se revisa enseguida.
+        expect(cache.setnx).not.toHaveBeenCalled();
+        expect(cache.incrWithExpire).not.toHaveBeenCalled();
+        expect(creadas).toHaveLength(0);
+      });
+    }
+
+    it('en automatico forzado a manual por el servidor, tampoco', async () => {
+      const { service, modelo } = build({
+        respuesta: respuesta(),
+        vinculo: null,
+        env: { AI_AGENT_FORCE_MANUAL: 'true' },
+      });
+      await service.revisarBot({ ...AJUSTE, mode: AiMode.AUTO }, BOT, 'CRON');
+      expect(modelo.revisar).not.toHaveBeenCalled();
+    });
+
+    it('en automatico el canal no hace falta: el cambio se aplica y se avisa despues', async () => {
+      const { service, modelo, db, bots } = build({ respuesta: respuesta(), vinculo: null });
+      bots.updateConfig.mockResolvedValue({ applied: true, version: 4 });
+      await service.revisarBot({ ...AJUSTE, mode: AiMode.AUTO }, BOT, 'CRON');
+      expect(modelo.revisar).toHaveBeenCalledTimes(1);
+      expect(bots.updateConfig).toHaveBeenCalledTimes(1);
+      // Y ni se pregunta: en automatico no hay nada que aprobar.
+      expect(db.telegramLink.findUnique).not.toHaveBeenCalled();
+    });
+
+    it('se pregunta por el vinculo del DUEÑO del bot', async () => {
+      const { service, db } = build({ respuesta: respuesta() });
+      await service.revisarBot(AJUSTE, BOT, 'CRON');
+      expect(db.telegramLink.findUnique).toHaveBeenCalledWith(
+        expect.objectContaining({ where: { user_id: BOT.user_id } }),
+      );
+    });
+
+    it('si no se puede leer el vinculo, no se gasta', async () => {
+      const { service, modelo, db } = build({ respuesta: respuesta() });
+      db.telegramLink.findUnique.mockRejectedValue(new Error('base caida'));
+      await service.revisarBot(AJUSTE, BOT, 'CRON');
+      expect(modelo.revisar).not.toHaveBeenCalled();
+    });
   });
 
   it('sin rasgos de mercado no se decide a ciegas', async () => {
@@ -585,7 +653,9 @@ describe('SupervisorService — el modo automatico', () => {
     // La excepcion NO se traga: si el cambio se rechaza por riesgo, por
     // validacion o por inventario, eso es justo lo que hay que poder leer.
     const { service, bots, db, bus } = build({ respuesta: respuesta() });
-    bots.updateConfig.mockRejectedValue(new Error('Tu límite de apalancamiento es 3×.'));
+    bots.updateConfig.mockRejectedValue(
+      new ForbiddenException('Tu límite de apalancamiento es 3×.'),
+    );
 
     await service.revisarBot(auto, BOT, 'CRON');
 
@@ -594,8 +664,29 @@ describe('SupervisorService — el modo automatico', () => {
     };
     expect(update.data.state).toBe(AiDecisionState.FALLIDA);
     expect(update.data.error).toContain('apalancamiento');
-    // Y el dueño se entera.
+    // Y el dueño se entera, con el motivo.
     expect(tiposPublicados(bus)).toContain('AI_FAILED');
+    expect(textoPublicado(bus, 'AI_FAILED')).toContain('Tu límite de apalancamiento es 3×.');
+  });
+
+  it('un error que no es HTTP se guarda entero, pero a Telegram no llega (spec 056, R-3)', async () => {
+    // El de Prisma trae la invocacion y detalles internos; el supervisor lo
+    // mandaba tal cual al chat.
+    const { service, bots, db, bus } = build({ respuesta: respuesta() });
+    const interno = 'Invalid `prisma.botConfigRevision.create()` invocation: Unique constraint';
+    bots.updateConfig.mockRejectedValue(new Error(interno));
+
+    await service.revisarBot(auto, BOT, 'CRON');
+
+    const update = db.botAiDecision.update.mock.calls.at(-1)![0] as { data: { error: string } };
+    expect(update.data.error).toBe(interno);
+    const texto = textoPublicado(bus, 'AI_FAILED');
+    expect(texto).not.toContain('prisma');
+    expect(texto).toBe(
+      'El supervisor no pudo aplicar su cambio: un error interno al escribir la configuración',
+    );
+    const evento = db.botEvent.create.mock.calls.at(-1)![0] as { data: { message: string } };
+    expect(evento.data.message).toBe(texto);
   });
 
   it('un cambio aplicado se avisa con severidad WARN', async () => {
@@ -661,6 +752,7 @@ describe('SupervisorService — el boton de Telegram', () => {
       strategy: StrategyKind.MARKET_MAKER,
       status: 'RUNNING',
       config_version: 3,
+      user: { role: 'ADMIN', disabled: false },
     },
     ...extra,
   });
@@ -699,6 +791,41 @@ describe('SupervisorService — el boton de Telegram', () => {
     expect(bots.updateConfig).not.toHaveBeenCalled();
   });
 
+  it('quien ya no es administrador, o tiene la cuenta deshabilitada, no aplica nada (spec 056, R-4)', async () => {
+    // El barrido y la revision por evento exigen un dueño administrador y
+    // habilitado; el boton no lo miraba, y la sugerencia vive una hora.
+    for (const user of [
+      { role: 'USER', disabled: false },
+      { role: 'ADMIN', disabled: true },
+    ]) {
+      const base = decisionPendiente();
+      const { service, bots, db } = build({
+        vale: VALE,
+        decision: { ...base, bot: { ...base.bot, user } },
+      });
+      await service.canjearVale('admin-1', 'x', true);
+
+      const donde = JSON.stringify(user);
+      expect(`${donde}: ${bots.updateConfig.mock.calls.length}`).toBe(`${donde}: 0`);
+      const update = db.botAiDecision.update.mock.calls[0][0] as {
+        data: { state: string; discard_reason: string };
+      };
+      expect(update.data).toMatchObject({
+        state: AiDecisionState.DESCARTADA,
+        discard_reason: 'DUENO',
+      });
+    }
+  });
+
+  it('el canje lee el rol y el estado del dueño del bot (spec 056, R-4)', async () => {
+    const { service, db } = build({ vale: VALE, decision: decisionPendiente() });
+    await service.canjearVale('admin-1', 'x', false);
+    const args = db.botAiDecision.findUnique.mock.calls[0][0] as {
+      include: { bot: { select: { user?: unknown } } };
+    };
+    expect(args.include.bot.select.user).toEqual({ select: { role: true, disabled: true } });
+  });
+
   it('descartar marca RECHAZADA y no toca el bot', async () => {
     const { service, bots, db } = build({ vale: VALE, decision: decisionPendiente() });
     await service.canjearVale('admin-1', 'x', false);
@@ -721,6 +848,7 @@ describe('SupervisorService — el boton de Telegram', () => {
           strategy: StrategyKind.MARKET_MAKER,
           status: 'RUNNING',
           config_version: 9,
+          user: { role: 'ADMIN', disabled: false },
         },
       }),
     });
@@ -1045,6 +1173,7 @@ describe('SupervisorService — la segunda pasada (spec 047, tanda G)', () => {
       strategy: StrategyKind.MARKET_MAKER,
       status: 'RUNNING',
       config_version: 3,
+      user: { role: 'ADMIN', disabled: false },
     },
     ...extra,
   });
@@ -1079,6 +1208,7 @@ describe('SupervisorService — la segunda pasada (spec 047, tanda G)', () => {
             strategy: StrategyKind.MARKET_MAKER,
             status,
             config_version: 3,
+            user: { role: 'ADMIN', disabled: false },
           },
         }),
       });
