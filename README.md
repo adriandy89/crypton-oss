@@ -44,6 +44,17 @@ genera la app sola a partir de `meta.fields`: no hay una pantalla escrita a mano
 por estrategia, así que añadir una al registro de `strategy-core` la hace
 aparecer aquí. Ver [Estrategias](#estrategias).
 
+Y el **Modo IA**, el supervisor que vigila un bot que ya está operando. Se
+enciende bot a bot desde su pestaña **Ajustes**:
+
+![Pestaña Ajustes de un market maker sobre HYPE con el panel Modo IA: los modos Apagado, Propone y espera y Decide y aplica, y las opciones avanzadas de cuándo revisa, cada cuántos minutos y si puede recolocar las órdenes](docs/img/auto-ia.webp)
+
+El panel dice lo que puede y lo que no antes de encenderlo: mueve como mucho
+cinco ajustes, dos a la vez y dos pasos cada uno, y nunca toca el capital, el
+par, la cuenta ni la dirección. Debajo, cuándo revisa (reloj, eventos o ambos),
+cada cuántos minutos, si puede recolocar las órdenes y cuándo fue su última
+revisión y su último ajuste. Ver [Modo IA](#modo-ia-un-supervisor-para-bots-en-marcha).
+
 ---
 
 ## Qué hay aquí
@@ -131,7 +142,7 @@ hay cuatro cosas que son tuyas y vienen sin rellenar:
 | **Credenciales de Google OAuth** | `GOOGLE_CLIENT_ID`, `GOOGLE_CLIENT_SECRET`, `GOOGLE_REDIRECT_URI` | **Sí.** Es la única forma de entrar; sin esto la API no arranca. Se crean en Google Cloud Console, en tu propio proyecto: ver [Configurar Google](#configurar-google-una-vez) |
 | **Secretos de cifrado y sesión** | `CREDENTIALS_MASTER_KEY`, `JWT_ACCESS_SECRET`, `JWT_REFRESH_SECRET` | **Sí**, pero los genera `pnpm setup` por ti |
 | **Bot de Telegram** | `TELEGRAM_BOT_TOKEN`, `TELEGRAM_BOT_USERNAME` | No. Vacío, los avisos simplemente no se mandan |
-| **Clave de OpenRouter** | `OPENROUTER_API_KEY` | No. Vacío, el asistente de configuración con IA queda apagado |
+| **Clave de OpenRouter** | `OPENROUTER_API_KEY` | No. Vacía, no hay IA. Puesta, tampoco enciende nada sola: hacen falta `AI_ADVISOR_ENABLE=true` (asistente) o `AI_AGENT_ENABLE=true` (Modo IA). Ver [IA](#modo-ia-un-supervisor-para-bots-en-marcha) |
 
 Dos ajustes más que conviene conocer:
 
@@ -312,6 +323,71 @@ la misma transacción que su evento, y el aviso por el bus solo adelanta la
 entrega. Si el worker dueño estaba reiniciando o Redis parpadeó, el comando se
 recoge en el siguiente tick. Para un PAUSE eso es una comodidad; para un PANIC,
 con dinero abierto en el venue, es la diferencia entre funcionar y no funcionar.
+
+---
+
+## Modo IA: un supervisor para bots en marcha
+
+Hay dos usos de un modelo de lenguaje, y los dos vienen **apagados**:
+
+- **El asistente** (`AI_ADVISOR_ENABLE`) propone tres configuraciones **al
+  crear** un bot, a partir de la volatilidad del par. Si no hay IA, o se agota el
+  cupo diario, las tres salen igual, calculadas por reglas.
+- **El Modo IA** (`AI_AGENT_ENABLE`, specs 046-056) vigila un bot **que ya
+  opera**: lee sus parámetros, su rendimiento real y el estado del par, y decide
+  si esa configuración sigue teniendo sentido. Cubre Market Maker, Market Maker
+  V2, Tendencia y Seguimiento de beneficio. Hoy solo puede encenderlo un
+  administrador, y solo sobre **un bot suyo**.
+
+Ninguno de los dos escribe números. El modelo emite **enumeraciones** —«más
+diferencial», «menos apalancamiento»— y un generador determinista las traduce
+a parámetros, redondeados a la retícula del venue. El cambio pasa por la misma
+validación, el mismo preview y los mismos límites de riesgo que uno hecho a mano,
+y se aplica por el mismo camino. No hay una segunda puerta de escritura.
+
+| Modo | Qué hace |
+|---|---|
+| **Apagado** | El bot funciona con la configuración que le pusiste. |
+| **Propone y espera** | La sugerencia llega por Telegram, parámetro a parámetro con su valor actual y el nuevo, y con dos botones. Al aprobar se **recalcula contra el mercado de ese momento**. Necesita Telegram vinculado y los avisos del Modo IA encendidos. |
+| **Decide y aplica** | Aplica el ajuste y te avisa después con la misma lista. |
+
+Lo que **puede** hacer: mover cinco perillas (apalancamiento, cobertura,
+diferencial, crecimiento del tamaño y cadencia), dos como mucho por decisión y
+dos pasos cada una. Cada parámetro se desplaza **desde tu valor**, no desde el
+que el modelo habría puesto, y como mucho un cuarto por paso.
+
+Lo que **no** hace, pase lo que pase:
+
+- tocar el capital, el par, la cuenta o la dirección;
+- parar, pausar, cerrar posiciones o cancelar órdenes: no manda ni un comando;
+- ensanchar o apagar un stop loss;
+- subir el riesgo, o tocar lo que podría cerrar la posición, con una posición abierta;
+- recolocar las órdenes, salvo que se lo permitas en las opciones avanzadas, y
+  por su cuenta nunca dos veces en seis horas (si lo apruebas tú, sí).
+
+Si tocas el bot mientras el supervisor piensa, **gana lo tuyo**. Si el modelo
+falla o responde fuera del contrato, **no se toca nada**, y tras cinco fallos
+seguidos el modo se duerme unas horas. Con Redis caído se apaga solo: sin poder
+contar el gasto no se llama a nadie.
+
+Cada cambio aplicado queda en el historial de configuración con la marca **IA**,
+y deshacerlo es volver a la versión anterior. El modelo **no ve dinero**: ni
+importes, ni precios absolutos, ni el nombre o la nota del bot.
+
+**Los interruptores** (en `apps/api/.env`):
+
+| Variable | Por defecto | Para qué |
+|---|---|---|
+| `AI_AGENT_ENABLE` | `false` | Lo apaga todo, aunque la clave esté puesta. |
+| `AI_AGENT_DRY_RUN_ONLY` | `true` | Solo actúa sobre bots **simulados**. Primero se mira qué propone sobre dinero que no existe. |
+| `AI_AGENT_FORCE_MANUAL` | `false` | Pasa todo el modo automático a «propone y espera» sin tocar la base de datos. |
+| `AI_AGENT_MODEL` | `anthropic/claude-sonnet-5` | Separado de `OPENROUTER_MODEL` a propósito: cambiar el del asistente no cambia el del supervisor. |
+| `AI_AGENT_DAILY_LIMIT` / `AI_AGENT_GLOBAL_DAILY_LIMIT` | 24 / 500 | Llamadas pagadas por bot y en total al día. El global es el que protege tu factura. |
+| `AI_AGENT_MAX_APPLIES_PER_DAY` | 6 | Cambios aplicados por bot y día: el freno contra el vaivén. |
+
+El resto de ajustes están comentados en `apps/api/.env.example`. Qué parámetros
+mueve cada perilla en cada estrategia, cuándo revisa, qué ve el modelo y cómo
+llega un aviso: [`docs/administracion.md`](docs/administracion.md#modo-ia-un-supervisor-que-vigila-bots-vivos-spec-046).
 
 ---
 
