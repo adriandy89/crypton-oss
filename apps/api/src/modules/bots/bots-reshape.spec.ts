@@ -67,6 +67,9 @@ function build(filledLevelIndexes: number[]) {
     bot: {
       findFirst: jest.fn().mockResolvedValue(bot),
       update: jest.fn().mockResolvedValue(bot),
+      // Desde el spec 052 la version se escribe con la version vieja en el
+      // `where`, para que una escritura simultanea no se pise (F-06).
+      updateMany: jest.fn().mockResolvedValue({ count: 1 }),
     },
     botConfigRevision: {
       findUniqueOrThrow: jest.fn().mockResolvedValue({ config: CONFIG_BASE }),
@@ -150,5 +153,61 @@ describe('BotsService.updateConfig — forma de la escalera con inventario (F-90
 
     expect(res).toMatchObject({ applied: true, level: 'HOT' });
     expect(db.botCycle.findFirst).not.toHaveBeenCalled();
+  });
+});
+
+describe('BotsService.updateConfig — la version que se leyo (spec 052, F-06)', () => {
+  const cambioHot = () => revision({ leverage: 2 });
+
+  it('sin `expectedVersion` todo sigue igual: el formulario no la necesita', async () => {
+    const { service, db } = build([]);
+    const res = (await service.updateConfig(USER_ID, BOT_ID, cambioHot())) as { applied: boolean };
+    expect(res.applied).toBe(true);
+    // Y el `where` de la escritura no exige ninguna version.
+    const args = db.bot.updateMany.mock.calls[0][0] as { where: Record<string, unknown> };
+    expect(args.where['config_version']).toBeUndefined();
+  });
+
+  it('con la version que el bot tiene, se aplica y la escritura la exige', async () => {
+    const { service, db } = build([]);
+    await service.updateConfig(USER_ID, BOT_ID, cambioHot(), { expectedVersion: 1 });
+    const args = db.bot.updateMany.mock.calls[0][0] as { where: Record<string, unknown> };
+    // Dentro de la transaccion, para que una escritura simultanea no se pise:
+    // entre leer el bot y escribirlo cabe otra.
+    expect(args.where['config_version']).toBe(1);
+  });
+
+  it('con una version vieja se rechaza y no se escribe nada', async () => {
+    // El caso real: el supervisor de IA lee la configuracion, tarda unos
+    // veinticinco segundos en decidir, y mientras tanto el dueño toca el bot. Lo
+    // que iba a escribir es la configuracion ENTERA calculada sobre lo que leyo.
+    const { service, db } = build([]);
+
+    const error = await service
+      .updateConfig(USER_ID, BOT_ID, cambioHot(), { expectedVersion: 0 })
+      .catch((e: ConflictException) => e);
+
+    expect(error).toBeInstanceOf(ConflictException);
+    expect((error as ConflictException).getResponse()).toMatchObject({
+      reason: 'STALE_VERSION',
+      expectedVersion: 0,
+      currentVersion: 1,
+    });
+    expect(db.botConfigRevision.create).not.toHaveBeenCalled();
+    expect(db.bot.updateMany).not.toHaveBeenCalled();
+  });
+
+  it('si la version cambia entre la lectura y la transaccion, tampoco', async () => {
+    // La comprobacion de arriba no basta: la carrera cabe justo ahi. Por eso la
+    // version va tambien en el `where` y se cuentan las filas escritas.
+    const { service, db } = build([]);
+    db.bot.updateMany.mockResolvedValue({ count: 0 });
+
+    const error = await service
+      .updateConfig(USER_ID, BOT_ID, cambioHot(), { expectedVersion: 1 })
+      .catch((e: ConflictException) => e);
+
+    expect(error).toBeInstanceOf(ConflictException);
+    expect((error as ConflictException).getResponse()).toMatchObject({ reason: 'STALE_VERSION' });
   });
 });

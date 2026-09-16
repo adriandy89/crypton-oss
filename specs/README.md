@@ -166,4 +166,6 @@ ante un 429 se paran sin reintentar. A `findings.md` va solo la evidencia resumi
 | 048 | [Revision de las nueve estrategias](048-revision-de-estrategias/spec.md) | revision | hecho (falta CA-5 manual) | `spec/048-revision-de-estrategias` |
 | 049 | [La API no arranca: el supervisor no se puede inyectar](049-el-supervisor-no-se-inyecta/spec.md) | correccion | hecho (falta CA-5 manual) | `spec/049-el-supervisor-no-se-inyecta` |
 | 050 | [Una caida del venue no es un fallo del bot](050-caida-del-venue/spec.md) | cambio | hecho (falta CA-10 manual) | `spec/050-caida-del-venue` |
+| 051 | [El supervisor que solo avisa](051-el-supervisor-que-solo-avisa/spec.md) | cambio | hecho (falta CA-10 manual) | `spec/051-el-supervisor-que-solo-avisa` |
+| 052 | [Revision del spec 051](052-revision-051/spec.md) | revision | hecho (18 hallazgos corregidos dentro) | `spec/052-revision-051` |
 

@@ -179,6 +179,40 @@ describe('RiskService', () => {
     ).resolves.toBeUndefined();
   });
 
+  it('el tope de apalancamiento es el menor de todos, y se puede consultar antes (spec 052)', async () => {
+    // La misma cuenta que hace `assertWithinLimits`, leida al reves, para que
+    // quien PROPONE un cambio pueda respetarla en vez de descubrirla con un 403.
+    // El supervisor de IA la usa para no proponer lo que va a fallar.
+    const sinLimites = build({}, []);
+    // 40x de maximo en el mercado → mantenimiento 1,25 % → 16x por distancia de
+    // liquidacion, que manda aunque el usuario no tenga ningun tope puesto.
+    await expect(sinLimites.service.topeDeApalancamiento('u1', '1000', MARKET)).resolves.toBe(16);
+
+    const conTope = build({ max_leverage: 5 }, []);
+    await expect(conTope.service.topeDeApalancamiento('u1', '1000', MARKET)).resolves.toBe(5);
+
+    // El notional por bot: 3.000 con 1.000 de inversion son 3x.
+    const porBot = build({ max_notional_per_bot: decimal('3000') }, []);
+    await expect(porBot.service.topeDeApalancamiento('u1', '1000', MARKET)).resolves.toBe(3);
+
+    // Y el total, descontando lo que ya ocupan los demas bots y excluyendo a este.
+    const total = build({ max_total_notional: decimal('5000') }, [
+      { id: 'b1', total_investment: '1000', leverage: 2 },
+      { id: 'b2', total_investment: '1000', leverage: 1 },
+    ]);
+    await expect(
+      total.service.topeDeApalancamiento('u1', '1000', MARKET, { excludeBotId: 'b2' }),
+    ).resolves.toBe(3);
+
+    // Sin inversion no hay notional que limitar: dividir por cero daria un tope
+    // inventado, asi que solo queda el del mercado.
+    await expect(porBot.service.topeDeApalancamiento('u1', '0', MARKET)).resolves.toBe(16);
+
+    // Y nunca por debajo de 1x: que ya no quepa lo dice el 403, no un tope de cero.
+    const sinSitio = build({ max_notional_per_bot: decimal('10') }, []);
+    await expect(sinSitio.service.topeDeApalancamiento('u1', '1000', MARKET)).resolves.toBe(1);
+  });
+
   it('la puerta del 5 % usa la tasa de mantenimiento del mercado y dice el tope', async () => {
     const { service } = build({}, []);
     // 40x de máximo → mantenimiento 1,25 % → 16x como mucho.

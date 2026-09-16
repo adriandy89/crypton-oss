@@ -1,3 +1,4 @@
+import { ConflictException } from '@nestjs/common';
 import { AiDecisionState, AiMode } from '@crypton/db';
 import { StrategyKind } from '@crypton/shared';
 import { getStrategy, VENUE_MARKETS } from '@crypton/strategy-core';
@@ -95,6 +96,18 @@ const AJUSTE = {
   failures: 0,
 };
 
+/** Un estado fresco del bot con posicion abierta. Los importes, como cadenas. */
+const SNAPSHOT = {
+  position_qty: '0.01',
+  average_entry: '78000',
+  mark_price: '78910.1',
+  unrealized_pnl: '9.1',
+  realized_pnl_acc: '-1.2',
+  liquidation_price: null,
+  open_orders: 2,
+  taken_at: new Date(),
+};
+
 interface Opciones {
   env?: Record<string, string>;
   respuesta?: string | null;
@@ -128,6 +141,7 @@ function build(opts: Opciones = {}) {
     botFill: { findFirst: jest.fn().mockResolvedValue(null) },
     botAiDecision: {
       findMany: jest.fn().mockResolvedValue([]),
+      findFirst: jest.fn().mockResolvedValue(null),
       create: jest.fn().mockImplementation((args: { data: Record<string, unknown> }) => {
         creadas.push(args.data);
         return Promise.resolve({ id: BigInt(creadas.length) });
@@ -147,6 +161,7 @@ function build(opts: Opciones = {}) {
     incrWithExpire: jest.fn().mockResolvedValue(opts.cupo ?? 1),
     set: jest.fn().mockResolvedValue(undefined),
     getDel: jest.fn().mockResolvedValue(opts.vale ?? null),
+    del: jest.fn().mockResolvedValue(undefined),
   };
   const bus = { publish: jest.fn().mockResolvedValue(undefined) };
   const config = { get: (k: string, def?: string) => env[k] ?? def };
@@ -157,7 +172,14 @@ function build(opts: Opciones = {}) {
   };
   const marketData = { features: jest.fn().mockResolvedValue(RASGOS) };
   const markets = { getSpec: jest.fn().mockResolvedValue(MERCADO.spec) };
-  const risk = { get: jest.fn().mockResolvedValue({ max_leverage: null }) };
+  const risk = {
+    get: jest.fn().mockResolvedValue({ max_leverage: null }),
+    // El tope EFECTIVO de apalancamiento (spec 052, F-09): el menor de los
+    // limites del usuario, los del notional y el que impone la distancia de
+    // liquidacion del mercado. Sin el se proponia lo que `assertWithinLimits` iba
+    // a rechazar con un 403.
+    topeDeApalancamiento: jest.fn().mockResolvedValue(10),
+  };
   const bots = { updateConfig: jest.fn() };
 
   const service = new SupervisorService(
@@ -172,7 +194,7 @@ function build(opts: Opciones = {}) {
     bots as never,
   );
 
-  return { service, db, cache, bus, modelo, bots, creadas };
+  return { service, db, cache, bus, modelo, bots, risk, creadas };
 }
 
 const respuesta = (extra: Record<string, unknown> = {}) =>
@@ -189,6 +211,21 @@ const respuesta = (extra: Record<string, unknown> = {}) =>
     motivo: 'La volatilidad ha subido.',
     ...extra,
   });
+
+const soloCobertura = {
+  leverage: 'IGUAL',
+  coverage: 'MAS',
+  spread: 'IGUAL',
+  sizeGrowth: 'IGUAL',
+  cadence: 'IGUAL',
+};
+
+/** Los datos de cada `update` de un mock, en orden. */
+const datosDe = (mock: jest.Mock): Record<string, unknown>[] =>
+  mock.mock.calls.map((c) => (c[0] as { data: Record<string, unknown> }).data);
+
+const tiposPublicados = (bus: { publish: jest.Mock }): string[] =>
+  bus.publish.mock.calls.map((c) => (c[1] as { type: string }).type);
 
 describe('SupervisorService — las barreras antes de gastar', () => {
   it('con el interruptor apagado no llama a nadie', async () => {
@@ -229,8 +266,8 @@ describe('SupervisorService — las barreras antes de gastar', () => {
   });
 
   it('si la huella del expediente no cambio, no se pregunta otra vez', async () => {
-    const { service, modelo, db } = build();
-    // Primera vuelta: se guarda la huella que produjo.
+    const { service, modelo, db } = build({ respuesta: respuesta({ accion: 'MANTENER' }) });
+    // Primera vuelta, con una respuesta que vale: se guarda la huella que produjo.
     await service.revisarBot(AJUSTE, BOT, 'CRON');
     const guardada = (db.botAiSetting.update.mock.calls[0][0] as { data: { last_bucket: string } })
       .data.last_bucket;
@@ -253,7 +290,10 @@ describe('SupervisorService — las barreras antes de gastar', () => {
   });
 
   it('agotado el cupo global no se llama, aunque el del bot sobre', async () => {
-    const { service, modelo } = build({ cupo: 9999 });
+    const { service, modelo, cache } = build();
+    cache.incrWithExpire.mockImplementation((clave: string) =>
+      Promise.resolve(clave.startsWith('ai:quota:global:') ? 9999 : 1),
+    );
     await service.revisarBot(AJUSTE, BOT, 'CRON');
     expect(modelo.revisar).not.toHaveBeenCalled();
   });
@@ -375,6 +415,19 @@ describe('SupervisorService — cuando el modelo falla', () => {
     await service.revisarBot(AJUSTE, BOT, 'CRON');
     expect(bus.publish).not.toHaveBeenCalled();
   });
+
+  it('si el modelo falla no se guarda la huella: la siguiente revision vuelve a preguntar', async () => {
+    // Con la huella en tramos, una guardada tras un timeout ya no caduca sola cada
+    // media hora: el bot se quedaria sin revisar hasta que cambiara otra cosa
+    // (spec 051, H-14).
+    for (const fallo of [null, '{"accion":"CONTENER"}']) {
+      const { service, db } = build({ respuesta: fallo });
+      await service.revisarBot(AJUSTE, BOT, 'CRON');
+      const datos = datosDe(db.botAiSetting.update);
+      expect(datos.some((d) => 'last_bucket' in d)).toBe(false);
+      expect(datos.some((d) => d['last_review_at'] instanceof Date)).toBe(true);
+    }
+  });
 });
 
 describe('SupervisorService — el modo automatico', () => {
@@ -393,7 +446,12 @@ describe('SupervisorService — el modo automatico', () => {
     const [userId, botId, dto, opts] = bots.updateConfig.mock.calls[0];
     expect(userId).toBe('admin-1');
     expect(botId).toBe('bot-1');
-    expect(opts).toEqual({ appliedBy: expect.stringMatching(/^ia:/) });
+    // Con la version que se leyo al empezar: si el dueño toco el bot durante la
+    // llamada al modelo, esto ya no se aplica (spec 052, F-06).
+    expect(opts).toEqual({
+      appliedBy: expect.stringMatching(/^ia:/),
+      expectedVersion: BOT.config_version,
+    });
     expect(creadas[0]['state']).toBe(AiDecisionState.PROPUESTA);
     // `acceptRelayout` va atado al nivel del cambio, ni siempre ni nunca:
     // `updateConfig` exige esa confirmacion para un WARM —que cancela las
@@ -410,10 +468,11 @@ describe('SupervisorService — el modo automatico', () => {
     // `bot_config_revisions`, que es justo lo que hay que mirar cuando un bot
     // cambio solo.
     const { service, bots } = build({ respuesta: respuesta() });
-    bots.updateConfig.mockResolvedValue({ version: 4 });
+    bots.updateConfig.mockResolvedValue({ applied: true, version: 4 });
     await service.revisarBot(auto, BOT, 'CRON');
     expect(bots.updateConfig.mock.calls[0][3]).toEqual({
       appliedBy: expect.stringMatching(/^ia:\d+$/),
+      expectedVersion: BOT.config_version,
     });
   });
 
@@ -460,15 +519,14 @@ describe('SupervisorService — el modo automatico', () => {
     expect(update.data.state).toBe(AiDecisionState.FALLIDA);
     expect(update.data.error).toContain('apalancamiento');
     // Y el dueño se entera.
-    const tipos = bus.publish.mock.calls.map((c) => (c[1] as { type: string }).type);
-    expect(tipos).toContain('AI_FAILED');
+    expect(tiposPublicados(bus)).toContain('AI_FAILED');
   });
 
   it('un cambio aplicado se avisa con severidad WARN', async () => {
     // No es una averia, pero es lo mas importante que puede pasarle a un bot sin
     // que su dueño lo pidiera: tiene que llegar aunque el canal este a medias.
     const { service, bots, bus } = build({ respuesta: respuesta() });
-    bots.updateConfig.mockResolvedValue({ version: 4 });
+    bots.updateConfig.mockResolvedValue({ applied: true, version: 4 });
     await service.revisarBot(auto, BOT, 'CRON');
 
     const aviso = bus.publish.mock.calls
@@ -579,8 +637,7 @@ describe('SupervisorService — el boton de Telegram', () => {
     expect(update.data.state).toBe(AiDecisionState.CADUCADA);
     expect(update.data.discard_reason).toBe('STALE');
     // Y se dice, en vez de dejar al usuario mirando un botón que no hizo nada.
-    const tipos = bus.publish.mock.calls.map((c) => (c[1] as { type: string }).type);
-    expect(tipos).toContain('AI_FAILED');
+    expect(tiposPublicados(bus)).toContain('AI_FAILED');
   });
 
   it('una decision que ya no esta pendiente no revive', async () => {
@@ -598,12 +655,17 @@ describe('SupervisorService — el boton de Telegram', () => {
 
   it('aplicar de verdad pasa por el camino de siempre', async () => {
     const { service, bots } = build({ vale: VALE, decision: decisionPendiente() });
-    bots.updateConfig.mockResolvedValue({ version: 4 });
+    bots.updateConfig.mockResolvedValue({ applied: true, version: 4 });
     await service.canjearVale('admin-1', 'x', true);
 
     expect(bots.updateConfig).toHaveBeenCalledTimes(1);
     expect(bots.updateConfig.mock.calls[0][0]).toBe('admin-1');
-    expect(bots.updateConfig.mock.calls[0][3]).toEqual({ appliedBy: 'ia:7' });
+    // La version es la que acaba de leer `rehacer`, no la que se guardo al
+    // proponer: entre las dos pueden haber pasado sesenta minutos.
+    expect(bots.updateConfig.mock.calls[0][3]).toEqual({
+      appliedBy: 'ia:7',
+      expectedVersion: BOT.config_version,
+    });
   });
 
   it('RECALCULA contra el mercado de ahora, no aplica lo guardado', async () => {
@@ -612,7 +674,7 @@ describe('SupervisorService — el boton de Telegram', () => {
     // pero NO con `preview()`, que es lo unico que detecta violaciones de tick,
     // paso y notional minimo del venue (spec 047, F-04).
     const { service, bots, db } = build({ vale: VALE, decision: decisionPendiente() });
-    bots.updateConfig.mockResolvedValue({ version: 4 });
+    bots.updateConfig.mockResolvedValue({ applied: true, version: 4 });
     await service.canjearVale('admin-1', 'x', true);
 
     // Se vuelve a leer la revision vigente y la spec del mercado: eso es
@@ -635,8 +697,7 @@ describe('SupervisorService — el boton de Telegram', () => {
     expect(update.data.state).toBe(AiDecisionState.CADUCADA);
     expect(update.data.discard_reason).toBe('RECALCULO');
     // Y se dice, en vez de dejar al usuario mirando un boton que no hizo nada.
-    const tipos = bus.publish.mock.calls.map((c) => (c[1] as { type: string }).type);
-    expect(tipos).toContain('AI_FAILED');
+    expect(tiposPublicados(bus)).toContain('AI_FAILED');
   });
 
   it('una aprobacion humana NO pasa por el tope diario de cambios', async () => {
@@ -644,7 +705,7 @@ describe('SupervisorService — el boton de Telegram', () => {
     // tarde. Quien pulsa el boton ha mirado el cambio y ha decidido; descartarle
     // el septimo en silencio seria lo peor de los dos mundos (F-09).
     const { service, bots, cache } = build({ vale: VALE, decision: decisionPendiente() });
-    bots.updateConfig.mockResolvedValue({ version: 4 });
+    bots.updateConfig.mockResolvedValue({ applied: true, version: 4 });
     cache.incrWithExpire.mockImplementation((clave: string) =>
       Promise.resolve(clave.startsWith('ai:applies:') ? 99 : 1),
     );
@@ -652,6 +713,28 @@ describe('SupervisorService — el boton de Telegram', () => {
     await service.canjearVale('admin-1', 'x', true);
 
     expect(bots.updateConfig).toHaveBeenCalledTimes(1);
+  });
+
+  it('una aprobacion humana tampoco pasa por el enfriamiento WARM (spec 051)', async () => {
+    // Hubo un WARM automatico hace un rato: el automatico esperaria seis horas,
+    // pero quien pulsa el boton ha mirado el cambio.
+    const { service, bots, db } = build({ vale: VALE, decision: decisionPendiente() });
+    db.botAiDecision.findFirst.mockResolvedValue({ id: BigInt(9) });
+    bots.updateConfig.mockResolvedValue({ applied: true, version: 4 });
+
+    await service.canjearVale('admin-1', 'x', true);
+
+    expect(bots.updateConfig).toHaveBeenCalledTimes(1);
+  });
+
+  it('aprobar desde Telegram tambien hace avanzar las perillas (spec 051)', async () => {
+    const { service, bots, db } = build({ vale: VALE, decision: decisionPendiente() });
+    bots.updateConfig.mockResolvedValue({ applied: true, version: 4 });
+
+    await service.canjearVale('admin-1', 'x', true);
+
+    const perillas = datosDe(db.botAiSetting.update).find((d) => 'knobs' in d);
+    expect(perillas?.['knobs']).toEqual({ ...KNOBS, spread: 'ALTA' });
   });
 });
 
@@ -679,23 +762,35 @@ describe('SupervisorService — el historial no miente (spec 047, F-02)', () => 
     await service.revisarBot(AJUSTE, BOT, 'CRON');
 
     const args = db.botAiDecision.findMany.mock.calls[0][0] as {
-      where: { state?: unknown; action?: unknown };
+      where: { OR?: unknown[]; action?: unknown };
     };
     // Lo que se pide son decisiones por ESTADO, no por accion: una fallida no es
     // una opinion del modelo, y una descartada tampoco llego a pasar.
-    expect(args.where.state).toBeDefined();
+    expect(args.where.OR).toBeDefined();
+    expect(args.where.action).toBeUndefined();
   });
 
-  it('tampoco incluye las descartadas: nunca llegaron a pasar', async () => {
+  it('tampoco incluye las descartadas ni los avisos: solo cambios', async () => {
     const { service, db } = build({ respuesta: respuesta() });
     await service.revisarBot(AJUSTE, BOT, 'CRON');
 
     const args = db.botAiDecision.findMany.mock.calls[0][0] as {
-      where: { state?: { in?: string[] } };
+      where: { OR?: { state?: { in?: string[] } | string; discard_reason?: string }[] };
     };
-    const estados = args.where.state?.in ?? [];
+    const rama = args.where.OR ?? [];
+    const estados = rama.flatMap((o) =>
+      typeof o.state === 'string' ? [o.state] : (o.state?.in ?? []),
+    );
     expect(estados).not.toContain(AiDecisionState.DESCARTADA);
     expect(estados).not.toContain(AiDecisionState.FALLIDA);
+    // «AVISAR hace 30 minutos, 1 hora, 2 horas» era lo que convencia al modelo de
+    // que el problema persistia (spec 051, H-02).
+    expect(estados).not.toContain(AiDecisionState.AVISADA);
+    expect(estados).toContain(AiDecisionState.RECHAZADA);
+    // Y la que caduco sin respuesta SI entra, con su motivo: sin ella el modelo
+    // repetia la misma propuesta que nadie habia aprobado (spec 052, F-17).
+    const caducadas = rama.find((o) => o.state === AiDecisionState.CADUCADA);
+    expect(caducadas?.discard_reason).toBe('PLAZO');
   });
 });
 
@@ -824,7 +919,7 @@ describe('SupervisorService — la segunda pasada (spec 047, tanda G)', () => {
     // quedo atras, y una aprobacion podia recolocar la escalera de un bot cuyo
     // dueño lo habia prohibido — que cuesta comisiones de verdad.
     const { service, bots } = build({ vale: VALE, decision: pendiente(), allowWarm: false });
-    bots.updateConfig.mockResolvedValue({ version: 4 });
+    bots.updateConfig.mockResolvedValue({ applied: true, version: 4 });
 
     await service.canjearVale('admin-1', 'x', true);
 
@@ -866,7 +961,7 @@ describe('SupervisorService — la segunda pasada (spec 047, tanda G)', () => {
     // El historico existe para explicar por que un bot cambio; si lo aplicado no
     // es lo anotado, explica mal.
     const { service, bots, db } = build({ vale: VALE, decision: pendiente() });
-    bots.updateConfig.mockResolvedValue({ version: 4 });
+    bots.updateConfig.mockResolvedValue({ applied: true, version: 4 });
 
     await service.canjearVale('admin-1', 'x', true);
 
@@ -876,5 +971,349 @@ describe('SupervisorService — la segunda pasada (spec 047, tanda G)', () => {
     expect(update.data['proposed_config']).toBeDefined();
     expect(update.data['diff']).toBeDefined();
     expect(update.data['apply_level']).toBeDefined();
+  });
+});
+
+describe('SupervisorService — un aviso por bot cada 24 horas (spec 051)', () => {
+  it('el primer AVISAR se manda; el segundo dentro de la ventana se guarda sin mandar', async () => {
+    // Ciento ocho avisos en tres dias sobre tres bots simulados: uno por revision.
+    const primero = build({ respuesta: respuesta({ accion: 'AVISAR' }) });
+    await primero.service.revisarBot(AJUSTE, BOT, 'CRON');
+    expect(primero.creadas[0]['state']).toBe(AiDecisionState.AVISADA);
+    expect(tiposPublicados(primero.bus)).toEqual(['AI_ADVICE']);
+    expect(primero.db.botEvent.create).toHaveBeenCalledTimes(1);
+
+    const segundo = build({ respuesta: respuesta({ accion: 'AVISAR' }) });
+    segundo.cache.setnx.mockImplementation((clave: string) =>
+      Promise.resolve(!clave.startsWith('ai:advice:')),
+    );
+    await segundo.service.revisarBot(AJUSTE, BOT, 'CRON');
+    // La decision existio y costo una llamada: se guarda. Pero no se manda, no
+    // ensucia el feed del bot y no retira ninguna propuesta pendiente.
+    expect(segundo.creadas[0]['state']).toBe(AiDecisionState.DESCARTADA);
+    expect(segundo.creadas[0]['discard_reason']).toBe('AVISO_REPETIDO');
+    expect(segundo.bus.publish).not.toHaveBeenCalled();
+    expect(segundo.db.botEvent.create).not.toHaveBeenCalled();
+    expect(segundo.db.botAiDecision.updateMany).not.toHaveBeenCalled();
+  });
+
+  it('la ventana dura AI_AGENT_ADVICE_COOLDOWN_H horas, 24 si no se dice', async () => {
+    for (const [env, segundos] of [
+      [{}, 86_400],
+      [{ AI_AGENT_ADVICE_COOLDOWN_H: '6' }, 21_600],
+    ] as const) {
+      const { service, cache } = build({ respuesta: respuesta({ accion: 'AVISAR' }), env });
+      await service.revisarBot(AJUSTE, BOT, 'CRON');
+      const turno = cache.setnx.mock.calls.find((c) => String(c[0]).startsWith('ai:advice:'));
+      expect(turno?.[0]).toBe('ai:advice:bot-1');
+      expect(turno?.[2]).toBe(segundos);
+    }
+  });
+
+  it('con Redis caido no se avisa', async () => {
+    const { service, cache, bus } = build({ respuesta: respuesta({ accion: 'AVISAR' }) });
+    cache.setnx.mockImplementation((clave: string) =>
+      clave.startsWith('ai:advice:') ? Promise.reject(new Error('redis')) : Promise.resolve(true),
+    );
+    await service.revisarBot(AJUSTE, BOT, 'CRON');
+    expect(bus.publish).not.toHaveBeenCalled();
+  });
+
+  it('si la fila no se puede escribir, el turno del aviso se devuelve', async () => {
+    // O el siguiente aviso de verdad se callaria un dia entero por un fallo de
+    // escritura.
+    const { service, db, cache } = build({ respuesta: respuesta({ accion: 'AVISAR' }) });
+    db.botAiDecision.create.mockRejectedValueOnce(new Error('base caida'));
+    await expect(service.revisarBot(AJUSTE, BOT, 'CRON')).rejects.toThrow('base caida');
+    expect(cache.del).toHaveBeenCalledWith('ai:advice:bot-1');
+  });
+});
+
+describe('SupervisorService — lo que se aplica, se aplica de verdad (spec 051)', () => {
+  const auto = { ...AJUSTE, mode: AiMode.AUTO };
+
+  it('aplicar hace avanzar las perillas y anota cuando', async () => {
+    // El market maker de BTC aplico «diferencial MENOS, cadencia MAS», siguio viendo sus
+    // perillas en MEDIA y pago cuatro llamadas para oir «sin cambios».
+    const { service, bots, db } = build({ respuesta: respuesta() });
+    bots.updateConfig.mockResolvedValue({ applied: true, version: 4 });
+
+    await service.revisarBot(auto, BOT, 'CRON');
+
+    const perillas = datosDe(db.botAiSetting.update).find((d) => 'knobs' in d);
+    expect(perillas?.['knobs']).toEqual({ ...KNOBS, spread: 'ALTA' });
+    expect(perillas?.['last_apply_at']).toBeInstanceOf(Date);
+  });
+
+  it('`applied: false` no es un cambio aplicado', async () => {
+    // Contra el estado de la base puede no quedar nada que cambiar. Anotarlo como
+    // aplicado inventaba un cambio en el historial y movia las perillas en vano.
+    const { service, bots, db, bus } = build({ respuesta: respuesta() });
+    bots.updateConfig.mockResolvedValue({ applied: false, level: 'NONE' });
+
+    await service.revisarBot(auto, BOT, 'CRON');
+
+    expect(datosDe(db.botAiDecision.update)).toContainEqual({
+      state: AiDecisionState.DESCARTADA,
+      discard_reason: 'SIN_CAMBIOS',
+    });
+    expect(datosDe(db.botAiSetting.update).some((d) => 'knobs' in d)).toBe(false);
+    expect(tiposPublicados(bus)).not.toContain('AI_APPLIED');
+  });
+
+  it('un fallo al anotar un cambio ya aplicado no se cuenta como «no pudo aplicar»', async () => {
+    const { service, bots, db, bus } = build({ respuesta: respuesta() });
+    bots.updateConfig.mockResolvedValue({ applied: true, version: 4 });
+    db.botAiDecision.update.mockRejectedValueOnce(new Error('base caida'));
+
+    await service.revisarBot(auto, BOT, 'CRON');
+
+    const tipos = tiposPublicados(bus);
+    expect(tipos).not.toContain('AI_FAILED');
+    expect(tipos).toContain('AI_APPLIED');
+    // Y las perillas se guardan igual: el cambio esta en el bot.
+    expect(datosDe(db.botAiSetting.update).some((d) => 'knobs' in d)).toBe(true);
+  });
+
+  it('un WARM automatico a pocas horas de otro se descarta', async () => {
+    // El diferencial de este market maker mueve la separacion de capas, que es
+    // WARM: cancela y vuelve a tender las ordenes.
+    const { service, db, creadas } = build({ respuesta: respuesta() });
+    db.botAiDecision.findFirst.mockImplementation((args: { where: { state?: string } }) =>
+      Promise.resolve(args.where.state === AiDecisionState.APLICADA ? { id: BigInt(9) } : null),
+    );
+
+    await service.revisarBot({ ...AJUSTE, mode: AiMode.AUTO }, BOT, 'CRON');
+
+    expect(creadas[0]['state']).toBe(AiDecisionState.DESCARTADA);
+    expect(creadas[0]['discard_reason']).toBe('RESHAPE');
+    // Y lo que se pregunta es un WARM APLICADO en las ultimas seis horas.
+    const consulta = db.botAiDecision.findFirst.mock.calls
+      .map((c) => c[0] as { where: Record<string, unknown> })
+      .find((a) => a.where['state'] === AiDecisionState.APLICADA)!;
+    expect(consulta.where['apply_level']).toBe('WARM');
+    const desde = (consulta.where['applied_at'] as { gte: Date }).gte;
+    const horas = (Date.now() - desde.getTime()) / 3_600_000;
+    expect(horas).toBeGreaterThan(5.9);
+    expect(horas).toBeLessThan(6.1);
+  });
+
+  it('sin un WARM reciente, el mismo cambio se propone', async () => {
+    const { service, creadas } = build({ respuesta: respuesta() });
+    await service.revisarBot(AJUSTE, BOT, 'CRON');
+    expect(creadas[0]['state']).toBe(AiDecisionState.PROPUESTA);
+  });
+
+  it('con el cupo del bot agotado no se toca el de la plataforma', async () => {
+    const { service, cache, modelo } = build({ respuesta: respuesta() });
+    cache.incrWithExpire.mockImplementation((clave: string) =>
+      Promise.resolve(clave.startsWith('ai:quota:bot:') ? 99 : 1),
+    );
+
+    await service.revisarBot(AJUSTE, BOT, 'CRON');
+
+    expect(modelo.revisar).not.toHaveBeenCalled();
+    const claves = cache.incrWithExpire.mock.calls.map((c) => String(c[0]));
+    expect(claves.some((k) => k.startsWith('ai:quota:global:'))).toBe(false);
+  });
+});
+
+describe('SupervisorService — lo que ve el modelo (spec 051)', () => {
+  const promptDe = (modelo: { revisar: jest.Mock }): string =>
+    String(modelo.revisar.mock.calls[0]?.[2] ?? '');
+
+  it('los eventos se agrupan por tipo y severidad', async () => {
+    const { service, db } = build({ respuesta: respuesta({ accion: 'MANTENER' }) });
+    await service.revisarBot(AJUSTE, BOT, 'CRON');
+    const args = db.botEvent.groupBy.mock.calls[0][0] as { by: string[] };
+    expect(args.by).toEqual(['type', 'severity']);
+  });
+
+  it('ni sus propios avisos ni la operacion normal llegan al prompt', async () => {
+    const { service, db, modelo } = build({ respuesta: respuesta({ accion: 'MANTENER' }) });
+    db.botEvent.groupBy.mockResolvedValue([
+      { type: 'AI_ADVICE', severity: 'INFO', _count: { type: 20 } },
+      { type: 'AI_FAILED', severity: 'WARN', _count: { type: 1 } },
+      { type: 'FILL', severity: 'INFO', _count: { type: 520 } },
+      { type: 'ORDER_REJECTED', severity: 'INFO', _count: { type: 19 } },
+    ]);
+
+    await service.revisarBot(AJUSTE, BOT, 'CRON');
+
+    const prompt = promptDe(modelo);
+    for (const ruido of ['AI_ADVICE', 'AI_FAILED', 'FILL', 'ORDER_REJECTED', 'Incidencias']) {
+      expect(`${ruido}: ${prompt.includes(ruido)}`).toBe(`${ruido}: false`);
+    }
+  });
+
+  it('el expediente trae lo que cambiaria cada perilla', async () => {
+    const { service, modelo } = build({ respuesta: respuesta({ accion: 'MANTENER' }) });
+    await service.revisarBot(AJUSTE, BOT, 'CRON');
+    const prompt = promptDe(modelo);
+    expect(prompt).toContain('Qué cambiaría ahora mover cada perilla un paso');
+    expect(prompt).toContain('spread (diferencial)');
+  });
+
+  it('con la posicion abierta en el estado fresco, «cobertura MAS» se descarta por riesgo', async () => {
+    // En un market maker, cubrir mas es aceptar mas inventario antes de
+    // defenderse. El recorte del spec 046 lo dejaba pasar creyendo lo contrario.
+    const { service, db, creadas } = build({ respuesta: respuesta({ ajustes: soloCobertura }) });
+    db.botSnapshot.findFirst.mockResolvedValue(SNAPSHOT);
+
+    await service.revisarBot(AJUSTE, BOT, 'CRON');
+
+    expect(creadas[0]['state']).toBe(AiDecisionState.DESCARTADA);
+    expect(creadas[0]['discard_reason']).toBe('RIESGO');
+  });
+
+  it('una posicion a cero esta cerrada aunque el ciclo de un MM tenga niveles', async () => {
+    // El ciclo de un market maker no cierra nunca: sus niveles ejecutados no
+    // dicen si hoy hay posicion. El estado fresco si.
+    const { service, db, creadas } = build({ respuesta: respuesta({ ajustes: soloCobertura }) });
+    db.botSnapshot.findFirst.mockResolvedValue({ ...SNAPSHOT, position_qty: '0' });
+    db.botCycle.findFirst.mockResolvedValue({ filled_level_indexes: [0, 1] });
+
+    await service.revisarBot(AJUSTE, BOT, 'CRON');
+
+    expect(creadas[0]['state']).toBe(AiDecisionState.PROPUESTA);
+  });
+
+  it('sin estado fresco, se supone abierta si el ciclo tiene inventario', async () => {
+    const { service, db, creadas } = build({ respuesta: respuesta({ ajustes: soloCobertura }) });
+    db.botCycle.findFirst.mockResolvedValue({ filled_level_indexes: [0] });
+
+    await service.revisarBot(AJUSTE, BOT, 'CRON');
+
+    expect(creadas[0]['discard_reason']).toBe('RIESGO');
+  });
+});
+
+describe('SupervisorService — la revision del spec 052', () => {
+  const auto = { ...AJUSTE, mode: AiMode.AUTO };
+
+  it('si la configuracion cambio durante la llamada, no se aplica y no se alarma (F-06)', async () => {
+    // Entre leer la configuracion y escribirla pasan unos veinticinco segundos de
+    // llamada al modelo, y lo que se escribe es la configuracion ENTERA calculada
+    // sobre lo que se leyo: sin esto, lo que el dueño tocara mientras tanto volvia
+    // atras en silencio y el historico lo atribuia a la IA.
+    const { service, bots, db, bus, creadas } = build({ respuesta: respuesta() });
+    bots.updateConfig.mockRejectedValue(
+      new ConflictException({ message: 'cambio', reason: 'STALE_VERSION' }),
+    );
+
+    await service.revisarBot(auto, BOT, 'CRON');
+
+    expect(bots.updateConfig.mock.calls[0][3]).toEqual({
+      appliedBy: expect.stringMatching(/^ia:/),
+      expectedVersion: BOT.config_version,
+    });
+    expect(datosDe(db.botAiDecision.update)).toContainEqual({
+      state: AiDecisionState.CADUCADA,
+      discard_reason: 'STALE',
+    });
+    // Ni FALLIDA ni Telegram: no hay nada que una persona tenga que hacer.
+    expect(datosDe(db.botAiDecision.update).some((d) => d['state'] === 'FALLIDA')).toBe(false);
+    expect(tiposPublicados(bus)).not.toContain('AI_FAILED');
+    expect(creadas[0]['action']).toBe('AJUSTAR');
+  });
+
+  it('cualquier otro rechazo de la escritura SI es un fallo', async () => {
+    // La otra mitad del mismo arreglo: un 403 por riesgo o un 400 por validacion
+    // tienen que poder leerse despues, y avisan.
+    const { service, bots, db, bus } = build({ respuesta: respuesta() });
+    bots.updateConfig.mockRejectedValue(new Error('supera tu límite'));
+
+    await service.revisarBot(auto, BOT, 'CRON');
+
+    expect(datosDe(db.botAiDecision.update)).toContainEqual({
+      state: AiDecisionState.FALLIDA,
+      discard_reason: 'ESCRITURA',
+      error: 'supera tu límite',
+    });
+    expect(tiposPublicados(bus)).toContain('AI_FAILED');
+  });
+
+  it('en manual, un WARM reciente no impide proponer (F-07)', async () => {
+    // El enfriamiento existe para que el bot no se reescriba solo cada rato. En
+    // manual no se aplica nada: se propone y decide una persona, y `rehacer` ni
+    // siquiera lo consulta al aprobar. Frenarlo aqui dejaba al modo manual seis
+    // horas sin su decision mas importante.
+    const conWarmReciente = (ajuste: typeof AJUSTE) => {
+      const { service, db, creadas } = build({ respuesta: respuesta() });
+      db.botAiDecision.findFirst.mockImplementation((args: { where: { state?: string } }) =>
+        Promise.resolve(args.where.state === AiDecisionState.APLICADA ? { id: BigInt(9) } : null),
+      );
+      return { service, creadas, correr: () => service.revisarBot(ajuste, BOT, 'CRON') };
+    };
+
+    const manual = conWarmReciente(AJUSTE);
+    await manual.correr();
+    expect(manual.creadas[0]['state']).toBe(AiDecisionState.PROPUESTA);
+
+    const automatico = conWarmReciente(auto);
+    await automatico.correr();
+    expect(automatico.creadas[0]['state']).toBe(AiDecisionState.DESCARTADA);
+    expect(automatico.creadas[0]['discard_reason']).toBe('RESHAPE');
+  });
+
+  it('el tope de apalancamiento que se usa es el EFECTIVO del usuario (F-09)', async () => {
+    // `assertWithinLimits` comprueba tambien los limites de notional y la
+    // distancia de liquidacion; sin mirarlos antes se proponia lo que iba a
+    // recibir un 403, y cada rechazo era una decision FALLIDA y un AI_FAILED.
+    const { service, risk, creadas } = build({ respuesta: respuesta() });
+    // El usuario ya no tiene notional libre: su tope efectivo es 1x, aunque su
+    // `max_leverage` no diga nada.
+    risk.topeDeApalancamiento.mockResolvedValue(1);
+
+    await service.revisarBot(AJUSTE, BOT, 'CRON');
+
+    const [userId, inversion, mercado, opts] = risk.topeDeApalancamiento.mock.calls[0] as [
+      string,
+      string,
+      unknown,
+      { excludeBotId?: string },
+    ];
+    expect(userId).toBe(BOT.user_id);
+    expect(inversion).toBe(CONFIG_VIGENTE.totalInvestment);
+    expect(mercado).toBe(MERCADO.spec);
+    // Excluyendo al propio bot, o contaria dos veces su notional (001/F-42).
+    expect(opts.excludeBotId).toBe(BOT.id);
+    // Y la configuracion propuesta respeta ese tope: con el anterior, lo que
+    // salia de aqui recibia un 403 en el camino de escritura.
+    const propuesta = creadas[0]['proposed_config'] as Record<string, unknown>;
+    expect(Number(propuesta['leverage'])).toBe(1);
+    expect(Number(CONFIG_VIGENTE['leverage'])).toBeGreaterThan(1);
+  });
+
+  it('una revision con respuesta valida pone los fallos a cero (F-10)', async () => {
+    // El comentario del contador dice «a los cinco SEGUIDOS», pero solo se
+    // reiniciaba al apagar el Modo IA: cinco cortes sueltos de OpenRouter en
+    // semanas pausaban el bot seis horas y avisaban de que «falla repetidamente».
+    const { service, db } = build({ respuesta: respuesta({ accion: 'MANTENER' }) });
+    await service.revisarBot({ ...AJUSTE, failures: 4 }, BOT, 'CRON');
+
+    const marca = datosDe(db.botAiSetting.update).find((d) => 'last_review_at' in d);
+    expect(marca?.['failures']).toBe(0);
+    expect(marca?.['last_error']).toBeNull();
+  });
+
+  it('una revision que falla NO pone los fallos a cero', async () => {
+    // La otra mitad: solo una respuesta utilizable cuenta como acierto. Si no, el
+    // contador no significaria nada.
+    const { service, db } = build({ respuesta: null });
+    await service.revisarBot({ ...AJUSTE, failures: 4 }, BOT, 'CRON');
+    const marcas = datosDe(db.botAiSetting.update);
+    for (const m of marcas) expect(m['failures']).not.toBe(0);
+    expect(marcas.some((m) => m['failures'] === 5)).toBe(true);
+  });
+
+  it('si falla retirar la propuesta anterior, el aviso se manda igual (F-13)', async () => {
+    // El turno del aviso ya estaba gastado: sin esto, el bot se quedaba
+    // veinticuatro horas sin poder avisar por un fallo que no tenia que ver.
+    const { service, db, bus } = build({ respuesta: respuesta({ accion: 'AVISAR' }) });
+    db.botAiDecision.updateMany.mockRejectedValue(new Error('base a medias'));
+
+    await expect(service.revisarBot(AJUSTE, BOT, 'CRON')).resolves.not.toThrow();
+    expect(tiposPublicados(bus)).toContain('AI_ADVICE');
   });
 });

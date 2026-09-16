@@ -7,6 +7,7 @@ import {
   startOfDay,
   type BotConfig,
   type MarketSpec,
+  type Numeric,
 } from '@crypton/shared';
 import { DbService } from 'src/libs';
 import { UpdateRiskLimitsDto } from './dtos';
@@ -108,6 +109,48 @@ export class RiskService {
     if (!market.active) {
       throw new BadRequestException(`El mercado ${market.symbol} no está operativo.`);
     }
+  }
+
+  /**
+   * El apalancamiento más alto que este usuario puede llevar en este bot sin que
+   * `assertWithinLimits` lo rechace.
+   *
+   * Es la misma cuenta de ahí arriba leída al revés, y existe para que quien
+   * PROPONE un cambio pueda respetar el límite en vez de descubrirlo con un 403.
+   * El supervisor de IA lo necesita por partida doble: para no proponer lo que va
+   * a fallar, y para que su lista de «qué movimiento tiene efecto» no le prometa
+   * al modelo un apalancamiento que no cabe (spec 052, F-09).
+   *
+   * No sustituye a `assertWithinLimits`: la comprobación de verdad sigue estando
+   * en el camino de escritura, donde no se puede saltar.
+   */
+  async topeDeApalancamiento(
+    userId: string,
+    investment: Numeric,
+    market: MarketSpec,
+    opts: { excludeBotId?: string } = {},
+  ): Promise<number> {
+    const limits = await this.get(userId);
+    const inversion = D(investment);
+    const topes: number[] = [maxLeverageWithinDistance(maintenanceMarginRateOf(market))];
+    if (limits.max_leverage != null) topes.push(limits.max_leverage);
+
+    // Sin inversión no hay notional que limitar: dividir por cero daría infinito
+    // y, peor, un tope inventado.
+    if (inversion.gt(0)) {
+      if (limits.max_notional_per_bot != null) {
+        topes.push(D(limits.max_notional_per_bot.toString()).div(inversion).floor().toNumber());
+      }
+      if (limits.max_total_notional != null) {
+        const otros = await this.currentTotalNotional(userId, opts.excludeBotId);
+        topes.push(
+          D(limits.max_total_notional.toString()).minus(otros).div(inversion).floor().toNumber(),
+        );
+      }
+    }
+    // Nunca menos de 1×: un tope de cero no significa «bot sin apalancamiento»,
+    // significa que ya no cabe, y eso lo dice el 403 con su motivo.
+    return Math.max(1, Math.min(...topes));
   }
 
   /** Comprueba que el usuario puede poner un bot más en marcha. */

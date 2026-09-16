@@ -29,11 +29,18 @@ import { MOVIMIENTOS, SIN_MOVIMIENTO, type Desplazamientos, type Movimiento } fr
  */
 
 /**
- * Version del contrato. Entra en la clave de cache y en la fila de la decision:
- * comparar decisiones de versiones distintas tiene que poder VERSE, no
+ * Version del contrato. Entra en la huella del expediente y en la fila de la
+ * decision: comparar decisiones de versiones distintas tiene que poder VERSE, no
  * adivinarse. Se sube al tocar el esquema o los prompts.
+ *
+ * 2 (spec 051): como mucho dos perillas, movimientos con efecto, market makers
+ * medidos por sus pares, y AVISAR solo cuando hace falta una persona y no se ha
+ * avisado ya.
+ * 3 (spec 052): el ajuste es relativo y acotado por paso, un cero no se enciende,
+ * hay movimientos que solo tienen efecto con los dos escalones, y una propuesta
+ * que caduco sin respuesta no se repite.
  */
-export const PROMPT_VERSION_REVISION = 1;
+export const PROMPT_VERSION_REVISION = 3;
 
 /** Que hacer con el bot. No hay «contener»: el supervisor no manda comandos. */
 export const ACCIONES = ['MANTENER', 'AJUSTAR', 'AVISAR'] as const;
@@ -61,6 +68,11 @@ const MAX_MOTIVO = 240;
  * opcional o un `oneOf` rompe el modo estricto en unos proveedores y en otros
  * no, y el proveedor lo elige el enrutador. Es el mismo fallo intermitente que
  * `provider: { require_parameters: true }` existe para evitar en el asesor.
+ *
+ * El tope de dos perillas NO esta aqui, y no puede estar: «como mucho dos de
+ * cinco distintas de IGUAL» no se expresa con `enum` sin un `oneOf`, que es
+ * justo lo que no se puede usar. Lo dice el prompt y lo hace cumplir
+ * `decidirCambio`, que descarta la decision entera.
  */
 export function revisionSchema(): Record<string, unknown> {
   const movimiento = { type: 'string', enum: [...MOVIMIENTOS] };
@@ -74,8 +86,9 @@ export function revisionSchema(): Record<string, unknown> {
         enum: [...ACCIONES],
         description:
           'MANTENER: la configuración sigue siendo adecuada, no toques nada. ' +
-          'AJUSTAR: mueve las perillas como indicas en ajustes. ' +
-          'AVISAR: no propongas cambios, pero esto debería mirarlo una persona.',
+          'AJUSTAR: mueve como mucho dos perillas, como indicas en ajustes. ' +
+          'AVISAR: una persona tiene que hacer algo que las perillas no arreglan; ' +
+          'si ya se avisó y no hay nada nuevo, usa MANTENER.',
       },
       ajustes: {
         type: 'object',
@@ -163,18 +176,19 @@ function leerAjustes(v: unknown): Desplazamientos | null {
 /**
  * El bloque estable: no depende del bot, solo de que esto es una revision.
  *
- * SIN marcador de cache de prompt, y medido antes de decidirlo: son ~700 tokens
- * y el minimo cacheable de Sonnet son 1024. Un `cache_control` aqui no se
- * activaria nunca — seria un adorno que aparenta una optimizacion que no existe.
- * Quien ahorra llamadas de verdad es la huella cuantizada del expediente, que se
- * salta la peticion entera. Si este bloque llegara a crecer por encima de 1024,
- * habria que volver a mirarlo.
+ * SIN marcador de cache de prompt. En la version 1 eran ~700 tokens, por debajo
+ * del minimo cacheable de 1024, y un `cache_control` no se habria activado
+ * nunca. La version 2 (spec 051) crece con los criterios de los market makers y
+ * probablemente pasa ese minimo; la cache de prompt sigue fuera de alcance, y
+ * quien ahorra llamadas de verdad es la huella del expediente, que se salta la
+ * peticion entera. Si se quiere cachear, primero hay que medir.
  */
 export function systemPromptRevision(): string {
   return [
     'Eres un supervisor de bots de trading sobre DEX. Se te da el expediente de un',
-    'bot que YA ESTA OPERANDO con dinero dentro, y tu trabajo es decidir si su',
-    'configuración sigue siendo adecuada para el mercado que tiene delante.',
+    'bot que YA ESTA OPERANDO —con dinero real o en simulación, el expediente lo',
+    'dice— y tu trabajo es decidir si su configuración sigue siendo adecuada para',
+    'el mercado que tiene delante.',
     '',
     'NO propones números ni parámetros: propones DESPLAZAMIENTOS sobre las cinco',
     'perillas que el bot ya tiene. Un generador determinista los traduce a los',
@@ -182,14 +196,26 @@ export function systemPromptRevision(): string {
     'Por eso no debes mencionar cifras en tu explicación: las que calcule el',
     'servidor pueden no coincidir con lo que estés imaginando.',
     '',
-    'Cada perilla se mueve como mucho dos posiciones, y eso es deliberado: un bot',
-    'en marcha se corrige poco a poco, no se reconfigura de golpe.',
+    'Cada perilla se mueve como mucho dos posiciones, y como mucho DOS perillas',
+    'distintas de IGUAL por decisión: si pides más, la decisión se descarta entera.',
+    'Un bot en marcha se corrige poco a poco, no se reconfigura de golpe.',
+    '',
+    'El expediente dice, para cada perilla, qué cambiaría ahora moverla.',
+    'Solo tienen efecto los movimientos marcados «sí»: pedir otro no cambia nada,',
+    'y uno bloqueado no se aplicará. Donde ponga «solo con MUCHO_», un paso se',
+    'queda corto y hacen falta los dos.',
+    '',
+    'Los cambios son RELATIVOS a lo que el bot tiene: cada paso mueve cada',
+    'parámetro como mucho un cuarto de su valor actual. Un bot muy lejos de donde',
+    'debería estar tarda varias revisiones en llegar, y eso es lo correcto. Un',
+    'parámetro que su dueño dejó en cero —apagado— no se enciende solo.',
     '',
     'Qué significa cada perilla, y hacia dónde la mueves:',
     '',
     '- leverage: cuánto apalancamiento respecto de lo que la volatilidad aconseja.',
-    '- coverage: cuánto recorrido en contra cubre antes de quedarse sin escalera, o',
-    '  cuán ancho trabaja. Más cobertura = aguanta más, gana menos por ciclo.',
+    '- coverage: cuánto recorrido en contra aguanta. En una escalera, más cobertura',
+    '  es aguantar más antes de quedarse sin niveles; en un market maker es aceptar',
+    '  MÁS inventario antes de defenderse, es decir, más riesgo.',
     '- spread: cuánto se separan los niveles, o cuánto diferencial cotiza un market',
     '  maker. Más separación = menos operaciones, más margen en cada una.',
     '- sizeGrowth: cuánto crece cada nivel respecto del anterior.',
@@ -204,13 +230,21 @@ export function systemPromptRevision(): string {
     '3. Si el mercado se mueve en línea recta (eficiencia alta), ensancha: una',
     '   rejilla estrecha solo tiene sentido cuando el precio va y viene.',
     '4. Si el bot lleva mucho sin ejecutar nada, probablemente cotiza demasiado',
-    '   lejos: estrecha el diferencial.',
+    '   lejos: estrecha el diferencial, si ese movimiento tiene efecto.',
     '5. Si las comisiones se están comiendo lo capturado, ensancha: está operando',
     '   demasiado para lo que saca.',
-    '6. Mira el historial de tus decisiones anteriores. Si acabas de mover una',
-    '   perilla en un sentido, no la muevas en el contrario sin un motivo nuevo.',
-    '7. Usa AVISAR cuando veas algo que deba mirar una persona pero que no se',
-    '   arregle moviendo perillas.',
+    '6. Un market maker no cierra ciclos: júzgalo por sus pares casados. Si el',
+    '   margen de los pares es NEGATIVO, o las comisiones se llevan todo lo que',
+    '   captura, cotiza demasiado estrecho para lo que se mueve el par: ensancha el',
+    '   diferencial. Que ejecute mucho y que el exchange le rechace órdenes',
+    '   post-only es su conducta normal, no una incidencia.',
+    '7. El historial son tus cambios anteriores. No deshagas uno reciente sin un',
+    '   motivo nuevo, y no repitas uno que una persona rechazó ni uno que caducó',
+    '   sin que nadie lo aprobara: proponerlo otra vez es mandarle el mismo aviso',
+    '   a quien ya decidió no hacer nada.',
+    '8. Usa AVISAR solo cuando una persona tenga que hacer algo YA que no se arregla',
+    '   moviendo perillas. Si ya se avisó y no ha aparecido nada nuevo, responde',
+    '   MANTENER: la persona está informada y repetirlo solo hace ruido.',
     '',
     'No puedes cambiar el capital, ni el par, ni la cuenta, ni la dirección del',
     'bot. Tampoco puedes pararlo, pausarlo ni cerrar su posición. Si crees que',

@@ -43,6 +43,10 @@ function usedIn(dir) {
     const src = read(file);
     for (const m of src.matchAll(/\.get(?:<[^>]*>)?\(\s*'([A-Z][A-Z0-9_]*)'/g)) used.add(m[1]);
     for (const m of src.matchAll(/process\.env(?:\.|\[')([A-Z][A-Z0-9_]*)/g)) used.add(m[1]);
+    // El supervisor lee sus numeros con `this.num('X', porDefecto)`, que distingue
+    // «vacio» de «cero». Sin esta linea sus variables quedaban fuera de la
+    // comprobacion, y una que faltara en el compose no avisaba (spec 051).
+    for (const m of src.matchAll(/this\.num\(\s*'([A-Z][A-Z0-9_]*)'/g)) used.add(m[1]);
     // Los secretos no se leen con `config.get` directamente, sino a traves de
     // ayudantes que ademas validan (`requireSecret`, `this.require`). Sin esta
     // linea, JWT_ACCESS_SECRET o GOOGLE_CLIENT_ID —justo las que impiden

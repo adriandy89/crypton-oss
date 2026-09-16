@@ -167,8 +167,8 @@ variables de entorno sin tocar, la función no existe.
 ### Qué puede hacer, y qué no
 
 Lo que **sí**: mover cinco perillas —apalancamiento, cobertura, diferencial, crecimiento del tamaño
-y cadencia— como mucho **dos posiciones cada una**, y solo si el cambio pasa exactamente la misma
-validación que un cambio hecho a mano.
+y cadencia— como mucho **dos posiciones cada una** y **dos perillas por decisión**, y solo si el
+cambio pasa exactamente la misma validación que un cambio hecho a mano.
 
 Lo que **no**, pase lo que pase:
 
@@ -176,13 +176,35 @@ Lo que **no**, pase lo que pase:
   asunto suyo.
 - **Parar, pausar, cerrar una posición o cancelar órdenes.** No emite ni un comando. Si cree que
   hace falta algo de eso, avisa y lo decides tú.
-- **Ensanchar o apagar un stop loss.** Solo puede estrecharlo.
+- **Ensanchar o apagar un stop loss.** Solo puede estrecharlo, y con una posición abierta ni eso.
 - **Subir el apalancamiento más de un punto** por revisión, ni por encima de tus propios límites.
-- **Cambiar más de cuatro parámetros de una vez.** Más que eso no es un ajuste, es otro bot.
+- **Mover más de dos perillas a la vez.** Una perilla arrastra los parámetros que dependen de ella
+  —el diferencial de un market maker V2 son siete— y se mueven juntos. Lo que hace atribuible un
+  resultado es cuántas decisiones se toman a la vez, no cuántos parámetros cambian.
+- **Con una posición abierta, subir el riesgo o tocar lo que podría cerrarla.** El apalancamiento,
+  los tamaños y los topes no suben, el modo defensivo de un market maker no se retrasa, y el stop,
+  el objetivo o el retroceso no se mueven. Tampoco baja por debajo de lo ya expuesto el tope de un
+  market maker que cierra al tocarlo.
 - **Recolocar la escalera con escalones ya ejecutados**, ni tocar un bot que no esté operando.
+- **Recolocar las órdenes dos veces en seis horas.** Un cambio que cancela y vuelve a tender las
+  órdenes espera seis horas desde el anterior del supervisor. Si lo apruebas tú desde Telegram, no.
 
-Y una propiedad que conviene conocer: **solo cambia lo que el ajuste significa**. Si has
-configurado tu bot a mano, todo lo que el supervisor no mueva se queda exactamente como lo dejaste.
+- **Mover un parámetro más de un cuarto de su valor por escalón** (la mitad con un movimiento
+  doble). Un bot muy lejos de donde el supervisor lo pondría tarda varias revisiones en llegar, y
+  eso es deliberado: lo que se hace es ajustar, no reconfigurar.
+- **Encender lo que dejaste apagado con un cero.** Un cero es una decisión tuya —«estas órdenes no
+  caducan por edad»— y de ahí no se sale por ajuste.
+
+Y una propiedad que conviene conocer: **solo cambia lo que el ajuste significa, y sobre lo que tú
+pusiste**. Todo lo que el supervisor no mueva se queda exactamente como lo dejaste, y lo que sí
+mueve se **desplaza** desde tu valor: si subiste a mano la distancia de compra a 12 bps y el
+supervisor ensancha, pasa a 14, no al valor que él habría puesto desde cero. Los importes se mueven
+en proporción, y todo dentro de esa banda de un cuarto por escalón. Subir y volver a bajar te deja
+**donde estabas**.
+
+Y si tocas el bot mientras el supervisor está pensando —tarda unos segundos en decidir—, **gana lo
+tuyo**: su cambio se calculó sobre la configuración que leyó, así que al ver que ya no es la misma
+lo descarta y lo dice en el historial de decisiones. No te deshace una edición.
 
 ### Cuándo mira
 
@@ -191,19 +213,34 @@ riesgo, un aviso de liquidación, falta de margen o un rechazo grave del exchang
 
 **Nunca con cada ejecución.** Para un market maker un fill es su conducta normal —decenas por
 minuto— y lo que hay que juzgar es una media, no un evento. Lo que aquí cuenta como «una operación»
-es un **ciclo cerrado**.
+es un **ciclo cerrado**. Un market maker no cierra ciclos nunca, así que a él lo revisa el reloj.
 
 Antes de preguntarle nada al modelo se interponen cinco filtros: el tipo de disparo, un hueco
 mínimo entre consultas del mismo bot, la coalescencia entre réplicas, una huella del estado —si
-nada material ha cambiado, la respuesta anterior sigue valiendo— y dos cupos diarios, uno por bot y
-otro de toda la plataforma.
+nada material ha cambiado desde la última respuesta, sigue valiendo— y dos cupos diarios, uno por
+bot y otro de toda la plataforma.
+
+Cuando cree que hace falta una persona, te avisa **como mucho una vez al día por bot**. Los avisos
+repetidos quedan guardados en el historial de decisiones, pero no llegan a Telegram ni al registro
+de eventos del bot.
 
 ### Qué ve el modelo
 
 Rasgos ya calculados y cuantizados: volatilidad, recorrido típico, tendencia, cómo ha cambiado el
-régimen desde que se configuró el bot, su rendimiento por ciclos, su exposición y su distancia a
-liquidación **en porcentajes y tramos**, las incidencias de las últimas 24 horas, y sus tres últimas
-decisiones sobre ese mismo bot.
+régimen desde que se configuró el bot, su rendimiento —por ciclos, o por **pares casados y su
+margen** si es un market maker—, el resultado realizado desde que opera y en las últimas 24 horas,
+su exposición y su distancia a liquidación **en porcentajes y tramos**, y **qué cambiaría ahora
+mover cada perilla**, calculado con la misma cadena que aplica, para que no pida lo que no tiene
+efecto —incluido si hace falta el movimiento doble para que pase algo—. Si el motor lleva un rato
+sin escribir el estado del bot, también ve que no lo hay: entonces se decide como si hubiera
+posición abierta, que es lo prudente.
+
+De las últimas 24 horas ve solo las **incidencias reales**: avisos y errores. Ni las ejecuciones, ni
+los rechazos post-only que son la conducta normal de un market maker, ni las reanudaciones que haces
+tú, ni sus propios avisos, ni lo que ninguna perilla arregla —un tick lento por el cupo del exchange,
+un apalancamiento que el venue no acepta cambiar con posición abierta—. Y de su historial ve sus **cambios** —aplicados, pendientes o rechazados
+por ti—, nunca sus explicaciones: leerse a sí mismo es lo que convirtió un único fallo del modelo en
+veinte avisos de «fallos persistentes».
 
 **No ve dinero.** Ni un importe, ni un precio absoluto. Tampoco el nombre ni la nota del bot, que
 son texto que escribes tú. Y no emite números: emite desplazamientos sobre bandas, que un generador
@@ -226,6 +263,7 @@ Con **Redis caído** el Modo IA se apaga solo: sin poder contar el gasto no se l
 | Quieres que deje de aplicar pero siga sugiriendo | `AI_AGENT_FORCE_MANUAL=true` |
 | Quieres que solo actúe sobre bots simulados | `AI_AGENT_DRY_RUN_ONLY=true` (así viene) |
 | Quieres apagarlo en un bot concreto | Poner su Modo IA en `OFF` |
+| Quieres más o menos avisos de «revisa este bot» | `AI_AGENT_ADVICE_COOLDOWN_H` (24 horas por defecto) |
 
 ### El rastro
 

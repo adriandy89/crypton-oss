@@ -143,6 +143,8 @@ services:
       AI_AGENT_SWEEP_MAX: ${AI_AGENT_SWEEP_MAX:-5}
       AI_AGENT_FORCE_MANUAL: ${AI_AGENT_FORCE_MANUAL:-false}
       AI_AGENT_DRY_RUN_ONLY: ${AI_AGENT_DRY_RUN_ONLY:-true}
+      # Horas entre dos avisos «revisa este bot» del mismo bot (spec 051).
+      AI_AGENT_ADVICE_COOLDOWN_H: ${AI_AGENT_ADVICE_COOLDOWN_H:-24}
     depends_on:
       migrate:
         condition: service_completed_successfully

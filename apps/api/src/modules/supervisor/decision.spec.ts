@@ -204,4 +204,31 @@ describe('decision — el parseo no repara, descarta', () => {
     expect(p).toContain('Tampoco puedes pararlo');
     expect(PROMPT_VERSION_REVISION).toBeGreaterThan(0);
   });
+
+  it('la version 2 cuenta lo que la traduccion hace cumplir (spec 051)', () => {
+    // Si el prompt no dijera que dos perillas es el tope, el modelo pediria tres
+    // y la decision entera se descartaria sin que el supiera por que. Y si no
+    // supiera que un market maker no cierra ciclos, volveria a leer «sin ciclos
+    // cerrados» como una averia.
+    const p = systemPromptRevision();
+    expect(PROMPT_VERSION_REVISION).toBeGreaterThanOrEqual(2);
+    expect(p).toContain('como mucho DOS perillas');
+    expect(p).toContain('Solo tienen efecto los movimientos marcados «sí»');
+    expect(p).toContain('Un market maker no cierra ciclos');
+    expect(p).toContain('Si ya se avisó y no ha aparecido nada nuevo');
+    // Y deja de afirmar que todo bot tiene dinero dentro: los tres de produccion
+    // eran simulados.
+    expect(p).not.toContain('con dinero dentro');
+  });
+
+  it('la version 3 cuenta que el ajuste es relativo y acotado (spec 052)', () => {
+    // Sin esto el modelo pide un salto y ve un paso: creeria que el sistema no le
+    // hace caso, que es justo como se llega a «este bot necesita una persona».
+    const p = systemPromptRevision();
+    expect(PROMPT_VERSION_REVISION).toBeGreaterThanOrEqual(3);
+    expect(p).toContain('como mucho un cuarto de su valor actual');
+    expect(p).toContain('no se enciende solo');
+    expect(p).toContain('solo con MUCHO_');
+    expect(p).toContain('caducó');
+  });
 });

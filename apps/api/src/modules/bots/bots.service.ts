@@ -153,7 +153,23 @@ export interface CommandOptions {
  */
 export interface UpdateConfigOptions {
   appliedBy?: string;
+  /**
+   * La version de configuracion sobre la que se calculo este cambio.
+   *
+   * Quien la pasa esta diciendo «esto solo vale si el bot sigue donde lo dejé».
+   * Sin ella todo funciona igual que siempre —un formulario que reenvia la
+   * configuracion entera no la necesita: la persona esta mirando la pantalla—,
+   * pero el supervisor de IA tarda unos veinticinco segundos en decidir, y en ese
+   * rato el dueño puede haber tocado el bot. Como lo que se escribe es la
+   * configuracion ENTERA calculada sobre lo que se leyo, sin esta comprobacion el
+   * cambio del dueño se deshacia en silencio y el historico lo atribuia a la IA
+   * (spec 052, F-06).
+   */
+  expectedVersion?: number;
 }
+
+/** Lo que se devuelve cuando el bot cambio debajo de quien iba a escribir. */
+const RAZON_VERSION_RANCIA = 'STALE_VERSION';
 
 @Injectable()
 export class BotsService implements OnModuleInit {
@@ -992,6 +1008,15 @@ export class BotsService implements OnModuleInit {
     opts: UpdateConfigOptions = {},
   ) {
     const bot = await this.mustOwn(userId, id);
+    if (opts.expectedVersion !== undefined && opts.expectedVersion !== bot.config_version) {
+      throw new ConflictException({
+        message:
+          'La configuración del bot ha cambiado desde que se leyó, así que este cambio ya no vale.',
+        reason: RAZON_VERSION_RANCIA,
+        expectedVersion: opts.expectedVersion,
+        currentVersion: bot.config_version,
+      });
+    }
     const market = await this.markets.getSpec(
       bot.venue,
       bot.symbol,
@@ -1091,14 +1116,29 @@ export class BotsService implements OnModuleInit {
           applied_by: opts.appliedBy ?? userId,
         },
       });
-      await tx.bot.update({
-        where: { id },
+      // Con la version en el `where`, y contando filas: entre la lectura de
+      // arriba y esta transaccion cabe otra escritura, y quien pidio una version
+      // concreta tiene que enterarse. Sin `expectedVersion` el `where` es el de
+      // siempre y no cambia nada para nadie.
+      const escritas = await tx.bot.updateMany({
+        where: {
+          id,
+          ...(opts.expectedVersion === undefined ? {} : { config_version: opts.expectedVersion }),
+        },
         data: {
           config_version: version,
           leverage: Number(next.leverage ?? bot.leverage),
           total_investment: String(next.totalInvestment ?? bot.total_investment),
         },
       });
+      if (escritas.count !== 1) {
+        throw new ConflictException({
+          message:
+            'La configuración del bot ha cambiado mientras se escribía, así que no se ha aplicado.',
+          reason: RAZON_VERSION_RANCIA,
+          expectedVersion: opts.expectedVersion,
+        });
+      }
       await tx.botEvent.create({
         data: {
           bot_id: id,
