@@ -61,7 +61,8 @@
               <ui-badge tone="brand" size="sm">{{ strategyLabel(b.strategy) }}</ui-badge>
             </div>
             <p class="sub">{{ venueLabel(b.venue) }} · {{ b.direction }} · {{ b.leverage }}×</p>
-            @if (b.dryRun || b.testnet) {
+            @let pastilla = pastillaIa(b);
+            @if (b.dryRun || b.testnet || pastilla) {
               <div class="flags">
                 @if (b.dryRun) {
                   <ui-badge size="sm" tone="warn" caps>simulación</ui-badge>
@@ -71,6 +72,19 @@
                      testnet. -->
                 @if (b.testnet) {
                   <ui-badge size="sm" tone="warn" variant="outline" caps>testnet</ui-badge>
+                }
+                <!-- El Modo IA, solo para administradores (spec 053): la misma
+                     pastilla que en la lista. Los mandos estan en Ajustes. -->
+                @if (pastilla; as ia) {
+                  <ui-badge
+                    size="sm"
+                    caps
+                    [tone]="ia.tone"
+                    [variant]="ia.variant"
+                    [attr.title]="ia.porQue"
+                  >
+                    {{ ia.texto }}
+                  </ui-badge>
                 }
               </div>
             }
@@ -653,6 +667,25 @@
             <ui-strategy-help [kind]="b.strategy" [fields]="b.fields" variant="inline" />
           </div>
         }
+
+        <!-- ── Modo IA (spec 053) ──
+             Encima de los campos a proposito: decide si alguien mas va a
+             tocarlos. Solo para administradores, y en un bot apagado de una
+             estrategia fuera del alcance no sale. Guardar no pasa por la barra
+             de abajo: tiene su propio boton, su motivo y su confirmacion. -->
+        @if (mostrarPanelIa()) {
+          <h3 class="section">Modo IA</h3>
+          <app-modo-ia-panel
+            [ajuste]="ia()"
+            [error]="iaError()"
+            [ocupado]="guardandoIa()"
+            [bot]="b"
+            (guardar)="guardarIa($event)"
+            (reintentar)="cargarIa()"
+          />
+          <h3 class="section">Configuración del bot</h3>
+        }
+
         <p class="hint">
           Cada campo indica qué ocurre si lo cambias ahora mismo. Los
           <ui-mutability-badge level="HOT" /> se aplican en el próximo ciclo sin tocar la posición;
@@ -730,6 +763,13 @@
                   @if (r.applyLevel) {
                     <ui-mutability-badge [level]="r.applyLevel" />
                   }
+                  <!-- Lo aplicó el supervisor (spec 053): firma la revisión con
+                       `ia:<decisión>`, y hasta aquí no se veía. -->
+                  @if (r.appliedBy?.startsWith('ia:')) {
+                    <ui-badge size="sm" tone="brand" caps title="Cambio aplicado por el Modo IA">
+                      IA
+                    </ui-badge>
+                  }
                   <span class="when">{{ shortDate(r.createdAt) }}</span>
                 </div>
                 @if (r.version === 1) {
@@ -746,6 +786,18 @@
               </div>
             }
           </ui-card>
+        }
+
+        <!-- El borrador nació sobre otra versión (spec 053, H-05): guardar lo
+             aplicaría entero y desharía lo que cambió entretanto. Guardar además
+             lo confirma; esto lo dice antes. -->
+        @if (borradorViejo(); as v) {
+          <ui-notice tone="warn" icon="warning-outline">
+            La configuración ha cambiado mientras editabas (versión {{ v.de }} → {{ v.a }}), quizá
+            por un ajuste del Modo IA. Si guardas, se aplica tu borrador entero y se deshace lo que
+            cambió.
+            <ion-button size="small" fill="clear" (click)="discard()">Descartar mis cambios</ion-button>
+          </ui-notice>
         }
 
         @if (dirty()) {
@@ -800,7 +852,7 @@
                     <span class="type">{{ eventLabel(e.type) }}</span>
                     <span class="when">{{ shortDate(e.created_at) }}</span>
                   </div>
-                  <p>{{ e.message }}</p>
+                  <p class="bd-msg">{{ e.message }}</p>
                 </div>
               }
             </div>

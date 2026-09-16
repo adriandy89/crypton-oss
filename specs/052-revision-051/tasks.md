@@ -71,13 +71,42 @@
 
 ## Fase 6 — Despliegue (autorizado por el usuario)
 
-- [ ] Merge a `main` y push a origin
-- [ ] Producción: `git pull --ff-only` y `up -d --build api`; comprobar el `dist` antes de nada
-- [ ] Vigilancia de solo lectura
+- [x] Merge a `main` (`eac96f8`) y `push` a origin
+- [x] Antes de desplegar, la vigilancia pendiente del 051 (CA-9), que salió **bien y además
+      confirmó F-17 en producción**: en doce horas, **cero avisos** (antes ~36 al día), siete
+      decisiones con `prompt_version = 2`, dos cambios aplicados y una propuesta rechazada por una
+      persona. Las otras cuatro son **la misma propuesta caducada cuatro veces** sobre el market
+      maker V2 de LIT, que está en manual: cinco `AI_SUGGESTION` a Telegram por una decisión que su
+      dueño ya había dejado pasar. Es exactamente F-17. Y `failures = 1` en el de HYPE por un corte
+      del modelo que nunca se iba a reiniciar: F-10
+- [x] **El primer despliegue FALLÓ al construir la imagen**, y ahí se descubrió que `nest build` no
+      compilaba (ver Fase 5). El contenedor viejo siguió sirviendo: `up --build` no sustituye nada
+      si la imagen no compila. Con el arreglo (`e867bf6`), imagen de las 08:03 UTC y `healthy` a las
+      08:04:28
+- [x] Comprobado que el `dist` desplegado lleva el 052: prompt v3, la cota relativa, el stop de ATR,
+      `STALE_VERSION`, `topeDeApalancamiento`, las incidencias nuevas y la frescura. Trampa nueva:
+      el `dist` vive en `/app/apps/api/dist/modules`, sin el `src/` que tenía en el 051
+- [x] Sin tocar datos: los fallos se reinician solos con la primera revisión buena y las huellas
+      cambian con la versión del prompt
+- [x] Vigilancia de solo lectura tras la primera revisión v3 (08:25 UTC, el market maker V2 de LIT,
+      que está en manual). El modelo respondió **MANTENER**, y el motivo es literalmente el hallazgo
+      F-17 funcionando: «Margen negativo pide ensanchar spread, pero ya se rechazó y caducó dos veces
+      sin motivo nuevo; se mantiene sin repetir el aviso ni el ajuste». Antes de esto el expediente
+      no le enseñaba las caducadas y lo habría vuelto a proponer, con su mensaje de Telegram. Cero
+      eventos `AI_*` en la ventana, ninguna fila escrita —`MANTENER` sale gratis a propósito— y la
+      huella cambió con la versión del prompt, como tenía que pasar
 
 ## Fase 7 — Fork OSS
 
-- [ ] Parche 3-way desde el punto de bifurcación, con las exclusiones de siempre
-- [ ] Anonimizar antes de portar
-- [ ] Commit local (sin push, decisión del usuario)
-- [ ] Memoria
+- [x] Nombres de los bots fuera del privado ANTES de portar (`5a2b892`): los specs y los comentarios
+      se publican, y el nombre que su dueño le puso a un bot es suyo
+- [x] Parche 3-way desde `0d3ad2e` con las exclusiones de siempre: **24 ficheros, sin un solo
+      conflicto**
+- [x] Verificación: 18/25 idénticos por md5 sin ``, 0 ausentes, y en los 7 distintos **0 líneas
+      nuevas perdidas** — son las divergencias documentadas (planes, `com.crypton.app`, el índice
+      propio y el ancho de prettier de `apps/api`)
+- [x] OSS: 7016 tests (API 5614 frente a 5650, que son los 36 de planes y del gate de Telegram),
+      lint 0 errores, `check:env` coherente, `nest build` de la API
+- [x] Commit local `ab06e51`, **sin push** (decisión del usuario), y limpieza de los objetos
+      privados del clon (`git cat-file -e` del commit privado ya no lo encuentra)
+- [x] Memoria

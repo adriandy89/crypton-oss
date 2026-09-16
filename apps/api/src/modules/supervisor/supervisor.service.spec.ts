@@ -1,10 +1,11 @@
 import { ConflictException } from '@nestjs/common';
 import { AiDecisionState, AiMode } from '@crypton/db';
-import { StrategyKind } from '@crypton/shared';
+import { D, StrategyKind } from '@crypton/shared';
 import { getStrategy, VENUE_MARKETS } from '@crypton/strategy-core';
 import { buildConfig } from '../advisor/build';
 import { coerceConfig, enforceCouplings } from '../advisor/sanitize';
 import { systemPromptRevision } from './decision';
+import { ETIQUETAS } from './mensajes';
 import { SupervisorService } from './supervisor.service';
 
 /**
@@ -227,6 +228,27 @@ const datosDe = (mock: jest.Mock): Record<string, unknown>[] =>
 const tiposPublicados = (bus: { publish: jest.Mock }): string[] =>
   bus.publish.mock.calls.map((c) => (c[1] as { type: string }).type);
 
+/** El texto publicado de un tipo de evento. */
+const textoPublicado = (bus: { publish: jest.Mock }, tipo: string): string => {
+  const mensaje = bus.publish.mock.calls
+    .map((c) => c[1] as { type: string; data: { message: string } })
+    .find((m) => m.type === tipo);
+  if (!mensaje) throw new Error(`No se publico ningun ${tipo}`);
+  return mensaje.data.message;
+};
+
+/** Un campo de un diff guardado. */
+type CampoGuardado = { key: string; from: unknown; to: unknown; labelKey: string };
+
+/** Un valor como lo escribe un aviso: sin ceros de relleno (spec 054). */
+const legible = (v: unknown): string => D(String(v)).toFixed();
+
+/** La linea que un aviso escribe para un campo, con el nombre de la pantalla. */
+const lineaDe = (c: CampoGuardado): string =>
+  `• ${ETIQUETAS[c.labelKey]}: ${legible(c.from)} → ${legible(c.to)}`;
+
+const parametros = (n: number): string => `${n} ${n === 1 ? 'parámetro' : 'parámetros'}`;
+
 describe('SupervisorService — las barreras antes de gastar', () => {
   it('con el interruptor apagado no llama a nadie', async () => {
     const { service, modelo } = build({ env: { AI_AGENT_ENABLE: 'false' } });
@@ -372,6 +394,60 @@ describe('SupervisorService — que hace con lo que dice el modelo', () => {
     expect(mensaje['entregaForzada']).toBe(true);
     expect(mensaje['type']).toBe('AI_SUGGESTION');
     expect(mensaje['userId']).toBe('admin-1');
+  });
+
+  it('la sugerencia dice que cambia, de cuanto a cuanto y por que (spec 054)', async () => {
+    // Decia «propone cambiar buyDistanceBps, sellDistanceBps»: sin un numero no
+    // se podia decidir si aprobar sin abrir la app.
+    const { service, bus, db, creadas } = build({ respuesta: respuesta() });
+    await service.revisarBot(AJUSTE, BOT, 'CRON');
+
+    const texto = textoPublicado(bus, 'AI_SUGGESTION');
+    const diff = creadas[0]['diff'] as CampoGuardado[];
+    expect(diff.length).toBeGreaterThan(0);
+    const lineas = texto.split('\n');
+    expect(lineas[0]).toBe(
+      `El supervisor propone cambiar ${parametros(diff.length)} (diferencial: más):`,
+    );
+    // Cada campo del diff guardado, con sus dos valores, y ninguna clave interna.
+    for (const c of diff) {
+      expect(texto).toContain(lineaDe(c));
+      expect(texto).not.toContain(c.key);
+    }
+    expect(lineas.at(-1)).toBe('Motivo: La volatilidad ha subido.');
+
+    // Y la bitacora del bot dice exactamente lo mismo que Telegram.
+    const evento = db.botEvent.create.mock.calls[0][0] as {
+      data: { type: string; message: string };
+    };
+    expect(evento.data).toMatchObject({ type: 'AI_SUGGESTION', message: texto });
+  });
+
+  it('en «cantidad de moneda» el tamaño se avisa en la moneda base (spec 054)', async () => {
+    // El descriptor efectivo es el que sabe la unidad: con el crudo, el aviso
+    // diria USDC de una cantidad de BTC.
+    const { service, bus, db, creadas } = build({
+      respuesta: respuesta({
+        ajustes: {
+          leverage: 'IGUAL',
+          coverage: 'IGUAL',
+          spread: 'IGUAL',
+          sizeGrowth: 'MAS',
+          cadence: 'IGUAL',
+        },
+      }),
+    });
+    db.botConfigRevision.findUnique.mockResolvedValue({
+      config: { ...CONFIG_VIGENTE, sizingMode: 'BASE', orderSizePerSide: '0.005' },
+    });
+    await service.revisarBot(AJUSTE, BOT, 'CRON');
+
+    const diff = creadas[0]['diff'] as CampoGuardado[];
+    const tamano = diff.find((c) => c.key === 'orderSizePerSide');
+    expect(tamano).toBeDefined();
+    expect(textoPublicado(bus, 'AI_SUGGESTION')).toContain(
+      `• Tamaño por compra/venta: 0.005 → ${legible(tamano!.to)} BTC\n`,
+    );
   });
 });
 
@@ -534,6 +610,26 @@ describe('SupervisorService — el modo automatico', () => {
       .find((m) => m.type === 'AI_APPLIED');
     expect(aviso).toBeDefined();
     expect(aviso!.data.severity).toBe('WARN');
+  });
+
+  it('el cambio aplicado dice que cambio y de cuanto a cuanto (spec 054)', async () => {
+    const { service, bots, bus, creadas } = build({ respuesta: respuesta() });
+    bots.updateConfig.mockResolvedValue({ applied: true, version: 4 });
+    await service.revisarBot(auto, BOT, 'CRON');
+
+    const texto = textoPublicado(bus, 'AI_APPLIED');
+    const diff = creadas[0]['diff'] as CampoGuardado[];
+    const lineas = texto.split('\n');
+    expect(lineas[0]).toBe(
+      `El supervisor ha cambiado ${parametros(diff.length)} (diferencial: más):`,
+    );
+    for (const c of diff) {
+      expect(texto).toContain(lineaDe(c));
+      expect(texto).not.toContain(c.key);
+    }
+    expect(lineas.filter((l) => l.startsWith('• '))).toHaveLength(diff.length);
+    expect(texto).not.toContain('aprobación');
+    expect(lineas.at(-1)).toBe('Motivo: La volatilidad ha subido.');
   });
 });
 
@@ -735,6 +831,45 @@ describe('SupervisorService — el boton de Telegram', () => {
 
     const perillas = datosDe(db.botAiSetting.update).find((d) => 'knobs' in d);
     expect(perillas?.['knobs']).toEqual({ ...KNOBS, spread: 'ALTA' });
+  });
+
+  it('el aviso de una aprobacion lleva los valores RECALCULADOS (spec 054)', async () => {
+    // Al aprobar se rehace el cambio con el mercado de ahora (F-04): lo aplicado
+    // puede no ser lo que decia la sugerencia, y el aviso tiene que decir lo
+    // aplicado. Lo que se guardo al proponer, aqui, es otra cosa a proposito.
+    const alProponer = [
+      {
+        key: 'buyDistanceBps',
+        from: '1',
+        to: '999',
+        mutability: 'HOT',
+        labelKey: 'strategy.mm.buyDistanceBps',
+      },
+    ];
+    const { service, bots, bus, db } = build({
+      vale: VALE,
+      decision: decisionPendiente({ diff: alProponer }),
+    });
+    bots.updateConfig.mockResolvedValue({ applied: true, version: 4 });
+
+    await service.canjearVale('admin-1', 'x', true);
+
+    const aplicado = datosDe(db.botAiDecision.update).find((d) => 'diff' in d)?.[
+      'diff'
+    ] as CampoGuardado[];
+    expect(aplicado.length).toBeGreaterThan(0);
+    const texto = textoPublicado(bus, 'AI_APPLIED');
+    const lineas = texto.split('\n');
+    expect(lineas[0]).toBe(
+      `El supervisor ha cambiado ${parametros(aplicado.length)} con tu aprobación ` +
+        '(diferencial: más):',
+    );
+    for (const c of aplicado) {
+      expect(texto).toContain(lineaDe(c));
+    }
+    expect(texto).not.toContain('999');
+    expect(lineas).toContain('Valores recalculados al aprobar, con el mercado de ese momento.');
+    expect(lineas.at(-1)).toBe('Motivo: La volatilidad ha subido.');
   });
 });
 
@@ -1315,5 +1450,65 @@ describe('SupervisorService — la revision del spec 052', () => {
 
     await expect(service.revisarBot(AJUSTE, BOT, 'CRON')).resolves.not.toThrow();
     expect(tiposPublicados(bus)).toContain('AI_ADVICE');
+  });
+});
+
+describe('SupervisorService — los interruptores que ve la app (spec 053)', () => {
+  // `undefined` en el entorno simulado es «variable sin poner»: `get` devuelve
+  // el valor por defecto, igual que `ConfigService`.
+  const sinVariables = {
+    AI_AGENT_ENABLE: undefined as never,
+    AI_AGENT_DRY_RUN_ONLY: undefined as never,
+  };
+
+  it('por defecto: apagado, sin forzar y solo simulados', () => {
+    const { service } = build({ env: sinVariables });
+    expect(service.interruptores()).toEqual({
+      encendido: false,
+      forzarManual: false,
+      soloSimulados: true,
+    });
+  });
+
+  it('sin clave del modelo no esta encendido, aunque la variable diga que si', () => {
+    const { service, modelo } = build();
+    (modelo as { agentAvailable: boolean }).agentAvailable = false;
+    expect(service.interruptores().encendido).toBe(false);
+  });
+
+  it('con la variable y la clave, encendido', () => {
+    const { service } = build();
+    expect(service.interruptores().encendido).toBe(true);
+  });
+
+  it('refleja AI_AGENT_FORCE_MANUAL y AI_AGENT_DRY_RUN_ONLY', () => {
+    const { service } = build({
+      env: { AI_AGENT_FORCE_MANUAL: 'true', AI_AGENT_DRY_RUN_ONLY: 'false' },
+    });
+    expect(service.interruptores()).toEqual({
+      encendido: true,
+      forzarManual: true,
+      soloSimulados: false,
+    });
+  });
+
+  it('lo que dice coincide con lo que hace revisarBot', async () => {
+    // Si la pantalla dijera «actua» y el servicio no mirase, la pastilla
+    // mentiria justo sobre lo que existe para aclarar.
+    const real = build();
+    expect(real.service.interruptores().soloSimulados).toBe(true);
+    await real.service.revisarBot(AJUSTE, { ...BOT, dry_run: false }, 'CRON');
+    expect(real.modelo.revisar).not.toHaveBeenCalled();
+
+    const apagado = build({ env: { AI_AGENT_ENABLE: 'false' } });
+    expect(apagado.service.interruptores().encendido).toBe(false);
+    await apagado.service.revisarBot(AJUSTE, BOT, 'CRON');
+    expect(apagado.modelo.revisar).not.toHaveBeenCalled();
+
+    const sinClave = build();
+    (sinClave.modelo as { agentAvailable: boolean }).agentAvailable = false;
+    expect(sinClave.service.interruptores().encendido).toBe(false);
+    await sinClave.service.revisarBot(AJUSTE, BOT, 'CRON');
+    expect(sinClave.modelo.revisar).not.toHaveBeenCalled();
   });
 });

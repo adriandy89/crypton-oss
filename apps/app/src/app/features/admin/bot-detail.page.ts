@@ -15,17 +15,16 @@ import { ToastService } from '../../core/services';
 import { AuthService } from '../../core/auth';
 import {
   ADMIN_BOT_COMMANDS,
-  AI_MODES,
-  AYUDA_MODO_IA,
   AdminBotsService,
   ETIQUETA_COMANDO,
-  ETIQUETA_MODO_IA,
   type AdminBotCommand,
   type AdminBotDetail,
-  type AiMode,
   type AiSetting,
 } from '../../core/services/admin-bots.service';
 import { errorText, money, shortDate, signed, strategyLabel, venueLabel } from '../../core/utils';
+import type { CambioIa } from '../../core/utils/modo-ia';
+import { ModoIaAccionesService } from '../../shared/bot/modo-ia-acciones.service';
+import { ModoIaPanelComponent } from '../../shared/bot/modo-ia-panel.component';
 import {
   UiBadgeComponent,
   UiCardComponent,
@@ -79,6 +78,7 @@ const CONTENIBLES = ['STARTING', 'RUNNING', 'PAUSED'];
     UiStatComponent,
     UiStatusPillComponent,
     AdminForbiddenComponent,
+    ModoIaPanelComponent,
   ],
   template: `
     <ion-header class="ion-no-border">
@@ -148,41 +148,16 @@ const CONTENIBLES = ['STARTING', 'RUNNING', 'PAUSED'];
                a fallar es peor que no ofrecerlo. -->
           @if (esMio(b)) {
             <ui-section title="Modo IA" />
-            <ui-notice tone="info" icon="sparkles-outline">
-              Un supervisor revisa este bot cada media hora y cuando cierra un ciclo. Puede mover
-              cinco ajustes como mucho dos posiciones cada uno. <b>Nunca</b> toca el capital, el
-              par, la cuenta ni la dirección, y no puede parar el bot, cerrar su posición ni
-              cancelar sus órdenes.
-            </ui-notice>
-
-            @if (ia(); as s) {
-              <div class="modos">
-                @for (m of modos; track m) {
-                  <button
-                    type="button"
-                    class="modo"
-                    [class.sel]="s.mode === m"
-                    [disabled]="guardando()"
-                    (click)="cambiarModo(m)"
-                  >
-                    <span class="modo-t">{{ etiquetaModo(m) }}</span>
-                    <span class="modo-a">{{ ayudaModo(m) }}</span>
-                  </button>
-                }
-              </div>
-
-              @if (s.paused_until) {
-                <ui-notice tone="warn" icon="warning-outline">
-                  El supervisor se ha dormido tras varios fallos seguidos. Se reactiva solo el
-                  {{ shortDate(s.paused_until) }}.
-                </ui-notice>
-              }
-              @if (s.last_review_at) {
-                <p class="fina">Última revisión: {{ shortDate(s.last_review_at) }}.</p>
-              }
-            } @else {
-              <div class="center"><ion-spinner name="crescent" /></div>
-            }
+            <!-- El mismo panel que el detalle del bot (spec 053). -->
+            <app-modo-ia-panel
+              class="ia"
+              [ajuste]="ia()"
+              [error]="iaError()"
+              [ocupado]="guardandoIa()"
+              [bot]="b"
+              (guardar)="guardarIa(b, $event)"
+              (reintentar)="cargarIa()"
+            />
           }
 
           <ui-section title="Contención" />
@@ -263,43 +238,8 @@ const CONTENIBLES = ['STARTING', 'RUNNING', 'PAUSED'];
         padding: var(--space-6) 0;
       }
 
-      .modos {
-        display: flex;
-        flex-direction: column;
-        gap: var(--space-2);
-        margin: var(--space-3) 0;
-      }
-
-      .modo {
-        display: flex;
-        flex-direction: column;
-        gap: 2px;
-        padding: var(--space-3);
-        text-align: left;
-        border: 1px solid var(--line-1);
-        border-radius: var(--radius-2);
-        background: transparent;
-        cursor: pointer;
-      }
-
-      .modo:disabled {
-        opacity: 0.6;
-        cursor: default;
-      }
-
-      .modo.sel {
-        border-color: var(--brand-2);
-        background: color-mix(in srgb, var(--brand-2) 8%, transparent);
-      }
-
-      .modo-t {
-        font-size: 12.5px;
-        color: var(--text-1);
-      }
-
-      .modo-a {
-        font-size: 11px;
-        color: var(--text-2);
+      .ia {
+        margin: var(--space-3) 0 var(--space-5);
       }
 
       .fina {
@@ -317,16 +257,20 @@ export class AdminBotDetailPage implements OnInit {
   private readonly route = inject(ActivatedRoute);
 
   private readonly auth = inject(AuthService);
+  private readonly accionesIa = inject(ModoIaAccionesService);
 
   readonly bot = signal<AdminBotDetail | null>(null);
   readonly forbidden = signal(false);
   readonly noExiste = signal(false);
 
+  /** El Modo IA del bot, si es propio. `null` mientras se lee. */
   readonly ia = signal<AiSetting | null>(null);
-  readonly guardando = signal(false);
+  readonly iaError = signal(false);
+  readonly guardandoIa = signal(false);
+  /** Una lectura que llega despues de un guardado traeria el modo viejo. */
+  private secuenciaIa = 0;
 
   readonly comandos = ADMIN_BOT_COMMANDS;
-  readonly modos = AI_MODES;
   readonly venueLabel = venueLabel;
   readonly strategyLabel = strategyLabel;
   readonly shortDate = shortDate;
@@ -345,14 +289,6 @@ export class AdminBotDetailPage implements OnInit {
     return ETIQUETA_COMANDO[c];
   }
 
-  etiquetaModo(m: AiMode): string {
-    return ETIQUETA_MODO_IA[m];
-  }
-
-  ayudaModo(m: AiMode): string {
-    return AYUDA_MODO_IA[m];
-  }
-
   /**
    * ¿Es un bot del propio administrador?
    *
@@ -365,23 +301,46 @@ export class AdminBotDetailPage implements OnInit {
   }
 
   /**
-   * Cambia el modo, pidiendo el motivo.
+   * Lee el Modo IA del bot.
    *
-   * El motivo es obligatorio en el servidor, igual que en la contencion y por lo
-   * mismo: encender un agente que reescribe la configuracion de un bot con
-   * dinero dentro tiene que quedar explicado en la bitacora, y que el bot sea
-   * propio no lo hace menos revisable — lo hace mas facil de olvidar.
+   * Un fallo es un fallo, y se enseña como tal: antes se pintaba como «Apagado»,
+   * y ofrecer «encender» sobre algo que quizá ya está encendido es peor que no
+   * ofrecer nada (spec 053).
    */
-  async cambiarModo(mode: AiMode): Promise<void> {
-    const actual = this.ia();
-    const b = this.bot();
-    if (!actual || !b || actual.mode === mode || this.guardando()) return;
-
-    this.guardando.set(true);
+  async cargarIa(): Promise<void> {
+    const turno = ++this.secuenciaIa;
+    this.iaError.set(false);
     try {
-      await this.acciones.modoIa(b, mode, (s) => this.ia.set(s));
+      const ajuste = await this.api.aiMode(this.id);
+      if (turno === this.secuenciaIa) this.ia.set(ajuste);
+    } catch {
+      if (turno !== this.secuenciaIa) return;
+      this.ia.set(null);
+      this.iaError.set(true);
+    }
+  }
+
+  /**
+   * Guarda el Modo IA, con motivo y confirmación.
+   *
+   * `guardandoIa` cubre la petición entera: la acción no vuelve hasta que el
+   * servidor contesta. Antes se soltaba al abrir el diálogo y el botón quedaba
+   * libre con la petición en vuelo.
+   */
+  async guardarIa(b: AdminBotDetail, cambio: CambioIa): Promise<void> {
+    const actual = this.ia();
+    if (!actual || this.guardandoIa()) return;
+
+    this.guardandoIa.set(true);
+    try {
+      const nuevo = await this.accionesIa.guardar(b, cambio, actual.mode);
+      if (nuevo) {
+        this.secuenciaIa++;
+        // Lo que no trae la respuesta del guardado —los interruptores— se conserva.
+        this.ia.set({ ...actual, ...nuevo });
+      }
     } finally {
-      this.guardando.set(false);
+      this.guardandoIa.set(false);
     }
   }
 
@@ -417,10 +376,7 @@ export class AdminBotDetailPage implements OnInit {
 
       // El Modo IA solo se pide si el bot es propio: sobre uno ajeno el servidor
       // responde 403, y un 403 esperado no es un error que enseñar.
-      if (this.esMio(b)) {
-        const sinModo: AiSetting = { bot_id: this.id, mode: 'OFF' };
-        this.ia.set(await this.api.aiMode(this.id).catch(() => sinModo));
-      }
+      if (this.esMio(b)) await this.cargarIa();
     } catch (e) {
       const status = (e as { status?: number }).status;
       if (status === 403) this.forbidden.set(true);

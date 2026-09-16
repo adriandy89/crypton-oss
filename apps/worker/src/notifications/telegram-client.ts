@@ -147,3 +147,71 @@ export class TelegramClient {
 /** Escapa lo que Telegram interpretaría como marcado HTML. */
 export const escapeHtml = (text: string): string =>
   text.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+
+/**
+ * Lo más largo que se manda en un mensaje.
+ *
+ * Telegram rechaza entero, con un 400, un texto de más de 4096 caracteres
+ * (contados tras interpretar las entidades), y `sendMessage` solo deja un aviso
+ * en el log: un lote demasiado largo se perdía completo sin que el usuario lo
+ * supiera (spec 054). Aquí se mide el texto con las entidades SIN interpretar,
+ * que nunca es más corto, y con margen.
+ */
+export const MAX_TEXTO = 4000;
+
+/** Lo que `recortar` puede añadir detrás del corte: los cierres y los puntos. */
+const HOLGURA_DEL_CORTE = 16;
+
+/**
+ * Recorta una línea que no cabe en un mensaje sin romper su HTML.
+ *
+ * Las líneas del notificador llevan el nombre del bot entre `<b>` y el resto
+ * pasado por `escapeHtml`. Un corte a ciegas puede dejar una entidad a medias
+ * (`&am`), una etiqueta sin cerrar o medio emoji, y Telegram rechaza el mensaje
+ * ENTERO por no poder interpretarlo: el recorte convertiría un aviso largo en
+ * ningún aviso.
+ */
+export function recortar(linea: string, max = MAX_TEXTO): string {
+  if (linea.length <= max) return linea;
+  let corte = linea.slice(0, max - HOLGURA_DEL_CORTE);
+
+  // Medio par sustituto: el emoji se quita entero.
+  const ultimo = corte.charCodeAt(corte.length - 1);
+  if (ultimo >= 0xd800 && ultimo <= 0xdbff) corte = corte.slice(0, -1);
+
+  // Una entidad sin cerrar. Tras `escapeHtml` todo `&` abre una, así que basta
+  // con mirar si el último `&` va detrás del último `;`.
+  const amp = corte.lastIndexOf('&');
+  if (amp > corte.lastIndexOf(';')) corte = corte.slice(0, amp);
+
+  // Una etiqueta a medio escribir, y luego las que quedaron abiertas.
+  const abre = corte.lastIndexOf('<');
+  if (abre > corte.lastIndexOf('>')) corte = corte.slice(0, abre);
+  let cierres = '';
+  for (const etiqueta of ['i', 'b']) {
+    const abiertas = corte.split(`<${etiqueta}>`).length - 1;
+    const cerradas = corte.split(`</${etiqueta}>`).length - 1;
+    if (abiertas > cerradas) cierres += `</${etiqueta}>`;
+  }
+  return `${corte}…${cierres}`;
+}
+
+/**
+ * Reparte las líneas de un lote en mensajes que Telegram acepta: en orden, sin
+ * perder ninguna y sin partir una línea entre dos mensajes.
+ */
+export function trocear(lineas: readonly string[], max = MAX_TEXTO): string[] {
+  const out: string[] = [];
+  let actual = '';
+  for (const bruta of lineas) {
+    const linea = recortar(bruta, max);
+    if (actual && actual.length + 1 + linea.length > max) {
+      out.push(actual);
+      actual = linea;
+    } else {
+      actual = actual ? `${actual}\n${linea}` : linea;
+    }
+  }
+  if (actual) out.push(actual);
+  return out;
+}

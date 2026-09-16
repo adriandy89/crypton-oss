@@ -17,6 +17,7 @@ import {
   type AdminBotsFilters,
 } from '../../core/services/admin-bots.service';
 import type { BotStatus, StrategyKind, Venue } from '../../core/models';
+import { ModoIaService } from '../../core/services/modo-ia.service';
 import { ago, errorText, strategyLabel, venueLabel } from '../../core/utils';
 import { UiBadgeComponent, UiCardComponent, UiStatusPillComponent } from '../../shared/ui';
 import { AdminForbiddenComponent } from './admin-forbidden.component';
@@ -155,6 +156,15 @@ const ESTRATEGIAS: StrategyKind[] = [
           } @else if (filas().length === 0) {
             <p class="empty">Ningún bot con estos filtros.</p>
           } @else {
+            <!-- La pastilla del Modo IA solo puede salir en los bots PROPIOS: la
+                 politica de un bot ajeno no se lee (spec 046). Sin esta frase,
+                 un bot de otro administrador sin pastilla se leeria «sin IA». -->
+            @if (modoIa.hayEncendidos()) {
+              <p class="leyenda">
+                La pastilla «IA» solo sale en tus bots: el Modo IA de otros administradores no se
+                puede consultar desde aquí.
+              </p>
+            }
             <ui-card flush class="lista">
               @for (b of filas(); track b.id) {
                 <a class="it" [routerLink]="['/admin/bots', b.id]">
@@ -169,6 +179,16 @@ const ESTRATEGIAS: StrategyKind[] = [
                     }
                     @if (b.lastError) {
                       <ui-badge size="sm" tone="down">error</ui-badge>
+                    }
+                    @if (modoIa.insignia(b.id, b); as ia) {
+                      <ui-badge
+                        size="sm"
+                        [tone]="ia.tone"
+                        [variant]="ia.variant"
+                        [attr.title]="ia.porQue"
+                      >
+                        {{ ia.texto }}
+                      </ui-badge>
                     }
                   </div>
                   <div class="l2 mono">
@@ -274,6 +294,13 @@ const ESTRATEGIAS: StrategyKind[] = [
         text-align: center;
       }
 
+      .leyenda {
+        margin: 0 0 var(--space-2);
+        font-size: 11px;
+        line-height: 1.45;
+        color: var(--text-3);
+      }
+
       .mas {
         display: flex;
         align-items: center;
@@ -293,6 +320,8 @@ export class AdminBotsPage implements OnInit {
   private readonly api = inject(AdminBotsService);
   private readonly toast = inject(ToastService);
   private readonly route = inject(ActivatedRoute);
+  /** Para la pastilla del Modo IA, que solo existe en los bots propios. */
+  readonly modoIa = inject(ModoIaService);
 
   readonly venues = VENUES;
   readonly estados = ESTADOS;

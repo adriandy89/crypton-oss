@@ -37,6 +37,7 @@ import {
   ToastService,
 } from '../../core/services';
 import type { BotSummary } from '../../core/models';
+import { ModoIaService } from '../../core/services/modo-ia.service';
 import {
   errorText,
   money,
@@ -258,109 +259,138 @@ const VIVOS = ['STARTING', 'RUNNING', 'PAUSED'];
       } @else {
         <div class="list">
           @for (bot of visible(); track bot.id) {
-            <ui-card class="bot" [routerLink]="['/bots', bot.id]">
-              <div class="row">
-                <div class="id">
-                  <h3>{{ bot.name }}</h3>
-                  <p class="meta">
-                    <span>
-                      {{ bot.symbol }} · {{ venueLabel(bot.venue) }} ·
-                      {{ strategyLabel(bot.strategy) }}
-                    </span>
-                    @if (bot.dryRun) {
-                      <ui-badge size="sm" tone="warn" caps>simulación</ui-badge>
-                    }
-                    <!-- La red va en cada fila ADEMAS de en la franja de arriba:
-                         la franja dice que la lista es de testnet, pero esto es
-                         lo que se ve en una captura suelta o al volver de otra
-                         pantalla, y confundir el libro es confundir el dinero.
-                         Va en contorno y no en relleno para que se distinga de
-                         «simulación», que comparte el ambar: un bot SIMULADO en
-                         testnet no es lo mismo que uno real en testnet. -->
-                    @if (bot.testnet) {
-                      <ui-badge size="sm" tone="warn" variant="outline" caps>testnet</ui-badge>
-                    }
-                  </p>
+            <!-- Exactamente DOS hijos, «cuerpo» y «pie» (spec 053). En pantalla
+                 ancha la tarjeta toma prestadas dos filas de la rejilla
+                 (subgrid) para que los pies de una misma fila casen arriba y
+                 abajo, y un subgrid no crea filas de mas: un tercer hijo se
+                 montaria encima de otro. Sin nota, «sin-pie» esconde el pie y el
+                 cuerpo ocupa las dos filas. -->
+            <ui-card
+              class="bot"
+              [class.sin-pie]="!bot.lastError && !bot.note"
+              [routerLink]="['/bots', bot.id]"
+            >
+              <div class="cuerpo">
+                <div class="row">
+                  <div class="id">
+                    <h3>{{ bot.name }}</h3>
+                    <p class="meta">
+                      <span>
+                        {{ bot.symbol }} · {{ venueLabel(bot.venue) }} ·
+                        {{ strategyLabel(bot.strategy) }}
+                      </span>
+                      @if (bot.dryRun) {
+                        <ui-badge size="sm" tone="warn" caps>simulación</ui-badge>
+                      }
+                      <!-- La red va en cada fila ADEMAS de en la franja de arriba:
+                           la franja dice que la lista es de testnet, pero esto es
+                           lo que se ve en una captura suelta o al volver de otra
+                           pantalla, y confundir el libro es confundir el dinero.
+                           Va en contorno y no en relleno para que se distinga de
+                           «simulación», que comparte el ambar: un bot SIMULADO en
+                           testnet no es lo mismo que uno real en testnet. -->
+                      @if (bot.testnet) {
+                        <ui-badge size="sm" tone="warn" variant="outline" caps>testnet</ui-badge>
+                      }
+                      <!-- El Modo IA, solo para administradores (spec 053). Dice el
+                           modo configurado, y sale en gris y con contorno cuando no
+                           esta actuando: en un movil el title no se ve, asi que el
+                           estado tiene que leerse en la propia pastilla. -->
+                      @if (modoIa.insignia(bot.id, bot); as ia) {
+                        <ui-badge
+                          size="sm"
+                          caps
+                          [tone]="ia.tone"
+                          [variant]="ia.variant"
+                          [attr.title]="ia.porQue"
+                        >
+                          {{ ia.texto }}
+                        </ui-badge>
+                      }
+                    </p>
+                  </div>
+                  <ui-status-pill [status]="bot.status" />
                 </div>
-                <ui-status-pill [status]="bot.status" />
-              </div>
 
-              <!-- Ultimas 24 h, un punto por hora, con el cero visible. Viaja
-                   CON la lista: una peticion por tarjeta serian veinte. Con
-                   menos de dos puntos no hay linea que pintar. -->
-              @let puntos = puntosDeSpark(bot.spark);
-              @if (puntos.length > 1) {
-                <ui-spark
-                  mode="line"
-                  [points]="puntos"
-                  [baseline]="0"
-                  [height]="30"
-                  [label]="'Resultado de las últimas 24 h de ' + bot.name"
-                />
-              }
-
-              <!-- Cuanto dinero hay AHORA, primero: es la pregunta que trae al
-                   usuario a esta pantalla y hasta el spec 025 tenia que sumarla de
-                   cabeza. Debajo, lo que puso, para leer las dos cifras juntas. La
-                   suma la hace el servidor con el paquete compartido: la app no suma dinero. -->
-              <div class="grid">
-                <ui-stat
-                  label="Capital actual"
-                  [value]="money(capital(bot))"
-                  [hint]="'de ' + money(bot.totalInvestment) + ' asignados'"
-                />
-                <ui-stat
-                  label="PnL total"
-                  [value]="signed(total(bot))"
-                  [tone]="pnlColor(total(bot))"
-                />
-                <ui-stat label="ROI" [value]="pct(bot.roiPct)" [tone]="pnlColor(bot.roiPct)" />
-                <ui-stat label="Órdenes" [value]="bot.openOrders" />
-              </div>
-
-              <!-- Lo que hay en juego, como lo pone un exchange junto a la
-                   posicion: cuanta hay y que vale a precio de marca, que margen la
-                   sostiene y cuanto lleva el bot en marcha. -->
-              <p class="facts num">
-                @if (enPosicion(bot)) {
-                  <span>
-                    Posición <b>{{ qty(bot.positionQty) }}</b>
-                    @if (bot.positionValue) {
-                      ≈ <b>{{ money(bot.positionValue) }}</b>
-                    }
-                  </span>
-                  @if (conMargen(bot)) {
-                    <span
-                      >Margen <b>{{ money(bot.marginUsed) }}</b></span
-                    >
-                  }
-                } @else {
-                  <span>Sin posición</span>
+                <!-- Ultimas 24 h, un punto por hora, con el cero visible. Viaja
+                     CON la lista: una peticion por tarjeta serian veinte. Con
+                     menos de dos puntos no hay linea que pintar. -->
+                @let puntos = puntosDeSpark(bot.spark);
+                @if (puntos.length > 1) {
+                  <ui-spark
+                    mode="line"
+                    [points]="puntos"
+                    [baseline]="0"
+                    [height]="30"
+                    [label]="'Resultado de las últimas 24 h de ' + bot.name"
+                  />
                 }
-                <span
-                  >Activo <b>{{ uptime(bot.uptimeSeconds) }}</b></span
-                >
-              </p>
 
-              <!-- La distancia a liquidación es LA métrica de riesgo: se muestra
-                   en la tarjeta, no escondida en el detalle. -->
-              @if (liqDistance(bot); as dist) {
-                <ui-liq-meter [pct]="bot.liquidationDistancePct" />
-                @if (dist < liqPeligro) {
-                  <ui-notice tone="danger" icon="warning-outline">
-                    <span class="num">
-                      A un {{ money(dist, 1) }} % de la liquidación, en
-                      {{ price(bot.liquidationPrice) }}.
+                <!-- Cuanto dinero hay AHORA, primero: es la pregunta que trae al
+                     usuario a esta pantalla y hasta el spec 025 tenia que sumarla de
+                     cabeza. Debajo, lo que puso, para leer las dos cifras juntas. La
+                     suma la hace el servidor con el paquete compartido: la app no suma dinero. -->
+                <div class="grid">
+                  <ui-stat
+                    label="Capital actual"
+                    [value]="money(capital(bot))"
+                    [hint]="'de ' + money(bot.totalInvestment) + ' asignados'"
+                  />
+                  <ui-stat
+                    label="PnL total"
+                    [value]="signed(total(bot))"
+                    [tone]="pnlColor(total(bot))"
+                  />
+                  <ui-stat label="ROI" [value]="pct(bot.roiPct)" [tone]="pnlColor(bot.roiPct)" />
+                  <ui-stat label="Órdenes" [value]="bot.openOrders" />
+                </div>
+
+                <!-- Lo que hay en juego, como lo pone un exchange junto a la
+                     posicion: cuanta hay y que vale a precio de marca, que margen la
+                     sostiene y cuanto lleva el bot en marcha. -->
+                <p class="facts num">
+                  @if (enPosicion(bot)) {
+                    <span>
+                      Posición <b>{{ qty(bot.positionQty) }}</b>
+                      @if (bot.positionValue) {
+                        ≈ <b>{{ money(bot.positionValue) }}</b>
+                      }
                     </span>
-                  </ui-notice>
-                }
-              }
+                    @if (conMargen(bot)) {
+                      <span
+                        >Margen <b>{{ money(bot.marginUsed) }}</b></span
+                      >
+                    }
+                  } @else {
+                    <span>Sin posición</span>
+                  }
+                  <span
+                    >Activo <b>{{ uptime(bot.uptimeSeconds) }}</b></span
+                  >
+                </p>
 
-              @if (bot.lastError) {
-                <ui-notice tone="danger" icon="warning-outline">{{ bot.lastError }}</ui-notice>
-              } @else if (bot.note) {
-                <ui-notice tone="info">{{ bot.note }}</ui-notice>
-              }
+                <!-- La distancia a liquidación es LA métrica de riesgo: se muestra
+                     en la tarjeta, no escondida en el detalle. -->
+                @if (liqDistance(bot); as dist) {
+                  <ui-liq-meter [pct]="bot.liquidationDistancePct" />
+                  @if (dist < liqPeligro) {
+                    <ui-notice tone="danger" icon="warning-outline">
+                      <span class="num">
+                        A un {{ money(dist, 1) }} % de la liquidación, en
+                        {{ price(bot.liquidationPrice) }}.
+                      </span>
+                    </ui-notice>
+                  }
+                }
+              </div>
+
+              <div class="pie">
+                @if (bot.lastError) {
+                  <ui-notice tone="danger" icon="warning-outline">{{ bot.lastError }}</ui-notice>
+                } @else if (bot.note) {
+                  <ui-notice tone="info">{{ bot.note }}</ui-notice>
+                }
+              </div>
             </ui-card>
           }
         </div>
@@ -382,6 +412,8 @@ export class BotsListPage implements OnInit {
   private readonly risk = inject(RiskService);
   private readonly accountsSvc = inject(ExchangeAccountsService);
   private readonly network = inject(NetworkService);
+  /** El Modo IA de los bots, para la pastilla. Solo pinta algo a un administrador. */
+  readonly modoIa = inject(ModoIaService);
   /** La red que se esta mirando. La lista ya viene filtrada por ella. */
   readonly testnet = this.network.testnet;
 
@@ -546,7 +578,9 @@ export class BotsListPage implements OnInit {
   }
 
   async reload(event: CustomEvent): Promise<void> {
-    await Promise.all([this.bots.refresh(), this.cargarConexiones()]);
+    // El Modo IA tambien: `refrescar()` no hace nada para quien no es
+    // administrador y nunca falla hacia fuera.
+    await Promise.all([this.bots.refresh(), this.cargarConexiones(), this.modoIa.refrescar()]);
     void (event.target as HTMLIonRefresherElement).complete();
   }
 

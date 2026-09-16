@@ -21,18 +21,21 @@ function build(bot: Record<string, unknown> | null) {
     upsert: jest.fn().mockImplementation((args: { create: unknown }) => args.create),
     findMany: jest.fn().mockResolvedValue([]),
   };
+  const eventos = { create: jest.fn().mockResolvedValue({}) };
   const db = {
     bot: { findUnique: jest.fn().mockResolvedValue(bot) },
     exchangeAccount: { findUnique: jest.fn().mockResolvedValue({ testnet: false }) },
     botAiSetting: ajustes,
     botAiDecision: decisiones,
+    botEvent: eventos,
     // Vinculado por defecto: el modo MANUAL lo exige, y lo que se prueba en la
     // mayoria de estos casos es otra cosa.
     telegramLink: { findUnique: jest.fn().mockResolvedValue({ verified_at: new Date() }) },
   };
   const marketData = { features: jest.fn().mockResolvedValue(null) };
-  const service = new SupervisorPolicyService(db as never, marketData as never);
-  return { service, db, ajustes, decisiones, marketData };
+  const bus = { publish: jest.fn().mockResolvedValue(undefined) };
+  const service = new SupervisorPolicyService(db as never, marketData as never, bus as never);
+  return { service, db, ajustes, decisiones, marketData, eventos, bus };
 }
 
 const bot = (extra: Record<string, unknown> = {}) => ({
@@ -271,5 +274,189 @@ describe('SupervisorPolicyService — el modo manual necesita donde avisar (spec
     const { service, ajustes } = conTelegram(false);
     await service.set(ADMIN, 'bot-1', { mode: AiMode.OFF });
     expect(ajustes.upsert).toHaveBeenCalled();
+  });
+});
+
+describe('SupervisorPolicyService — el cambio de modo deja rastro en el bot (spec 053, H-01)', () => {
+  it('encenderlo escribe un AI_MODE en el bot, con el modo y el motivo', async () => {
+    // El spec 046 (R-3) lo exigia y el comentario del DTO lo daba por hecho, pero
+    // el cambio solo quedaba en la bitacora: la pestaña de eventos del bot no
+    // decia que un agente se habia encendido sobre el.
+    const { service, eventos } = build(bot());
+    await service.set(ADMIN, 'bot-1', { mode: AiMode.AUTO, reason: 'lo vigilo yo' });
+
+    expect(eventos.create).toHaveBeenCalledTimes(1);
+    const { data } = eventos.create.mock.calls[0][0] as { data: Record<string, unknown> };
+    expect(data).toMatchObject({ bot_id: 'bot-1', type: 'AI_MODE', severity: 'INFO' });
+    expect(data['message']).toContain('decide y aplica');
+    expect(data['message']).toContain('lo vigilo yo');
+    expect(data['payload']).toEqual({ mode: AiMode.AUTO, reason: 'lo vigilo yo' });
+  });
+
+  it('apagarlo tambien deja rastro', async () => {
+    const { service, eventos } = build(bot());
+    await service.set(ADMIN, 'bot-1', { mode: AiMode.OFF, reason: 'fin de la prueba' });
+    const { data } = eventos.create.mock.calls[0][0] as { data: { message: string } };
+    expect(data.message).toContain('apagado');
+  });
+
+  it('el rastro lleva las opciones que se mandaron, y solo esas', async () => {
+    const { service, eventos } = build(bot());
+    await service.set(ADMIN, 'bot-1', {
+      mode: AiMode.MANUAL,
+      trigger: 'PERIODICO',
+      reviewEveryMinutes: null,
+      allowWarm: false,
+      reason: 'menos ruido',
+    });
+    const { data } = eventos.create.mock.calls[0][0] as { data: { payload: unknown } };
+    expect(data.payload).toEqual({
+      mode: AiMode.MANUAL,
+      trigger: 'PERIODICO',
+      reviewEveryMinutes: null,
+      allowWarm: false,
+      reason: 'menos ruido',
+    });
+  });
+
+  it('se publica para refrescar la app, SIN entrega forzada', async () => {
+    // Con la marca, el notificador del worker lo mandaria a Telegram: enterarse
+    // por el movil de lo que uno mismo acaba de pulsar es ruido.
+    const { service, bus } = build(bot());
+    await service.set(ADMIN, 'bot-1', { mode: AiMode.AUTO, reason: 'lo vigilo yo' });
+
+    expect(bus.publish).toHaveBeenCalledTimes(1);
+    const [canal, mensaje] = bus.publish.mock.calls[0] as [string, Record<string, unknown>];
+    expect(canal).toBe('crypton:bot-events');
+    expect(mensaje).toMatchObject({ userId: ADMIN, botId: 'bot-1', type: 'AI_MODE' });
+    expect(mensaje['entregaForzada']).toBeUndefined();
+    expect(mensaje['data']).toMatchObject({ severity: 'INFO', mode: AiMode.AUTO });
+  });
+
+  it('si el rastro no se puede escribir, el cambio sigue hecho', async () => {
+    const { service, ajustes, eventos, bus } = build(bot());
+    eventos.create.mockRejectedValue(new Error('base caida'));
+    bus.publish.mockRejectedValue(new Error('redis caido'));
+
+    await expect(
+      service.set(ADMIN, 'bot-1', { mode: AiMode.AUTO, reason: 'lo vigilo yo' }),
+    ).resolves.toBeDefined();
+    expect(ajustes.upsert).toHaveBeenCalled();
+  });
+
+  it('un cambio rechazado no deja rastro', async () => {
+    const ajeno = build(bot({ user_id: OTRO }));
+    await expect(ajeno.service.set(ADMIN, 'bot-1', { mode: AiMode.AUTO })).rejects.toThrow();
+    expect(ajeno.eventos.create).not.toHaveBeenCalled();
+    expect(ajeno.bus.publish).not.toHaveBeenCalled();
+
+    const fuera = build(bot({ strategy: 'MARTINGALE' }));
+    await expect(fuera.service.set(ADMIN, 'bot-1', { mode: AiMode.AUTO })).rejects.toThrow();
+    expect(fuera.eventos.create).not.toHaveBeenCalled();
+  });
+});
+
+describe('SupervisorPolicyService — el intervalo vuelve al de la estrategia con null (spec 053, H-04)', () => {
+  it('null se escribe como null al reconfigurar', async () => {
+    const { service, ajustes } = build(bot());
+    ajustes.findUnique.mockResolvedValue({
+      bot_id: 'bot-1',
+      mode: AiMode.AUTO,
+      knobs: {},
+      review_every_minutes: 45,
+      enabled_at: new Date(),
+    });
+    await service.set(ADMIN, 'bot-1', { mode: AiMode.AUTO, reviewEveryMinutes: null });
+    const args = ajustes.upsert.mock.calls[0][0] as { update: Record<string, unknown> };
+    expect(args.update).toHaveProperty('review_every_minutes', null);
+  });
+
+  it('sin mandarlo, el intervalo guardado no se toca', async () => {
+    const { service, ajustes } = build(bot());
+    await service.set(ADMIN, 'bot-1', { mode: AiMode.AUTO });
+    const args = ajustes.upsert.mock.calls[0][0] as { update: Record<string, unknown> };
+    expect(args.update).not.toHaveProperty('review_every_minutes');
+  });
+});
+
+describe('SupervisorPolicyService — lo que ve la lista y la cobertura (spec 053)', () => {
+  it('encendidosDe pide solo los bots del administrador que llama', async () => {
+    // La politica de un bot ajeno no se lee (spec 046): tampoco en bloque.
+    const { service, ajustes } = build(bot());
+    await service.encendidosDe(ADMIN);
+    const { where } = ajustes.findMany.mock.calls[0][0] as { where: Record<string, unknown> };
+    expect(where['bot']).toEqual({ user_id: ADMIN });
+  });
+
+  it('encendidosDe no trae los apagados', async () => {
+    const { service, ajustes } = build(bot());
+    await service.encendidosDe(ADMIN);
+    const { where } = ajustes.findMany.mock.calls[0][0] as { where: Record<string, unknown> };
+    expect(where['mode']).toEqual({ in: [AiMode.MANUAL, AiMode.AUTO] });
+  });
+
+  it('encendidosDe no saca las perillas ni el expediente, que son el grueso de la fila', async () => {
+    const { service, ajustes } = build(bot());
+    await service.encendidosDe(ADMIN);
+    const { select } = ajustes.findMany.mock.calls[0][0] as { select: Record<string, boolean> };
+    for (const pesado of ['knobs', 'features_at_enable', 'last_bucket', 'last_error']) {
+      expect(select).not.toHaveProperty(pesado);
+    }
+    // Y lo que la pastilla si necesita, para que el test no pase por estar vacio.
+    for (const campo of ['bot_id', 'mode', 'paused_until', 'trigger', 'allow_warm']) {
+      expect(select[campo]).toBe(true);
+    }
+  });
+
+  it('get dice cubierta:true en una estrategia del alcance, con o sin fila', async () => {
+    const { service, ajustes } = build(bot());
+    await expect(service.get(ADMIN, 'bot-1')).resolves.toEqual({
+      bot_id: 'bot-1',
+      mode: AiMode.OFF,
+      knobs: null,
+      cubierta: true,
+    });
+
+    ajustes.findUnique.mockResolvedValue({ bot_id: 'bot-1', mode: AiMode.AUTO });
+    await expect(service.get(ADMIN, 'bot-1')).resolves.toMatchObject({
+      mode: AiMode.AUTO,
+      cubierta: true,
+    });
+  });
+
+  it('get de una estrategia fuera del alcance se lee, y dice cubierta:false', async () => {
+    const { service } = build(bot({ strategy: 'MARTINGALE' }));
+    await expect(service.get(ADMIN, 'bot-1')).resolves.toMatchObject({ cubierta: false });
+  });
+
+  it('set tambien devuelve cubierta', async () => {
+    const dentro = build(bot());
+    await expect(dentro.service.set(ADMIN, 'bot-1', { mode: AiMode.AUTO })).resolves.toMatchObject({
+      mode: AiMode.AUTO,
+      cubierta: true,
+    });
+
+    const fuera = build(bot({ strategy: 'MARTINGALE' }));
+    await expect(fuera.service.set(ADMIN, 'bot-1', { mode: AiMode.OFF })).resolves.toMatchObject({
+      mode: AiMode.OFF,
+      cubierta: false,
+    });
+  });
+
+  it('las estrategias que se anuncian son las que set() acepta', async () => {
+    const { service } = build(bot());
+    const anunciadas = service.estrategias();
+    expect([...anunciadas].sort()).toEqual(
+      ['MARKET_MAKER', 'MARKET_MAKER_V2', 'TRAILING_PROFIT', 'TREND_FOLLOW'].sort(),
+    );
+    // Cada una se puede encender, y una que no esta, no.
+    for (const strategy of anunciadas) {
+      const { service: s } = build(bot({ strategy }));
+      await expect(s.set(ADMIN, 'bot-1', { mode: AiMode.AUTO })).resolves.toBeDefined();
+    }
+    const { service: fuera } = build(bot({ strategy: 'GRID_CLASSIC' }));
+    await expect(fuera.set(ADMIN, 'bot-1', { mode: AiMode.AUTO })).rejects.toBeInstanceOf(
+      ForbiddenException,
+    );
   });
 });

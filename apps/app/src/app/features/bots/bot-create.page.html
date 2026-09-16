@@ -501,6 +501,24 @@
         </div>
       </ui-card>
 
+      <!-- ── Modo IA (spec 053) ──
+           Solo para administradores y estrategias del alcance. Se enciende
+           DESPUES de crear el bot, con su propia peticion: si falla, el bot queda
+           creado y se avisa. El motivo se pide aqui porque no hay dialogo. -->
+      @if (iaDisponible()) {
+        <h3 class="section">Modo IA</h3>
+        <app-modo-ia-editor
+          [(valor)]="iaBorrador"
+          [(motivo)]="iaMotivo"
+          [pedirMotivo]="true"
+          [estrategia]="strategyKind()"
+          [simulado]="simulando()"
+          [enMarcha]="startActive"
+          [interruptores]="modoIa.interruptores()"
+          [deshabilitado]="busy()"
+        />
+      }
+
       @if (!simulando()) {
         <div class="realwarn">
           <ion-icon name="warning-outline" />

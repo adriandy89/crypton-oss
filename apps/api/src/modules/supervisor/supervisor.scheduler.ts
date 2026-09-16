@@ -3,7 +3,7 @@ import { ConfigService } from '@nestjs/config';
 import { Cron, CronExpression } from '@nestjs/schedule';
 import { AiDecisionState } from '@crypton/db';
 import { BUS_CHANNELS, BusService, CacheService, DbService, type BusMessage } from 'src/libs';
-import { SupervisorPolicyService } from './supervisor.policy.service';
+import { DUENO_CON_MODO_IA, SupervisorPolicyService } from './supervisor.policy.service';
 import { SupervisorService } from './supervisor.service';
 
 /**
@@ -78,8 +78,13 @@ export class SupervisorScheduler implements OnModuleInit {
       return;
     }
 
-    const ajuste = await this.db.botAiSetting.findUnique({
-      where: { bot_id: mensaje.botId },
+    // Con el MISMO filtro del dueño que el barrido. Sin el, a quien le quitaban
+    // el rol o le deshabilitaban la cuenta se le seguia revisando el bot —y en
+    // AUTO, cambiando— cada vez que cerraba un ciclo o saltaba una guarda
+    // (spec 053, H-02). `findFirst` y no `findUnique`: el filtro va sobre una
+    // relacion, y `findUnique` solo admite la clave.
+    const ajuste = await this.db.botAiSetting.findFirst({
+      where: { bot_id: mensaje.botId, bot: { user: DUENO_CON_MODO_IA } },
       include: { bot: { select: BOT_SELECT } },
     });
     if (!ajuste || ajuste.mode === 'OFF') return;

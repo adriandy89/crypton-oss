@@ -4,7 +4,13 @@ import { Cron, CronExpression } from '@nestjs/schedule';
 import { D } from '@crypton/shared';
 import { LeaseService } from '../engine';
 import { BUS_CHANNELS, BusService, DbService, type BusMessage } from '../libs';
-import { TelegramClient, escapeHtml, type InlineKeyboard } from './telegram-client';
+import {
+  TelegramClient,
+  escapeHtml,
+  recortar,
+  trocear,
+  type InlineKeyboard,
+} from './telegram-client';
 
 interface TelegramPrefs {
   fills: boolean;
@@ -244,7 +250,11 @@ export class NotifierService implements OnModuleInit, OnModuleDestroy {
 
     const bot = await this.botLabel(message.botId);
     const icon = ICON[message.type] ?? (severity === 'CRITICAL' ? '🔥' : '·');
-    const line = `${icon} <b>${escapeHtml(bot)}</b> — ${escapeHtml(data.message ?? message.type)}`;
+    // Recortada aquí, antes de encolarla o de mandarla sola: una línea que no cabe
+    // en un mensaje lo tumba entero (spec 054).
+    const line = recortar(
+      `${icon} <b>${escapeHtml(bot)}</b> — ${escapeHtml(data.message ?? message.type)}`,
+    );
 
     // Se reserva lo más tarde posible: un evento que el usuario no quiere no
     // debe costar una ida y vuelta a Redis, y el camino normal —el del origen
@@ -330,7 +340,13 @@ export class NotifierService implements OnModuleInit, OnModuleDestroy {
     const parts = [...batch.lines];
     if (batch.dropped > 0) parts.push(`<i>… y ${batch.dropped} evento(s) más</i>`);
 
-    await this.client.sendMessage(chatId, parts.join('\n'));
+    // En varios mensajes si hace falta. Doce líneas cabían siempre en uno cuando
+    // cada aviso era una frase; los del supervisor listan ahora sus cambios
+    // (spec 054), y un error del venue ya podía ser largo antes. Uno de más de
+    // 4096 caracteres Telegram lo rechaza entero.
+    for (const texto of trocear(parts)) {
+      await this.client.sendMessage(chatId, texto);
+    }
   }
 
   private async linkOf(userId: string): Promise<{ chatId: string; prefs: TelegramPrefs } | null> {

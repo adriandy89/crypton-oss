@@ -5,6 +5,7 @@ import { ActorKind, AuditOutcome, EventSeverity } from '@crypton/shared';
 import { AuditService, IdParamDto } from 'src/libs';
 import { GetUserInfo, JwtAuthGuard, Roles, RolesGuard, type SessionUser } from '../auth';
 import { SupervisorPolicyService } from '../supervisor/supervisor.policy.service';
+import { SupervisorService } from '../supervisor/supervisor.service';
 import { SetAiModeDto } from '../supervisor/dtos';
 
 /**
@@ -21,25 +22,55 @@ import { SetAiModeDto } from '../supervisor/dtos';
  * Los guards y el `@Roles` van a nivel de CLASE a proposito, como en el resto de
  * la consola: `RolesGuard` deja pasar cuando NO hay metadata, asi que un metodo
  * nuevo sin decorar naceria abierto a cualquier usuario autenticado.
+ *
+ * OJO AL PREFIJO. Es `admin` y no `admin/bots` (spec 053): el resumen de la app
+ * no puede colgar de `admin/bots/ai`, porque `AdminBotsController` registra
+ * antes `GET admin/bots/:id`, que se lo quedaria y responderia 400 por no ser
+ * un UUID. Las dos rutas de un bot conservan su URL de siempre; lo comprueba
+ * `admin-ai.routes.spec.ts`.
  */
 @ApiTags('admin')
 @ApiBearerAuth()
-@Controller('admin/bots')
+@Controller('admin')
 @UseGuards(JwtAuthGuard, RolesGuard)
 @Roles('ADMIN')
 export class AdminAiController {
   constructor(
     private readonly policy: SupervisorPolicyService,
+    private readonly supervisor: SupervisorService,
     private readonly audit: AuditService,
   ) {}
 
-  @Get(':id/ai')
-  @ApiOperation({ summary: 'Modo IA de un bot propio (solo ADMIN)' })
-  get(@GetUserInfo() admin: SessionUser, @Param() { id }: IdParamDto) {
-    return this.policy.get(admin.id, id);
+  /**
+   * El Modo IA de los bots del administrador que llama, en una sola respuesta.
+   *
+   * Lo que pinta la pastilla de la lista de bots y lo que el asistente necesita
+   * para ofrecer el modo al crear. Con los interruptores del servidor, para que
+   * la app no enseñe un modo que hoy no hace nada, y con las estrategias que
+   * cubre, para que no tenga una copia propia que se desincronice.
+   */
+  @Get('ai')
+  @ApiOperation({ summary: 'Modo IA de los bots propios, interruptores y alcance (solo ADMIN)' })
+  async resumen(@GetUserInfo() admin: SessionUser) {
+    return {
+      interruptores: this.supervisor.interruptores(),
+      estrategias: this.policy.estrategias(),
+      bots: await this.policy.encendidosDe(admin.id),
+    };
   }
 
-  @Put(':id/ai')
+  @Get('bots/:id/ai')
+  @ApiOperation({ summary: 'Modo IA de un bot propio (solo ADMIN)' })
+  async get(@GetUserInfo() admin: SessionUser, @Param() { id }: IdParamDto) {
+    // Con los interruptores: el panel del bot no puede depender de que el
+    // resumen de la lista haya llegado para decir la verdad.
+    return {
+      ...(await this.policy.get(admin.id, id)),
+      interruptores: this.supervisor.interruptores(),
+    };
+  }
+
+  @Put('bots/:id/ai')
   @ApiOperation({
     summary: 'Enciende, apaga o reconfigura el Modo IA de un bot propio (solo ADMIN)',
     description:
@@ -65,7 +96,15 @@ export class AdminAiController {
       severity: EventSeverity.WARN,
       outcome: AuditOutcome.OK,
       message: `Modo IA ${dto.mode}: ${dto.reason}`,
-      meta: { mode: dto.mode, trigger: dto.trigger, reason: dto.reason },
+      // Con las opciones: desde el spec 053 la app las cambia, y una fila que
+      // solo dice «AUTO» no explica por que el bot dejo de recolocar órdenes.
+      meta: {
+        mode: dto.mode,
+        trigger: dto.trigger,
+        reviewEveryMinutes: dto.reviewEveryMinutes,
+        allowWarm: dto.allowWarm,
+        reason: dto.reason,
+      },
     });
 
     return fila;

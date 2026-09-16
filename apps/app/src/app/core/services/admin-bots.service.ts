@@ -40,10 +40,59 @@ export const AYUDA_MODO_IA: Record<AiMode, string> = {
   AUTO: 'Aplica los ajustes y te avisa después. Nunca toca el capital, el par ni la posición.',
 };
 
+/**
+ * El texto de la pastilla de un bot con el Modo IA encendido (spec 053).
+ *
+ * Corto a proposito: vive en la linea de la tarjeta junto a «simulación» y
+ * «testnet», y los mismos verbos que las etiquetas largas para que se
+ * reconozcan. Apagado no tiene: sin modo, sin pastilla.
+ */
+export const ETIQUETA_CORTA_MODO_IA: Record<Exclude<AiMode, 'OFF'>, string> = {
+  MANUAL: 'IA · propone',
+  AUTO: 'IA · aplica',
+};
+
+/**
+ * Cuándo revisa el supervisor. Calcado de `AI_TRIGGERS` del servidor, con el
+ * valor de fabrica primero.
+ */
+export const AI_TRIGGERS = ['AMBOS', 'PERIODICO', 'OPERACION'] as const;
+export type AiTrigger = (typeof AI_TRIGGERS)[number];
+
+export const ETIQUETA_DISPARO: Record<AiTrigger, string> = {
+  AMBOS: 'Reloj y eventos',
+  PERIODICO: 'Solo reloj',
+  OPERACION: 'Solo eventos',
+};
+
+export const AYUDA_DISPARO: Record<AiTrigger, string> = {
+  AMBOS: 'Cada cierto tiempo, y además al cerrar un ciclo o ante un aviso de riesgo.',
+  PERIODICO:
+    'Solo cada cierto tiempo: un ciclo cerrado o un aviso de riesgo no adelantan la revisión.',
+  OPERACION: 'Solo al cerrar un ciclo o ante un aviso de riesgo, nunca por reloj.',
+};
+
+/**
+ * Lo que los interruptores del servidor dejan hacer hoy (spec 053).
+ *
+ * Sin esto la app enseñaria «decide y aplica» sobre un bot al que el
+ * supervisor no va a mirar.
+ */
+export interface AiSwitches {
+  /** El interruptor global Y la clave del modelo. */
+  encendido: boolean;
+  /** El automatico se degrada a «propone y espera». */
+  forzarManual: boolean;
+  /** Solo actua sobre bots simulados. */
+  soloSimulados: boolean;
+}
+
 export interface AiSetting {
   bot_id: string;
   mode: AiMode;
+  /** `VarChar` en el servidor: el vocabulario puede crecer antes que la app. */
   trigger?: string;
+  /** `null` = el intervalo que recomienda la estrategia. */
   review_every_minutes?: number | null;
   allow_warm?: boolean;
   last_review_at?: string | null;
@@ -51,12 +100,28 @@ export interface AiSetting {
   failures?: number;
   paused_until?: string | null;
   last_error?: string | null;
+  /**
+   * Si la estrategia entra en el alcance del Modo IA. Ausente con un servidor
+   * anterior al spec 053: se trata como desconocido, y decide el servidor.
+   */
+  cubierta?: boolean;
+  /** Solo en la lectura de un bot. */
+  interruptores?: AiSwitches;
+}
+
+/** `GET /admin/ai`: el Modo IA de los bots propios encendidos (spec 053). */
+export interface AiOverview {
+  interruptores: AiSwitches;
+  /** Las estrategias que cubre el Modo IA. */
+  estrategias: string[];
+  bots: AiSetting[];
 }
 
 export interface SetAiMode {
   mode: AiMode;
-  trigger?: string;
-  reviewEveryMinutes?: number;
+  trigger?: AiTrigger;
+  /** `null` vuelve al intervalo de la estrategia. */
+  reviewEveryMinutes?: number | null;
   allowWarm?: boolean;
   reason: string;
 }
@@ -175,5 +240,17 @@ export class AdminBotsService {
   /** El motivo es obligatorio, como en los comandos y por lo mismo. */
   setAiMode(id: string, dto: SetAiMode): Promise<AiSetting> {
     return firstValueFrom(this.http.put<AiSetting>(`${this.base}/${id}/ai`, dto));
+  }
+
+  /**
+   * El Modo IA de los bots PROPIOS encendidos, los interruptores del servidor y
+   * las estrategias que cubre (spec 053). Una sola peticion para toda la lista:
+   * una por tarjeta serian veinte.
+   *
+   * Cuelga de `admin/ai` y no de `admin/bots/ai`: ahi la ruta del detalle de un
+   * bot se la quedaria.
+   */
+  aiOverview(): Promise<AiOverview> {
+    return firstValueFrom(this.http.get<AiOverview>(`${environment.apiUrl}/admin/ai`));
   }
 }

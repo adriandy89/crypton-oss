@@ -2,16 +2,13 @@ import { Injectable, inject } from '@angular/core';
 import { AlertController } from '@ionic/angular/standalone';
 import { ToastService } from '../../core/services';
 import {
-  AYUDA_MODO_IA,
   AdminBotsService,
   ETIQUETA_COMANDO,
-  ETIQUETA_MODO_IA,
   type AdminBotCommand,
-  type AiMode,
-  type AiSetting,
 } from '../../core/services/admin-bots.service';
 import { AdminUsersService } from '../../core/services/admin-users.service';
 import { errorText } from '../../core/utils';
+import { AVISO_SIN_MOTIVO, CAMPO_MOTIVO, motivoValido } from '../../shared/bot/motivo';
 
 /**
  * Las acciones de la consola, con su confirmacion.
@@ -37,13 +34,11 @@ export class AdminActionsService {
   private readonly bots = inject(AdminBotsService);
   private readonly users = inject(AdminUsersService);
 
-  /** El campo de motivo, identico en las tres acciones que lo piden. */
-  private readonly campoMotivo = {
-    name: 'reason',
-    type: 'text' as const,
-    placeholder: 'Motivo (queda en la bitácora)',
-    attributes: { maxlength: 200 },
-  };
+  /**
+   * El campo de motivo, identico en las acciones que lo piden. Compartido con el
+   * Modo IA (`shared/bot/motivo.ts`), que exige lo mismo.
+   */
+  private readonly campoMotivo = CAMPO_MOTIVO;
 
   /**
    * Valida el motivo dentro del `handler`.
@@ -53,11 +48,8 @@ export class AdminActionsService {
    * explica por que.
    */
   private motivoDe(datos: { reason?: string }): string | null {
-    const reason = (datos?.reason ?? '').trim();
-    if (reason.length < 3) {
-      void this.toast.error('Escribe el motivo: queda en la bitácora.');
-      return null;
-    }
+    const reason = motivoValido(datos?.reason);
+    if (!reason) void this.toast.error(AVISO_SIN_MOTIVO);
     return reason;
   }
 
@@ -95,53 +87,8 @@ export class AdminActionsService {
     await alert.present();
   }
 
-  /**
-   * Cambiar el Modo IA de un bot PROPIO (spec 046).
-   *
-   * Pide motivo como la contencion, y por lo mismo: encender un agente que
-   * reescribe la configuracion de un bot con dinero dentro tiene que quedar
-   * explicado en la bitacora. Que el bot sea propio no lo hace menos revisable —
-   * lo hace mas facil de olvidar.
-   *
-   * El mensaje dice lo que el supervisor NO puede hacer, que es lo que alguien
-   * con prisa da por supuesto al reves.
-   */
-  async modoIa(
-    bot: { id: string; name: string },
-    mode: AiMode,
-    onDone?: (s: AiSetting) => void | Promise<void>,
-  ): Promise<void> {
-    const apagar = mode === 'OFF';
-    const alert = await this.alerts.create({
-      header: apagar ? 'Apagar el Modo IA' : ETIQUETA_MODO_IA[mode],
-      message: apagar
-        ? `${bot.name} volverá a funcionar solo con la configuración que le pusiste. ` +
-          'Las sugerencias que estuvieran esperando se descartan.'
-        : `${AYUDA_MODO_IA[mode]} Nunca toca el capital, el par, la cuenta ni la dirección, ` +
-          'y no puede parar el bot, cerrar su posición ni cancelar sus órdenes.',
-      inputs: [this.campoMotivo],
-      buttons: [
-        { text: 'Cancelar', role: 'cancel' },
-        {
-          text: 'Confirmar',
-          handler: (datos: { reason?: string }) => {
-            const reason = this.motivoDe(datos);
-            if (!reason) return false;
-            void this.correr(
-              async () => {
-                const s = await this.bots.setAiMode(bot.id, { mode, reason });
-                await onDone?.(s);
-                return s;
-              },
-              apagar ? 'Modo IA apagado.' : 'Modo IA actualizado.',
-            );
-            return true;
-          },
-        },
-      ],
-    });
-    await alert.present();
-  }
+  // El Modo IA salio de aqui en el spec 053: ahora lo usa tambien el detalle
+  // del bot, y vive en `shared/bot/modo-ia-acciones.service.ts`.
 
   /**
    * Deshabilitar una cuenta.

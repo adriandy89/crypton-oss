@@ -1,8 +1,26 @@
 import { ForbiddenException, Injectable, Logger, NotFoundException } from '@nestjs/common';
 import { AiDecisionState, AiMode, Role } from '@crypton/db';
-import { DbService } from 'src/libs';
+import { EventSeverity } from '@crypton/shared';
+import { BUS_CHANNELS, BusService, DbService } from 'src/libs';
 import { MarketDataService } from '../market-data';
 import { defaultKnobs } from '../advisor/build';
+
+/** Lo que se pide al cambiar el Modo IA. `reason` lo exige el DTO de la ruta. */
+export interface CambioDeModoIa {
+  mode: AiMode;
+  trigger?: string;
+  /** `null` = el intervalo que recomienda la estrategia. */
+  reviewEveryMinutes?: number | null;
+  allowWarm?: boolean;
+  reason?: string;
+}
+
+/** Como se nombra cada modo en el rastro del bot. Los mismos rotulos que la app. */
+const NOMBRE_DEL_MODO: Record<AiMode, string> = {
+  [AiMode.OFF]: 'apagado',
+  [AiMode.MANUAL]: 'propone y espera',
+  [AiMode.AUTO]: 'decide y aplica',
+};
 
 /**
  * Encender y apagar el Modo IA de un bot.
@@ -33,6 +51,7 @@ export class SupervisorPolicyService {
   constructor(
     private readonly db: DbService,
     private readonly marketData: MarketDataService,
+    private readonly bus: BusService,
   ) {}
 
   /**
@@ -68,11 +87,55 @@ export class SupervisorPolicyService {
     return bot;
   }
 
-  /** El estado del Modo IA de un bot. Sin fila es OFF, y significan lo mismo. */
+  /**
+   * El estado del Modo IA de un bot. Sin fila es OFF, y significan lo mismo.
+   *
+   * `cubierta` dice si su estrategia entra en el alcance (spec 053): la app la
+   * usa para no ofrecer un modo que el servidor va a rechazar con un 403. La
+   * decision sigue siendo de `set()`; esto solo evita enseñar un boton inutil.
+   */
   async get(adminId: string, botId: string) {
-    await this.mustOwnAsAdmin(adminId, botId);
+    const bot = await this.mustOwnAsAdmin(adminId, botId);
     const fila = await this.db.botAiSetting.findUnique({ where: { bot_id: botId } });
-    return fila ?? { bot_id: botId, mode: AiMode.OFF, knobs: null };
+    return {
+      ...(fila ?? { bot_id: botId, mode: AiMode.OFF, knobs: null }),
+      cubierta: ESTRATEGIAS_CON_SUPERVISOR.has(bot.strategy),
+    };
+  }
+
+  /**
+   * El Modo IA de los bots PROPIOS que lo tienen encendido (spec 053).
+   *
+   * Es lo que pinta la pastilla de la lista de bots, en una sola consulta para
+   * todos: una peticion por tarjeta serian veinte. Solo los propios, por la
+   * misma frontera que `get()` — la politica de un bot ajeno no se lee.
+   *
+   * Sin `knobs`, `features_at_enable` ni `last_bucket`: son el grueso del peso de
+   * la fila, y la pastilla no necesita ninguno.
+   */
+  async encendidosDe(adminId: string) {
+    return this.db.botAiSetting.findMany({
+      where: {
+        mode: { in: [AiMode.MANUAL, AiMode.AUTO] },
+        bot: { user_id: adminId },
+      },
+      select: {
+        bot_id: true,
+        mode: true,
+        trigger: true,
+        review_every_minutes: true,
+        allow_warm: true,
+        paused_until: true,
+        last_review_at: true,
+        last_apply_at: true,
+        failures: true,
+      },
+    });
+  }
+
+  /** Las estrategias que cubre el Modo IA, para que la app no tenga una copia. */
+  estrategias(): string[] {
+    return [...ESTRATEGIAS_CON_SUPERVISOR];
   }
 
   /**
@@ -85,11 +148,7 @@ export class SupervisorPolicyService {
    * `defaultKnobs` sobre los rasgos del par de HOY, que es la mejor
    * aproximacion disponible a «que perillas explicarian esta configuracion».
    */
-  async set(
-    adminId: string,
-    botId: string,
-    dto: { mode: AiMode; trigger?: string; reviewEveryMinutes?: number; allowWarm?: boolean },
-  ) {
+  async set(adminId: string, botId: string, dto: CambioDeModoIa) {
     const bot = await this.mustOwnAsAdmin(adminId, botId);
 
     // Solo las estrategias del alcance del spec 046. Las demas no es que fallen:
@@ -172,8 +231,65 @@ export class SupervisorPolicyService {
       });
     }
 
+    await this.dejarRastro(bot.user_id, botId, dto);
+
     this.logger.log(`Bot ${botId}: Modo IA ${dto.mode} por ${adminId}`);
-    return fila;
+    return { ...fila, cubierta: ESTRATEGIAS_CON_SUPERVISOR.has(bot.strategy) };
+  }
+
+  /**
+   * El cambio de modo, EN EL BOT (spec 046, R-3; spec 053, H-01).
+   *
+   * Hasta aqui solo quedaba en la bitacora de actividad, y quien abria los
+   * eventos del bot no veia que un agente se habia encendido o apagado sobre el,
+   * pese a que el requisito y el comentario del DTO lo daban por hecho.
+   *
+   * Se publica ademas, para que la app se refresque en todos los dispositivos, y
+   * SIN `entregaForzada`: el notificador del worker descarta lo que publica la
+   * API, y recibir por Telegram lo que uno mismo acaba de pulsar es ruido. El
+   * tipo empieza por `AI_` a proposito: el expediente del modelo ya descarta esos
+   * eventos, y el disparador de revisiones no lo escucha.
+   *
+   * `INFO` y no `WARN`: en la pestaña de eventos el ambar es «algo no cuadra», y
+   * esto es una decision de su dueño. La severidad `WARN` ya la lleva la fila de
+   * la bitacora, que es donde se buscan las acciones de administracion.
+   *
+   * Con `catch` en las dos escrituras: el cambio ya esta hecho, y un rastro que
+   * no se puede escribir no puede deshacerlo ni convertirlo en un 500.
+   */
+  private async dejarRastro(userId: string, botId: string, dto: CambioDeModoIa): Promise<void> {
+    const datos = {
+      mode: dto.mode,
+      ...(dto.trigger === undefined ? {} : { trigger: dto.trigger }),
+      ...(dto.reviewEveryMinutes === undefined
+        ? {}
+        : { reviewEveryMinutes: dto.reviewEveryMinutes }),
+      ...(dto.allowWarm === undefined ? {} : { allowWarm: dto.allowWarm }),
+      ...(dto.reason ? { reason: dto.reason } : {}),
+    };
+    const mensaje =
+      `Modo IA: ${NOMBRE_DEL_MODO[dto.mode]}.` + (dto.reason ? ` Motivo: ${dto.reason}` : '');
+
+    await this.db.botEvent
+      .create({
+        data: {
+          bot_id: botId,
+          type: 'AI_MODE',
+          severity: EventSeverity.INFO,
+          message: mensaje,
+          payload: datos,
+        },
+      })
+      .catch(() => undefined);
+
+    await this.bus
+      .publish(BUS_CHANNELS.BOT_EVENTS, {
+        userId,
+        botId,
+        type: 'AI_MODE',
+        data: { severity: EventSeverity.INFO, message: mensaje, ...datos },
+      })
+      .catch(() => undefined);
   }
 
   /**
@@ -242,7 +358,7 @@ export class SupervisorPolicyService {
           // La frontera del spec 033, otra vez y en la consulta: si a alguien le
           // quitan el rol de administrador, sus politicas dejan de barrerse sin
           // que nadie tenga que acordarse de apagarlas una por una.
-          user: { role: Role.ADMIN, disabled: false },
+          user: DUENO_CON_MODO_IA,
         },
       },
       orderBy: { last_review_at: { sort: 'asc', nulls: 'first' } },
@@ -268,6 +384,18 @@ export class SupervisorPolicyService {
     });
   }
 }
+
+/**
+ * El dueño de un bot al que el supervisor puede tocar: administrador y con la
+ * cuenta habilitada.
+ *
+ * Una sola constante para las DOS consultas que eligen bots —el barrido y la
+ * revision que adelanta un evento—, porque la segunda llego a no tenerla: a
+ * quien le quitaban el rol o le deshabilitaban la cuenta, el supervisor le
+ * seguia revisando el bot, y en AUTO cambiandoselo, cada vez que cerraba un
+ * ciclo (spec 053, H-02). Dos copias del filtro son dos sitios donde olvidarlo.
+ */
+export const DUENO_CON_MODO_IA = { role: Role.ADMIN, disabled: false } as const;
 
 /** Las cuatro del alcance del spec 046. */
 const ESTRATEGIAS_CON_SUPERVISOR = new Set([

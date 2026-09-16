@@ -36,6 +36,8 @@ import { AdminUsersService } from './admin-users.service';
  * administrador. Su servicio rechaza cualquier bot ajeno, asi que la superficie
  * sobre bots de terceros sigue siendo exactamente la de antes — dos comandos de
  * contencion y nada mas. Y tampoco trae adaptadores: solo mercados y velas.
+ * Desde el spec 053 aporta tambien el resumen de los bots PROPIOS con el modo
+ * encendido y los interruptores globales, que solo se leen.
  */
 @Module({
   imports: [BotsModule, AuthModule, SupervisorModule],

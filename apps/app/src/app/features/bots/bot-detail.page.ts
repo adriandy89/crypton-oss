@@ -1,6 +1,7 @@
 import { Component, OnInit, computed, inject, signal } from '@angular/core';
 import { takeUntilDestroyed } from '@angular/core/rxjs-interop';
 import { ActivatedRoute, Router, RouterLink } from '@angular/router';
+import { filter } from 'rxjs';
 import {
   AlertController,
   IonBackButton,
@@ -113,6 +114,13 @@ import {
   ventanasDe,
 } from './bot-timeline';
 import { liqNum } from '../../core/utils/risk';
+// El Modo IA (spec 053), por ruta como el resto de lo de administración.
+import { AuthService } from '../../core/auth';
+import { AdminBotsService, type AiSetting } from '../../core/services/admin-bots.service';
+import { ModoIaService } from '../../core/services/modo-ia.service';
+import { insigniaIa, type CambioIa, type InsigniaIa } from '../../core/utils/modo-ia';
+import { ModoIaAccionesService } from '../../shared/bot/modo-ia-acciones.service';
+import { ModoIaPanelComponent } from '../../shared/bot/modo-ia-panel.component';
 
 type Tab = 'resumen' | 'escalera' | 'ordenes' | 'ajustes' | 'eventos';
 
@@ -168,6 +176,7 @@ type LadderRow =
     UiStatComponent,
     UiStatusPillComponent,
     UiStrategyHelpComponent,
+    ModoIaPanelComponent,
   ],
   templateUrl: './bot-detail.page.html',
   styleUrl: './bot-detail.page.scss',
@@ -191,6 +200,56 @@ export class BotDetailPage implements OnInit {
   readonly loading = signal(true);
   /** Ficha de market making. null mientras no se ha pedido o no aplica. */
   readonly mmStats = signal<MarketMakerStats | null>(null);
+
+  // ── Modo IA (spec 053) ─────────────────────────────────────────
+  private readonly auth = inject(AuthService);
+  private readonly adminBots = inject(AdminBotsService);
+  private readonly accionesIa = inject(ModoIaAccionesService);
+  readonly modoIa = inject(ModoIaService);
+
+  /**
+   * Rol de administrador: decide si se PINTAN la pastilla y el panel del Modo
+   * IA. Comodidad, no seguridad: las rutas son de administración y el servidor
+   * responde 403 a cualquier otro.
+   */
+  readonly esAdmin = computed(() => this.auth.user()?.role === 'ADMIN');
+  /** El Modo IA de este bot. `null` mientras se lee, o para quien no es administrador. */
+  readonly ia = signal<AiSetting | null>(null);
+  readonly iaError = signal(false);
+  readonly guardandoIa = signal(false);
+  /** Una lectura que llega despues de un guardado traeria el modo viejo. */
+  private secuenciaIa = 0;
+
+  /**
+   * Si se enseña la sección del Modo IA en Ajustes.
+   *
+   * Encendido, siempre —aunque sea para poder apagarlo—. Apagado, solo si la
+   * estrategia está en el alcance, o si todavía no se sabe: entonces decide el
+   * servidor.
+   */
+  readonly mostrarPanelIa = computed(() => {
+    const b = this.bot();
+    if (!b || !this.esAdmin()) return false;
+    const ia = this.ia();
+    if (ia && ia.mode !== 'OFF') return true;
+    return (ia?.cubierta ?? this.modoIa.cubre(b.strategy)) !== false;
+  });
+
+  /**
+   * La versión de la configuración sobre la que nació el borrador de Ajustes.
+   *
+   * Guardar manda el borrador ENTERO, así que si la configuración cambió
+   * mientras había cambios a medio escribir —un ajuste del Modo IA, otro
+   * dispositivo—, guardar lo desharía en silencio (spec 053, H-05). Aquí solo se
+   * avisa; impedirlo es asunto de la API.
+   */
+  private readonly borradorBase = signal<number | null>(null);
+  readonly borradorViejo = computed(() => {
+    const b = this.bot();
+    const base = this.borradorBase();
+    if (!b || base === null || !this.dirty() || b.config_version === base) return null;
+    return { de: base, a: b.config_version };
+  });
   /**
    * La serie temporal y los ciclos cerrados. Los dos endpoints existían desde el
    * principio con su método cliente escrito y ninguna pantalla los llamaba
@@ -471,11 +530,77 @@ export class BotDetailPage implements OnInit {
       .ofBot(() => this.id)
       .pipe(takeUntilDestroyed())
       .subscribe(() => void this.load(false));
+
+    // El Modo IA se relee solo con SUS eventos (spec 053): `load()` corre con
+    // cada evento del bot, y un market maker manda varios por segundo.
+    this.stream.stream
+      .pipe(
+        filter((ev) => ev.botId === this.id && ev.type.startsWith('AI_')),
+        takeUntilDestroyed(),
+      )
+      .subscribe(() => void this.cargarIa());
   }
 
   async ngOnInit(): Promise<void> {
     this.id = this.route.snapshot.paramMap.get('id') ?? '';
+    // Aparte y sin esperar: no es a lo que se viene aquí, y nunca falla hacia fuera.
+    void this.cargarIa();
     await this.load(true);
+  }
+
+  // ── Modo IA (spec 053) ─────────────────────────────────────────
+
+  /**
+   * Lee el Modo IA del bot, solo para un administrador.
+   *
+   * Un fallo se enseña como fallo: pintarlo como «Apagado» ofrecería encender
+   * algo que quizá ya está encendido.
+   */
+  async cargarIa(): Promise<void> {
+    if (!this.esAdmin() || !this.id) return;
+    const turno = ++this.secuenciaIa;
+    this.iaError.set(false);
+    try {
+      const ajuste = await this.adminBots.aiMode(this.id);
+      if (turno === this.secuenciaIa) this.ia.set(ajuste);
+    } catch {
+      if (turno !== this.secuenciaIa) return;
+      this.ia.set(null);
+      this.iaError.set(true);
+    }
+  }
+
+  /** Guarda el Modo IA. `guardandoIa` cubre la petición entera, no solo el diálogo. */
+  async guardarIa(cambio: CambioIa): Promise<void> {
+    const b = this.bot();
+    const actual = this.ia();
+    if (!b || !actual || this.guardandoIa()) return;
+
+    this.guardandoIa.set(true);
+    try {
+      const nuevo = await this.accionesIa.guardar(b, cambio, actual.mode);
+      if (nuevo) {
+        this.secuenciaIa++;
+        // Lo que no trae la respuesta del guardado —los interruptores— se conserva.
+        this.ia.set({ ...actual, ...nuevo });
+      }
+    } finally {
+      this.guardandoIa.set(false);
+    }
+  }
+
+  /**
+   * La pastilla de la cabecera: con la lectura de este bot si ya llegó, y si no
+   * con el resumen compartido, que es lo mismo que enseña la lista.
+   */
+  pastillaIa(b: BotDetail): InsigniaIa | null {
+    if (!this.esAdmin()) return null;
+    const ia = this.ia();
+    return insigniaIa(
+      ia ?? this.modoIa.de(b.id),
+      ia?.interruptores ?? this.modoIa.interruptores(),
+      b,
+    );
   }
 
   private async load(withSpinner: boolean): Promise<void> {
@@ -485,8 +610,11 @@ export class BotDetailPage implements OnInit {
       this.bot.set(detail);
       // El borrador solo se reinicia si el usuario no tiene cambios sin
       // guardar: refrescar por un evento no debe borrarle lo que estaba
-      // escribiendo.
-      if (!this.dirty()) this.draft.set({ ...detail.config });
+      // escribiendo. Con él se anota la versión de la que nace (spec 053, H-05).
+      if (!this.dirty()) {
+        this.draft.set({ ...detail.config });
+        this.borradorBase.set(detail.config_version);
+      }
       // La serie y los ciclos van con `catch`: son analítica, y si fallan la
       // pantalla se pinta igual con lo que sí llegó.
       const [orders, events, snapshots, cycles, revisions] = await Promise.all([
@@ -587,6 +715,7 @@ export class BotDetailPage implements OnInit {
 
   discard(): void {
     this.draft.set({ ...(this.bot()?.config as Record<string, unknown>) });
+    this.borradorBase.set(this.bot()?.config_version ?? null);
   }
 
   /**
@@ -599,6 +728,11 @@ export class BotDetailPage implements OnInit {
    */
   async save(confirmRelayout = false): Promise<void> {
     if (!this.dirty()) return;
+    // El borrador nació sobre otra versión: guardarlo desharía lo que cambió
+    // entretanto (spec 053, H-05). La segunda pasada —la de recolocar— ya viene
+    // confirmada.
+    const viejo = this.borradorViejo();
+    if (viejo && !confirmRelayout && !(await this.confirmarBorradorViejo(viejo))) return;
     this.saving.set(true);
 
     try {
@@ -612,6 +746,9 @@ export class BotDetailPage implements OnInit {
           ? 'Se aplicará en el próximo ciclo; la posición no se toca.'
           : 'Se cancelan y vuelven a tender las órdenes; la posición sigue abierta.';
       await this.toast.success(`Configuración v${result.version} guardada. ${nivel}`);
+      // Lo que se acaba de guardar ES la base del borrador, aunque el servidor
+      // normalice algún valor y el borrador siga contando como cambiado.
+      if (result.version !== undefined) this.borradorBase.set(result.version);
       await this.load(false);
     } catch (e) {
       const parsed = parseHttpError(e);
@@ -643,6 +780,24 @@ export class BotDetailPage implements OnInit {
     } finally {
       this.saving.set(false);
     }
+  }
+
+  /** `true` si se confirma guardar un borrador nacido sobre otra versión. */
+  private async confirmarBorradorViejo(v: { de: number; a: number }): Promise<boolean> {
+    const alerta = await this.alerts.create({
+      header: 'La configuración ha cambiado',
+      message:
+        `Empezaste a editar sobre la versión ${v.de} y ahora está en la ${v.a}, quizá por un ` +
+        'ajuste del Modo IA o desde otro dispositivo. Guardar aplica tu borrador ENTERO y ' +
+        'deshace lo que cambió entretanto.',
+      buttons: [
+        { text: 'Cancelar', role: 'cancel' },
+        { text: 'Guardar igualmente', role: 'confirm' },
+      ],
+    });
+    await alerta.present();
+    const { role } = await alerta.onDidDismiss();
+    return role === 'confirm';
   }
 
   /**

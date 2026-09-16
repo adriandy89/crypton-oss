@@ -7,10 +7,11 @@ import {
   EventSeverity,
   isFiniteNum,
   resumenDeCiclos,
+  type FieldMeta,
   type MarketFeatures,
   type Numeric,
 } from '@crypton/shared';
-import { getStrategy } from '@crypton/strategy-core';
+import { camposEfectivos, getStrategy } from '@crypton/strategy-core';
 import { BUS_CHANNELS, BusService, CacheService, DbService } from 'src/libs';
 import { MarketDataService } from '../market-data';
 import { MarketsService } from '../markets';
@@ -43,6 +44,7 @@ import {
   type CambioAnterior,
   type Expediente,
 } from './dossier';
+import { textoDeCambio } from './mensajes';
 
 /**
  * El lazo del supervisor: elegir, mirar, decidir y —si toca— aplicar.
@@ -101,6 +103,25 @@ export class SupervisorService {
 
   private get soloSimulados(): boolean {
     return this.config.get<string>('AI_AGENT_DRY_RUN_ONLY', 'true') === 'true';
+  }
+
+  /**
+   * Lo que los interruptores del servidor dejan hacer HOY (spec 053).
+   *
+   * Existe para que la app no enseñe «decide y aplica» sobre un bot al que el
+   * supervisor no va a mirar: con el interruptor apagado, sin clave del modelo o
+   * con «solo simulados» sobre un bot real, el modo guardado no significa nada.
+   *
+   * `encendido` exige las DOS cosas que exige `revisarBot` antes de gastar —el
+   * interruptor y la clave—, y no una: es la misma pregunta, y dos respuestas
+   * distintas a ella serian una pantalla que miente.
+   */
+  interruptores(): { encendido: boolean; forzarManual: boolean; soloSimulados: boolean } {
+    return {
+      encendido: this.enabled && this.modelo.agentAvailable,
+      forzarManual: this.forzarManual,
+      soloSimulados: this.soloSimulados,
+    };
   }
 
   /** Horas entre dos avisos del mismo bot. Nunca menos de una. */
@@ -521,7 +542,19 @@ export class SupervisorService {
       return fila.id;
     }
 
-    const campos = cambio!.diff.changed.map((c) => c.key).join(', ');
+    // Lo que lee una persona: que campos, de cuanto a cuanto y por que perilla
+    // (spec 054). Solo con las claves no se podia decidir si aprobar sin abrir la
+    // app. Con el descriptor EFECTIVO, que es el que sabe que en «cantidad de
+    // moneda» el tamaño por orden no va en USDC.
+    const campos = camposEfectivos(strategy.meta.fields, contexto.vigente, contexto.build.market);
+    const textoDelAviso = (momento: 'PROPUESTO' | 'APLICADO'): string =>
+      textoDeCambio({
+        momento,
+        cambios: cambio!.diff.changed,
+        campos,
+        ajustes: revision.ajustes,
+        motivo: revision.motivo,
+      });
 
     // En manual se propone y se espera. Es la mitad del encargo: que la IA avise
     // y decida una persona.
@@ -529,7 +562,7 @@ export class SupervisorService {
       await this.avisar(
         bot,
         'AI_SUGGESTION',
-        `El supervisor propone cambiar ${campos}: ${revision.motivo}`,
+        textoDelAviso('PROPUESTO'),
         EventSeverity.INFO,
         await this.valeDe(bot, fila.id),
       );
@@ -540,8 +573,7 @@ export class SupervisorService {
       bot,
       fila.id,
       cambio!,
-      campos,
-      revision.motivo,
+      textoDelAviso('APLICADO'),
       true,
       // La version sobre la que se calculo todo esto, hace unos veinticinco
       // segundos. Si ya no es la del bot, el dueño lo toco mientras tanto.
@@ -561,13 +593,15 @@ export class SupervisorService {
    * `assertWithinLimits`. No hay un segundo camino de escritura, y eso es lo que
    * hace que esto sea seguro: cualquier comprobacion que se añada mañana a la
    * via del usuario la hereda el supervisor sin que nadie se acuerde.
+   *
+   * `aviso` es el texto del `AI_APPLIED`, escrito antes de aplicar con los valores
+   * del propio `cambio`: solo se manda si el cambio se aplica de verdad.
    */
   private async aplicar(
     bot: { id: string; user_id: string },
     decisionId: bigint,
     cambio: CambioPropuesto,
-    campos: string,
-    motivo: string,
+    aviso: string,
     cuentaParaElTope = true,
     versionEsperada?: number,
   ): Promise<void> {
@@ -658,9 +692,9 @@ export class SupervisorService {
 
     // Las perillas AVANZAN con el cambio (spec 051, H-04). Sin esto el modelo
     // seguia viendo las de antes, pedia otra vez lo que ya se habia aplicado, y el
-    // desplazamiento se calculaba desde un punto que el bot ya no tenia: `btc -
-    // mtg` pago cuatro llamadas para oir «sin cambios» y nunca pudo pasar de un
-    // paso.
+    // desplazamiento se calculaba desde un punto que el bot ya no tenia: el market
+    // maker de BTC pago cuatro llamadas para oir «sin cambios» y nunca pudo pasar
+    // de un paso.
     await this.db.botAiSetting
       .update({
         where: { bot_id: bot.id },
@@ -670,12 +704,7 @@ export class SupervisorService {
         this.logger.error(`Bot ${bot.id}: cambio aplicado sin guardar sus perillas: ${e.message}`),
       );
 
-    await this.avisar(
-      bot,
-      'AI_APPLIED',
-      `El supervisor ha cambiado ${campos}: ${motivo}`,
-      EventSeverity.WARN,
-    );
+    await this.avisar(bot, 'AI_APPLIED', aviso, EventSeverity.WARN);
   }
 
   /**
@@ -912,8 +941,15 @@ export class SupervisorService {
       decision.bot,
       decision.id,
       rehecho.cambio,
-      rehecho.cambio.diff.changed.map((c) => c.key).join(', '),
-      decision.rationale ?? '',
+      // Con los valores RECALCULADOS, que son los que se aplican: pueden no ser los
+      // del aviso que se aprobo, y el dueño tiene que poder verlo (spec 054).
+      textoDeCambio({
+        momento: 'APROBADO',
+        cambios: rehecho.cambio.diff.changed,
+        campos: rehecho.campos,
+        ajustes: rehecho.ajustes,
+        motivo: decision.rationale,
+      }),
       // Una aprobacion HUMANA no pasa por el tope diario de cambios: ese tope
       // existe para que un bot no se reescriba solo seis veces en una tarde, y
       // quien pulsa el boton ha mirado el cambio y ha decidido (F-09).
@@ -935,7 +971,12 @@ export class SupervisorService {
     bot: { id: string; user_id: string; strategy: string; config_version: number };
     knobs_before: unknown;
     raw: unknown;
-  }): Promise<{ cambio: CambioPropuesto; version: number } | null> {
+  }): Promise<{
+    cambio: CambioPropuesto;
+    version: number;
+    campos: readonly FieldMeta[];
+    ajustes: Desplazamientos;
+  } | null> {
     // El mando del dueño manda tambien aqui. `allow_warm: false` significa «solo
     // cambios HOT, nunca recoloques la escalera», y recolocarla cuesta
     // comisiones de verdad: al mover la traduccion de proponer a aplicar (F-04)
@@ -969,8 +1010,9 @@ export class SupervisorService {
     const ajustes = (decision.raw as { ajustes?: Desplazamientos })?.ajustes;
     if (!ajustes) return null;
 
+    const strategy = getStrategy(decision.bot.strategy as never);
     const cambio = decidirCambio({
-      strategy: getStrategy(decision.bot.strategy as never),
+      strategy,
       vigente: contexto.vigente,
       knobs: decision.knobs_before as never,
       ajustes,
@@ -980,9 +1022,16 @@ export class SupervisorService {
       posicion: contexto.posicion,
       permitirWarm: ajuste?.allow_warm ?? true,
     });
+    if (typeof cambio === 'string') return null;
     // La version que se acaba de leer viaja con el cambio: es la que tendra que
-    // seguir siendo la del bot cuando se escriba.
-    return typeof cambio === 'string' ? null : { cambio, version: bot.config_version };
+    // seguir siendo la del bot cuando se escriba. Y con el descriptor efectivo y
+    // los desplazamientos, para que el aviso diga lo que se aplico de verdad.
+    return {
+      cambio,
+      version: bot.config_version,
+      campos: camposEfectivos(strategy.meta.fields, contexto.vigente, contexto.build.market),
+      ajustes,
+    };
   }
 
   /**

@@ -166,6 +166,32 @@ a más viejo**. Cada evento tiene una severidad: **INFO** (sin borde), **WARN** 
 | `AUTH_ERROR` (CRITICAL) | El exchange rechazó la credencial. El bot no puede operar: revisa la clave en Cuenta → conexiones. |
 | `ACTION_FAILED` | Un comando no pudo ejecutarse. Lee el motivo. |
 
+### Modo IA (solo bots de un administrador)
+
+Solo aparecen en bots con el Modo IA encendido, que hoy solo puede tener un administrador sobre un
+bot suyo. Ver [Administración](./administracion.md#modo-ia-un-supervisor-que-vigila-bots-vivos-spec-046).
+
+| Evento | Etiqueta | Qué hacer |
+|---|---|---|
+| `AI_MODE` (INFO) | Modo IA cambiado | Nada: es el rastro de un cambio de modo u opciones, con su motivo. No llega a Telegram. |
+| `AI_SUGGESTION` | Sugerencia de la IA | En «propone y espera»: la propuesta te ha llegado por Telegram con sus dos botones. Dice qué parámetros cambiaría, de cuánto a cuánto y qué perilla lo pide. |
+| `AI_APPLIED` | Ajuste aplicado por la IA | El cambio ya está hecho, con la misma lista de parámetros y valores. Si lo aprobaste tú, lo dice, y los valores son los recalculados al aprobar. Lo ves en el historial de Ajustes con la marca **IA**; deshacerlo es volver a la versión anterior. |
+| `AI_ADVICE` | La IA pide revisar el bot | La IA cree que hace falta una persona. Como mucho uno por bot y día. |
+| `AI_FAILED` (WARN) | La IA no pudo revisar el bot | No se ha tocado nada. Si se repite cinco veces seguidas, el Modo IA se duerme unas horas. |
+
+Así llega una sugerencia (spec 054). Un aviso aplicado dice «ha cambiado» en lugar de «propone
+cambiar»:
+
+```text
+🤖 mi bot (ETH) · simulado — El supervisor propone cambiar 2 parámetros (cadencia: mucho más):
+• Retroceso para salir: 1.4 → 1 %
+• Umbral para mover el disparador: 20 → 14 bps
+Motivo: …
+```
+
+Como mucho salen diez parámetros; si hay más, la última línea los cuenta. Si un lote de avisos no
+cabe en un mensaje de Telegram, llega en varios.
+
 ### La nota del bot
 
 Además de los eventos, cada estrategia escribe una **nota** en cada revisión (la ves en el resumen del

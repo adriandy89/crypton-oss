@@ -1,4 +1,4 @@
-import { ApiPropertyOptional } from '@nestjs/swagger';
+import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
 import { AiMode } from '@crypton/db';
 import {
   IsBoolean,
@@ -10,7 +10,18 @@ import {
   MaxLength,
   Min,
   MinLength,
+  ValidateIf,
 } from 'class-validator';
+
+/**
+ * Valida el campo solo si VIENE, pero con `null` sí valida (y falla).
+ *
+ * `@IsOptional` se salta los validadores tanto con `undefined` como con `null`,
+ * y `set()` solo distingue `undefined`: un `trigger: null` llegaba a una columna
+ * `NOT NULL` y la API respondia 500 (spec 053, H-04). Para los campos que no
+ * admiten «vaciarse», omitirlos es la unica forma de no tocarlos.
+ */
+const SiViene = () => ValidateIf((_objeto: unknown, valor: unknown) => valor !== undefined);
 
 /** Cuando revisa el supervisor. `VarChar` en la base: el vocabulario crecera. */
 export const AI_TRIGGERS = ['PERIODICO', 'OPERACION', 'AMBOS'] as const;
@@ -20,12 +31,13 @@ export type AiTrigger = (typeof AI_TRIGGERS)[number];
 export const AI_MODES = [AiMode.OFF, AiMode.MANUAL, AiMode.AUTO] as const;
 
 export class SetAiModeDto {
-  @ApiPropertyOptional({ enum: AI_MODES })
+  /** Obligatorio en cada llamada, tambien cuando solo cambian las opciones. */
+  @ApiProperty({ enum: AI_MODES })
   @IsIn(AI_MODES)
   mode: AiMode;
 
   @ApiPropertyOptional({ enum: AI_TRIGGERS })
-  @IsOptional()
+  @SiViene()
   @IsIn(AI_TRIGGERS)
   trigger?: AiTrigger;
 
@@ -33,13 +45,16 @@ export class SetAiModeDto {
    * Minutos entre revisiones. El suelo son diez, que es el hueco minimo entre
    * llamadas pagadas: pedir menos no las haria mas frecuentes, solo mas caras
    * de descartar.
+   *
+   * `null` es un valor con significado: «el que recomiende la estrategia». Es la
+   * forma de deshacer un intervalo puesto a mano (spec 053).
    */
-  @ApiPropertyOptional({ minimum: 10, maximum: 1440 })
+  @ApiPropertyOptional({ minimum: 10, maximum: 1440, nullable: true })
   @IsOptional()
   @IsInt()
   @Min(10)
   @Max(1440)
-  reviewEveryMinutes?: number;
+  reviewEveryMinutes?: number | null;
 
   /**
    * false = el supervisor solo propone cambios HOT, que no tocan ninguna orden.
@@ -47,7 +62,7 @@ export class SetAiModeDto {
    * comisiones de verdad.
    */
   @ApiPropertyOptional()
-  @IsOptional()
+  @SiViene()
   @IsBoolean()
   allowWarm?: boolean;
 

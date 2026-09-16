@@ -43,6 +43,7 @@ import {
   MarketsService,
   NetworkService,
   RiskService,
+  TelegramService,
   ToastService,
   WalletService,
 } from '../../core/services';
@@ -84,6 +85,21 @@ import {
   UiRiskMeterComponent,
   UiStrategyHelpComponent,
 } from '../../shared/ui';
+// El Modo IA (spec 053), por ruta como el resto de lo de administración.
+import {
+  AdminBotsService,
+  ETIQUETA_MODO_IA,
+  type AiMode,
+} from '../../core/services/admin-bots.service';
+import { ModoIaService } from '../../core/services/modo-ia.service';
+import {
+  BORRADOR_APAGADO,
+  cambiosDe,
+  minutosValidos,
+  type BorradorIa,
+} from '../../core/utils/modo-ia';
+import { ModoIaEditorComponent } from '../../shared/bot/modo-ia-editor.component';
+import { motivoValido } from '../../shared/bot/motivo';
 
 /**
  * Clave del campo de capital.
@@ -151,6 +167,7 @@ type Step = 'venue' | 'strategy' | 'params' | 'preview';
     UiRecommendationsComponent,
     UiRiskMeterComponent,
     UiStrategyHelpComponent,
+    ModoIaEditorComponent,
   ],
   templateUrl: './bot-create.page.html',
   styleUrl: './bot-create.page.scss',
@@ -271,6 +288,41 @@ export class BotCreatePage implements OnInit, OnDestroy {
   readonly recoError = signal<string | null>(null);
   /** Perfil aplicado. Se limpia en cuanto el usuario toca un campo. */
   readonly appliedProfile = signal<string | null>(null);
+
+  // ── Modo IA (spec 053) ──
+  // Solo para administradores. Se enciende DESPUÉS de crear el bot, con su
+  // propia petición: si falla, el bot queda creado y se avisa.
+  readonly modoIa = inject(ModoIaService);
+  private readonly adminBots = inject(AdminBotsService);
+  private readonly telegram = inject(TelegramService);
+  readonly iaBorrador = signal<BorradorIa>({ ...BORRADOR_APAGADO });
+  readonly iaMotivo = signal('');
+
+  /**
+   * Si se ofrece el Modo IA. Sale de la estrategia elegida, que puede cambiar
+   * volviendo al paso 2; con el alcance aún desconocido se ofrece, y decide el
+   * servidor.
+   */
+  readonly iaDisponible = computed(() => {
+    const kind = this.strategyKind();
+    return this.modoIa.esAdmin() && !!kind && this.modoIa.cubre(kind) !== false;
+  });
+
+  /** Por qué el Modo IA elegido no se puede mandar todavía, o vacío. */
+  readonly iaBloqueo = computed<string>(() => {
+    const b = this.iaBorrador();
+    if (!this.iaDisponible() || b.mode === 'OFF') return '';
+    if (!minutosValidos(b.reviewEveryMinutes)) {
+      return 'Los minutos entre revisiones del Modo IA van de 10 a 1440, o se dejan vacíos.';
+    }
+    if (b.mode === 'MANUAL' && this.telegram.status()?.linked === false) {
+      return 'El modo «propone y espera» necesita un chat de Telegram vinculado.';
+    }
+    if (!motivoValido(this.iaMotivo())) {
+      return 'Escribe el motivo del Modo IA: queda en la bitácora.';
+    }
+    return '';
+  });
 
   /** Con capital escrito ya se puede proponer algo con sentido. */
   readonly hasCapital = computed(() => Number(this.config()[CAPITAL_FIELD] ?? 0) > 0);
@@ -853,7 +905,8 @@ export class BotCreatePage implements OnInit, OnDestroy {
       return 'Hay niveles inválidos en este mercado. Ajusta los parámetros y vuelve a calcular.';
     }
     if (!this.preview()) return 'Vuelve a calcular la escalera: has cambiado algún parámetro.';
-    return '';
+    // Lo ultimo: el Modo IA es un añadido al bot, no el bot (spec 053).
+    return this.iaBloqueo();
   });
 
   readonly canCreate = computed(() => this.createBlockedReason() === '');
@@ -1202,6 +1255,29 @@ export class BotCreatePage implements OnInit, OnDestroy {
     }
   }
 
+  /**
+   * Enciende el Modo IA del bot recién creado, si se eligió (spec 053).
+   *
+   * Nunca lanza: devuelve el modo encendido, o el motivo del fallo. Solo manda
+   * lo que difiere de los valores de fábrica, que son los del servidor para una
+   * fila nueva.
+   */
+  private async encenderModoIa(botId: string): Promise<{ modo?: AiMode; fallo?: string }> {
+    const borrador = this.iaBorrador();
+    const reason = motivoValido(this.iaMotivo());
+    if (!this.iaDisponible() || borrador.mode === 'OFF' || !reason) return {};
+    try {
+      const ajuste = await this.adminBots.setAiMode(botId, {
+        ...cambiosDe(BORRADOR_APAGADO, borrador),
+        reason,
+      });
+      this.modoIa.anotar(ajuste);
+      return { modo: ajuste.mode };
+    } catch (e) {
+      return { fallo: errorText(e) };
+    }
+  }
+
   async create(): Promise<void> {
     const account = this.account();
     const strategy = this.strategyKind();
@@ -1218,8 +1294,23 @@ export class BotCreatePage implements OnInit, OnDestroy {
         startActive: this.startActive,
         dryRun: this.simulando(),
       });
+      // El bot ya existe: pase lo que pase con el Modo IA, no se deshace.
+      const modoIa = await this.encenderModoIa(bot.id);
       await this.bots.refresh();
-      await this.toast.success(this.simulando() ? 'Bot creado en simulación.' : 'Bot creado.');
+      if (modoIa.fallo) {
+        // Un solo aviso, el del fallo, que ya dice que el bot se creó: con dos
+        // seguidos, el de éxito taparía al que importa.
+        await this.toast.error(
+          `Bot creado, pero el Modo IA no se pudo encender: ${modoIa.fallo} ` +
+            'Puedes encenderlo en la pestaña Ajustes del bot.',
+        );
+      } else {
+        const base = this.simulando() ? 'Bot creado en simulación' : 'Bot creado';
+        const conIa = modoIa.modo
+          ? ` con el Modo IA en «${ETIQUETA_MODO_IA[modoIa.modo].toLowerCase()}»`
+          : '';
+        await this.toast.success(`${base}${conIa}.`);
+      }
       await this.router.navigate(['/bots', bot.id], { replaceUrl: true });
     } catch (e) {
       const parsed = parseHttpError(e);

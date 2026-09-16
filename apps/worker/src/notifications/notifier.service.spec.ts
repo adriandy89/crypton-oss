@@ -1,4 +1,5 @@
 import { NotifierService } from './notifier.service';
+import { MAX_TEXTO, recortar, trocear } from './telegram-client';
 
 /**
  * El resumen diario sumaba el PnL de los bots SIMULADOS al de los reales.
@@ -158,9 +159,13 @@ function buildEntrega(prefs: Record<string, boolean> = {}, cerrojo = true) {
   const config = { get: jest.fn().mockReturnValue('token-de-prueba') };
 
   const service = new NotifierService(db as never, bus as never, leases as never, config as never);
+  const enviados: { chatId: string; text: string; teclado: unknown }[] = [];
   (service as unknown as { client: { enabled: boolean; sendMessage: unknown } }).client = {
     enabled: true,
-    sendMessage: async () => true,
+    sendMessage: async (chatId: string, text: string, teclado?: unknown) => {
+      enviados.push({ chatId, text, teclado });
+      return true;
+    },
   };
 
   const onEvent = (m: Record<string, unknown>): Promise<void> =>
@@ -172,7 +177,11 @@ function buildEntrega(prefs: Record<string, boolean> = {}, cerrojo = true) {
     return [...pending.values()].flatMap((b) => b.lines);
   };
 
-  return { service, onEvent, lineas, leases };
+  // Manda lo encolado del chat de la prueba, sin esperar a la ventana.
+  const vaciar = (): Promise<void> =>
+    (service as unknown as { flush: (chatId: string) => Promise<void> }).flush('111');
+
+  return { service, onEvent, lineas, leases, enviados, vaciar };
 }
 
 const deLaApi = (extra: Record<string, unknown> = {}) => ({
@@ -294,5 +303,103 @@ describe('NotifierService — entrega forzada (spec 046)', () => {
 
     expect(lineas()).toHaveLength(1);
     expect(leases.tryLock).not.toHaveBeenCalled();
+  });
+});
+
+/**
+ * Mensajes que Telegram acepta (spec 054).
+ *
+ * Telegram rechaza entero un texto de más de 4096 caracteres, y el cliente solo
+ * lo deja en el log. Mientras cada aviso era una frase, doce líneas cabían en un
+ * mensaje; los avisos del supervisor listan ahora sus cambios, y un lote de doce
+ * se perdía completo.
+ */
+const delSupervisor = (n: number, texto: string) => ({
+  userId: 'u-1',
+  botId: 'bot-1',
+  type: 'AI_APPLIED',
+  origin: 'api-7',
+  ts: 1_700_000_000_000 + n,
+  entregaForzada: true,
+  data: { severity: 'WARN', message: texto },
+});
+
+/** ¿Termina el texto con una entidad HTML a medias? */
+const entidadPartida = (texto: string): boolean => /&[a-z#0-9]*$/i.test(texto);
+
+describe('NotifierService — mensajes que Telegram acepta (spec 054)', () => {
+  it('doce avisos largos salen en varios mensajes, en orden y sin perder ninguno', async () => {
+    const { onEvent, vaciar, enviados } = buildEntrega();
+    for (let i = 0; i < 12; i++) {
+      await onEvent(delSupervisor(i, `aviso ${String(i).padStart(2, '0')}: ${'x'.repeat(900)}`));
+    }
+    await vaciar();
+
+    expect(enviados.length).toBeGreaterThan(1);
+    for (const e of enviados) expect(e.text.length).toBeLessThanOrEqual(MAX_TEXTO);
+    // Las doce, en el orden en que llegaron, y ninguna partida entre dos mensajes.
+    const recibidas = enviados.flatMap((e) => e.text.split('\n'));
+    expect(recibidas).toHaveLength(12);
+    recibidas.forEach((l, i) => expect(l).toContain(`aviso ${String(i).padStart(2, '0')}: x`));
+  });
+
+  it('una linea que no cabe sale recortada sin partir una entidad', async () => {
+    // Todo `&` se escapa a `&amp;`: con tres mil, el corte cae dentro de una.
+    const { onEvent, vaciar, enviados } = buildEntrega();
+    await onEvent(delSupervisor(0, '&'.repeat(3000)));
+    await vaciar();
+
+    expect(enviados).toHaveLength(1);
+    const texto = enviados[0].text;
+    expect(texto.length).toBeLessThanOrEqual(MAX_TEXTO);
+    expect(texto.endsWith('…')).toBe(true);
+    expect(entidadPartida(texto.slice(0, -1))).toBe(false);
+    expect(texto.startsWith('🤖 <b>bot (BTC)</b> — &amp;')).toBe(true);
+  });
+
+  it('una sugerencia larga se manda recortada y con sus botones', async () => {
+    // Va sola y al momento, fuera del lote: el recorte tiene que valer tambien ahi.
+    const { onEvent, enviados, lineas } = buildEntrega();
+    await onEvent({
+      ...delSupervisor(0, `propone: ${'y'.repeat(9000)}`),
+      type: 'AI_SUGGESTION',
+      data: { severity: 'INFO', message: `propone: ${'y'.repeat(9000)}`, token: 'a'.repeat(32) },
+    });
+
+    expect(lineas()).toHaveLength(0);
+    expect(enviados).toHaveLength(1);
+    expect(enviados[0].text.length).toBeLessThanOrEqual(MAX_TEXTO);
+    expect(enviados[0].text.endsWith('…')).toBe(true);
+    expect(enviados[0].teclado).toBeTruthy();
+  });
+
+  it('recortar no deja medio emoji ni una etiqueta abierta', () => {
+    // Un emoji son dos unidades: cortando por la mitad queda un sustituto suelto.
+    // Con dos letras delante, el corte a 85 unidades cae entre las dos del emoji.
+    const emojis = recortar(`pp${'🤖'.repeat(3000)}`, 101);
+    expect(emojis.length).toBeLessThanOrEqual(101);
+    const antes = emojis.slice(0, emojis.indexOf('…'));
+    const ultimo = antes.charCodeAt(antes.length - 1);
+    expect(ultimo >= 0xd800 && ultimo <= 0xdbff).toBe(false);
+
+    // El nombre del bot tan largo que el corte cae dentro de su `<b>`.
+    const abierta = recortar(`<b>${'n'.repeat(500)}</b> — mensaje`, 101);
+    expect(abierta.length).toBeLessThanOrEqual(101);
+    expect(abierta.endsWith('…</b>')).toBe(true);
+
+    // Y una etiqueta a medio escribir no se deja.
+    const aMedias = recortar(`${'z'.repeat(83)}</b>${'r'.repeat(100)}`, 101);
+    expect(aMedias).toBe(`${'z'.repeat(83)}…`);
+  });
+
+  it('lo que cabe no se toca, y un lote corto sigue siendo un mensaje', () => {
+    expect(recortar('corto')).toBe('corto');
+    expect(recortar('x'.repeat(MAX_TEXTO))).toBe('x'.repeat(MAX_TEXTO));
+    expect(trocear(['a', 'b', 'c'])).toEqual(['a\nb\nc']);
+    expect(trocear([])).toEqual([]);
+    // Justo en el limite: dos lineas que con su salto suman exactamente el maximo.
+    const mil = 'm'.repeat(1000);
+    expect(trocear([mil, mil], 2001)).toEqual([`${mil}\n${mil}`]);
+    expect(trocear([mil, `${mil}m`], 2001)).toEqual([mil, `${mil}m`]);
   });
 });

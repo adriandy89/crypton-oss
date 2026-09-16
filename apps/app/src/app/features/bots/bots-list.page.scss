@@ -11,6 +11,33 @@
   gap: 13px;
   cursor: pointer;
 
+  // El cuerpo y el pie (spec 053). Con el mismo hueco que tenia la tarjeta entre
+  // sus piezas, asi que en una columna nada se mueve.
+  .cuerpo {
+    display: flex;
+    flex-direction: column;
+    gap: 13px;
+    min-width: 0;
+  }
+
+  // El pie llena su hueco y la nota se estira con el: dos pies de la misma fila
+  // miden lo mismo aunque uno tenga una linea y el otro dos. El texto se queda
+  // arriba, que es donde lo pone `ui-notice`.
+  .pie {
+    display: flex;
+    flex-direction: column;
+    min-width: 0;
+
+    > ui-notice {
+      flex: 1 1 auto;
+    }
+  }
+
+  // Sin nota no hay pie.
+  &.sin-pie > .pie {
+    display: none;
+  }
+
   .row {
     display: flex;
     align-items: flex-start;
@@ -160,10 +187,55 @@
   --page-max: var(--content-wide);
 }
 
+// Dos columnas. Sin `align-items: start`: la celda estira la tarjeta, y las dos
+// de una fila miden lo mismo (spec 053).
 @media (min-width: 900px) {
   .list {
     display: grid;
     grid-template-columns: repeat(2, minmax(0, 1fr));
-    align-items: start;
+  }
+
+  // Respaldo sin subgrid: el pie baja al fondo y los bordes de abajo casan.
+  .bot > .pie {
+    margin-top: auto;
+  }
+
+  // Con subgrid, cada tarjeta toma prestadas DOS filas de la rejilla, la del
+  // cuerpo y la del pie. Como las dos tarjetas de una fila comparten esas
+  // pistas, los dos pies empiezan y terminan a la vez aunque sus notas ocupen
+  // distinto numero de lineas.
+  //
+  // - El hueco entre filas pasa a ser margen de la tarjeta: con hueco en la
+  //   rejilla, tambien habria hueco entre el cuerpo y el pie de cada tarjeta, y
+  //   una fila sin notas creceria.
+  // - La separacion entre cuerpo y pie la pone el propio pie.
+  // - Sin nota, el cuerpo ocupa las DOS filas. Asi la vecina con nota no hace
+  //   crecer la fila (su pie cabe junto al cuerpo alto de esta), y la tarjeta
+  //   sigue tocando los dos bordes con un hijo: el margen, el borde y el relleno
+  //   de la tarjeta cuentan como margen de esos hijos, y con la pista de abajo
+  //   vacia el relleno inferior no contaria.
+  // - La columna explicita impide que una nota sin espacios ensanche la tarjeta.
+  @supports (grid-template-rows: subgrid) {
+    .list {
+      row-gap: 0;
+    }
+
+    .bot {
+      display: grid;
+      grid-row: span 2;
+      grid-template-rows: subgrid;
+      grid-template-columns: minmax(0, 1fr);
+      row-gap: 0;
+      margin-bottom: 11px;
+    }
+
+    .bot > .pie {
+      margin-top: 0;
+      padding-top: 13px;
+    }
+
+    .bot.sin-pie > .cuerpo {
+      grid-row: 1 / span 2;
+    }
   }
 }

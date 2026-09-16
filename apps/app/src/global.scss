@@ -1304,7 +1304,15 @@ ion-toast {
     font-size: 11.5px;
     color: var(--text-2);
     overflow-wrap: anywhere;
+    white-space: pre-line;
   }
+}
+
+/* El mensaje de un suceso respeta sus saltos de línea: los avisos del Modo IA
+   ponen un cambio por línea (spec 054). Aquí y no en `bot-detail.page.scss`, que
+   está en el límite de su presupuesto de 6 kB. */
+.bd-msg {
+  white-space: pre-line;
 }
 
 /* ── Cartera: la curva del héroe (spec 003) ──

@@ -157,12 +157,40 @@ real y el estado del par— y decide si esa configuración sigue teniendo sentid
 Se enciende **bot a bot**, y hoy solo puede hacerlo un administrador **sobre un bot suyo**. Con las
 variables de entorno sin tocar, la función no existe.
 
+### Dónde se ve y dónde se cambia (spec 053)
+
+Todo lo que sigue solo lo ve una cuenta `ADMIN`; para el resto de usuarios no existe.
+
+- **La pastilla.** En la lista de bots, en la cabecera del bot y en la lista de la consola, cada bot
+  con el Modo IA encendido lleva `IA · PROPONE` (manual) o `IA · APLICA` (automático). Dice el modo
+  **configurado**, y sale **en gris y con contorno cuando la IA no está actuando**: el interruptor del
+  servidor está apagado, el servidor solo deja actuar sobre simulados y el bot es real, está dormida
+  tras varios fallos, el bot no está en marcha, o el servidor obliga a proponer aunque el modo sea
+  automático. El motivo sale al pasar el ratón; en el móvil, el gris ya dice que no actúa. En la
+  consola solo sale en **tus** bots: el Modo IA de otros administradores no se puede consultar.
+- **El panel.** En la pestaña **Ajustes** del bot, encima de los campos: el modo y tres opciones
+  avanzadas —cuándo revisa (reloj y eventos, solo reloj o solo eventos), cada cuántos minutos (de 10
+  a 1440; vacío es el de la estrategia) y si puede recolocar las órdenes—. Guardar pide un
+  **motivo**, que queda en la bitácora, y en automático sobre un bot real avisa de que es **dinero
+  real**. El mismo panel está en la ficha del bot de la consola. Si el bot es de una estrategia que
+  el Modo IA no cubre y está apagado, el panel no sale.
+- **Al crear el bot.** El último paso del asistente, «Revisión», ofrece el mismo modo y las mismas
+  opciones, con su motivo. Se enciende **después** de crear el bot, con su propia petición: si falla,
+  el bot queda creado igualmente y se dice por qué.
+- **El rastro en el bot.** Cambiar el modo deja un evento `AI_MODE` en la bitácora del bot (spec 046,
+  R-3, que hasta el 053 no se cumplía), y los cambios de configuración que aplica el supervisor llevan
+  la marca **IA** en el historial.
+
+«Propone y espera» necesita un chat de Telegram **vinculado**: sin él, el panel no deja elegirlo. Y
+si lo desvinculas con un bot ya en manual, el panel te avisa de que sus sugerencias no llegan a
+ninguna parte: el servidor todavía no lo impide.
+
 ### Los dos modos
 
 | Modo | Qué hace |
 |---|---|
-| **Manual** | Propone y espera. La sugerencia llega a tu Telegram con dos botones —aplicar o descartar— y el bot no se toca hasta que pulses. Al pulsar, el ajuste se **recalcula contra el mercado de ese momento**: si ya no cabe, caduca y se te dice. |
-| **Automático** | Aplica el cambio y te avisa después. Sigue sin poder cruzar ninguno de los límites de abajo. |
+| **Manual** | Propone y espera. La sugerencia llega a tu Telegram con la lista de parámetros que cambiaría —cada uno con su valor actual y el nuevo— y dos botones —aplicar o descartar—, y el bot no se toca hasta que pulses. Al pulsar, el ajuste se **recalcula contra el mercado de ese momento**: si ya no cabe, caduca y se te dice; si se aplica, el aviso trae los valores que se aplicaron de verdad. |
+| **Automático** | Aplica el cambio y te avisa después, con la misma lista. Sigue sin poder cruzar ninguno de los límites de abajo. |
 
 ### Qué puede hacer, y qué no
 
@@ -206,10 +234,124 @@ Y si tocas el bot mientras el supervisor está pensando —tarda unos segundos e
 tuyo**: su cambio se calculó sobre la configuración que leyó, así que al ver que ya no es la misma
 lo descarta y lo dice en el historial de decisiones. No te deshace una edición.
 
+Al revés hay que tener cuidado: **guardar Ajustes manda tu borrador entero**. Si el supervisor
+aplica un cambio mientras tienes campos a medio editar, guardar lo desharía. La pantalla lo avisa
+—«la configuración ha cambiado mientras editabas»— y pide confirmación antes de guardar; el servidor
+todavía no lo impide.
+
+### Qué parámetros toca cada perilla (spec 054)
+
+Medido sobre el código, no deducido:
+
+- **La exploración.** 374 640 decisiones con las cuatro estrategias, los trece mercados de las
+  pruebas, capitales de 40 a 60 000 y tres tipos de mercado. Los bots eran recién creados y
+  ajustados a mano.
+- **El test que la fija.** Un test (`alcance.spec.ts`) repite la exploración en pequeño y falla si
+  un día la IA toca algo que no está en esta tabla.
+
+Los nombres son los del formulario de Ajustes.
+
+| Estrategia | Perilla | Qué puede mover |
+|---|---|---|
+| Market maker | apalancamiento | apalancamiento, tamaño por compra/venta y valor máximo de la posición; con poco capital, también las capas y el multiplicador de distancia por capa |
+| | cobertura | modo defensivo a partir de, modo de alto riesgo a partir de y valor máximo de la posición |
+| | diferencial | distancias de compra y de venta, distancia mínima permitida y multiplicador de distancia por capa |
+| | crecimiento del tamaño | capas, tamaño por compra/venta, multiplicador de tamaño por capa, sesgo por inventario y multiplicador de distancia por capa |
+| | cadencia | intervalo de actualización de órdenes |
+| Market maker V2 | apalancamiento | apalancamiento, tamaño por compra/venta e inversión / posición máxima; con poco capital, también los niveles de cotización y el multiplicador de distancia por nivel |
+| | cobertura | umbral defensivo, umbral de alto riesgo e inversión / posición máxima |
+| | diferencial | distancias de compra y de venta, distancia mínima permitida, multiplicador de volatilidad, multiplicador de distancia por nivel, distancia para reajustar precio y spread dinámico máximo |
+| | crecimiento del tamaño | niveles de cotización, tamaño por compra/venta, multiplicador de tamaño por nivel y multiplicador de distancia por nivel |
+| | cadencia | intervalo de actualización de órdenes, actualizar órdenes después de y espera tras un fill |
+| Tendencia | apalancamiento | apalancamiento y tope de exposición |
+| | cobertura | velas del canal de ruptura y eficiencia mínima para entrar |
+| | diferencial | stop, en ATR |
+| | crecimiento del tamaño | riesgo por operación |
+| | cadencia | movimiento mínimo del stop |
+| Seguimiento de beneficio | apalancamiento | apalancamiento y tope de exposición |
+| | cobertura | beneficio al que empieza a seguir |
+| | cadencia | retroceso para salir y umbral para mover el disparador |
+| | diferencial y crecimiento del tamaño | nada: esta estrategia no los usa |
+
+Dos lecturas que no son obvias:
+
+- **Más capas, órdenes más pequeñas.** En un market maker, «crecimiento del tamaño» reparte el mismo
+  capital entre más capas: sube las capas y **baja** el tamaño de cada orden.
+- **Con poco capital, apalancamiento y capas van juntos.** Cuántas capas caben depende del
+  apalancamiento: «apalancamiento menos» puede quitar una capa y dejar cada orden **más grande**,
+  aunque la exposición total baje.
+
+**Reparaciones.** Con cualquier perilla pueden llegar además tres reparaciones, que el aviso lista
+igual que el resto:
+
+- **El apalancamiento baja** al menor de tus topes, el del exchange y 18x. Pasa si lo bajaste
+  después de encender el Modo IA. Sin esa reparación, el servidor rechazaría cualquier cambio.
+- **En los market makers, la distancia mínima permitida baja** hasta la menor de las dos
+  distancias.
+- **En los market makers, el multiplicador de distancia sube a 1,05** cuando hay varias capas: con
+  1, todas caerían al mismo precio.
+
+**Lo que no ha cambiado en ninguna de las 241 717 propuestas de la exploración:**
+
+- el capital, el par, la cuenta y la dirección;
+- el perfil y todo lo que se deriva de él: la acción al alcanzar el límite, el perfil de riesgo, el
+  comportamiento, «ajustar distancia automáticamente» y «usar tamaño normal hasta el máximo»;
+- el stop loss, la pérdida diaria máxima y los límites de inventario largo y corto;
+- la fuente de precio, la condición de activación, la resolución de las velas, los lados que opera
+  una tendencia y los demás campos que exigen crear otro bot;
+- en el market maker V2, la estimación de comisión, el buffer de seguridad, el margen mínimo de
+  beneficio, el margen del libro y la muestra de volatilidad;
+- el spread dinámico, el ajuste de precio por inventario, las velas del ATR y el «solo post-only».
+
+> ⚠️ **Limitación conocida (054/H-01, abierta a 2026-09-16).** En un **market maker V2**, si pusiste
+> la distancia mínima permitida **por encima** de las distancias de compra y venta —la app lo admite
+> y avisa de que «se elevarán hasta ahí»—, **cualquier decisión** de la IA la baja hasta la menor de
+> las dos. Pasa aunque la perilla sea otra: «apalancamiento» propone ese cambio y ningún otro.
+> Con 20 bps de mínimo y 10 de distancia, el diferencial en calma pasa de 20 a 16,5 bps. Esto
+> contradice dos promesas de arriba: lo que el supervisor no mueve se queda como estaba, y ningún
+> parámetro se mueve más de un cuarto por escalón.
+> **Hasta que se corrija:** el aviso lo enseña («Distancia mínima permitida: 20 → 10 bps»). En manual,
+> descártalo. En automático, no dejes la distancia mínima por encima de las distancias en un bot
+> con Modo IA. Estado: `specs/054-lo-que-cambia-la-ia/spec.md` § Hallazgos.
+
+> ⚠️ **Limitación conocida (054/H-02, abierta a 2026-09-16).** En un **market maker V2**, «diferencial
+> más» puede **estrechar** un poco el diferencial efectivo, y «diferencial menos», ensancharlo. Pasa
+> porque la perilla mueve a la vez la distancia base y el multiplicador de volatilidad, en sentidos
+> contrarios. Con la volatilidad que el propio generador supone, ocurre en torno a una de cada
+> cuatro propuestas. Casi siempre es menos de 1 bps, nunca más de 3, y nunca por debajo del suelo por
+> comisiones.
+> **Hasta que se corrija:** mira las distancias y el multiplicador del aviso antes de aprobar.
+> Estado: `specs/054-lo-que-cambia-la-ia/spec.md` § Hallazgos.
+
+### Cómo es un aviso
+
+Una sugerencia o un cambio aplicado llega así a Telegram, y queda igual en los eventos del bot:
+
+```text
+🤖 mi bot (ETH) · simulado — El supervisor propone cambiar 6 parámetros (cobertura: menos; cadencia: menos):
+• Umbral defensivo: 70 → 56 %
+• Umbral de alto riesgo: 80 → 64 %
+• Intervalo de actualización de órdenes: 30 → 35 s
+• Actualizar órdenes después de: 300 → 375 s
+• Espera tras un fill: 35 → 40 s
+• Inversión / posición máxima: 15000 → 12000 USDC
+Motivo: …
+```
+
+- **Qué dice.** Entre paréntesis, lo que pidió el modelo. En cada línea, el valor de ahora y el
+  nuevo, con su unidad; en «cantidad de moneda», el tamaño va en la moneda del par.
+- **Cotas.** Como mucho se listan diez parámetros; si hay más, la última línea los cuenta. Si un lote
+  de avisos no cabe en un mensaje, llega en varios.
+- **Tras aprobar.** El aviso dice «con tu aprobación» y que los valores se recalcularon al aprobar:
+  pueden no coincidir con los de la sugerencia si el mercado se movió entre medias.
+
 ### Cuándo mira
 
 Cada media hora, y además cuando pasa algo que merece mirarse: un ciclo cerrado, una guarda de
-riesgo, un aviso de liquidación, falta de margen o un rechazo grave del exchange.
+riesgo, un aviso de liquidación, falta de margen o un rechazo grave del exchange. Es lo de fábrica;
+las opciones avanzadas del panel dejan solo el reloj, solo los eventos, u otro intervalo. Con «solo
+eventos», el intervalo sigue siendo el mínimo entre dos revisiones, y un market maker —que no cierra
+ciclos— solo se revisaría ante avisos de riesgo.
 
 **Nunca con cada ejecución.** Para un market maker un fill es su conducta normal —decenas por
 minuto— y lo que hay que juzgar es una media, no un evento. Lo que aquí cuenta como «una operación»
@@ -262,7 +404,7 @@ Con **Redis caído** el Modo IA se apaga solo: sin poder contar el gasto no se l
 | Quieres apagarlo todo | `AI_AGENT_ENABLE=false` |
 | Quieres que deje de aplicar pero siga sugiriendo | `AI_AGENT_FORCE_MANUAL=true` |
 | Quieres que solo actúe sobre bots simulados | `AI_AGENT_DRY_RUN_ONLY=true` (así viene) |
-| Quieres apagarlo en un bot concreto | Poner su Modo IA en `OFF` |
+| Quieres apagarlo en un bot concreto | Ajustes del bot → Modo IA → «Apagado» (queda en `OFF`) |
 | Quieres más o menos avisos de «revisa este bot» | `AI_AGENT_ADVICE_COOLDOWN_H` (24 horas por defecto) |
 
 ### El rastro

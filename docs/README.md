@@ -39,8 +39,8 @@ poco riesgo (configuraciones A/B/C con sus números, checklist, señales de alar
 | [Riesgo y liquidación](./riesgo-y-liquidacion.md) | Fórmula de liquidación, aislado/cruzado, semáforo 25/10 % y regla del 5 %, límites de la cuenta, guardas del motor, el stop-loss, peor caso por estrategia, funding |
 | [Venues y mínimos](./venues-y-minimos.md) | Cupos de peticiones, mínimos y retículas por venue, la credencial de cada venue y qué pasa cuando caduca, testnet frente a mainnet, límites de Lighter, qué hace el motor con una orden que no cumple |
 | [Simulación y backtest](./simulacion-y-backtest.md) | La cuenta «Simulación», qué simula y qué no, el backtest y sus nueve avisos |
-| [Comandos, guardas y eventos](./comandos-guardas-y-eventos.md) | Los trece comandos y qué conservan el stop, en caliente/tibio/frío, las guardas, los 36 eventos con qué hacer, la nota del bot |
-| [Administración](./administracion.md) | Qué ve y qué puede hacer un `ADMIN`: las tres pantallas, los dos únicos comandos sobre bots ajenos y por qué los demás no están, que deshabilitar no para los bots, qué queda registrado, y el **Modo IA** que vigila bots vivos |
+| [Comandos, guardas y eventos](./comandos-guardas-y-eventos.md) | Los trece comandos y qué conservan el stop, en caliente/tibio/frío, las guardas, cada evento con qué hacer (también los del Modo IA), la nota del bot |
+| [Administración](./administracion.md) | Qué ve y qué puede hacer un `ADMIN`: las tres pantallas, los dos únicos comandos sobre bots ajenos y por qué los demás no están, que deshabilitar no para los bots, qué queda registrado, y el **Modo IA** que vigila bots vivos: su pastilla, su panel en Ajustes y cómo encenderlo al crear el bot |
 | [Market Maker V1](./market-maker.md) · [V2](./market-maker-v2.md) | Las dos guías de market making, con su comparativa |
 | [Tendencia](./trend-follow.md) | La única que gana cuando el precio se va recto, y por qué pierde más veces de las que acierta |
 | [Seguimiento de beneficio](./trailing-profit.md) | El take profit que sigue al máximo, el suelo de lo que se cobra y por qué nace con stop puesto |

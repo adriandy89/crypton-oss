@@ -183,6 +183,12 @@ export const EVENT_LABELS: Record<string, string> = {
   VENUE_RECOVERED: 'El exchange vuelve a responder',
   AUTH_ERROR: 'Credencial rechazada por el exchange',
   ACTION_FAILED: 'Accion fallida',
+  // El Modo IA (spec 046). Salían con la constante tal cual hasta el spec 053.
+  AI_MODE: 'Modo IA cambiado',
+  AI_SUGGESTION: 'Sugerencia de la IA',
+  AI_APPLIED: 'Ajuste aplicado por la IA',
+  AI_ADVICE: 'La IA pide revisar el bot',
+  AI_FAILED: 'La IA no pudo revisar el bot',
 };
 
 export function eventLabel(type: string): string {

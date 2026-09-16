@@ -209,7 +209,7 @@ describe('Aislamiento entre usuarios (e2e)', () => {
       botDeAlicia = bot.id;
     });
 
-    const superficie: [metodo: 'get' | 'post', ruta: string][] = [
+    const superficie: [metodo: 'get' | 'post' | 'put', ruta: string][] = [
       ['get', '/admin/users'],
       ['get', '/admin/users/00000000-0000-0000-0000-000000000000'],
       ['post', '/admin/users/00000000-0000-0000-0000-000000000000/disable'],
@@ -224,6 +224,10 @@ describe('Aislamiento entre usuarios (e2e)', () => {
       ['get', '/admin/bots/00000000-0000-0000-0000-000000000000/revisions'],
       ['get', '/admin/bots/00000000-0000-0000-0000-000000000000/levels'],
       ['post', '/admin/bots/00000000-0000-0000-0000-000000000000/commands'],
+      // El Modo IA (spec 046), que faltaba en esta lista, y su resumen (spec 053).
+      ['get', '/admin/ai'],
+      ['get', '/admin/bots/00000000-0000-0000-0000-000000000000/ai'],
+      ['put', '/admin/bots/00000000-0000-0000-0000-000000000000/ai'],
       ['get', '/admin/maintenance'],
       ['post', '/admin/maintenance/preview'],
       ['post', '/admin/maintenance/purge'],
@@ -282,6 +286,31 @@ describe('Aislamiento entre usuarios (e2e)', () => {
       expect(res.body.data[0].owner.email).toBe(alicia.email);
       // El dinero viaja como cadena, nunca como numero (invariante 1).
       expect(typeof res.body.data[0].totalInvestment).toBe('string');
+    });
+
+    /**
+     * El resumen del Modo IA solo trae bots PROPIOS (spec 053).
+     *
+     * La politica de un bot ajeno no se lee, ni una a una ni en bloque: si el
+     * resumen la trajera, la consola sabria lo que un administrador decidio
+     * sobre su propio dinero sin que el lo haya compartido.
+     */
+    it('el resumen del Modo IA no enseña el de un bot ajeno', async () => {
+      await db.botAiSetting.upsert({
+        where: { bot_id: botDeAlicia },
+        create: { bot_id: botDeAlicia, mode: 'AUTO', knobs: {} },
+        update: { mode: 'AUTO' },
+      });
+
+      const res = await http().get(`${PREFIX}/admin/ai`).set(as(admin)).expect(200);
+
+      const ids = (res.body.bots as { bot_id: string }[]).map((b) => b.bot_id);
+      expect(ids).not.toContain(botDeAlicia);
+      // Y la forma, para que el test no pase por venir vacio de otra cosa.
+      expect(res.body.interruptores).toEqual(
+        expect.objectContaining({ encendido: expect.any(Boolean) as unknown }),
+      );
+      expect(res.body.estrategias).toEqual(expect.arrayContaining(['MARKET_MAKER']));
     });
 
     it('un id que no existe si es 404, aun siendo administradora', async () => {
