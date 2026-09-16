@@ -36,7 +36,7 @@ pantalla escrita dos veces.
 Y el asistente de creación, que empieza por lo que más pesa: qué estrategia, y
 con cuánto riesgo.
 
-![Asistente de nuevo bot, paso de estrategia: las estrategias en tarjetas, con Martingala y GridMart marcadas como riesgo alto](docs/img/selector-estrategias.webp)
+![Asistente de nuevo bot, paso de estrategia: las nueve estrategias en tarjetas, cada una con su ayuda, y Martingala y GridMart marcadas como riesgo alto](docs/img/selector-estrategias.webp)
 
 El riesgo va declarado en la tarjeta, antes de elegir —Martingala y GridMart
 llevan su aviso desde el primer paso—. Y el formulario de cada estrategia lo
