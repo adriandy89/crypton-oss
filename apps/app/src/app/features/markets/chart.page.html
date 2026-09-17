@@ -164,6 +164,7 @@
     } @else {
       <app-price-chart
         [candles]="candles()"
+    [cargando]="cargandoVelas()"
         [liveBar]="liveBar()"
         [kind]="kind()"
         [priceDecimals]="decimals()"
@@ -174,6 +175,8 @@
         [average]="averageSeries()"
         [result]="resultSeries()"
         [canal]="visibleCanal()"
+    [indicadoresPrecio]="indicadoresPrecio()"
+    [indicadorPanel]="indicadorPanel()"
         [fitSpan]="bot() ? overlaySpan() : null"
         [scaleKey]="scaleKey()"
         (needHistory)="loadMoreHistory()"
@@ -540,6 +543,29 @@
           </span>
           <i class="track" [class.on]="showVolume()"><i class="knob"></i></i>
         </button>
+      </section>
+
+      <!-- ── Indicadores ──
+           Los mismos cálculos con los que el motor del canal decide (spec 061),
+           con sus parámetros de siempre. Los dos de panel propio se turnan: con
+           el volumen y el resultado puestos, un tercer panel deja al precio sin
+           sitio. -->
+      <section>
+        <div class="lbl">Indicadores</div>
+        @for (ind of opcionesIndicador; track ind.clave) {
+          <button
+            type="button"
+            class="switch"
+            (click)="toggleIndicador(ind.clave)"
+            [attr.aria-pressed]="indicadorActivo(ind.clave)"
+          >
+            <span class="who">
+              <b>{{ ind.etiqueta }}</b>
+              <em>{{ ind.explicacion }}</em>
+            </span>
+            <i class="track" [class.on]="indicadorActivo(ind.clave)"><i class="knob"></i></i>
+          </button>
+        }
       </section>
 
       <!-- ── Resultado del bot ──

@@ -176,4 +176,5 @@ ante un 429 se paran sin reintentar. A `findings.md` va solo la evidencia resumi
 | 058 | [El motor determinista del canal y la estrategia AI_CHANNEL](058-canal-determinista/spec.md) | cambio | hecho (falta CA-9 del usuario: el walk-forward con el juez) | `spec/058-canal-determinista` |
 | 059 | [La IA del canal, el producto y las guias](059-canal-ia/spec.md) | cambio | hecho (faltan CA-10 y CA-11 del usuario: la llamada de pago y la simulacion) | `spec/059-canal-ia` |
 | 060 | [Revision de los specs 057 a 059 antes de desplegar](060-revision-057-059/spec.md) | revision | hecho (63 hallazgos; corregidos dentro los 3 Criticos, F-07 —regresion del 057— y F-15; el resto en los seguimientos 061-071; falta CA-4 tras la simulacion) | `spec/060-revision-057-059` |
+| 061 | [El grafico avisa de que esta cargando, y deja encender indicadores](061-grafico-carga-e-indicadores/spec.md) | cambio | hecho (faltan CA-4 y CA-5: las comprobaciones a mano del usuario) | `spec/061-grafico-carga-e-indicadores` |
 

@@ -11,6 +11,7 @@ import {
   untracked,
   viewChild,
 } from '@angular/core';
+import { IonSpinner } from '@ionic/angular/standalone';
 import type {
   IChartApi,
   IPriceLine,
@@ -25,11 +26,25 @@ import type {
   UTCTimestamp,
 } from 'lightweight-charts';
 import { lineasDelCanal, type LineasCanal } from '@crypton/shared';
+import type { ClaveIndicador, LineaIndicador } from '@crypton/strategy-core';
 import type { Candle } from '../../core/models';
-import { chartPalette, fade, overlayPalette } from './chart-theme';
+import { chartPalette, fade, indicadorPalette, overlayPalette } from './chart-theme';
 import type { OverlayEventMarker, OverlayLine, OverlayMarker, OverlayStyle } from './bot-overlay';
 
 export type ChartSeriesKind = 'candles' | 'bars' | 'line' | 'area';
+
+/**
+ * Un indicador listo para pintar: sus lineas ya calculadas por
+ * `lineasDeIndicador` de `strategy-core`. El componente no calcula nada.
+ */
+export interface IndicadorPintado {
+  clave: ClaveIndicador;
+  lineas: LineaIndicador[];
+  /** Guias horizontales del panel propio; el RSI tiene las suyas en 30 y 70. */
+  guias?: readonly number[];
+  /** Decimales con los que se lee su eje. El RSI, entero; el ATR, como el precio. */
+  precision?: number;
+}
 
 /**
  * Un punto de una serie auxiliar, ya casado al instante de SU vela. `v: null`
@@ -86,6 +101,7 @@ export interface ChartReadout {
 @Component({
   selector: 'app-price-chart',
   standalone: true,
+  imports: [IonSpinner],
   template: `
     <div class="host" #host></div>
     <!-- La vuelta al encuadre automatico.
@@ -102,8 +118,14 @@ export interface ChartReadout {
         AUTO
       </button>
     }
-    @if (!ready()) {
+    <!-- Esqueleto mientras no hay NADA que pintar —el motor montandose, o una
+         serie que aun no ha llegado—, y velo sobre lo que ya hay cuando se esta
+         pidiendo otra. Sin el velo, cambiar de intervalo dejaba en pantalla las
+         velas del anterior bajo la etiqueta del nuevo, sin decirlo (spec 061). -->
+    @if (!ready() || candles().length === 0) {
       <div class="skeleton"></div>
+    } @else if (cargando()) {
+      <div class="velo" aria-live="polite"><ion-spinner name="dots" /></div>
     }
   `,
   styles: [
@@ -146,6 +168,27 @@ export interface ChartReadout {
         }
       }
 
+      /* Velo: lo que ya esta pintado se atenua y sale el mismo indicador que la
+         nota del borde. No se vacia la serie a proposito — parpadear a blanco
+         entre dos intervalos se lee como un error, y esperar no. */
+      .velo {
+        position: absolute;
+        inset: 0;
+        display: grid;
+        place-items: center;
+        border-radius: var(--radius-sm);
+        /* Dos veces: el WebView mas viejo que soporta la app no garantiza
+           color-mix(), y sin el respaldo el velo saldria transparente. */
+        background: rgba(12, 11, 29, 0.62);
+        background: color-mix(in srgb, var(--surface-1) 72%, transparent);
+      }
+
+      .velo ion-spinner {
+        width: 22px;
+        height: 22px;
+        color: var(--brand-2);
+      }
+
       /* Esquina inferior derecha: el hueco muerto donde se cruzan el eje de
          tiempo y el de precios. Esta siempre vacio —no tapa ni una etiqueta— y
          es donde cualquiera que haya usado un terminal va a buscarlo. */
@@ -176,6 +219,15 @@ export class PriceChartComponent {
   private readonly host = viewChild.required<ElementRef<HTMLElement>>('host');
 
   readonly candles = input.required<Candle[]>();
+
+  /**
+   * «Hay una peticion de velas en vuelo».
+   *
+   * No se deduce de `candles` vacio: una serie puede estar vacia sin que nadie
+   * este pidiendo nada —un par sin histórico—, y entonces lo honesto es el
+   * esqueleto quieto y no un indicador que promete algo que no llega.
+   */
+  readonly cargando = input<boolean>(false);
   readonly kind = input<ChartSeriesKind>('candles');
   readonly priceDecimals = input<number>(2);
   readonly showVolume = input<boolean>(true);
@@ -204,6 +256,19 @@ export class PriceChartComponent {
    * gráfico ejecuta el código de antes.
    */
   readonly canal = input<LineasCanal | null>(null);
+
+  /**
+   * Indicadores que van SOBRE el precio (spec 061). Llegan calculados; aqui
+   * solo se eligen colores y se crean o se retiran las series.
+   */
+  readonly indicadoresPrecio = input<IndicadorPintado[]>([]);
+
+  /**
+   * El indicador que ocupa panel propio bajo el precio, o ninguno. Es uno solo
+   * a proposito: con el volumen y el resultado encendidos, un segundo panel
+   * deja al precio sin sitio en un movil.
+   */
+  readonly indicadorPanel = input<IndicadorPintado | null>(null);
   /**
    * Rango que hay que poder ver. Al entrar desde un bot, el grafico se ABRE a
    * la escalera entera: uno ajustado solo a las velas deja fuera justo la orden
@@ -278,6 +343,11 @@ export class PriceChartComponent {
   private resultSeries: ISeriesApi<'Baseline'> | null = null;
   /** Soporte, resistencia y media, en ese orden; vacío sin canal. */
   private canalSeries: ISeriesApi<'Line'>[] = [];
+  /** Series de los indicadores del panel del precio, por indicador y linea. */
+  private indPrecio = new Map<string, ISeriesApi<'Line'>>();
+  private indPanelSerie: ISeriesApi<'Line'> | null = null;
+  private indPanelClave: ClaveIndicador | null = null;
+  private indPanelGuias: IPriceLine[] = [];
   /** El motor, una vez cargado: las series auxiliares se crean tarde y lo necesitan. */
   private lw: typeof import('lightweight-charts') | null = null;
   /** Con volumen el panel de resultado es el tercero; sin él, el segundo. */
@@ -419,6 +489,13 @@ export class PriceChartComponent {
     // Con las velas: los puntos del canal se ponen en los instantes que existen.
     effect(() => {
       this.applyCanal(this.canal(), this.candles());
+    });
+    // Los indicadores, cada uno con su efecto: apagados no crean ninguna serie.
+    effect(() => {
+      this.applyIndicadoresPrecio(this.indicadoresPrecio());
+    });
+    effect(() => {
+      this.applyIndicadorPanel(this.indicadorPanel());
     });
 
     // Cambia lo que se esta mirando -> se suelta el ajuste manual.
@@ -612,6 +689,11 @@ export class PriceChartComponent {
     this.applyAverage(this.average());
     this.applyResult(this.result());
     this.applyCanal(this.canal(), this.candles());
+    // Los indicadores tambien: sus efectos no se vuelven a ejecutar por
+    // reconstruir —sus entradas no han cambiado— y sin esto apagar el volumen
+    // se llevaria por delante las bandas hasta el siguiente cambio de vela.
+    this.applyIndicadoresPrecio(this.indicadoresPrecio());
+    this.applyIndicadorPanel(this.indicadorPanel());
     this.ready.set(true);
   }
 
@@ -682,6 +764,10 @@ export class PriceChartComponent {
     this.avgSeries = null;
     this.resultSeries = null;
     this.canalSeries = [];
+    this.indPrecio.clear();
+    this.indPanelSerie = null;
+    this.indPanelClave = null;
+    this.indPanelGuias = [];
     this.lw = null;
     this.main = null;
     try {
@@ -1237,11 +1323,15 @@ export class PriceChartComponent {
           if (pane && pane.getSeries().length === 0) chart.removePane(idx);
         }
         this.resultSeries = null;
+        this.ordenarPaneles();
         return;
       }
       if (!this.resultSeries) {
         const p = chartPalette();
-        const pane = this.hasVolume ? 2 : 1;
+        // El siguiente panel libre, no una posicion contada a mano: con un
+        // panel de indicador encendido, `hasVolume ? 2 : 1` metia el resultado
+        // DENTRO de el (spec 061). El orden se arregla despues.
+        const pane = chart.panes().length;
         this.resultSeries = chart.addSeries(
           lw.BaselineSeries,
           {
@@ -1263,6 +1353,7 @@ export class PriceChartComponent {
         );
         const container = this.host().nativeElement;
         chart.panes()[pane]?.setHeight(Math.round(container.clientHeight * 0.2));
+        this.ordenarPaneles();
       }
       this.resultSeries.setData(
         points.map((pt) =>
@@ -1323,6 +1414,158 @@ export class PriceChartComponent {
       resistencia.setData(datos(puntos.resistencia));
       media.setData(datos(puntos.media));
     });
+  }
+
+  /**
+   * Los indicadores que van SOBRE el precio (spec 061).
+   *
+   * Las series se crean y se retiran por su identidad —indicador y linea—, no
+   * se rehacen todas en cada cambio: apagar una media no puede costarle a las
+   * bandas de Bollinger un `setData` de mil puntos.
+   *
+   * Ninguno pide etiqueta en el eje ni linea de ultimo valor: son contexto, y
+   * el eje de precios ya va cargado con los niveles del bot.
+   */
+  private applyIndicadoresPrecio(lista: IndicadorPintado[]): void {
+    const chart = this.chart;
+    const lw = this.lw;
+    if (!chart || !lw) return;
+    this.zone.runOutsideAngular(() => {
+      const paleta = indicadorPalette();
+      const decimals = untracked(() => this.priceDecimals());
+      const vivas = new Set<string>();
+
+      for (const ind of lista) {
+        for (const linea of ind.lineas) {
+          const id = ind.clave + ':' + linea.clave;
+          vivas.add(id);
+          let serie = this.indPrecio.get(id);
+          if (!serie) {
+            const color = paleta[ind.clave];
+            serie = chart.addSeries(
+              lw.LineSeries,
+              {
+                // La banda central de Bollinger, atenuada y de puntos: es una
+                // media, no un borde, y confundirlas es leer mal el canal.
+                color: linea.clave === 'media' ? fade(color, 0.6) : color,
+                lineStyle: linea.clave === 'media' ? lw.LineStyle.Dotted : lw.LineStyle.Solid,
+                lineWidth: 1,
+                priceLineVisible: false,
+                lastValueVisible: false,
+                crosshairMarkerVisible: false,
+                priceFormat: {
+                  type: 'price',
+                  precision: decimals,
+                  minMove: Math.pow(10, -decimals),
+                },
+              },
+              0,
+            );
+            this.indPrecio.set(id, serie);
+          }
+          serie.setData(datosDeLinea(linea));
+        }
+      }
+
+      for (const [id, serie] of [...this.indPrecio]) {
+        if (vivas.has(id)) continue;
+        chart.removeSeries(serie);
+        this.indPrecio.delete(id);
+      }
+    });
+  }
+
+  /**
+   * El indicador de panel propio (spec 061).
+   *
+   * Mismo ciclo de vida que el panel de resultado: nace con el indicador, y al
+   * apagarlo se lleva su panel por delante — un panel vacio deja una franja en
+   * blanco bajo el precio. Cambiar de indicador es apagar y encender.
+   */
+  private applyIndicadorPanel(ind: IndicadorPintado | null): void {
+    const chart = this.chart;
+    const lw = this.lw;
+    if (!chart || !lw) return;
+    this.zone.runOutsideAngular(() => {
+      const quitar = (): void => {
+        if (!this.indPanelSerie) return;
+        const idx = this.indPanelSerie.getPane().paneIndex();
+        chart.removeSeries(this.indPanelSerie);
+        const pane = chart.panes()[idx];
+        if (pane && pane.getSeries().length === 0) chart.removePane(idx);
+        this.indPanelSerie = null;
+        this.indPanelClave = null;
+        this.indPanelGuias = [];
+      };
+
+      if (!ind || ind.lineas.length === 0) {
+        quitar();
+        this.ordenarPaneles();
+        return;
+      }
+      if (this.indPanelClave !== ind.clave) quitar();
+
+      if (!this.indPanelSerie) {
+        const color = indicadorPalette()[ind.clave];
+        const decimals = ind.precision ?? untracked(() => this.priceDecimals());
+        const pane = chart.panes().length;
+        this.indPanelSerie = chart.addSeries(
+          lw.LineSeries,
+          {
+            color,
+            lineWidth: 1,
+            priceLineVisible: false,
+            lastValueVisible: true,
+            crosshairMarkerVisible: false,
+            title: ind.clave,
+            priceFormat: {
+              type: 'price',
+              precision: decimals,
+              minMove: Math.pow(10, -decimals),
+            },
+          },
+          pane,
+        );
+        this.indPanelClave = ind.clave;
+        const container = this.host().nativeElement;
+        chart.panes()[pane]?.setHeight(Math.round(container.clientHeight * 0.2));
+        // Las guias del RSI: sobrecompra y sobreventa. Sin etiqueta en el eje,
+        // que en un panel de veinte por ciento de alto no cabe.
+        const guia = fade(chartPalette().grid, 0.9);
+        this.indPanelGuias = (ind.guias ?? []).map((precio) =>
+          this.indPanelSerie!.createPriceLine({
+            price: precio,
+            color: guia,
+            lineWidth: 1,
+            lineStyle: lw.LineStyle.Dashed,
+            axisLabelVisible: false,
+            title: '',
+          }),
+        );
+        this.ordenarPaneles();
+      }
+      this.indPanelSerie.setData(datosDeLinea(ind.lineas[0]));
+    });
+  }
+
+  /**
+   * El orden de los paneles: precio, volumen, resultado, indicador.
+   *
+   * Hace falta porque los dos de abajo se encienden y se apagan por separado y
+   * la libreria los coloca por orden de creacion: sin esto, encender el
+   * resultado con un indicador puesto dejaba el indicador en medio.
+   */
+  private ordenarPaneles(): void {
+    const chart = this.chart;
+    if (!chart) return;
+    // De abajo hacia arriba: cada uno reclama el ultimo sitio que queda libre.
+    let destino = chart.panes().length - 1;
+    for (const serie of [this.indPanelSerie, this.resultSeries]) {
+      if (!serie || destino < 1) continue;
+      const pane = serie.getPane();
+      if (pane.paneIndex() !== destino) pane.moveTo(destino);
+      destino--;
+    }
   }
 
   /**
@@ -1411,6 +1654,17 @@ export class PriceChartComponent {
 
 /** ms epoch -> la escala del motor, que trabaja en SEGUNDOS. */
 const toTime = (ms: number): UTCTimestamp => Math.floor(ms / 1000) as UTCTimestamp;
+
+/**
+ * Los puntos de una linea de indicador, en lo que come la libreria. Un punto
+ * sin valor se manda SIN `value`: asi la linea se rompe en vez de bajar a cero
+ * en las primeras velas, que es donde el indicador todavia no tiene datos.
+ */
+function datosDeLinea(linea: LineaIndicador): { time: UTCTimestamp; value?: number }[] {
+  return linea.puntos.map((p) =>
+    p.v === null ? { time: toTime(p.t) } : { time: toTime(p.t), value: p.v },
+  );
+}
 
 const clamp = (v: number, min: number, max: number): number => Math.min(Math.max(v, min), max);
 

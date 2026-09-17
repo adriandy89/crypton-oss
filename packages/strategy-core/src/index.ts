@@ -88,3 +88,18 @@ export { wilsonInferior } from './canal/estadistica';
 export { etiquetarTripleBarrera, resumirTasas, type Etiqueta } from './canal/tasas-base';
 export { serieNumerica, type SerieNumerica } from './canal/numeros';
 export { serieFresca, ultimaCerradaEsperada } from './canal/velas';
+
+// Los indicadores que puede pintar el grafico de la app (spec 061): envuelven la
+// estadistica del canal, que no se exporta cruda por la colision de nombres de
+// arriba.
+export {
+  CLAVES_INDICADOR,
+  INDICADORES,
+  esClaveIndicador,
+  lineasDeIndicador,
+  type ClaveIndicador,
+  type FichaIndicador,
+  type LineaIndicador,
+  type PanelIndicador,
+  type PuntoIndicador,
+} from './indicadores-vista';

@@ -28,7 +28,7 @@ sitio web, ni infraestructura de nadie: todo lo que hace está disponible para q
 | `apps/app` | Ionic 8 + Angular 21 + Capacitor. Ejecuta `strategy-core` **también en cliente** (`features/bots/bot-create.page.ts`, `fullConfig`). |
 | `packages/shared` | Tipos, enums (calcan Prisma), `money.ts` (Decimal), `precision.ts` (redondeo), `liquidation.ts`, `series.ts` (la aritmética de las series y la analítica que pintan las pantallas: la app no suma dinero, lo pide aquí con test). |
 | `packages/db` | Prisma 7. Genera TypeScript, así que **se compila** (`dist/src`). Fuente única del modelo. |
-| `packages/strategy-core` | Cada estrategia como funciones puras: `validate()`, `preview()`, `plan()`. Más `reconcile`, `order-gate`, `stop-loss`, `cycle-accounting`, `client-order-id`, `mutability`, y el motor del canal con IA (`canal/`: régimen, canales, setups, herramienta, tasas base y juez). |
+| `packages/strategy-core` | Cada estrategia como funciones puras: `validate()`, `preview()`, `plan()`. Más `reconcile`, `order-gate`, `stop-loss`, `cycle-accounting`, `client-order-id`, `mutability`, y el motor del canal con IA (`canal/`: régimen, canales, setups, herramienta, tasas base y juez). `indicadores-vista.ts` envuelve esa misma estadística para lo que pinta el gráfico de la app (spec 061). |
 | `packages/exchange-core` | Adaptadores HL/Lighter/Aster tras `ExchangeAdapter`, `DryRunAdapter`, `coid`, `errors`, `rate-limit`, `venue-budget`, `venue-weights`, `endpoints`. |
 | `packages/backtest` | Replay sobre velas con las **mismas** piezas que el motor. |
 | `specs/` | Metodología SDD. **Empieza por `specs/README.md`.** |

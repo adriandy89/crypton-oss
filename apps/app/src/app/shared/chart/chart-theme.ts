@@ -1,3 +1,4 @@
+import type { ClaveIndicador } from '@crypton/strategy-core';
 import type { OverlayKind } from './bot-overlay';
 
 /**
@@ -116,4 +117,26 @@ export function fade(color: string, alpha: number): string {
     .toString(16)
     .padStart(2, '0');
   return `${hex}${a}`;
+}
+
+/**
+ * Colores de los indicadores (spec 061).
+ *
+ * `Record` completo sobre las claves del catálogo, por el mismo motivo que
+ * `OverlayPalette`: un indicador nuevo sin color no compila.
+ *
+ * Ninguno usa el verde ni el rojo, que en este gráfico significan ganar y
+ * perder, ni el ámbar del stop: un indicador es contexto, no una señal de
+ * dinero, y tiene que leerse como fondo detrás de las velas y de las líneas del
+ * bot. De ahí el violeta de marca para las medias y el cian de la cruceta para
+ * lo que se lee en su propio panel.
+ */
+export function indicadorPalette(p = chartPalette()): Record<ClaveIndicador, string> {
+  return {
+    BOLLINGER: token('--text-2', '#9d98c0'),
+    SMA50: p.brand,
+    EMA20: token('--brand-2', '#22d3ee'),
+    RSI: p.brand,
+    ATR: token('--brand-2', '#22d3ee'),
+  };
 }

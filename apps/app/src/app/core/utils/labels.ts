@@ -1,3 +1,4 @@
+import type { ClaveIndicador } from '@crypton/strategy-core';
 import type { BotStatus, StrategyKind, Venue } from '../models';
 
 /**
@@ -229,3 +230,34 @@ export const ORDER_STATUS_LABELS: Record<string, string> = {
 export function orderStatusLabel(status: string): string {
   return ORDER_STATUS_LABELS[status] ?? status;
 }
+
+/**
+ * Los indicadores del gráfico (spec 061).
+ *
+ * `Record` completo sobre las claves del catálogo de `strategy-core`: un
+ * indicador nuevo sin nombre ni explicación no compila. La explicación es de
+ * una frase y dice lo que se ve, no lo que hay que hacer con ello: es contexto,
+ * no un consejo.
+ */
+export const INDICADOR_LABELS: Record<ClaveIndicador, { etiqueta: string; explicacion: string }> = {
+  BOLLINGER: {
+    etiqueta: 'Bandas de Bollinger',
+    explicacion: 'Media de 20 velas y dos desviaciones a cada lado.',
+  },
+  SMA50: {
+    etiqueta: 'Media 50',
+    explicacion: 'El precio medio de las últimas 50 velas.',
+  },
+  EMA20: {
+    etiqueta: 'Media exponencial 20',
+    explicacion: 'Como la media, pero pesa más lo reciente.',
+  },
+  RSI: {
+    etiqueta: 'RSI 14',
+    explicacion: 'Fuerza del movimiento, de 0 a 100. Ocupa el panel de abajo.',
+  },
+  ATR: {
+    etiqueta: 'ATR 14',
+    explicacion: 'Cuánto se mueve una vela, en precio. Ocupa el panel de abajo.',
+  },
+};

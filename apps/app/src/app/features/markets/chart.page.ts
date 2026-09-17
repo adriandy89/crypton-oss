@@ -85,17 +85,26 @@ import {
   venueLabel,
 } from '../../core/utils';
 import {
+  CLAVES_INDICADOR,
+  INDICADORES,
+  lineasDeIndicador,
+  type ClaveIndicador,
+} from '@crypton/strategy-core';
+import { INDICADOR_LABELS } from '../../core/utils/labels';
+import {
   PriceChartComponent,
   buildBotOverlay,
   buildEventMarkers,
   buildFillMarkers,
   type ChartLinePoint,
   type ChartSeriesKind,
+  type IndicadorPintado,
   type OverlayEventMarker,
   type OverlayLine,
   type OverlayMarker,
 } from '../../shared/chart';
 import { muestrasPorVela } from '../../shared/chart/bot-series';
+import { ChartPrefsService } from './chart-prefs.service';
 import { BotCommandsService } from '../../shared/bot/bot-commands.service';
 import {
   UiBadgeComponent,
@@ -215,6 +224,9 @@ export class MarketChartPage implements OnInit {
   private readonly botsSvc = inject(BotsService);
   private readonly toast = inject(ToastService);
   private readonly destroyRef = inject(DestroyRef);
+  private readonly prefs = inject(ChartPrefsService);
+  /** Los ajustes guardados se aplican UNA vez, cuando llegan. */
+  private ajustesAplicados = false;
   private readonly streamSvc = inject(StreamService);
   private readonly commands = inject(BotCommandsService);
   readonly data = inject(MarketDataService);
@@ -232,6 +244,15 @@ export class MarketChartPage implements OnInit {
   /** Rasgos del par, del servidor. null mientras no llegan o si no hay velas suficientes. */
   readonly features = signal<MarketFeatures | null>(null);
   readonly loading = signal(true);
+  /**
+   * «Se estan pidiendo velas AHORA».
+   *
+   * Distinta de `loading`, que es de un solo disparo y cubre las pestañas de
+   * abajo: esta se enciende en cada peticion de la serie y es la que atenua el
+   * grafico, para que cambiar de intervalo deje de enseñar en silencio las
+   * velas del intervalo anterior (spec 061).
+   */
+  readonly cargandoVelas = signal(false);
   readonly chartError = signal<string | null>(null);
   readonly tab = signal<'info' | 'bots' | 'venues'>('info');
 
@@ -265,6 +286,50 @@ export class MarketChartPage implements OnInit {
    * gráfico, y sin él el gráfico ejecuta exactamente el código de antes.
    */
   readonly showResult = signal(false);
+
+  /**
+   * Los indicadores encendidos (spec 061).
+   *
+   * Un conjunto y no un objeto con una bandera por indicador: lo que se guarda
+   * y lo que se pinta es «cuales estan puestos», y asi añadir uno no obliga a
+   * tocar ninguna forma.
+   */
+  readonly indicadores = signal<ReadonlySet<ClaveIndicador>>(new Set<ClaveIndicador>());
+
+  /** Las fichas de la hoja, en el orden del catalogo. */
+  readonly opcionesIndicador = CLAVES_INDICADOR.map((clave) => ({
+    clave,
+    ...INDICADOR_LABELS[clave],
+    propio: INDICADORES[clave].panel === 'PROPIO',
+  }));
+
+  /**
+   * Las lineas de los indicadores que van sobre el precio.
+   *
+   * Es un `computed`: se rehace cuando cambian las velas CERRADAS o la
+   * seleccion, y no con cada tick de la vela viva, que llega por otra señal.
+   */
+  readonly indicadoresPrecio = computed<IndicadorPintado[]>(() => {
+    const velas = this.candles();
+    if (velas.length === 0) return [];
+    return [...this.indicadores()]
+      .filter((clave) => INDICADORES[clave].panel === 'PRECIO')
+      .map((clave) => ({ clave, lineas: lineasDeIndicador(clave, velas) }));
+  });
+
+  /** El del panel de abajo, si hay alguno encendido. */
+  readonly indicadorPanel = computed<IndicadorPintado | null>(() => {
+    const clave = [...this.indicadores()].find((c) => INDICADORES[c].panel === 'PROPIO');
+    const velas = this.candles();
+    if (!clave || velas.length === 0) return null;
+    return {
+      clave,
+      lineas: lineasDeIndicador(clave, velas),
+      guias: INDICADORES[clave].guias,
+      // El RSI se lee en enteros; el ATR es un precio y se lee como el par.
+      precision: clave === 'RSI' ? 0 : this.decimals(),
+    };
+  });
   /** La hoja de margen, compartida con el detalle del bot. */
   readonly marginOpen = signal(false);
 
@@ -670,6 +735,22 @@ export class MarketChartPage implements OnInit {
     // Aqui hacen falta los TRES venues: la pestaña «Plataformas» compara este
     // par con el mismo activo en los otros dos, y cuesta lo mismo porque el
     // endpoint lee de Redis, no del DEX.
+    // Lo que se dejó puesto la última vez (spec 061). Llega un instante después
+    // de construir la pantalla, así que se aplica cuando el almacén contesta, y
+    // UNA sola vez: a partir de ahí manda lo que toque el usuario.
+    effect(() => {
+      const guardados = this.prefs.ajustes();
+      if (this.ajustesAplicados || !this.prefs.cargado()) return;
+      this.ajustesAplicados = true;
+      untracked(() => {
+        this.kind.set(guardados.kind);
+        this.showVolume.set(guardados.volumen);
+        this.showResult.set(guardados.resultado);
+        this.layers.set({ ...guardados.capas });
+        this.indicadores.set(new Set(guardados.indicadores));
+      });
+    });
+
     const release = this.data.watchTickers();
     this.destroyRef.onDestroy(release);
 
@@ -1144,6 +1225,7 @@ export class MarketChartPage implements OnInit {
     // rápido de la lente de red a media petición podía pegar en el gráfico las
     // velas de la otra red, sin error y sin que nada lo indicara.
     const asked = this.historyKey();
+    this.cargandoVelas.set(true);
     try {
       const data = await this.data.candles(this.venue(), this.symbol(), this.interval(), BARS, {
         refresh: true,
@@ -1179,6 +1261,10 @@ export class MarketChartPage implements OnInit {
       this.candles.set([]);
       this.resetHistoryPaging();
       this.chartError.set(errorText(e));
+    } finally {
+      // Solo si esta peticion sigue siendo la vigente: una respuesta vieja que
+      // llega tarde no puede apagar el velo de la que la adelanto.
+      if (this.historyKey() === asked) this.cargandoVelas.set(false);
     }
   }
 
@@ -1354,6 +1440,7 @@ export class MarketChartPage implements OnInit {
 
   toggleLayer(layer: 'ladder' | 'planned' | 'fills' | 'liquidation' | 'events' | 'canal'): void {
     this.layers.update((l) => ({ ...l, [layer]: !l[layer] }));
+    this.prefs.guardar({ capas: { ...this.layers() } });
   }
 
   goToBot(bot: BotSummary | BotDetail): void {
@@ -1362,6 +1449,32 @@ export class MarketChartPage implements OnInit {
 
   toggleResult(): void {
     this.showResult.update((v) => !v);
+    this.prefs.guardar({ resultado: this.showResult() });
+  }
+
+  indicadorActivo(clave: ClaveIndicador): boolean {
+    return this.indicadores().has(clave);
+  }
+
+  /**
+   * Enciende o apaga un indicador.
+   *
+   * Los de panel propio se turnan: con el volumen y el resultado puestos, un
+   * segundo panel deja al precio sin sitio en un movil, asi que encender el RSI
+   * apaga el ATR y al reves.
+   */
+  toggleIndicador(clave: ClaveIndicador): void {
+    const siguiente = new Set(this.indicadores());
+    if (!siguiente.delete(clave)) {
+      if (INDICADORES[clave].panel === 'PROPIO') {
+        for (const otro of [...siguiente]) {
+          if (INDICADORES[otro].panel === 'PROPIO') siguiente.delete(otro);
+        }
+      }
+      siguiente.add(clave);
+    }
+    this.indicadores.set(siguiente);
+    this.prefs.guardar({ indicadores: [...siguiente] });
   }
 
   /**
@@ -1480,10 +1593,12 @@ export class MarketChartPage implements OnInit {
 
   setKind(kind: ChartSeriesKind): void {
     this.kind.set(kind);
+    this.prefs.guardar({ kind });
   }
 
   toggleVolume(): void {
     this.showVolume.update((v) => !v);
+    this.prefs.guardar({ volumen: this.showVolume() });
   }
 }
 
