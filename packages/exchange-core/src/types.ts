@@ -11,6 +11,7 @@ import type {
   MarketSpec,
   MarketTicker,
   ModifyRequest,
+  NivelApalancamiento,
   OrderAck,
   OrderUpdate,
   PlaceOrderRequest,
@@ -220,8 +221,44 @@ export interface ExchangeAdapter {
   modifyOrder?(req: ModifyRequest): Promise<OrderAck>;
 
   // ── Configuración previa del mercado ──────────────────────────
-  setLeverage(symbol: string, leverage: number, mode: MarginMode): Promise<void>;
+  /**
+   * Fija el apalancamiento y el modo de margen del símbolo.
+   *
+   * Devuelve lo que el venue dice haber aplicado cuando lo dice (spec 058): el
+   * canal con IA elige el apalancamiento por operación y no puede entrar con
+   * otro distinto del que calculó. Sigue aceptando `void` para los dobles de
+   * los tests y para quien no tenga nada que contar.
+   */
+  setLeverage(
+    symbol: string,
+    leverage: number,
+    mode: MarginMode,
+  ): Promise<AcuseApalancamiento | void>;
   setPositionMode?(mode: PositionMode): Promise<void>;
+
+  /**
+   * El modo de posición de la cuenta, leído del venue (spec 058).
+   *
+   * Solo lo declara quien puede estar en cobertura: Aster. Hyperliquid y Lighter
+   * solo tienen una posición neta por mercado, y quien no lo declara se trata
+   * como unidireccional. El canal con IA no entra en una cuenta en cobertura:
+   * su stop y sus objetivos reducen una posición que ahí no existiría.
+   */
+  getPositionMode?(): Promise<PositionMode>;
+
+  /**
+   * Los tramos de apalancamiento del símbolo, de menor a mayor nocional.
+   *
+   * Cada tramo rige desde su nocional hasta el del siguiente, con su
+   * apalancamiento máximo y su mantenimiento: por encima de cierto tamaño un par
+   * de 50x deja de admitir 50x, y la liquidación se estima con otra tasa. Es lo
+   * que la herramienta del canal con IA necesita para no ofrecer una operación
+   * que el venue no admitiría (spec 058).
+   *
+   * Opcional: quien no lo declara se trata como un único tramo con el máximo y
+   * el mantenimiento de la ficha del mercado.
+   */
+  getLeverageTiers?(symbol: string): Promise<NivelApalancamiento[]>;
 
   /**
    * Añade o retira colateral de una posición AISLADA.
@@ -276,6 +313,19 @@ export interface ExchangeAdapter {
 
   /** Cierra sockets y libera recursos. Idempotente. */
   close(): Promise<void>;
+}
+
+/**
+ * Lo que el venue contesta al fijar el apalancamiento (spec 058).
+ *
+ * `leverage` es `null` cuando la respuesta no lo confirma: Lighter solo acusa
+ * que la transacción está bien formada, y quien la necesite confirmada la mira
+ * en la posición. `maxNotional` solo lo da Aster, y es el nocional máximo que
+ * admite ese apalancamiento en el tramo de la cuenta.
+ */
+export interface AcuseApalancamiento {
+  leverage: number | null;
+  maxNotional?: string;
 }
 
 /** Estado de un stream del venue. */

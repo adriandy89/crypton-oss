@@ -50,6 +50,8 @@ import {
   cronologiaPorCiclo,
   sumaExacta,
   edicionesDe,
+  esEstrategiaSoloAdmin,
+  esEventoModoIa,
   recolocarBorrador,
   type FieldMeta,
 } from '@crypton/shared';
@@ -123,6 +125,8 @@ import { ModoIaService } from '../../core/services/modo-ia.service';
 import { insigniaIa, type CambioIa, type InsigniaIa } from '../../core/utils/modo-ia';
 import { ModoIaAccionesService } from '../../shared/bot/modo-ia-acciones.service';
 import { ModoIaPanelComponent } from '../../shared/bot/modo-ia-panel.component';
+import { CanalIaService } from '../../core/services/canal-ia.service';
+import { CanalIaPanelComponent } from '../../shared/bot/canal-ia-panel.component';
 
 type Tab = 'resumen' | 'escalera' | 'ordenes' | 'ajustes' | 'eventos';
 
@@ -179,6 +183,7 @@ type LadderRow =
     UiStatusPillComponent,
     UiStrategyHelpComponent,
     ModoIaPanelComponent,
+    CanalIaPanelComponent,
   ],
   templateUrl: './bot-detail.page.html',
   styleUrl: './bot-detail.page.scss',
@@ -227,15 +232,23 @@ export class BotDetailPage implements OnInit {
    *
    * Encendido, siempre —aunque sea para poder apagarlo—. Apagado, solo si la
    * estrategia está en el alcance, o si todavía no se sabe: entonces decide el
-   * servidor.
+   * servidor. Las de solo administradores no lo están nunca (spec 059): el canal
+   * con IA tiene su propio panel, y así no parpadea mientras llega el alcance.
    */
   readonly mostrarPanelIa = computed(() => {
     const b = this.bot();
     if (!b || !this.esAdmin()) return false;
     const ia = this.ia();
     if (ia && ia.mode !== 'OFF') return true;
+    if (esEstrategiaSoloAdmin(b.strategy)) return false;
     return (ia?.cubierta ?? this.modoIa.cubre(b.strategy)) !== false;
   });
+
+  /** El canal con IA (spec 059): su pastilla y su panel, como el Modo IA. */
+  readonly canalIa = inject(CanalIaService);
+
+  /** El panel del canal con IA: solo sus bots, y solo para un administrador. */
+  readonly esCanalIa = computed(() => this.esAdmin() && this.bot()?.strategy === 'AI_CHANNEL');
 
   /**
    * La configuración de la que nació el borrador de Ajustes, y su versión.
@@ -581,10 +594,11 @@ export class BotDetailPage implements OnInit {
       .subscribe(() => void this.load(false));
 
     // El Modo IA se relee solo con SUS eventos (spec 053): `load()` corre con
-    // cada evento del bot, y un market maker manda varios por segundo.
+    // cada evento del bot, y un market maker manda varios por segundo. Y con
+    // los suyos de verdad (spec 059): el canal con IA también emite `AI_*`.
     this.stream.stream
       .pipe(
-        filter((ev) => ev.botId === this.id && ev.type.startsWith('AI_')),
+        filter((ev) => ev.botId === this.id && esEventoModoIa(ev.type)),
         takeUntilDestroyed(),
       )
       .subscribe(() => void this.cargarIa());
@@ -653,6 +667,11 @@ export class BotDetailPage implements OnInit {
       this.modoIa.conCanal(ia?.interruptores ?? this.modoIa.interruptores()),
       b,
     );
+  }
+
+  /** Tras una acción del panel del canal: la misma recarga que un evento. */
+  recargar(): void {
+    void this.load(false);
   }
 
   private async load(withSpinner: boolean): Promise<void> {

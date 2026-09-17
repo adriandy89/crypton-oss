@@ -35,3 +35,76 @@ describe('withWriteRetry — cuando no se puede saber si la orden entró', () =>
     expect(verify).toHaveBeenCalledTimes(1);
   });
 });
+
+/**
+ * Spec 057, F-06. El error de estado desconocido salía como un RETRYABLE más, y
+ * el motor marcaba la fila REJECTED: el tick siguiente volvía a mandar la orden.
+ * Ahora viaja marcado. Y el ÚLTIMO intento fallido tampoco se daba por
+ * comprobado: podía haber entrado sin que nadie lo preguntara.
+ */
+describe('withWriteRetry — el estado desconocido viaja marcado (spec 057, F-06)', () => {
+  const fallo = () => new ExchangeError('RETRYABLE', 'HTTP 503', Venue.ASTER);
+  const acuse = { clientOrderId: 'x', venueOrderId: 'v-1', status: 'FILLED' as const, ts: 0 };
+  type Acuse = typeof acuse;
+  const error = (p: Promise<unknown>) =>
+    p.then(() => null).catch((e: unknown) => e as ExchangeError);
+
+  it('si la comprobación falla, el error dice que el estado es desconocido', async () => {
+    const e = await error(
+      withWriteRetry<Acuse>(
+        () => Promise.reject(fallo()),
+        () => Promise.reject(fallo()),
+        { venue: Venue.ASTER, baseDelayMs: 1 },
+      ),
+    );
+    expect(e).toBeInstanceOf(ExchangeError);
+    expect(e?.estadoDesconocido).toBe(true);
+  });
+
+  it('tras el último intento también se pregunta: si entró, se devuelve su acuse', async () => {
+    const send = jest.fn(() => Promise.reject(fallo()));
+    const verify = jest
+      .fn<Promise<Acuse | null>, []>()
+      .mockResolvedValueOnce(null)
+      .mockResolvedValueOnce(null)
+      .mockResolvedValueOnce(acuse);
+
+    await expect(withWriteRetry(send, verify, { attempts: 3, baseDelayMs: 1 })).resolves.toBe(
+      acuse,
+    );
+    expect(send).toHaveBeenCalledTimes(3);
+    expect(verify).toHaveBeenCalledTimes(3);
+  });
+
+  it('si tras el último intento no entró, el error es el del envío, y se sabe', async () => {
+    const send = jest.fn(() => Promise.reject(fallo()));
+    const verify = jest.fn<Promise<Acuse | null>, []>().mockResolvedValue(null);
+
+    const e = await error(withWriteRetry(send, verify, { attempts: 2, baseDelayMs: 1 }));
+    expect(e?.kind).toBe('RETRYABLE');
+    expect(e?.estadoDesconocido).toBe(false);
+    expect(verify).toHaveBeenCalledTimes(2);
+  });
+
+  it('si la comprobación del último intento falla, es desconocido', async () => {
+    const send = jest.fn(() => Promise.reject(fallo()));
+    const verify = jest
+      .fn<Promise<Acuse | null>, []>()
+      .mockResolvedValueOnce(null)
+      .mockRejectedValueOnce(fallo());
+
+    const e = await error(withWriteRetry(send, verify, { attempts: 2, baseDelayMs: 1 }));
+    expect(e?.estadoDesconocido).toBe(true);
+    expect(send).toHaveBeenCalledTimes(2);
+  });
+
+  it('un rechazo que no se reintenta no se comprueba ni es desconocido', async () => {
+    const send = jest.fn(() => Promise.reject(new ExchangeError('RULES', 'tick', Venue.ASTER)));
+    const verify = jest.fn<Promise<Acuse | null>, []>();
+
+    const e = await error(withWriteRetry(send, verify, { baseDelayMs: 1 }));
+    expect(e?.kind).toBe('RULES');
+    expect(e?.estadoDesconocido).toBe(false);
+    expect(verify).not.toHaveBeenCalled();
+  });
+});

@@ -1,4 +1,5 @@
 import type { StrategyKind } from '../models';
+import { AI_CHANNEL_GUIDE } from './ai-channel.guide';
 import { COMMON_OPTION_DOCS } from './common-options';
 import { GRIDMART_GUIDE } from './gridmart.guide';
 import { GRID_CLASSIC_GUIDE } from './grid-classic.guide';
@@ -31,6 +32,7 @@ export const STRATEGY_GUIDES: Record<StrategyKind, StrategyGuide> = {
   MARKET_MAKER_V2: MARKET_MAKER_V2_GUIDE,
   TREND_FOLLOW: TREND_FOLLOW_GUIDE,
   TRAILING_PROFIT: TRAILING_PROFIT_GUIDE,
+  AI_CHANNEL: AI_CHANNEL_GUIDE,
 };
 
 export const strategyGuide = (kind: string): StrategyGuide | null =>

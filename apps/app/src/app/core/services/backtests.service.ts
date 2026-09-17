@@ -97,6 +97,8 @@ export interface RunBacktestInput {
   slippageRate?: string;
   spreadBps?: number;
   barPath?: string;
+  /** Tramos consecutivos, de 1 a 6. Solo lo leen las estrategias que registran operaciones. */
+  ventanasConsecutivas?: number;
 }
 
 @Injectable({ providedIn: 'root' })

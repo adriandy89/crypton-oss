@@ -257,6 +257,147 @@ describe('runReplay — rechazos del simulador (spec 001, F-65)', () => {
   });
 });
 
+/**
+ * Spec 057, F-04. `contexto()` no pasaba velas ni extremos a `plan()`:
+ * Tendencia decía «esperando velas» en todo el replay y no operaba nunca, y el
+ * seguimiento medía el máximo sobre el cierre de cada vela.
+ */
+describe('runReplay — velas y extremos en el contexto (spec 057, F-04)', () => {
+  const HORA = 4 * SPAN;
+  const TREND = {
+    exchangeAccountId: 'acc-1',
+    symbol: 'BTC',
+    direction: 'NEUTRAL' as const,
+    leverage: 1,
+    marginMode: 'ISOLATED' as const,
+    totalInvestment: '10000',
+    candleInterval: '15m',
+    breakoutPeriod: 20,
+    atrPeriod: 14,
+    atrStopMultiplier: '2.5',
+    riskPerTradePct: '1',
+    entryEfficiency: '0',
+    stopRepriceBps: '20',
+    cooldownMinutes: 0,
+  };
+
+  /** Lateral en torno a 100 con mechas de ±1, de `span` en `span`. */
+  const lateral = (n: number, desde = T0, span = SPAN): Candle[] =>
+    Array.from({ length: n }, (_, i) => ({
+      t: desde + i * span,
+      o: '100',
+      h: '101',
+      l: '99',
+      c: i % 2 ? '100.5' : '99.5',
+      v: '1',
+    }));
+
+  const vela = (t: number, o: string, h: string, l: string, c: string): Candle => ({
+    t,
+    o,
+    h,
+    l,
+    c,
+    v: '1',
+  });
+
+  const tendencia = (
+    candles: Candle[],
+    over: Record<string, unknown> = {},
+    interval: '15m' | '1h' = '15m',
+  ) =>
+    runReplay({
+      botId: '1a2b3c4d-0000-4000-8000-000000000000',
+      strategy: StrategyKind.TREND_FOLLOW,
+      config: { ...TREND, ...over },
+      venue: Venue.HYPERLIQUID,
+      market: TEST_MARKET,
+      interval,
+      candles,
+      params: PARAMS,
+    });
+
+  it('Tendencia opera: entra con la ruptura, al cierre de esa vela', async () => {
+    const ruptura = vela(T0 + 30 * SPAN, '100', '111', '100', '110');
+    const r = await tendencia([...lateral(30), ruptura, ...rampa(10, 111, 120, T0 + 31 * SPAN)]);
+
+    const entrada = r.fills.find((f) => f.levelKind === 'BASE');
+    expect(entrada).toBeDefined();
+    expect(entrada!.side).toBe('BUY');
+    // Con la vela de la ruptura ya reproducida y ninguna posterior.
+    expect(entrada!.ts).toBe(ruptura.t + SPAN - 1);
+    expect(Number(entrada!.price)).toBeCloseTo(110, 0);
+    expect(r.cycles[0].entries).toBe(1);
+  });
+
+  it('con velas de su intervalo agregadas, espera a que CIERRE la hora de la ruptura', async () => {
+    // Doce horas laterales en velas de 15 min y la ruptura en la primera vela
+    // de la hora siguiente. La hora no está cerrada hasta su cuarta vela: entrar
+    // antes sería decidir con una vela que aún no existe.
+    const inicio = T0 + 48 * SPAN;
+    const hora = [
+      vela(inicio, '100', '111', '100', '110'),
+      vela(inicio + SPAN, '110', '111', '109', '110.5'),
+      vela(inicio + 2 * SPAN, '110', '111', '109', '110.5'),
+      vela(inicio + 3 * SPAN, '110', '111', '109', '110.5'),
+    ];
+    const r = await tendencia(
+      [...lateral(48), ...hora, ...lateral(8, inicio + HORA).map((v) => ({ ...v, c: '111' }))],
+      { candleInterval: '1h', breakoutPeriod: 5, atrPeriod: 5 },
+    );
+
+    const entrada = r.fills.find((f) => f.levelKind === 'BASE');
+    expect(entrada?.ts).toBe(inicio + HORA - 1);
+  });
+
+  it('sin velas de su intervalo no puede decidir, y el resultado lo dice', async () => {
+    const r = await tendencia(lateral(40, T0, HORA), { candleInterval: '15m' }, '1h');
+
+    expect(r.fillsTotal).toBe(0);
+    expect(r.warnings.some((w) => w.includes('15m') && w.includes('1h'))).toBe(true);
+  });
+
+  it('avisa de las velas que se gastan en calentar los indicadores', async () => {
+    const r = await tendencia(lateral(30));
+    expect(r.warnings.some((w) => /calentar/.test(w) && w.includes('25'))).toBe(true);
+  });
+
+  it('el seguimiento mide el máximo de la vela, no su cierre', async () => {
+    // Entrada a ~100 al cierre de la primera vela. La segunda sube a 130 y
+    // cierra en 125: con el máximo, el disparador va a 128,7 (130 × 0,99) y
+    // salta en la apertura de la tercera; con el cierre iría a 123,75 y no.
+    const r = await runReplay({
+      botId: '1a2b3c4d-0000-4000-8000-000000000000',
+      strategy: StrategyKind.TRAILING_PROFIT,
+      config: {
+        exchangeAccountId: 'acc-1',
+        symbol: 'BTC',
+        direction: 'LONG',
+        leverage: 1,
+        marginMode: 'ISOLATED',
+        totalInvestment: '1000',
+        activationMode: 'NONE',
+        takeProfitPct: '20',
+        trailingCallbackPct: '1',
+        trailingRepriceBps: 20,
+        cooldownMinutes: 0,
+      } as never,
+      venue: Venue.HYPERLIQUID,
+      market: TEST_MARKET,
+      interval: '15m',
+      candles: [
+        vela(T0, '100', '100', '100', '100'),
+        vela(T0 + SPAN, '100', '130', '100', '125'),
+        ...plano(3, '125', T0 + 2 * SPAN),
+      ],
+      params: PARAMS,
+    });
+
+    const salida = r.fills.find((f) => f.side === 'SELL');
+    expect(salida).toMatchObject({ price: '128.7', ts: T0 + 2 * SPAN });
+  });
+});
+
 describe('runReplay — stop-loss', () => {
   it('una caída que no llega al stop deja la posición abierta y no vende nada', async () => {
     // De 100 a 96 se llena el nivel de compra de ~97,1; el stop, un 10 % por

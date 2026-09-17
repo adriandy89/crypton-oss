@@ -172,4 +172,8 @@ ante un 429 se paran sin reintentar. A `findings.md` va solo la evidencia resumi
 | 054 | [Lo que cambia la IA: los avisos con sus valores, y su alcance medido](054-lo-que-cambia-la-ia/spec.md) | cambio | hecho (falta CA-9 manual; H-01 y H-02 del V2 corregidos en el 055) | `spec/054-lo-que-cambia-la-ia` |
 | 055 | [Los pendientes del Modo IA, y los errores que la app no veia](055-los-pendientes-del-modo-ia/spec.md) | cambio | hecho (falta CA-8 manual; desplegar primero la API) | `spec/055-los-pendientes-del-modo-ia` |
 | 056 | [Revision de los specs 053 a 055](056-revision-053-055/spec.md) | revision | hecho (20 hallazgos, ninguno Critico; 2 descartados, el resto corregido dentro; falta CA-4 manual) | `spec/055-los-pendientes-del-modo-ia` |
+| 057 | [Los stops nativos, las velas y el simulador](057-stops-velas-y-simulador/spec.md) | revision | hecho (11 hallazgos, 2 Criticos; todos corregidos dentro; falta CA-4 manual) | `spec/057-stops-velas-y-simulador` |
+| 058 | [El motor determinista del canal y la estrategia AI_CHANNEL](058-canal-determinista/spec.md) | cambio | hecho (falta CA-9 del usuario: el walk-forward con el juez) | `spec/058-canal-determinista` |
+| 059 | [La IA del canal, el producto y las guias](059-canal-ia/spec.md) | cambio | hecho (faltan CA-10 y CA-11 del usuario: la llamada de pago y la simulacion) | `spec/059-canal-ia` |
+| 060 | [Revision de los specs 057 a 059 antes de desplegar](060-revision-057-059/spec.md) | revision | hecho (63 hallazgos; corregidos dentro los 3 Criticos, F-07 —regresion del 057— y F-15; el resto en los seguimientos 061-071; falta CA-4 tras la simulacion) | `spec/060-revision-057-059` |
 

@@ -112,6 +112,9 @@ número que se enseña sea el de las filas que van a desaparecer. **No hay desha
   el historial que su dueño ve en la app. No se purgan por antigüedad simple.
 - **`bot_config_revisions`.** `bot.config_version` apunta a una de sus filas: borrarla dejaría al
   bot señalando al vacío.
+- **`bot_ai_decisions` y `bot_ai_intents`.** Son lo único que explica por qué un bot cambió solo de
+  configuración o abrió una operación. El cron solo vacía su parte pesada —el expediente y la
+  herramienta— a los 90 días (`RETENTION_AI_DOSSIER_DAYS`).
 
 ### Limitación conocida (spec 034)
 
@@ -122,8 +125,10 @@ alguien entra en esta pantalla.
 ## Lo que queda registrado
 
 Todo. Las acciones (`admin.user.disable`, `admin.user.enable`, `admin.user.sessions_revoke`,
-`admin.bot.command`) se escriben **antes de responder** y no se pierden en un reinicio. Y también
-las lecturas: abrir el listado de cuentas o la ficha de alguien deja su propia fila
+`admin.bot.command`, y desde el spec 059 `admin.ai_channel.entries_open`,
+`admin.ai_channel.entries_close` y `bot.ai_channel.pause_button`) se escriben **antes de
+responder** y no se pierden en un reinicio. Y también las lecturas: abrir el listado de cuentas o
+la ficha de alguien deja su propia fila
 (`admin.users.list`, `admin.user.read`, `admin.bots.list`, `admin.bot.read`), porque leer la ficha
 completa de una persona es un evento de privacidad y no una consulta cualquiera.
 
@@ -147,6 +152,13 @@ solo tiene sentido durante un incidente concreto y sabiendo esto.
 
 Si la marca no se pudo escribir, la pantalla lo dice: la cuenta queda deshabilitada, pero su token
 en curso aguanta lo que le quede de vida (`JWT_ACCESS_TTL`, 15 minutos por defecto).
+
+> ⚠️ **Limitación conocida (F-06, abierta a 2026-09-17).** Deshabilitar una cuenta no para sus bots,
+> como dice esta ficha… salvo los del **canal con IA**: al siguiente relevo de worker —un despliegue,
+> un reinicio, un corte de Redis— el bot queda en ERROR con su posición abierta, sin vigilante ni
+> salidas, y en ERROR no admite ni PAUSE ni PANIC.
+> **Hasta que se corrija:** antes de deshabilitar a un administrador con bots del canal, ciérralos con
+> «parar y cerrar». Estado: `specs/060-revision-057-059/findings.md` § F-06.
 
 ## Modo IA: un supervisor que vigila bots vivos (spec 046)
 
@@ -435,3 +447,98 @@ Porque la regla de esta consola es *mirar y contener, nunca disponer del dinero 
 que reescribe la configuración de un bot ajeno la rompería. Al limitarlo a bots propios no es un
 administrador operando el bot de otro: es el dueño operando el suyo con una herramienta, y lo que se
 puede hacer sobre bots de terceros sigue siendo exactamente lo de antes — pausar y sacar del motor.
+
+## Canal con IA (spec 059)
+
+La estrategia **Canal con IA** (`AI_CHANNEL`) es la única que **solo puede usar un
+administrador**, y para todos los demás no existe: no sale en la lista de estrategias, y crearla,
+previsualizarla, editarla o arrancarla responde `403`. El rol se lee de la base en cada uno de esos
+caminos, así que a quien le retiran el rol deja de poder arrancar su bot en la petición siguiente.
+Tampoco la cubren los planes, el ranking, el asesor ni el Modo IA. La guía de la estrategia está en
+[ai-channel.md](./ai-channel.md).
+
+El reparto es el del Modo IA: **el worker calcula y ejecuta; la API solo pregunta**. El modelo elige
+entre operaciones que ya calculó el motor, con palabras de una lista, y nunca escribe un número.
+
+### Dónde se ve y dónde se cambia
+
+- **La pastilla.** En la lista de bots, en la cabecera del bot y en la lista de la consola, cada bot
+  propio del canal lleva la suya: consultando, en sombra, en pausa por fallos, apagada o sin
+  entradas. Sale en gris cuando la IA no está consultando. Como la del Modo IA, solo aparece en
+  bots propios.
+- **El panel.** En el detalle del bot (pestaña Resumen) y en la ficha de la consola: el estado de la
+  IA, el mercado, la operación abierta, el día y las decisiones con sus motivos. Desde ahí se pausa
+  el bot y se cortan o abren sus entradas.
+- **El interruptor global.** En el índice de Administración, debajo de las pantallas. **Corta o abre
+  las entradas de todos los bots del canal a la vez**, con motivo obligatorio. Las posiciones
+  abiertas siguen con su stop y sus objetivos.
+  - Se guarda en Redis (`crypton:ai-channel:entries`). El worker lo lee en cada revisión y, con
+    Redis caído, lo da por cortado.
+  - La API comprueba lo escrito leyéndolo de vuelta: si Redis no contesta, responde `503` y el
+    interruptor no cambia.
+  - Queda en la bitácora (`admin.ai_channel.entries_open` o `…_close`, en `WARN`).
+
+### Las rutas
+
+| Ruta | Qué |
+|---|---|
+| `GET /admin/ai-channel` | Los interruptores y los bots propios del canal, con su lazo y su última decisión |
+| `PUT /admin/ai-channel/entries` | `{ abiertas, reason }`: el interruptor global |
+| `GET /admin/bots/:id/ai-channel` | El estado de un bot propio: interruptores, lazo, día y últimas cinco decisiones |
+| `GET /admin/bots/:id/ai-channel/decisiones` | Las decisiones, de la más reciente hacia atrás (`antes`, `limite` ≤ 50) |
+| `GET /admin/bots/:id/ai-channel/decisiones/:intentId` | Una decisión con la herramienta completa que vio el modelo |
+
+Sobre un bot ajeno, `403`; sobre uno que no es del canal, `404`. Esto no amplía lo que un
+administrador puede hacer sobre bots de otros.
+
+### El botón de pausa de Telegram
+
+Cada aviso de operación abierta lleva **⏸ Pausar el bot**. El botón lleva un vale opaco, nunca el
+id del bot. La API lo canjea:
+
+1. el vale sirve **una vez**, también con varias réplicas, y caduca a las **24 horas**;
+2. tiene que ser del usuario del chat;
+3. el dueño tiene que seguir siendo administrador habilitado;
+4. manda `PAUSE` por el camino de siempre y lo apunta (`bot.ai_channel.pause_button`, `WARN`).
+
+Pausar cancela los objetivos y deja **solo el stop** en el exchange.
+
+### Cuándo pregunta, y qué pasa si falla
+
+- **Solo con una operación lista.** El worker deja la solicitud al cerrar la vela de 5 minutos, y
+  caduca un minuto después.
+- **La API la reclama** con una escritura condicional: dos réplicas nunca preguntan por la misma.
+  Escucha el bus y, por si un aviso se pierde, mira cada 10 segundos. Cada minuto caduca lo vencido.
+- **Antes de llamar** comprueba el interruptor del servidor, el dueño, el estado del bot, la pausa
+  por fallos, el interruptor global, el plazo, la oferta y los cupos. **El cupo se cuenta antes de
+  llamar**, y sin Redis no se llama.
+- **Con la IA apagada** la API no llama, pero cierra cada solicitud con su motivo: el panel dice por
+  qué el bot no entra.
+- **Un fallo** —sin respuesta, o fuera del contrato— no abre nada. Con **cinco seguidos**, ese bot
+  deja de preguntar **seis horas** y avisa (como mucho una vez por hora).
+
+### Las variables
+
+| Variable | Por defecto | Qué |
+|---|---|---|
+| `AI_CHANNEL_ENABLE` | `false` | El interruptor del servidor. Con `false` no se llama a nadie. Usa `OPENROUTER_API_KEY` |
+| `AI_CHANNEL_MODEL` | `anthropic/claude-sonnet-5` | El modelo |
+| `AI_CHANNEL_REASONING` | `medium` | Esfuerzo de razonamiento (`low`, `medium` o `high`) |
+| `AI_CHANNEL_TIMEOUT_MS` | `20000` | Plazo de cada llamada, con tope en 25.000 |
+| `AI_CHANNEL_DAILY_LIMIT` | `48` | Consultas al día por bot. Manda el menor entre esto y el campo del bot |
+| `AI_CHANNEL_GLOBAL_DAILY_LIMIT` | `400` | Consultas al día de toda la plataforma |
+| `AI_CHANNEL_PROMPT_CACHE` | `1h` | Caché de la parte fija del prompt: `1h`, `5m` u `off` |
+| `AI_CHANNEL_SHADOW_ONLY` | `false` | Modo sombra: decide y registra, y nunca ejecuta |
+| `AI_CHANNEL_CONCURRENCY` | `4` | Consultas a la vez por réplica de la API |
+| `AI_CHANNEL_MAX_BOTS_PER_VENUE` (worker) | `LIGHTER=2` | Bots reales del canal por venue. El que no cabe queda en error |
+
+Los contadores del día van por día UTC. El gasto de cada consulta queda en su fila, y el del día en
+el panel.
+
+### El rastro
+
+Cada solicitud es una fila de `bot_ai_intents` con su historia (pedida, consultando, decidida,
+aceptada, abierta, cerrada, o sin entrada, fallida, descartada o caducada), la herramienta que vio
+el modelo, lo que eligió, lo que dijo, el plan que resultó, el modelo, la versión del prompt, lo
+que tardó y lo que costó. **La fila no se borra nunca**. La herramienta se vacía a los 90 días
+(`RETENTION_AI_DOSSIER_DAYS`), igual que el expediente del Modo IA.

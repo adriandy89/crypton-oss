@@ -11,7 +11,8 @@ import {
   IonToolbar,
 } from '@ionic/angular/standalone';
 import { capitalActual } from '@crypton/shared';
-import { ToastService } from '../../core/services';
+import { BotsService, ToastService } from '../../core/services';
+import type { BotDetail } from '../../core/models';
 import { AuthService } from '../../core/auth';
 import {
   ADMIN_BOT_COMMANDS,
@@ -25,6 +26,7 @@ import { errorText, money, shortDate, signed, strategyLabel, venueLabel } from '
 import type { CambioIa } from '../../core/utils/modo-ia';
 import { ModoIaAccionesService } from '../../shared/bot/modo-ia-acciones.service';
 import { ModoIaPanelComponent } from '../../shared/bot/modo-ia-panel.component';
+import { CanalIaPanelComponent } from '../../shared/bot/canal-ia-panel.component';
 import {
   UiBadgeComponent,
   UiCardComponent,
@@ -79,6 +81,7 @@ const CONTENIBLES = ['STARTING', 'RUNNING', 'PAUSED'];
     UiStatusPillComponent,
     AdminForbiddenComponent,
     ModoIaPanelComponent,
+    CanalIaPanelComponent,
   ],
   template: `
     <ion-header class="ion-no-border">
@@ -146,7 +149,19 @@ const CONTENIBLES = ['STARTING', 'RUNNING', 'PAUSED'];
           <!-- El Modo IA solo aparece en los bots del PROPIO administrador: sobre
                uno ajeno el servidor responde 403, y ofrecer un interruptor que va
                a fallar es peor que no ofrecerlo. -->
-          @if (esMio(b)) {
+          @if (esMio(b) && b.strategy === 'AI_CHANNEL') {
+            <!-- El canal con IA tiene su panel y el Modo IA no lo cubre (spec
+                 059). El panel necesita el detalle que ve el dueño —la
+                 configuración y el ciclo—, y aquí quien mira ES el dueño. -->
+            <ui-section title="Canal con IA" />
+            @if (propio(); as p) {
+              <app-canal-ia-panel class="ia" [bot]="p" (cambiado)="cargar()" />
+            } @else if (propioFallo(); as fallo) {
+              <ui-notice tone="danger" icon="warning-outline">{{ fallo }}</ui-notice>
+            } @else {
+              <div class="center"><ion-spinner name="crescent" /></div>
+            }
+          } @else if (esMio(b)) {
             <ui-section title="Modo IA" />
             <!-- El mismo panel que el detalle del bot (spec 053). -->
             <app-modo-ia-panel
@@ -258,10 +273,15 @@ export class AdminBotDetailPage implements OnInit {
 
   private readonly auth = inject(AuthService);
   private readonly accionesIa = inject(ModoIaAccionesService);
+  private readonly bots = inject(BotsService);
 
   readonly bot = signal<AdminBotDetail | null>(null);
   readonly forbidden = signal(false);
   readonly noExiste = signal(false);
+
+  /** El detalle del dueño, para el panel del canal con IA de un bot propio (spec 059). */
+  readonly propio = signal<BotDetail | null>(null);
+  readonly propioFallo = signal<string | null>(null);
 
   /** El Modo IA del bot, si es propio. `null` mientras se lee. */
   readonly ia = signal<AiSetting | null>(null);
@@ -346,6 +366,15 @@ export class AdminBotDetailPage implements OnInit {
     }
   }
 
+  private async cargarPropio(): Promise<void> {
+    try {
+      this.propio.set(await this.bots.detail(this.id));
+      this.propioFallo.set(null);
+    } catch (e) {
+      this.propioFallo.set(errorText(e));
+    }
+  }
+
   contenible(b: AdminBotDetail): boolean {
     return CONTENIBLES.includes(b.status);
   }
@@ -369,7 +398,7 @@ export class AdminBotDetailPage implements OnInit {
     void this.acciones.comandoDeBot(b, c, () => this.cargar());
   }
 
-  private async cargar(): Promise<void> {
+  async cargar(): Promise<void> {
     try {
       const b = await this.api.detail(this.id);
       this.bot.set(b);
@@ -377,8 +406,10 @@ export class AdminBotDetailPage implements OnInit {
       this.noExiste.set(false);
 
       // El Modo IA solo se pide si el bot es propio: sobre uno ajeno el servidor
-      // responde 403, y un 403 esperado no es un error que enseñar.
-      if (this.esMio(b)) await this.cargarIa();
+      // responde 403, y un 403 esperado no es un error que enseñar. Un bot del
+      // canal con IA no lo tiene: tiene su panel, que lee el detalle del dueño.
+      if (this.esMio(b) && b.strategy === 'AI_CHANNEL') await this.cargarPropio();
+      else if (this.esMio(b)) await this.cargarIa();
     } catch (e) {
       const status = (e as { status?: number }).status;
       if (status === 403) this.forbidden.set(true);

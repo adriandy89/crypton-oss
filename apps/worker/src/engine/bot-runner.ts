@@ -3,20 +3,30 @@ import { Subscription } from 'rxjs';
 import {
   D,
   Decimal,
+  EstadoIntencion,
+  EventoCanal,
   ExchangeError,
   FairPriceOrigin,
+  MotivoRechazo,
   PriceSource,
   SourceMarketType,
+  candleSpanMs,
+  operacionCanalDe,
+  type AvisoEstrategia,
   type BotConfig,
   type BotContext,
   type CycleState,
   type DesiredOrder,
   type DesiredState,
   type Fill,
+  type LimitesExternos,
+  type MarcaDecision,
   type MarginAdjustment,
   type MarketSpec,
+  type NivelApalancamiento,
   type OrderAck,
   type Position,
+  type SolicitudIa,
   type StrategyKind,
   type Candle,
   type CandleInterval,
@@ -25,9 +35,11 @@ import {
   type VenueOrder,
 } from '@crypton/shared';
 import {
+  VENUE_CAPABILITIES,
   codecFor,
   isVenueUnavailable,
   shortMessage,
+  type AcuseApalancamiento,
   type ExchangeAdapter,
 } from '@crypton/exchange-core';
 import {
@@ -40,7 +52,9 @@ import {
   type ReconcilePlan,
   type Strategy,
 } from '@crypton/strategy-core';
+import type { AiIntentsLike } from './ai-intents.store';
 import type { BotStore, BotRecord, RiskGuards } from './bot-store';
+import { avisoDeEntrada, eventoDeSalida, motivoDeSalida } from './canal-avisos';
 
 export type RunnerCommand =
   | 'PAUSE'
@@ -92,7 +106,106 @@ const REANCHOR_NO_APLICA: Partial<Record<StrategyKind, string>> = {
   MARKET_MAKER: 'el market maker cotiza alrededor de la referencia en cada tick, no tiene ancla.',
   MARKET_MAKER_V2:
     'el market maker cotiza alrededor de la referencia en cada tick, no tiene ancla.',
+  // Faltaban (spec 057, F-11): con el comando dentro, el motor anunciaba
+  // «retícula recentrada» y borraba los niveles del ciclo.
+  TREND_FOLLOW:
+    'la estrategia de tendencia entra por ruptura del canal y sigue al precio con su stop; no cuelga de un ancla.',
+  TRAILING_PROFIT:
+    'el seguimiento de beneficio abre una sola posición y la sigue desde el objetivo; no cuelga de un ancla.',
+  AI_CHANNEL:
+    'el canal con IA opera cada vez en el canal que ve en ese momento, con su stop y sus objetivos; no cuelga de un ancla.',
 };
+
+// ── Canal con IA (spec 058) ────────────────────────────────────────────────
+
+/** Las series se deciden al cierre de cada vela de 5 min. */
+const CIERRE_MS = 5 * 60_000;
+
+/**
+ * Cuánto después del cierre se despierta el bot. El feed de velas no pide la
+ * vela recién cerrada hasta pasados dos segundos más un desfase de hasta tres
+ * (`MarketDataService`), y el bot tiene que llegar después.
+ */
+const MARGEN_CIERRE_MS = 6_000;
+
+/** Desfase por bot, para que los de un mismo par no despierten a la vez. */
+const DESFASE_CIERRE_MAX_MS = 2_000;
+
+/** Lo más que se espera, FUERA del cerrojo, a que llegue la vela recién cerrada. */
+const ESPERA_VELAS_MS = 8_000;
+
+/** Refresco de una serie aunque no cierre nada: el de su intervalo, sin pasar de 15 min. */
+const TTL_SERIE_MAX_MS = 15 * 60_000;
+
+/**
+ * El TTL de una serie del canal. La vela que cierra la trae el propio feed en
+ * cuanto cierra; esto es solo la red por si ese intento falló.
+ */
+const ttlDeSerie = (iv: CandleInterval): number => Math.min(candleSpanMs(iv), TTL_SERIE_MAX_MS);
+
+/** Vida de los tramos y del modo de posición leídos del venue. */
+const LECTURA_VENUE_TTL_MS = 10 * 60_000;
+
+/** Tras un fallo leyéndolos, cuánto se espera antes de volver a preguntar. */
+const LECTURA_VENUE_FALLO_MS = 60_000;
+
+/**
+ * Una posición del canal sin stop confirmado en el venue durante más de esto se
+ * cierra a mercado. Es el vigilante del spec: la posición va apalancada y su
+ * única red es el stop nativo.
+ *
+ * Lighter tiene más margen: su acuse solo dice que la transacción está bien
+ * formada, y el stop aparece en el libro algo después. Con su revisión cada
+ * 8 s, 5 s cerrarían en la primera que no lo viera todavía.
+ */
+const SIN_STOP_MAX_MS: Partial<Record<Venue, number>> = { LIGHTER: 10_000 };
+const SIN_STOP_DEFECTO_MS = 5_000;
+
+/**
+ * Cada cuánto se revisa un bot del canal con una entrada en curso o una
+ * posición sin stop confirmado. Lighter es más lento en confirmar y tiene un
+ * cupo más estrecho.
+ */
+const VIGILANCIA_MS: Partial<Record<Venue, number>> = {
+  HYPERLIQUID: 3_000,
+  ASTER: 3_000,
+  LIGHTER: 8_000,
+};
+
+/**
+ * Con la regla de liquidación por stop, la guarda actúa cuando el precio ha
+ * recorrido esta parte del camino entre la entrada y la liquidación. El aviso
+ * por porcentaje no sirve ahí: a 25x la liquidación está siempre «cerca».
+ */
+const RECORRIDO_LIQUIDACION = D(2).div(3);
+
+/**
+ * Con el tope diario que se reabre solo, la guarda del motor no pausa al tope:
+ * la estrategia ya cierra las entradas. Pausa al 1,5, que ya no es un mal día.
+ */
+const FACTOR_PAUSA_DIARIA = D('1.5');
+
+/** Desfase fijo por bot (FNV-1a): el mismo bot cae siempre en el mismo sitio. */
+function desfaseDeBot(botId: string): number {
+  let h = 0x811c9dc5;
+  for (let i = 0; i < botId.length; i++) {
+    h ^= botId.charCodeAt(i);
+    h = Math.imul(h, 0x01000193);
+  }
+  return (h >>> 0) % DESFASE_CIERRE_MAX_MS;
+}
+
+const hayEntradas = (d: DesiredState): boolean =>
+  d.orders.some((o) => !o.reduceOnly) || d.immediate.some((o) => !o.reduceOnly);
+
+/** El mismo plan sin sus entradas: las salidas y el stop siguen. */
+const sinEntradas = (d: DesiredState, nota: string): DesiredState => ({
+  ...d,
+  orders: d.orders.filter((o) => o.reduceOnly),
+  immediate: d.immediate.filter((o) => o.reduceOnly),
+  apalancamiento: undefined,
+  note: nota,
+});
 
 /**
  * Cada cuántos ticks se barren las ejecuciones por REST aunque el stream diga
@@ -294,7 +407,26 @@ export interface CandleSourceLike {
     interval: CandleInterval,
     bars: number,
     testnet?: boolean,
+    opts?: { ttlMs?: number },
   ): Candle[] | null;
+  /**
+   * La misma ventana, esperando a la vela recién cerrada (spec 058). Opcional:
+   * sin ella, el canal con IA decide con lo que haya.
+   */
+  candleWindow?(
+    venue: Venue,
+    symbol: string,
+    interval: CandleInterval,
+    bars: number,
+    testnet?: boolean,
+    opts?: { ttlMs?: number; esperarMs?: number },
+  ): Promise<Candle[] | null>;
+}
+
+/** El interruptor global de entradas del canal con IA, ya leído. */
+export interface EstadoInterruptor {
+  permitidas: boolean;
+  motivo: string | null;
 }
 
 export interface PriceSourceLike {
@@ -358,6 +490,16 @@ export interface BotRunnerDeps {
    * así que un runner sin esto funciona igual para todas las demás.
    */
   candleSource?: CandleSourceLike;
+  /**
+   * Las intenciones del canal con IA (spec 058). Una estrategia que las consume
+   * no abre nada sin esto: la entrada se anota ANTES de salir hacia el venue.
+   */
+  intents?: AiIntentsLike;
+  /**
+   * Lee el interruptor global de entradas del canal con IA. Sin él, o si falla
+   * (Redis caído), no hay entradas.
+   */
+  interruptorCanal?: () => Promise<EstadoInterruptor>;
   /**
    * Arranca en pausa. Se usa al adoptar un bot que ya estaba pausado.
    *
@@ -460,6 +602,12 @@ export class BotRunner {
    * (revisión del spec 050, M-1).
    */
   private posicionAbierta: boolean | null = null;
+  /**
+   * La posición leída en el último tick. Solo para el aviso de entrada del
+   * canal (spec 059): la cantidad y el precio reales de la IOC, que pueden no
+   * ser los del plan.
+   */
+  private posicionDelTick: Position | null = null;
   /** ¿Se ha contrastado ya el ciclo con el venue tras adoptar? */
   private startupChecked = false;
   /**
@@ -521,6 +669,13 @@ export class BotRunner {
   private stopRechazoAvisado: string | null = null;
 
   /**
+   * ¿Se ha avisado ya de que se conserva un stop que el plan no pedía? Una vez
+   * por racha: vuelve a falso en cuanto el plan trae su stop o no hay posición.
+   * Ver `conservarStopPropio`.
+   */
+  private stopConservadoAvisado = false;
+
+  /**
    * ¿Sigue la posición pudiendo crecer en este tick?
    *
    * Se calcula una vez por tick y lo consulta `revisarOrden`. Es lo que
@@ -577,6 +732,28 @@ export class BotRunner {
    */
   private stopLossVivo = false;
 
+  // ── Canal con IA (spec 058) ──────────────────────────────────────────
+
+  /** Despertador del cierre de cada vela de 5 min. */
+  private cierreTimer: NodeJS.Timeout | null = null;
+  /** Tick de vigilancia pendiente: entrada en curso o posición sin stop. */
+  private vigilanciaTimer: NodeJS.Timeout | null = null;
+  /** Tramos del par leídos del venue, con su hora y el motivo si fallaron. */
+  private tramosLeidos: {
+    at: number;
+    valor: NivelApalancamiento[] | null;
+    motivo: string | null;
+  } | null = null;
+  /** Modo de posición leído: true = unidireccional; null = no se sabe. */
+  private modoLeido: { at: number; unidireccional: boolean | null; motivo: string | null } | null =
+    null;
+  /** Avisos de la estrategia ya emitidos y que siguen vigentes. Ver `emitirAvisos`. */
+  private readonly avisosVivos = new Set<string>();
+  /** Desde cuándo hay posición sin stop confirmado. Ver `vigilarStop`. */
+  private sinStopDesde: number | null = null;
+  /** La intención ya marcada como ABIERTA, para no repetir la escritura en cada tick. */
+  private abiertaAnotada: string | null = null;
+
   constructor(private readonly deps: BotRunnerDeps) {
     this.paused = deps.startPaused === true;
     this.logger = new Logger(`Bot:${deps.bot.id.slice(0, 8)}`);
@@ -591,6 +768,25 @@ export class BotRunner {
 
   get botId(): string {
     return this.deps.bot.id;
+  }
+
+  /** Lo que el motor necesita para aplicar el tope de bots del canal por venue. */
+  get perfil(): { strategy: StrategyKind; venue: Venue; dryRun: boolean } {
+    const { strategy, venue, dry_run } = this.deps.bot;
+    return { strategy, venue, dryRun: dry_run };
+  }
+
+  /**
+   * Pide un tick desde fuera: una intención del canal ha cambiado y el bot la
+   * mira ya, en vez de esperar al latido (spec 058).
+   */
+  pedirTick(): void {
+    this.requestTick();
+  }
+
+  /** ¿Consume esta estrategia las intenciones del canal con IA? */
+  private get esCanal(): boolean {
+    return this.strategy.consumeDecisionesIa === true;
   }
 
   // ═══════════════════════════════════════════════════════════════
@@ -624,7 +820,12 @@ export class BotRunner {
     // Lighter y Aster son configuración on-chain o de cuenta, y una orden
     // enviada con el apalancamiento anterior abre una posición del tamaño
     // equivocado sin ningún aviso.
-    await this.syncLeverage();
+    //
+    // Salvo en la estrategia que lo pide en cada entrada (spec 058): allí el
+    // `leverage` de la configuración es un TOPE, no el valor que se usa, y
+    // fijarlo al arrancar con una posición abierta cambiaría la de esa
+    // operación.
+    if (this.strategy.apalancamientoPorOperacion !== true) await this.syncLeverage();
 
     // El modo de posición va junto al apalancamiento y por el mismo motivo: es
     // configuración de cuenta, no de orden. En modo cobertura una venta abre un
@@ -733,6 +934,9 @@ export class BotRunner {
       },
       Math.floor(Math.random() * period),
     );
+    // Quien decide con series decide al cierre de cada vela, no al ritmo del
+    // latido (spec 058).
+    if (this.strategy.series) this.programarCierre();
 
     await this.exclusive(() => this.tick());
   }
@@ -748,6 +952,10 @@ export class BotRunner {
     this.startTimer = null;
     if (this.timer) clearInterval(this.timer);
     this.timer = null;
+    if (this.cierreTimer) clearTimeout(this.cierreTimer);
+    this.cierreTimer = null;
+    if (this.vigilanciaTimer) clearTimeout(this.vigilanciaTimer);
+    this.vigilanciaTimer = null;
     for (const s of this.subs) s.unsubscribe();
     this.subs = [];
     // Se espera al cerrojo antes de cerrar el adaptador: si hay un tick a
@@ -822,6 +1030,15 @@ export class BotRunner {
 
       const position = positions[0] ?? null;
       this.posicionAbierta = position !== null && !D(position.qty).isZero();
+      this.posicionDelTick = position;
+      // Lo que consta en el libro, y no solo lo que este proceso llegó a
+      // colocar: tras un reinicio el stop ya estaba y la coletilla decía que no
+      // constaba (spec 057, F-09). Si en este tick se coloca o se rechaza,
+      // `place()` lo corrige.
+      const idsDeStop = this.idsDeStop(cycleSeq);
+      this.stopLossVivo = openOrders.some(
+        (o) => o.clientOrderId != null && idsDeStop.has(o.clientOrderId),
+      );
 
       // Solo en el primer tick tras adoptar, y con el barrido de ejecuciones ya
       // hecho: es el único momento en que el ciclo puede venir de un hueco que
@@ -844,6 +1061,7 @@ export class BotRunner {
         // Un bot pausado que llega hasta aquí está sano: ha hablado con el
         // venue. Sin marcarlo, el chequeo de salud lo daría por atascado.
         this.markTickOk();
+        await this.protegerEnPausa(ticker, position, openOrders, balances[0]?.available ?? '0');
         if (this.persistDue()) await this.snapshot(ticker, position, openOrders.length);
         return;
       }
@@ -858,11 +1076,22 @@ export class BotRunner {
           await this.runCommand('STOP_AND_CLOSE');
         } else {
           await this.pauseForRisk(breach.reason);
+          await this.protegerEnPausa(ticker, position, openOrders, balances[0]?.available ?? '0');
         }
         return;
       }
 
-      const ctx = this.buildContext(ticker, position, openOrders, balances[0]?.available ?? '0');
+      // El canal con IA decide con más que el libro: su historial del día, su
+      // intención vigente, los tramos del par y lo que puede cerrar las
+      // entradas desde fuera (spec 058).
+      const delCanal = this.esCanal ? await this.contextoDelCanal() : undefined;
+      const ctx = this.buildContext(
+        ticker,
+        position,
+        openOrders,
+        balances[0]?.available ?? '0',
+        delCanal,
+      );
       // La ventana se cierra AQUÍ y solo aquí, que es donde se planifica de
       // verdad. `buildContext` se usa también al recibir una ejecución y en
       // `ADD_SAFETY_NOW`, y vaciarla allí se comería el máximo justo cuando más
@@ -870,7 +1099,7 @@ export class BotRunner {
       // el plan siguiente ya no (spec 042 R-6).
       this.extremos = null;
       await this.warnIfFairPriceStale(ctx);
-      const desired = this.withStopLoss(this.strategy.plan(ctx), position, cycleSeq);
+      let desired = this.withStopLoss(this.strategy.plan(ctx), position, cycleSeq);
 
       if (desired.scratchPatch) {
         this.cycle = {
@@ -878,6 +1107,13 @@ export class BotRunner {
           scratch: { ...this.cycle.scratch, ...desired.scratchPatch },
         };
         await store.saveCycleScratch(this.botId, this.cycle.scratch);
+      }
+
+      if (this.esCanal) {
+        const delPlan = await this.aplicarCanal(desired, cycleSeq);
+        // Pausado por la propia estrategia: no se toca el libro.
+        if (!delPlan) return;
+        desired = delPlan;
       }
 
       const plan = reconcile({
@@ -892,7 +1128,8 @@ export class BotRunner {
         ownIds: new Set(ownVenueIds),
       });
 
-      await this.execute(plan, desired);
+      await this.execute(await this.conservarStopPropio(plan, desired, cycleSeq), desired);
+      if (this.esCanal) await this.despuesDelCanal();
 
       // «Acción al alcanzar el límite: apagar». La estrategia no puede parar el
       // bot —es una función pura—, así que lo pide por el scratch y el runner lo
@@ -1029,7 +1266,7 @@ export class BotRunner {
           venueOrderId: order.venueOrderId,
           clientOrderId: order.clientOrderId ?? undefined,
         });
-        await store.markOrderCanceled(bot.id, order.venueOrderId);
+        await store.markOrderCanceled(bot.id, order.venueOrderId, order.clientOrderId);
       });
     }
 
@@ -1041,7 +1278,7 @@ export class BotRunner {
           venueOrderId: existing.venueOrderId,
           clientOrderId: existing.clientOrderId ?? undefined,
         });
-        await store.markOrderCanceled(bot.id, existing.venueOrderId);
+        await store.markOrderCanceled(bot.id, existing.venueOrderId, existing.clientOrderId);
         await this.place(want, `reemplazo (${reason})`, this.strategy.reusesOrderSlots === true);
       });
     }
@@ -1139,7 +1376,15 @@ export class BotRunner {
       this.entradasVivas && !salidaDefinitiva,
       this.lastTicker?.mark,
     );
-    if (veredicto.motivo !== 'OK') {
+    // El stop de una posición apalancada por operación no espera a nadie ni se
+    // calla por el mínimo del venue: se manda, y si el venue lo rechaza, el
+    // aviso es CRITICAL y el vigilante cierra la posición (spec 058). Solo una
+    // orden imposible —cantidad o precio a cero— no sale.
+    const stopExento =
+      order.levelKind === 'STOP_LOSS' &&
+      this.strategy.apalancamientoPorOperacion === true &&
+      veredicto.motivo !== 'IMPOSIBLE';
+    if (veredicto.motivo !== 'OK' && !stopExento) {
       if (order.levelKind === 'STOP_LOSS') this.stopLossVivo = false;
       // Cuarentena por FORMA, no por id: en cuanto entre otra ejecución la
       // cantidad cambia, la forma cambia y se vuelve a intentar sola. Es lo que
@@ -1166,7 +1411,13 @@ export class BotRunner {
     // distinción, cada cotización moría tras su primera ejecución y no volvía
     // hasta que la posición pasara por cero.
     const already = await store.findOrderByCoid(order.clientOrderId);
-    if (already && already.status !== 'CANCELED' && already.status !== 'REJECTED') {
+    // Una orden que venció (una IOC sin ejecutar en Aster, una con caducidad)
+    // ya no está en el libro, igual que una cancelada (spec 058).
+    const muerta =
+      already?.status === 'CANCELED' ||
+      already?.status === 'REJECTED' ||
+      already?.status === 'EXPIRED';
+    if (already && !muerta) {
       if (!(allowRefill && already.status === 'FILLED')) {
         if (!this.pendienteVencida(already)) {
           return null; // Ya existe: un reintento no debe duplicarla.
@@ -1210,6 +1461,8 @@ export class BotRunner {
         reduceOnly: order.reduceOnly,
         timeInForce: order.timeInForce,
         triggerPrice: order.triggerPrice,
+        // La caducidad, donde el venue la admite (spec 058).
+        ...(order.expiresAt !== undefined ? { expiresAt: order.expiresAt } : {}),
         // El sentido del disparo viaja EXPLÍCITO: el adaptador no puede
         // deducirlo del lado y el reduce-only, y deducirlo mal invierte la
         // condición de disparo (un stop-loss etiquetado como take-profit se
@@ -1223,6 +1476,43 @@ export class BotRunner {
     } catch (e) {
       const err = e as ExchangeError;
       if (order.levelKind === 'STOP_LOSS') this.stopLossVivo = false;
+
+      // Estado desconocido: la orden pudo entrar (spec 057, F-06). Marcarla
+      // rechazada dejaba que el tick siguiente la mandara otra vez, y una de
+      // mercado que sí entró ya no está entre las abiertas: la segunda doblaba
+      // la posición. La fila se queda PENDING, que veta el reenvío hasta que la
+      // sincronización con el venue la resuelva o venza (`pendienteVencida`).
+      //
+      // Las que solo reducen siguen el camino de siempre: repetirlas no puede
+      // abrir nada, y un stop o un cierre no deben esperar cinco minutos.
+      //
+      // Y las que REPOSAN, también (spec 060, F-07). El peligro que motivó esto
+      // es una orden de ejecución inmediata que entró y ya no está en el libro:
+      // la segunda dobla la posición. Una orden en reposo que entró SÍ se ve en
+      // el libro al tick siguiente, y mientras siga viva el venue rechaza el
+      // duplicado por id. Vetarla dejaba al market maker sin cotizar un lado
+      // hasta cinco minutos, y para siempre cuando el hueco reutiliza su id.
+      const inmediata =
+        order.type === 'MARKET' || order.timeInForce === 'IOC' || order.timeInForce === 'FOK';
+      if (err.estadoDesconocido === true && order.reduceOnly !== true && inmediata) {
+        await this.event(
+          'ORDER_RETRY',
+          'WARN',
+          `${order.levelKind}#${order.levelIndex} ${order.side} ${order.qty}: no se sabe si ` +
+            `llegó al exchange (${err.message}). No se reenvía hasta saberlo; si no aparece, se ` +
+            `vuelve a intentar en ${PENDING_ORPHAN_MS / 60_000} min.`,
+          { clientOrderId: order.clientOrderId, kind: err.kind },
+        );
+        // Cuenta como fallo pasajero: un venue que no deja saber nada, tick
+        // tras tick, acaba en la misma pausa que uno que no deja colocar.
+        if (++this.placeFailures >= MAX_PLACE_FAILURES && !this.paused) {
+          await this.pauseForRisk(
+            `${this.placeFailures} colocaciones seguidas sin salir (última: ${err.message})`,
+          ).catch(() => undefined);
+        }
+        return null;
+      }
+
       await store.rejectOrder(order.clientOrderId, err.message);
 
       // Un rechazo por reglas es información, no una avería: suele significar
@@ -1538,6 +1828,15 @@ export class BotRunner {
       const ours: Fill = { ...fill, clientOrderId: id };
 
       const before = this.cycle.scratch.cycleSeq;
+      // El canal avisa de la salida con su resultado en R y su motivo. La
+      // operación y el cierre en curso se leen AHORA: el ciclo nuevo empieza con
+      // el scratch vacío (spec 059).
+      const salidaCanal = this.esCanal
+        ? {
+            op: operacionCanalDe(this.cycle.scratch),
+            cierre: this.cycle.scratch['cierre'],
+          }
+        : null;
       this.cycle = await this.deps.store.applyFillToCycle(this.botId, this.cycle, ours, {
         recycleLevelOnExit: this.strategy.recycleLevelOnExit === true,
         rebuysOffLevelIndexes: this.strategy.rebuysOffLevelIndexes === true,
@@ -1547,9 +1846,21 @@ export class BotRunner {
         // ciclo: es un campo HOT, y una recarga que no llega aquí se anuncia
         // como aplicada sin serlo (001/F-86). El backtest ya lo lee así.
         cooldownMinutes: Number(this.config.cooldownMinutes ?? 0),
+        ...(salidaCanal
+          ? {
+              eventoCierre: (cierre: { seq: number; pnl: Decimal }) =>
+                eventoDeSalida(
+                  cierre,
+                  salidaCanal.op,
+                  motivoDeSalida(id, liquidacion, salidaCanal.op, salidaCanal.cierre),
+                  this.market.quote,
+                ),
+            }
+          : {}),
       });
       // Ciclo nuevo: los rechazos del anterior ya no significan nada.
       if (this.cycle.scratch.cycleSeq !== before) this.quarantine.clear();
+      if (this.esCanal) await this.anotarEjecucionDelCanal(this.cycle.scratch.cycleSeq !== before);
 
       // La estrategia solo interviene si tiene memoria propia (las recompras de
       // GridMart). Lo genérico —entradas, niveles llenos, precio medio— ya lo
@@ -1740,6 +2051,514 @@ export class BotRunner {
   }
 
   // ═══════════════════════════════════════════════════════════════
+  // Canal con IA (spec 058)
+  // ═══════════════════════════════════════════════════════════════
+
+  /**
+   * Lo que el canal necesita además del libro. Un fallo leyendo el historial o
+   * la intención tumba el tick: sin ellos la estrategia no sabría qué puede
+   * abrir, y un tick fallido no abre nada.
+   */
+  private async contextoDelCanal(): Promise<
+    Pick<BotContext, 'historial' | 'decisionIa' | 'nivelesApalancamiento' | 'limites'>
+  > {
+    const { store, intents } = this.deps;
+    // Los tramos primero: los límites los miran, y leídos a la vez saldrían dos
+    // peticiones en el primer tick.
+    const tramos = await this.leerTramos();
+    const [historial, decisionIa, limites] = await Promise.all([
+      store.historialOperaciones(this.botId),
+      intents ? intents.vigente(this.botId) : Promise.resolve(null),
+      this.limitesExternos(tramos),
+    ]);
+    return {
+      historial,
+      decisionIa,
+      ...(tramos.valor ? { nivelesApalancamiento: tramos.valor } : {}),
+      limites,
+    };
+  }
+
+  /**
+   * Los tramos del par, con memoria. Sin el método en el adaptador no hay
+   * nada que leer (la herramienta usa entonces la ficha del mercado); con él y
+   * fallando, `motivo` lo dice y no se entra.
+   */
+  private async leerTramos(): Promise<{
+    valor: NivelApalancamiento[] | null;
+    motivo: string | null;
+  }> {
+    const { adapter, bot } = this.deps;
+    if (!adapter.getLeverageTiers) return { valor: null, motivo: null };
+    const ahora = Date.now();
+    const previa = this.tramosLeidos;
+    if (previa) {
+      const vida = previa.valor ? LECTURA_VENUE_TTL_MS : LECTURA_VENUE_FALLO_MS;
+      if (ahora - previa.at < vida) return previa;
+    }
+    try {
+      const valor = await adapter.getLeverageTiers(bot.symbol);
+      this.tramosLeidos =
+        valor.length > 0
+          ? { at: ahora, valor, motivo: null }
+          : { at: ahora, valor: null, motivo: 'el exchange no ha dado tramos' };
+    } catch (e) {
+      this.tramosLeidos = {
+        at: ahora,
+        valor: null,
+        motivo: `no se pudieron leer los tramos del exchange (${(e as Error).message})`,
+      };
+    }
+    return this.tramosLeidos;
+  }
+
+  /**
+   * El modo de posición, con memoria. Quien no lo declara es de posición neta
+   * (Hyperliquid, Lighter): unidireccional.
+   */
+  private async leerModo(): Promise<{ unidireccional: boolean | null; motivo: string | null }> {
+    const { adapter } = this.deps;
+    if (!adapter.getPositionMode) return { unidireccional: true, motivo: null };
+    const ahora = Date.now();
+    const previo = this.modoLeido;
+    if (previo) {
+      const vida = previo.unidireccional === null ? LECTURA_VENUE_FALLO_MS : LECTURA_VENUE_TTL_MS;
+      if (ahora - previo.at < vida) return previo;
+    }
+    try {
+      const modo = await adapter.getPositionMode();
+      this.modoLeido = { at: ahora, unidireccional: modo === 'ONE_WAY', motivo: null };
+    } catch (e) {
+      this.modoLeido = {
+        at: ahora,
+        unidireccional: null,
+        motivo: `no se pudo leer el modo de posición (${(e as Error).message})`,
+      };
+    }
+    return this.modoLeido;
+  }
+
+  /** Lo que puede cerrar las entradas desde fuera de la configuración. */
+  private async limitesExternos(tramos: {
+    valor: NivelApalancamiento[] | null;
+    motivo: string | null;
+  }): Promise<LimitesExternos> {
+    const motivos: string[] = [];
+    let entradasPermitidas = false;
+    const interruptor = this.deps.interruptorCanal;
+    if (!interruptor) {
+      motivos.push('este worker no lee el interruptor global');
+    } else {
+      try {
+        const estado = await interruptor();
+        entradasPermitidas = estado.permitidas;
+        if (!estado.permitidas) motivos.push(estado.motivo ?? 'interruptor global apagado');
+      } catch (e) {
+        // Con Redis caído no se sabe si alguien cortó las entradas: no se entra.
+        motivos.push(`no se pudo leer el interruptor global (${(e as Error).message})`);
+      }
+    }
+
+    let venueListo = true;
+    const modo = await this.leerModo();
+    if (this.deps.adapter.getLeverageTiers && !tramos.valor) {
+      venueListo = false;
+      motivos.push(tramos.motivo ?? 'sin tramos del exchange');
+    }
+    if (modo.unidireccional !== true) {
+      venueListo = false;
+      motivos.push(
+        modo.unidireccional === false
+          ? 'la cuenta está en modo cobertura'
+          : (modo.motivo ?? 'modo de posición desconocido'),
+      );
+    }
+    return {
+      entradasPermitidas,
+      maxApalancamientoUsuario: this.deps.guards.maxLeverage,
+      venueListo,
+      motivo: motivos.length > 0 ? motivos.join('; ') : null,
+    };
+  }
+
+  /**
+   * Lo que el plan del canal pide además de sus órdenes, siempre ANTES de
+   * hablar con el venue, y en este orden:
+   *
+   *   1. Pausar, si la estrategia lo pide (1,5× el tope diario, caída máxima).
+   *   2. Sus avisos, una vez por clave.
+   *   3. La solicitud a la IA.
+   *   4. La intención que usa o descarta. La entrada solo sale si la base
+   *      acepta la marca: es la constancia de la decisión y la puerta de «una
+   *      operación viva por bot».
+   *   5. El apalancamiento de la entrada, con la posición plana. Si el venue no
+   *      confirma el que se pidió, no hay entrada.
+   *
+   * Devuelve el plan que se ejecuta —sin entradas si algo no deja entrar— o
+   * null si el bot se ha pausado.
+   */
+  private async aplicarCanal(
+    desired: DesiredState,
+    cycleSeq: number,
+  ): Promise<DesiredState | null> {
+    if (desired.pausar) {
+      await this.pauseForRisk(desired.pausar);
+      return null;
+    }
+    await this.emitirAvisos(desired.avisos);
+
+    const { intents } = this.deps;
+    if (!intents) {
+      return hayEntradas(desired)
+        ? this.descartarEntrada(desired, null, 'este worker no puede anotar la intención')
+        : desired;
+    }
+
+    if (desired.solicitudIa) await this.solicitarIa(desired.solicitudIa, cycleSeq);
+
+    const marca = desired.decision;
+    if (marca) {
+      const anotada = await intents.anotar(this.botId, cycleSeq, marca);
+      if (!anotada && hayEntradas(desired)) {
+        return this.descartarEntrada(
+          desired,
+          null,
+          'la decisión ya no se puede usar (cambió de estado u otra operación sigue viva)',
+        );
+      }
+    }
+    if (!hayEntradas(desired)) return desired;
+
+    const aceptada = marca?.estado === EstadoIntencion.ACEPTADA ? marca : null;
+    // Solo en plano: con posición, ni se toca el apalancamiento ni se entra.
+    if (this.posicionAbierta !== false) {
+      return this.descartarEntrada(
+        desired,
+        aceptada,
+        'hay una posición abierta',
+        MotivoRechazo.ESTADO,
+      );
+    }
+    if (desired.apalancamiento !== undefined) {
+      const fallo = await this.fijarApalancamiento(desired.apalancamiento, desired);
+      if (fallo) return this.descartarEntrada(desired, aceptada, fallo, MotivoRechazo.VENUE);
+    }
+    return desired;
+  }
+
+  private async solicitarIa(solicitud: SolicitudIa, cycleSeq: number): Promise<void> {
+    const nueva = await this.deps.intents!.solicitar(this.deps.bot, cycleSeq, solicitud);
+    if (nueva) {
+      this.logger.log(`Solicitud a la IA para la vela ${new Date(solicitud.barT).toISOString()}`);
+    }
+  }
+
+  /**
+   * Fija el apalancamiento de la entrada y comprueba el acuse. Devuelve el
+   * motivo si no se puede entrar, o null.
+   *
+   * Una credencial muerta o un corte del venue se relanzan, como en `place()`.
+   */
+  private async fijarApalancamiento(L: number, desired: DesiredState): Promise<string | null> {
+    const { adapter, bot } = this.deps;
+    let acuse: AcuseApalancamiento | void;
+    try {
+      acuse = await adapter.setLeverage(bot.symbol, L, bot.margin_mode);
+    } catch (e) {
+      const err = e as ExchangeError;
+      if (err.kind === 'AUTH' || err.kind === 'THROTTLED') throw e;
+      return `el exchange no aceptó ${L}x (${err.message})`;
+    }
+    if (!acuse) return null;
+    if (acuse.leverage !== null && acuse.leverage !== L) {
+      return `el exchange aplicó ${acuse.leverage}x en vez de ${L}x`;
+    }
+    if (acuse.maxNotional !== undefined) {
+      const nocional = [...desired.orders, ...desired.immediate]
+        .filter((o) => !o.reduceOnly)
+        .reduce((acc, o) => acc.plus(D(o.qty).mul(o.price)), D(0));
+      if (nocional.gt(acuse.maxNotional)) {
+        return (
+          `con ${L}x el exchange admite ${acuse.maxNotional} de nocional y la entrada suma ` +
+          nocional.toFixed(2)
+        );
+      }
+    }
+    return null;
+  }
+
+  /**
+   * Quita las entradas del plan y deja constancia.
+   *
+   * La operación guardada se olvida: ya no va a salir, y dejarla haría que el
+   * tick siguiente esperase un llenado que no llegará. Una intención que se
+   * llegó a aceptar pasa a rechazada con su motivo.
+   */
+  private async descartarEntrada(
+    desired: DesiredState,
+    aceptada: MarcaDecision | null,
+    motivo: string,
+    motivoRechazo: MotivoRechazo = MotivoRechazo.VENUE,
+  ): Promise<DesiredState> {
+    if (this.cycle.scratch['op'] != null) {
+      this.cycle = { ...this.cycle, scratch: { ...this.cycle.scratch, op: null } };
+      await this.deps.store.saveCycleScratch(this.botId, this.cycle.scratch);
+    }
+    if (aceptada && this.deps.intents) {
+      await this.deps.intents
+        .anotar(this.botId, Number(this.cycle.scratch.cycleSeq ?? 0), {
+          ...aceptada,
+          estado: EstadoIntencion.RECHAZADA,
+          motivo: motivoRechazo,
+          plan: null,
+        })
+        .catch((e: Error) => this.logger.warn(`No se pudo rechazar la intención: ${e.message}`));
+    }
+    await this.event('AI_ENTRY_DISCARDED', 'WARN', `Entrada descartada: ${motivo}.`, {
+      intentId: aceptada?.intentId ?? desired.decision?.intentId ?? null,
+    }).catch(() => undefined);
+    return sinEntradas(desired, `Entrada descartada: ${motivo}.`);
+  }
+
+  /**
+   * Emite cada aviso de la estrategia UNA vez mientras siga vigente. Una
+   * puerta cerrada tick tras tick avisa al cerrarse; si se abre y vuelve a
+   * cerrarse, vuelve a avisar.
+   */
+  private async emitirAvisos(avisos: AvisoEstrategia[] | undefined): Promise<void> {
+    const vigentes = new Set((avisos ?? []).map((a) => a.clave));
+    for (const clave of [...this.avisosVivos]) {
+      if (!vigentes.has(clave)) this.avisosVivos.delete(clave);
+    }
+    for (const a of avisos ?? []) {
+      if (this.avisosVivos.has(a.clave)) continue;
+      this.avisosVivos.add(a.clave);
+      await this.event(a.tipo, a.severidad, a.mensaje, { clave: a.clave }).catch(() => undefined);
+    }
+  }
+
+  /** Lo que se mira tras ejecutar el plan del canal. */
+  private async despuesDelCanal(): Promise<void> {
+    const op = this.cycle.scratch['op'] as { plan?: { intentId?: string } } | null | undefined;
+    const intentId = op?.plan?.intentId ?? null;
+    if (
+      this.posicionAbierta === true &&
+      intentId !== null &&
+      this.abiertaAnotada !== intentId &&
+      this.deps.intents
+    ) {
+      try {
+        const abierta = await this.deps.intents.abrir(this.botId, intentId);
+        this.abiertaAnotada = intentId;
+        if (abierta) await this.avisarEntrada();
+      } catch (e) {
+        this.logger.warn(`No se pudo marcar la operación abierta: ${(e as Error).message}`);
+      }
+    }
+    await this.vigilarStop();
+    this.programarVigilancia(intentId !== null);
+  }
+
+  /**
+   * El aviso de la entrada (spec 059): los números de la operación y el vale
+   * del botón «⏸ Pausar». Una vez por operación: `abrir` solo mueve la fila la
+   * primera vez, así que un reinicio con la posición abierta no lo repite.
+   */
+  private async avisarEntrada(): Promise<void> {
+    const op = operacionCanalDe(this.cycle.scratch);
+    if (!op || !this.deps.intents) return;
+    const vale = await this.deps.intents.valeDePausa(this.deps.bot).catch(() => null);
+    const aviso = avisoDeEntrada(op, this.posicionDelTick, this.market.quote, vale);
+    await this.event(EventoCanal.ENTRADA, 'INFO', aviso.message, aviso.payload).catch(
+      () => undefined,
+    );
+  }
+
+  /**
+   * El vigilante del stop. Una posición del canal va apalancada y su única red
+   * es el stop nativo: si pasa más de `SIN_STOP_MAX_MS` sin que conste en el
+   * exchange —el libro al empezar el tick o el acuse de este tick—, se cierra a
+   * mercado y se avisa en CRITICAL.
+   */
+  private async vigilarStop(): Promise<void> {
+    if (this.strategy.stopPropio !== true || this.strategy.apalancamientoPorOperacion !== true) {
+      return;
+    }
+    if (this.posicionAbierta !== true || this.stopLossVivo) {
+      this.sinStopDesde = null;
+      return;
+    }
+    const ahora = Date.now();
+    const maximo = SIN_STOP_MAX_MS[this.deps.bot.venue] ?? SIN_STOP_DEFECTO_MS;
+    this.sinStopDesde ??= ahora;
+    if (ahora - this.sinStopDesde < maximo) return;
+    this.sinStopDesde = null;
+    await this.event(
+      'SIN_STOP',
+      'CRITICAL',
+      `La posición lleva más de ${maximo / 1000} s sin stop confirmado en el exchange: ` +
+        'se cierra a mercado.',
+    ).catch(() => undefined);
+    const cerrada = await this.closePositionAtMarket('posición sin stop');
+    if (!cerrada) {
+      await this.event(
+        'ACTION_FAILED',
+        'CRITICAL',
+        'No se pudo cerrar la posición sin stop: el exchange no aceptó el cierre. Se reintenta en ' +
+          'la siguiente revisión; ciérrala desde el exchange si no sale.',
+      ).catch(() => undefined);
+    }
+  }
+
+  /**
+   * Pausado, el canal no planifica, pero su posición no se queda sin stop
+   * (spec 060, F-03). Las guardas se miran antes de planificar, así que una que
+   * pausaba en el tick siguiente al llenado —el que pone el stop—, o una pausa
+   * antes de que el stop constara, dejaban la posición apalancada sin stop y
+   * sin vigilante. Se coloca el stop del plan si no está en el libro, y el
+   * vigilante sigue mirando.
+   */
+  private async protegerEnPausa(
+    ticker: Ticker,
+    position: Position | null,
+    openOrders: VenueOrder[],
+    saldo: string,
+  ): Promise<void> {
+    if (this.strategy.stopPropio !== true || this.strategy.apalancamientoPorOperacion !== true) {
+      return;
+    }
+    if (this.posicionAbierta !== true) return;
+    try {
+      if (!this.stopLossVivo) {
+        const ctx = this.buildContext(
+          ticker,
+          position,
+          openOrders,
+          saldo,
+          await this.contextoDelCanal(),
+        );
+        const stops = this.strategy.plan(ctx).orders.filter((o) => o.levelKind === 'STOP_LOSS');
+        for (const stop of stops) await this.place(stop, 'stop con el bot pausado');
+      }
+    } catch (e) {
+      // Una credencial muerta o un corte del venue se relanzan, como en `place()`.
+      // Cualquier otro fallo no puede dejar sin vigilante a la posición.
+      const err = e as ExchangeError;
+      if (err.kind === 'AUTH' || err.kind === 'THROTTLED') throw e;
+      this.logger.warn(`No se pudo reponer el stop con el bot pausado: ${err.message}`);
+    }
+    await this.vigilarStop();
+    this.programarVigilancia(false);
+  }
+
+  /**
+   * Un tick pronto mientras haya algo que vigilar: una entrada que aún no se ha
+   * resuelto o una posición sin stop confirmado. El latido normal llegaría
+   * tarde para las dos cosas. Pausado, solo lo segundo (spec 060, F-03).
+   */
+  private programarVigilancia(hayOperacion: boolean): void {
+    const sinStop = this.posicionAbierta === true && !this.stopLossVivo;
+    const entradaEnCurso = hayOperacion && this.posicionAbierta !== true && !this.paused;
+    if (!(sinStop || entradaEnCurso) || this.stopped || this.vigilanciaTimer) return;
+    const ms = VIGILANCIA_MS[this.deps.bot.venue] ?? 5_000;
+    this.vigilanciaTimer = setTimeout(() => {
+      this.vigilanciaTimer = null;
+      this.requestTick();
+    }, ms);
+  }
+
+  /** Despierta al bot unos segundos después de cada cierre de 5 min. */
+  private programarCierre(): void {
+    if (this.stopped) return;
+    const ahora = Date.now();
+    const siguiente = Math.floor(ahora / CIERRE_MS) * CIERRE_MS + CIERRE_MS;
+    const espera = siguiente + MARGEN_CIERRE_MS + desfaseDeBot(this.botId) - ahora;
+    this.cierreTimer = setTimeout(() => {
+      this.cierreTimer = null;
+      if (this.stopped) return;
+      // Las velas se esperan FUERA del cerrojo: dentro, un PANIC esperaría con
+      // ellas.
+      void this.precargarSeries().finally(() => {
+        this.requestTick();
+        this.programarCierre();
+      });
+    }, espera);
+  }
+
+  /** Trae las series con la vela recién cerrada, esperando lo justo. */
+  private async precargarSeries(): Promise<void> {
+    const quiere = this.strategy.series?.(this.config);
+    const fuente = this.deps.candleSource;
+    if (!quiere || !fuente?.candleWindow) return;
+    const { venue, symbol } = this.deps.bot;
+    await Promise.all(
+      quiere.map((s) =>
+        fuente.candleWindow!(venue, symbol, s.interval, this.barrasDe(s.bars), this.deps.testnet, {
+          ttlMs: ttlDeSerie(s.interval),
+          esperarMs: ESPERA_VELAS_MS,
+        }).catch(() => null),
+      ),
+    );
+  }
+
+  /** Las velas de una serie, topadas por lo que el venue sirve en una petición. */
+  private barrasDe(bars: number): number {
+    const max = VENUE_CAPABILITIES[this.deps.bot.venue].candles.maxBars;
+    return Math.max(1, Math.min(bars, max - 3));
+  }
+
+  /** Las series que declara la estrategia, cada una solo si llega entera. */
+  private seriesDelContexto(): Partial<Record<CandleInterval, Candle[]>> | undefined {
+    const quiere = this.strategy.series?.(this.config);
+    const fuente = this.deps.candleSource;
+    if (!quiere || !fuente) return undefined;
+    const { venue, symbol } = this.deps.bot;
+    const out: Partial<Record<CandleInterval, Candle[]>> = {};
+    for (const s of quiere) {
+      const velas = fuente.candleHistory(
+        venue,
+        symbol,
+        s.interval,
+        this.barrasDe(s.bars),
+        this.deps.testnet,
+        { ttlMs: ttlDeSerie(s.interval) },
+      );
+      if (velas) out[s.interval] = velas;
+    }
+    return out;
+  }
+
+  /**
+   * Una ejecución deja sin sentido lo pendiente: la posición ya no es la que se
+   * consultó. Y si cierra el ciclo, la operación ha terminado.
+   */
+  private async anotarEjecucionDelCanal(cicloCerrado: boolean): Promise<void> {
+    const { intents } = this.deps;
+    if (!intents) return;
+    try {
+      await intents.caducarPendientes(this.botId);
+      if (cicloCerrado) {
+        await intents.cerrar(this.botId);
+        this.abiertaAnotada = null;
+      }
+    } catch (e) {
+      this.logger.warn(
+        `No se pudieron anotar las intenciones tras la ejecución: ${(e as Error).message}`,
+      );
+    }
+  }
+
+  /** Caduca lo que aún podía acabar en entrada. Sin tumbar a quien lo pide. */
+  private async caducarIntenciones(): Promise<void> {
+    if (!this.esCanal || !this.deps.intents) return;
+    await this.deps.intents
+      .caducarPendientes(this.botId)
+      .catch((e: Error) =>
+        this.logger.warn(`No se pudieron caducar las intenciones: ${e.message}`),
+      );
+  }
+
+  // ═══════════════════════════════════════════════════════════════
   // Comandos
   // ═══════════════════════════════════════════════════════════════
 
@@ -1755,6 +2574,10 @@ export class BotRunner {
     // hacer lo que prometía: un cierre que no sale deja el bot PAUSADO y
     // vigilando, no suelto (001/F-33).
     let soltar = TERMINAL_COMMANDS.has(command);
+
+    // Cualquier orden del usuario deja sin sentido lo que la IA estaba
+    // decidiendo: se consultó con otro estado del bot (spec 058).
+    await this.caducarIntenciones();
 
     switch (command) {
       case 'PAUSE':
@@ -1773,6 +2596,9 @@ export class BotRunner {
 
       case 'RESUME':
         this.paused = false;
+        // La caída máxima del canal se mide desde aquí (spec 060, F-15): su
+        // historial no puede venir de la caché anterior a la reanudación.
+        store.olvidarHistorial(this.botId);
         // Se rearma el aviso de liquidación: reanudar cierra el episodio
         // anterior. Sin esto, un bot al que liquidan por segunda vez se pausaba
         // en memoria pero ni actualizaba su estado ni avisaba — la pantalla
@@ -1788,6 +2614,11 @@ export class BotRunner {
       case 'CANCEL_ALL_ORDERS':
         await this.cancelOwnOrders();
         await this.event('ORDERS_CANCELED', 'INFO', 'Órdenes canceladas a petición del usuario.');
+        // Una estrategia que pone su propio stop lo repone en el tick siguiente;
+        // se pide ya, para que la posición no espere al latido sin red. También
+        // pausado: el tick de un bot pausado repone el stop del canal (spec 060,
+        // F-03) y en el resto no coloca nada.
+        if (this.strategy.stopPropio === true) this.requestTick();
         break;
 
       case 'STOP_KEEP_POSITION':
@@ -1967,6 +2798,17 @@ export class BotRunner {
         this.requestTick();
         break;
       }
+
+      default: {
+        // Un comando que este worker no conoce —uno nuevo que llega antes que
+        // el worker que lo entiende— no puede darse por hecho. Sin esta rama no
+        // hacía nada, la bandeja lo cerraba como ejecutado y la API creía que
+        // se había hecho (spec 057, F-08). Lanzando, la bandeja lo cierra con el
+        // motivo y el motor avisa con COMMAND_FAILED. El `never` hace además que
+        // un comando nuevo sin su rama no compile.
+        const desconocido: never = command;
+        throw new Error(`Este worker no conoce el comando ${String(desconocido)}.`);
+      }
     }
 
     if (soltar) {
@@ -2005,6 +2847,8 @@ export class BotRunner {
       // oportunidad con la nueva.
       this.quarantine.clear();
       await this.event('CONFIG_RELOADED', 'INFO', `Configuración recargada (${level}).`);
+      // La IA decidió con la configuración de antes (spec 058).
+      await this.caducarIntenciones();
 
       // El apalancamiento es WARM, pero cambiarlo aquí no bastaba: hasta ahora
       // solo `start()` hablaba con el venue, así que un bot en marcha reajustaba
@@ -2012,7 +2856,12 @@ export class BotRunner {
       // con el viejo — y la posición que abría el siguiente nivel salía del
       // tamaño equivocado. En aislado el desfase es peor todavía: bajar el
       // apalancamiento es la vía indirecta de aportar margen, y no llegaba.
-      await this.syncLeverage(previousLeverage);
+      //
+      // Salvo donde es un tope y lo fija cada entrada (spec 058): cambiarlo
+      // aquí tocaría el de la operación abierta.
+      if (this.strategy.apalancamientoPorOperacion !== true) {
+        await this.syncLeverage(previousLeverage);
+      }
       // Mismo caso que el apalancamiento, y por la misma razón: un campo mutable
       // cuyo efecto vive FUERA de `this.config`. Ver `syncFairPrice`.
       this.syncFairPrice(previousFeed);
@@ -2121,17 +2970,82 @@ export class BotRunner {
   }
 
   /**
+   * Con la posición abierta, el stop de una estrategia que lo pone ella misma
+   * no se cancela por un plan que no lo trae (spec 057, F-02).
+   *
+   * En esas estrategias —Tendencia— la ausencia del stop en el plan no es una
+   * decisión del usuario, como quitar `stopLossPct`: es un fallo. Cancelarlo
+   * dejaba la posición sin red, y eso es lo que pasaba tras cada reinicio con
+   * la caché de velas fría. La estrategia ya no lo suelta; esto es la segunda
+   * red, por si otra vez falta.
+   *
+   * Se reconoce el stop por ser una orden propia que reduce y lleva disparo, o
+   * por su id. Sin posición no se conserva nada: un stop sin nada que proteger
+   * sí es un sobrante.
+   */
+  private async conservarStopPropio(
+    plan: ReconcilePlan,
+    desired: DesiredState,
+    cycleSeq: number,
+  ): Promise<ReconcilePlan> {
+    const traeStop = [...desired.orders, ...desired.immediate].some(
+      (o) => o.levelKind === 'STOP_LOSS',
+    );
+    if (this.strategy.stopPropio !== true || this.posicionAbierta !== true || traeStop) {
+      this.stopConservadoAvisado = false;
+      return plan;
+    }
+
+    const idsDeStop = this.idsDeStop(cycleSeq);
+    const esStop = (o: VenueOrder): boolean =>
+      o.reduceOnly &&
+      ((o.triggerPrice != null && o.triggerPrice !== '') ||
+        (o.clientOrderId != null && idsDeStop.has(o.clientOrderId)));
+    const conservados = plan.toCancel.filter(esStop);
+    if (conservados.length === 0) return plan;
+
+    if (!this.stopConservadoAvisado) {
+      this.stopConservadoAvisado = true;
+      // Sin relanzar: si la base falla al anotar el aviso, el tick sigue y el
+      // stop se conserva igual. Tumbarlo por el aviso sería contar un fallo más
+      // hacia la pausa por algo que ya está resuelto.
+      await this.event(
+        'ACTION_FAILED',
+        'WARN',
+        'La estrategia no ha pedido stop con la posición abierta: se conserva el que hay en ' +
+          'el exchange en vez de cancelarlo.',
+        { venueOrderIds: conservados.map((o) => o.venueOrderId) },
+      ).catch(() => undefined);
+    }
+    return { ...plan, toCancel: plan.toCancel.filter((o) => !esStop(o)) };
+  }
+
+  /**
    * Coletilla para los eventos que dejan la posición abierta.
    *
    * Decir en voz alta si queda red o no: callarlo es justo lo que hace que
    * alguien crea que sigue protegido cuando no lo está.
    */
   private get protectionNote(): string {
-    if (!this.config.stopLossPct) return ' Atención: la posición queda SIN stop loss.';
-    return this.stopLossVivo
-      ? ' El stop loss sigue vivo en el exchange.'
-      : ' Atención: hay un stop loss configurado pero NO consta colocado en el ' +
-          'exchange. Revísalo: la posición puede estar sin red.';
+    // Una estrategia que pone su propio stop (Tendencia) deja `stopLossPct`
+    // vacío: mirando solo ese campo, cada aviso decía «SIN stop loss» con el
+    // stop vivo (spec 057, F-09).
+    const propio = this.strategy.stopPropio === true;
+    if (!propio && !this.config.stopLossPct) return ' Atención: la posición queda SIN stop loss.';
+    if (this.stopLossVivo) return ' El stop loss sigue vivo en el exchange.';
+    return (
+      (propio
+        ? ' Atención: la estrategia pone su propio stop loss pero NO consta colocado en el '
+        : ' Atención: hay un stop loss configurado pero NO consta colocado en el ') +
+      'exchange. Revísalo: la posición puede estar sin red.'
+    );
+  }
+
+  /** Los ids del stop de este bot en espacio de venue, del ciclo actual y del anterior. */
+  private idsDeStop(cycleSeq: number): Set<string> {
+    return new Set(
+      [cycleSeq, cycleSeq - 1].map((seq) => this.encode(makeCoid(this.botId, seq, 'STOP_LOSS', 0))),
+    );
   }
 
   /**
@@ -2213,7 +3127,13 @@ export class BotRunner {
         }
       }
 
-      if (position.liquidationPrice && g.liquidationAlertPct) {
+      // Con la regla por stop, la guarda mide el CAMINO y no la distancia: a
+      // 25x la liquidación está siempre a pocos puntos y el aviso por
+      // porcentaje sonaría en cada operación (spec 058).
+      if (position.liquidationPrice && this.strategy.reglaLiquidacion === 'POR_STOP') {
+        const breach = await this.guardaLiquidacionPorStop(position, ticker);
+        if (breach) return breach;
+      } else if (position.liquidationPrice && g.liquidationAlertPct) {
         const distance = liquidationDistancePct(ticker.mark, position.liquidationPrice);
         // Con enfriamiento: el aviso salta en CADA tick mientras dure la
         // cercanía, y una posición puede quedarse ahí horas. Repetirlo cada
@@ -2283,14 +3203,59 @@ export class BotRunner {
         this.deps.bot.total_investment.toString(),
         today.toFixed(),
       );
-      if (loss != null && loss.gte(dailyPct)) {
+      // Con el tope que se reabre solo, la estrategia ya cierra las entradas al
+      // llegar; la guarda solo pausa cuando se ha ido mucho más allá (spec 058).
+      const reanuda = this.strategy.topeDiarioReanuda === true;
+      const umbral = reanuda ? D(dailyPct).mul(FACTOR_PAUSA_DIARIA) : D(dailyPct);
+      if (loss != null && loss.gte(umbral)) {
         return pauseBreach(
-          `pérdida de hoy del ${loss.toFixed(2)} % del capital del bot, por encima del límite diario (${dailyPct} %)`,
+          reanuda
+            ? `pérdida de hoy del ${loss.toFixed(2)} % del capital del bot, 1,5 veces el límite diario (${dailyPct} %)`
+            : `pérdida de hoy del ${loss.toFixed(2)} % del capital del bot, por encima del límite diario (${dailyPct} %)`,
         );
       }
     }
 
     return null;
+  }
+
+  /**
+   * La guarda de liquidación con la regla por stop (spec 058).
+   *
+   * El stop de la operación está siempre a bastante menos de un tercio del
+   * camino hasta la liquidación, así que llegar a dos tercios significa que el
+   * stop no ha saltado. Se avisa en CRITICAL (con enfriamiento) y se actúa con
+   * `liquidationAction`, que en esta estrategia es cerrar. Por debajo, silencio.
+   */
+  private async guardaLiquidacionPorStop(
+    position: Position,
+    ticker: Ticker,
+  ): Promise<GuardBreach | null> {
+    const entrada = D(position.entryPrice);
+    const liquidacion = D(position.liquidationPrice ?? 0);
+    const marca = D(ticker.mark);
+    const largo = D(position.qty).gt(0);
+    const camino = entrada.minus(liquidacion).abs();
+    if (!camino.gt(0) || !marca.gt(0)) return null;
+    const recorrido = largo ? entrada.minus(marca) : marca.minus(entrada);
+    if (recorrido.lt(camino.mul(RECORRIDO_LIQUIDACION))) return null;
+
+    const pct = recorrido.div(camino).mul(100).toFixed(0);
+    if (Date.now() > this.liquidationAlertUntil) {
+      this.liquidationAlertUntil = Date.now() + LIQUIDATION_ALERT_COOLDOWN_MS;
+      await this.event(
+        'LIQUIDATION_NEAR',
+        'CRITICAL',
+        `El precio ha recorrido el ${pct} % del camino hasta la liquidación: el stop no ha saltado.`,
+        { liquidationPrice: position.liquidationPrice, mark: ticker.mark },
+      );
+    }
+    const action = this.config.liquidationAction ?? 'CLOSE_ALL';
+    if (action === 'ALERT') return null;
+    const reason = `el precio ha recorrido el ${pct} % del camino hasta la liquidación`;
+    return action === 'CLOSE_ALL'
+      ? { reason: `Cerrando por proximidad a liquidación: ${reason}.`, action: 'CLOSE' }
+      : pauseBreach(reason);
   }
 
   /**
@@ -2301,6 +3266,7 @@ export class BotRunner {
    */
   private async pauseForRisk(reason: string): Promise<void> {
     this.paused = true;
+    await this.caducarIntenciones();
     // Con `true`: el stop loss NO se cancela. Es la ruta en la que más importa
     // —el bot deja de planificar y de tender, así que a partir de aquí el stop
     // es la única defensa que le queda a la posición.
@@ -2326,6 +3292,8 @@ export class BotRunner {
     position: Position | null,
     openOrders: VenueOrder[],
     availableBalance: string,
+    /** Lo que solo lleva el canal con IA: ver `contextoDelCanal`. */
+    delCanal?: Pick<BotContext, 'historial' | 'decisionIa' | 'nivelesApalancamiento' | 'limites'>,
   ): BotContext {
     const now = Date.now();
     const fair = this.deps.priceSource?.peek(this.fairFeedKey) ?? null;
@@ -2349,6 +3317,9 @@ export class BotRunner {
           this.deps.testnet,
         ) ?? undefined)
       : undefined;
+    // Varias series, para quien las declara (spec 058). Cada una solo si llega
+    // entera: una serie corta se trata como ausente.
+    const series = this.seriesDelContexto();
 
     return {
       botId: this.botId,
@@ -2365,6 +3336,8 @@ export class BotRunner {
       fairPrice: fresh?.price ?? null,
       ...(candles ? { candles } : {}),
       ...(extremos ? { extremos } : {}),
+      ...(series ? { series } : {}),
+      ...(delCanal ?? {}),
     };
   }
 
@@ -2600,6 +3573,16 @@ export class BotRunner {
     if (bot.margin_mode !== 'ISOLATED') {
       throw new Error(
         'El bot opera en margen cruzado: su colateral es el de toda la cuenta y no hay margen por posición que ajustar.',
+      );
+    }
+    // El canal con IA calcula el apalancamiento y la liquidación de cada
+    // operación con el margen que pone al entrar; retirarlo acerca la
+    // liquidación al stop, que es lo que la regla por stop existe para impedir
+    // (spec 058). Aportar sí: solo la aleja.
+    if (arg.action === 'REMOVE' && this.strategy.apalancamientoPorOperacion === true) {
+      throw new Error(
+        'Esta estrategia no permite retirar margen de una operación abierta: acercaría la ' +
+          'liquidación al stop calculado.',
       );
     }
 

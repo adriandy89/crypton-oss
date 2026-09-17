@@ -37,6 +37,69 @@ const SHARE_EVERY_MS = 500;
  */
 const CANDLE_HISTORY_TTL_MS = 60_000;
 
+/**
+ * Cuánto después de su cierre se da por definitiva una vela descargada.
+ *
+ * Una vela es CERRADA si lo estaba cuando se pidió, no si lo está ahora: la
+ * descargada a las 10:14:30 trae la de las 10:00 a medias, y a las 10:15:00
+ * seguía teniendo los datos de antes del cierre (spec 057, F-03). Los dos
+ * segundos dan al venue margen para cuadrar las últimas operaciones.
+ */
+const GRACIA_CIERRE_MS = 2_000;
+
+/**
+ * Desfase máximo, por clave, del refresco al cierre.
+ *
+ * Todas las velas de 15 minutos cierran a la vez; sin desfase, cada par y cada
+ * venue pedirían su ventana en el mismo segundo, contra el mismo cupo.
+ */
+const DESFASE_CIERRE_MAX_MS = 3_000;
+
+/** Espera entre dos intentos de traer la vela que acaba de cerrar. */
+const REINTENTO_CIERRE_MS = 5_000;
+
+/** Intentos por cierre antes de volver al ritmo del TTL. */
+const INTENTOS_CIERRE = 2;
+
+/**
+ * El intervalo más largo con cierres alineados a la época. Las semanas empiezan
+ * en lunes y los meses no duran lo mismo: para ellos no se calcula el cierre
+ * esperado y manda solo el TTL.
+ */
+const MAX_SPAN_ALINEADO_MS = 86_400_000;
+
+/**
+ * Lo que puede pedir quien lee una ventana de velas (spec 058).
+ *
+ * `ttlMs` es cada cuánto, como mucho, se vuelve a pedir la ventana aunque no haya
+ * cerrado ninguna vela. Por defecto `CANDLE_HISTORY_TTL_MS`. Con dos interesados
+ * en la misma ventana manda el más corto: el que pide menos no puede dejar sin
+ * refresco al que pide más.
+ *
+ * Existe por el cupo de Lighter: el canal con IA lee tres series por par, y con
+ * el refresco de un minuto eran tres peticiones por minuto y par solo para
+ * volver a traer velas cerradas, que no cambian. Sus series piden el refresco al
+ * ritmo de su intervalo; la vela que cierra la trae igual `faltaElCierre`.
+ */
+export interface OpcionesVentana {
+  ttlMs?: number;
+}
+
+/**
+ * Espera a `promesa` como mucho `ms`, sin dejar temporizadores sueltos: el de un
+ * `Promise.race` con un `sleep` seguiría en pie tras la carrera.
+ */
+function esperaAcotada(promesa: Promise<unknown>, ms: number): Promise<void> {
+  return new Promise<void>((resolve) => {
+    const timer = setTimeout(resolve, ms);
+    const fin = () => {
+      clearTimeout(timer);
+      resolve();
+    };
+    void promesa.then(fin, fin);
+  });
+}
+
 interface SymbolFeed {
   subject: Subject<Ticker>;
   last: Ticker | null;
@@ -78,10 +141,21 @@ interface SymbolFeed {
 interface CandleHistory {
   bars: Candle[];
   fetchedAt: number;
+  /**
+   * Cuando SALIO la peticion que trajo `bars`. Decide que velas son
+   * definitivas; `fetchedAt` solo gobierna el TTL (spec 057, F-03).
+   */
+  pedidasEn: number;
   /** Peticion en vuelo, para que N bots del mismo par no lancen N identicas. */
   inflight: Promise<void> | null;
   /** El tramo mas largo que alguien ha pedido: la ventana sirve a todos. */
   want: number;
+  /** El TTL mas corto que alguien ha pedido. Ver `OpcionesVentana`. */
+  ttlMs: number;
+  /** Apertura de la vela cuyo cierre se esta esperando, y cuantas veces se ha pedido. */
+  cierreBuscado: number | null;
+  intentosCierre: number;
+  ultimoIntentoEn: number;
 }
 
 interface CandleFeed {
@@ -301,7 +375,11 @@ export class MarketDataService implements OnModuleDestroy {
    *
    * Solo cerradas: la vela en curso cambia dentro de su propio intervalo, así
    * que entregarla haría que dos `plan()` con el mismo estado dieran planes
-   * distintos (spec 038).
+   * distintos (spec 038). Y cerradas **cuando se pidieron**, no ahora: una vela
+   * descargada a medias no se completa sola al pasar su hora (spec 057, F-03).
+   *
+   * El refresco sigue el TTL y, además, va a buscar la vela en cuanto cierra:
+   * esperar al TTL la entregaba hasta un minuto tarde.
    */
   candleHistory(
     venue: Venue,
@@ -309,25 +387,107 @@ export class MarketDataService implements OnModuleDestroy {
     interval: CandleInterval,
     bars: number,
     testnet = false,
+    opts: OpcionesVentana = {},
   ): Candle[] | null {
     const k = candleKey(venue, symbol, interval, testnet);
+    const ttl = opts.ttlMs ?? CANDLE_HISTORY_TTL_MS;
     let hist = this.candleHistories.get(k);
     if (!hist) {
-      hist = { bars: [], fetchedAt: 0, inflight: null, want: bars };
+      hist = {
+        bars: [],
+        fetchedAt: 0,
+        pedidasEn: 0,
+        inflight: null,
+        want: bars,
+        ttlMs: ttl,
+        cierreBuscado: null,
+        intentosCierre: 0,
+        ultimoIntentoEn: 0,
+      };
       this.candleHistories.set(k, hist);
     }
     hist.want = Math.max(hist.want, bars);
+    hist.ttlMs = Math.min(hist.ttlMs, ttl);
 
     const now = Date.now();
-    if (!hist.inflight && now - hist.fetchedAt > CANDLE_HISTORY_TTL_MS) {
-      hist.inflight = this.refreshCandles(venue, symbol, interval, testnet, hist).finally(() => {
-        hist.inflight = null;
+    const span = candleSpanMs(interval);
+    const pedidasEn = hist.pedidasEn;
+    const cerradas = hist.bars.filter((c) => c.t + span + GRACIA_CIERRE_MS <= pedidasEn);
+
+    if (
+      !hist.inflight &&
+      (now - hist.fetchedAt > hist.ttlMs || this.faltaElCierre(hist, cerradas, span, now, k))
+    ) {
+      const h = hist;
+      h.inflight = this.refreshCandles(venue, symbol, interval, testnet, h).finally(() => {
+        h.inflight = null;
       });
     }
 
-    const span = candleSpanMs(interval);
-    const cerradas = hist.bars.filter((c) => c.t + span <= now);
     return cerradas.length >= bars ? cerradas.slice(-bars) : null;
+  }
+
+  /**
+   * La ventana de `candleHistory`, esperando —como mucho `esperarMs`— al
+   * refresco que haya en vuelo (spec 058).
+   *
+   * Es para quien decide AL CIERRE de una vela: el canal con IA se despierta
+   * unos segundos después de cada cierre de 5 min, y con la lectura síncrona
+   * recibía la ventana de antes, sin la vela que acababa de cerrar. Decidía una
+   * vela tarde, que en ese intervalo es todo el margen que hay.
+   *
+   * Se llama FUERA del cerrojo del bot: esperar a la red dentro de él haría
+   * esperar también a un PANIC.
+   */
+  async candleWindow(
+    venue: Venue,
+    symbol: string,
+    interval: CandleInterval,
+    bars: number,
+    testnet = false,
+    opts: OpcionesVentana & { esperarMs?: number } = {},
+  ): Promise<Candle[] | null> {
+    const primera = this.candleHistory(venue, symbol, interval, bars, testnet, opts);
+    const enVuelo = this.candleHistories.get(candleKey(venue, symbol, interval, testnet))?.inflight;
+    if (!enVuelo || !opts.esperarMs) return primera;
+    await esperaAcotada(enVuelo, opts.esperarMs);
+    return this.candleHistory(venue, symbol, interval, bars, testnet, opts);
+  }
+
+  /**
+   * ¿Ha cerrado una vela que la ventana todavía no tiene?
+   *
+   * Cuenta como intento: dos por cierre, separados `REINTENTO_CIERRE_MS`, y
+   * luego se vuelve al TTL. Un venue que publica tarde —o un par sin
+   * operaciones que no tiene esa vela— no se convierte así en una petición por
+   * tick.
+   */
+  private faltaElCierre(
+    hist: CandleHistory,
+    cerradas: Candle[],
+    span: number,
+    now: number,
+    k: string,
+  ): boolean {
+    // La primera descarga la dispara el TTL, y los intervalos sin cierres
+    // alineados no tienen un cierre que calcular.
+    if (hist.pedidasEn === 0 || span > MAX_SPAN_ALINEADO_MS) return false;
+
+    const espera = GRACIA_CIERRE_MS + desfaseDe(k);
+    const esperada = Math.floor((now - espera) / span) * span - span;
+    const ultima = cerradas.at(-1)?.t ?? Number.NEGATIVE_INFINITY;
+    if (ultima >= esperada) return false;
+
+    if (hist.cierreBuscado !== esperada) {
+      hist.cierreBuscado = esperada;
+      hist.intentosCierre = 0;
+    }
+    if (hist.intentosCierre >= INTENTOS_CIERRE) return false;
+    if (hist.intentosCierre > 0 && now - hist.ultimoIntentoEn < REINTENTO_CIERRE_MS) return false;
+
+    hist.intentosCierre++;
+    hist.ultimoIntentoEn = now;
+    return true;
   }
 
   private async refreshCandles(
@@ -342,11 +502,16 @@ export class MarketDataService implements OnModuleDestroy {
       // Dos de más: una por la vela en curso, que se descarta al entregar, y
       // otra de holgura por si el venue recorta la primera.
       const limit = hist.want + 2;
+      // La hora de SALIDA, antes de esperar: la respuesta refleja el venue en
+      // algún momento entre la salida y la llegada, y solo lo cerrado antes de
+      // salir se sabe definitivo.
+      const pedidasEn = Date.now();
       const bars = await this.adapterFor(venue, testnet).getCandles(symbol, interval, {
-        startMs: Date.now() - span * limit,
+        startMs: pedidasEn - span * limit,
         limit,
       });
       hist.bars = bars;
+      hist.pedidasEn = pedidasEn;
       hist.fetchedAt = Date.now();
     } catch (e) {
       // No se vacía lo que ya había: una ventana de hace un minuto sirve mucho
@@ -569,6 +734,20 @@ const candleKey = (
   interval: CandleInterval,
   testnet = false,
 ): string => `${venueKey(venue, testnet)}:${symbol}:${interval}`;
+
+/**
+ * Desfase fijo de una clave en `[0, DESFASE_CIERRE_MAX_MS)`. Determinista
+ * (FNV-1a): la misma clave cae siempre en el mismo sitio, y claves distintas se
+ * reparten los segundos que siguen al cierre.
+ */
+function desfaseDe(clave: string): number {
+  let h = 0x811c9dc5;
+  for (let i = 0; i < clave.length; i++) {
+    h ^= clave.charCodeAt(i);
+    h = Math.imul(h, 0x01000193);
+  }
+  return (h >>> 0) % DESFASE_CIERRE_MAX_MS;
+}
 
 /**
  * Clave del precio compartido. La lee también la API.

@@ -280,6 +280,50 @@ describe('Lighter REST — los casos que el venue no deja provocar', () => {
   });
 
   /**
+   * Spec 057, F-01. El stop a mercado se coloca con el precio de ejecución un
+   * 5 % más allá del disparo, y el venue lo informa así. Sin el disparo, el
+   * motor comparaba ese precio con el del stop deseado y lo recolocaba en cada
+   * tick.
+   */
+  it('una orden con disparo se informa con su disparo y su tipo real', async () => {
+    const orden = (index: number, type: string, price: string, trigger: string) => ({
+      order_index: index,
+      client_order_index: index,
+      is_ask: true,
+      type,
+      price,
+      trigger_price: trigger,
+      initial_base_amount: '0.001',
+      remaining_base_amount: '0.001',
+      filled_quote_amount: '0',
+      reduce_only: true,
+      timestamp: 1_700_000_000,
+    });
+    rest.rutas.set('/api/v1/orderBookDetails', { cuerpo: catalogo });
+    rest.rutas.set('/api/v1/accountActiveOrders', {
+      cuerpo: JSON.stringify({
+        orders: [
+          orden(1, 'stop-loss', '66500.0', '70000.0'),
+          orden(2, 'take-profit-limit', '71000.0', '70900.0'),
+          orden(3, 'limit', '72000.0', '0'),
+          orden(4, 'limit', '72000.0', ''),
+        ],
+      }),
+    });
+    const a = crear();
+    (a as unknown as { authToken(): string }).authToken = () => 'tok';
+
+    const [stop, objetivo, limite, sinDisparo] = await a.getOpenOrders('BTC');
+
+    expect(stop).toMatchObject({ type: 'MARKET', price: '66500', triggerPrice: '70000' });
+    expect(objetivo).toMatchObject({ type: 'LIMIT', price: '71000', triggerPrice: '70900' });
+    // El SDK declara el campo en TODAS las órdenes: a cero o vacío no es un
+    // disparo.
+    expect(limite.triggerPrice).toBeNull();
+    expect(sinDisparo.triggerPrice).toBeNull();
+  });
+
+  /**
    * Spec 001, F-05. El SDK declara `Trade.type` (`trade`, `liquidation`,
    * `deleverage`, `market-settlement`) y el adaptador lo ignoraba: una
    * liquidacion llegaba como un fill normal y el bot seguia operando a ciegas.

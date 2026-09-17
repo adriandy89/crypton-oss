@@ -62,7 +62,8 @@
             </div>
             <p class="sub">{{ venueLabel(b.venue) }} · {{ b.direction }} · {{ b.leverage }}×</p>
             @let pastilla = pastillaIa(b);
-            @if (b.dryRun || b.testnet || pastilla) {
+            @let deCanal = canalIa.pastilla(b.id, b);
+            @if (b.dryRun || b.testnet || pastilla || deCanal) {
               <div class="flags">
                 @if (b.dryRun) {
                   <ui-badge size="sm" tone="warn" caps>simulación</ui-badge>
@@ -86,6 +87,21 @@
                     {{ ia.texto }}
                     @if (ia.porQue) {
                       <span class="solo-lector">(no actúa: {{ ia.porQue }})</span>
+                    }
+                  </ui-badge>
+                }
+                <!-- La del canal con IA (spec 059): la misma que en las listas. -->
+                @if (deCanal; as ic) {
+                  <ui-badge
+                    size="sm"
+                    caps
+                    [tone]="ic.tone"
+                    [variant]="ic.variant"
+                    [attr.title]="ic.porQue"
+                  >
+                    {{ ic.texto }}
+                    @if (ic.porQue) {
+                      <span class="solo-lector">(no consulta: {{ ic.porQue }})</span>
                     }
                   </ui-badge>
                 }
@@ -464,6 +480,15 @@
               otra plataforma.
             </p>
           </ui-collapsible>
+        }
+
+        <!-- ── Canal con IA (spec 059) ──
+             Solo en sus bots y para un administrador: sus rutas son de la
+             consola. Va antes del ciclo porque es lo que se viene a mirar: qué
+             ve el motor, qué decidió la IA y cuánto queda del día. -->
+        @if (esCanalIa()) {
+          <h3 class="section">Canal con IA</h3>
+          <app-canal-ia-panel class="bd-card" [bot]="b" (cambiado)="recargar()" />
         }
 
         @if (b.cycle; as c) {

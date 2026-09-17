@@ -11,6 +11,7 @@ import type {
   MarginMode,
   MarketSpec,
   MarketTicker,
+  NivelApalancamiento,
   OrderAck,
   OrderUpdate,
   PlaceOrderRequest,
@@ -22,7 +23,12 @@ import type {
   VenueOrder,
 } from '@crypton/shared';
 import { Venue, venueKey } from '@crypton/shared';
-import type { CandleQuery, ExchangeAdapter, StreamHealth } from '@crypton/exchange-core';
+import type {
+  AcuseApalancamiento,
+  CandleQuery,
+  ExchangeAdapter,
+  StreamHealth,
+} from '@crypton/exchange-core';
 import { DryRunAdapter } from '@crypton/exchange-core';
 import { MarketDataService } from '../marketdata';
 import { CredentialsService } from './credentials.service';
@@ -700,6 +706,14 @@ class AccountHandle implements ExchangeAdapter {
         }
       };
     }
+    // Los dos del canal con IA (spec 058), con la misma regla: solo si el
+    // adaptador los tiene. Son lecturas y no invalidan nada.
+    if (adapter.getPositionMode) {
+      this.getPositionMode = () => adapter.getPositionMode!();
+    }
+    if (adapter.getLeverageTiers) {
+      this.getLeverageTiers = (sym) => adapter.getLeverageTiers!(sym);
+    }
   }
 
   readonly adjustIsolatedMargin?: (
@@ -709,6 +723,8 @@ class AccountHandle implements ExchangeAdapter {
     side: PositionSide,
   ) => Promise<void>;
   readonly setPositionMode?: (mode: PositionMode) => Promise<void>;
+  readonly getPositionMode?: () => Promise<PositionMode>;
+  readonly getLeverageTiers?: (symbol: string) => Promise<NivelApalancamiento[]>;
 
   // ── Datos de mercado ────────────────────────────────────────────
   //
@@ -815,9 +831,14 @@ class AccountHandle implements ExchangeAdapter {
     }
   }
 
-  async setLeverage(symbol: string, leverage: number, mode: MarginMode): Promise<void> {
+  /** Con el acuse del venue: el canal con IA no entra con otro apalancamiento (spec 058). */
+  async setLeverage(
+    symbol: string,
+    leverage: number,
+    mode: MarginMode,
+  ): Promise<AcuseApalancamiento | void> {
     try {
-      await this.entry.adapter.setLeverage(symbol, leverage, mode);
+      return await this.entry.adapter.setLeverage(symbol, leverage, mode);
     } finally {
       this.hub.invalidate(this.entry, symbol);
     }

@@ -13,7 +13,12 @@ export * from './factory';
 export { HyperliquidAdapter, esLiquidacionHl, hyperliquidTickSize } from './adapters/hyperliquid';
 export { AsterAdapter } from './adapters/aster';
 export { LighterAdapter, oldestPrice, scaled } from './adapters/lighter';
-export { DryRunAdapter, type DryRunOptions, type DryRunState } from './adapters/dry-run';
+export {
+  DryRunAdapter,
+  type DryRunOptions,
+  type DryRunState,
+  type LimitFillMode,
+} from './adapters/dry-run';
 export { ReplaySourceAdapter } from './adapters/replay-source';
 export * from './service-credentials';
 export * from './history';

@@ -14,6 +14,7 @@ import {
   IonBackButton,
   IonButton,
   IonButtons,
+  IonCheckbox,
   IonContent,
   IonHeader,
   IonIcon,
@@ -33,7 +34,13 @@ import {
   refreshOutline,
   warningOutline,
 } from 'ionicons/icons';
-import type { BotConfig, FieldMeta, PreviewResult } from '@crypton/shared';
+import {
+  MAX_APALANCAMIENTO_POR_STOP,
+  esEstrategiaSoloAdmin,
+  type BotConfig,
+  type FieldMeta,
+  type PreviewResult,
+} from '@crypton/shared';
 import { camposEfectivos, getStrategy } from '@crypton/strategy-core';
 import {
   AdvisorService,
@@ -137,6 +144,40 @@ const topeOno = (v: string | null): number | null => {
 
 type Step = 'venue' | 'strategy' | 'params' | 'preview';
 
+/**
+ * La conformidad que piden algunas estrategias antes de crearse (spec 059,
+ * R-13). Sin marcarla, el botón de crear no se enciende.
+ */
+const CONSENTIMIENTOS: Partial<Record<StrategyKind, string>> = {
+  AI_CHANNEL:
+    'Entiendo que este bot puede operar con dinero real y apalancamiento de hasta 25x, y que ' +
+    'una IA decide cada entrada dentro de los límites que he puesto.',
+};
+
+/**
+ * Los rótulos del cálculo previo. En el canal con IA no hay escalera: lo que se
+ * calcula son los límites y una operación de ejemplo (spec 059).
+ */
+const TEXTOS_ESCALERA = {
+  calcular: 'Calcular la escalera',
+  recalcular: 'Vuelve a calcular la escalera: has cambiado algún parámetro.',
+  titulo: 'Esto es lo que se colocará',
+  nota:
+    'Calculado con el mismo código que ejecutará el motor. Si algún nivel es inválido en este ' +
+    'mercado, el bot no se crea.',
+  peor: 'Si se ejecuta la escalera entera',
+};
+
+const TEXTOS_CANAL: typeof TEXTOS_ESCALERA = {
+  calcular: 'Calcular los límites',
+  recalcular: 'Vuelve a calcular los límites: has cambiado algún parámetro.',
+  titulo: 'Esto es lo que puede arriesgar',
+  nota:
+    'Una operación de ejemplo con el stop más ancho que admites, calculada con el mismo código ' +
+    'que el motor. Cada operación real saca su tamaño y su apalancamiento de su propio stop.',
+  peor: 'La operación más grande que admite',
+};
+
 @Component({
   selector: 'app-bot-create',
   standalone: true,
@@ -149,6 +190,7 @@ type Step = 'venue' | 'strategy' | 'params' | 'preview';
     IonButtons,
     IonBackButton,
     IonButton,
+    IonCheckbox,
     IonIcon,
     IonContent,
     IonSpinner,
@@ -307,8 +349,33 @@ export class BotCreatePage implements OnInit, OnDestroy {
    */
   readonly iaDisponible = computed(() => {
     const kind = this.strategyKind();
-    return this.modoIa.esAdmin() && !!kind && this.modoIa.cubre(kind) !== false;
+    // Las de solo administradores no entran nunca en el Modo IA (spec 059):
+    // decirlo aquí evita que el editor parpadee mientras llega el alcance.
+    if (!kind || esEstrategiaSoloAdmin(kind)) return false;
+    return this.modoIa.esAdmin() && this.modoIa.cubre(kind) !== false;
   });
+
+  /**
+   * El asesor de configuraciones no cubre las estrategias de solo
+   * administradores: el servidor las rechaza (spec 059), y ofrecer un botón que
+   * va a fallar es peor que no ofrecerlo.
+   */
+  readonly mostrarAsesor = computed(() => {
+    const kind = this.strategyKind();
+    return !!kind && !esEstrategiaSoloAdmin(kind);
+  });
+
+  /** El texto de conformidad de la estrategia elegida, o `null` si no pide. */
+  readonly consentimiento = computed(() => {
+    const kind = this.strategyKind();
+    return kind ? (CONSENTIMIENTOS[kind] ?? null) : null;
+  });
+  readonly conforme = signal(false);
+
+  /** Los rótulos del cálculo previo de la estrategia elegida. */
+  readonly textos = computed(() =>
+    this.strategyKind() === 'AI_CHANNEL' ? TEXTOS_CANAL : TEXTOS_ESCALERA,
+  );
 
   /** Por qué el Modo IA elegido no se puede mandar todavía, o vacío. */
   readonly iaBloqueo = computed<string>(() => {
@@ -581,14 +648,14 @@ export class BotCreatePage implements OnInit, OnDestroy {
       })
       .map(([key, fields]) => ({
         key,
-        title: groupLabel(key),
+        title: groupLabel(key, this.strategyKind()),
         fields,
         inerte: this.grupoInerte(key),
       }));
   }
 
   groupTitle(key: string): string {
-    return groupLabel(key);
+    return groupLabel(key, this.strategyKind());
   }
 
   // ═══════════════════════════════════════════════════════════════
@@ -777,7 +844,14 @@ export class BotCreatePage implements OnInit, OnDestroy {
     const investment = Number(this.config()[CAPITAL_FIELD]);
     if (!snapshot || !Number.isFinite(leverage) || !Number.isFinite(investment)) return out;
 
-    const notional = investment * leverage;
+    // La estrategia puede declarar su nocional: en el canal con IA sale del
+    // capital, el riesgo y los topes, no del apalancamiento (spec 058). El
+    // servidor usa el mismo (`nocionalMaximo`), así que el aviso y el 403 dicen
+    // lo mismo.
+    const kind = this.strategyKind();
+    const estrategia = kind ? getStrategy(kind) : null;
+    const declarado = this.nocionalDeclarado();
+    const notional = declarado ?? investment * leverage;
     const limits = snapshot.limits;
 
     if (limits.maxLeverage !== null && leverage > limits.maxLeverage) {
@@ -791,8 +865,11 @@ export class BotCreatePage implements OnInit, OnDestroy {
     if (perBot !== null && notional > perBot) {
       out.push({
         message:
-          `El bot movería ${money(notional)} (${money(investment)} de capital × ${leverage} de ` +
-          `apalancamiento), por encima de tu límite por bot de ${money(perBot)}. ` +
+          (declarado !== null
+            ? `Una operación de este bot podría mover hasta ${money(notional)}`
+            : `El bot movería ${money(notional)} (${money(investment)} de capital × ${leverage} de ` +
+              'apalancamiento)') +
+          `, por encima de tu límite por bot de ${money(perBot)}. ` +
           `Puedes cambiarlo en Cuenta › Límites de riesgo.`,
         severity: 'ERROR',
       });
@@ -812,6 +889,22 @@ export class BotCreatePage implements OnInit, OnDestroy {
       }
     }
 
+    // Con la regla por stop (spec 058) la liquidación la pone cada operación:
+    // lo que queda es el techo, el mismo que aplica el servidor.
+    if (estrategia?.reglaLiquidacion === 'POR_STOP') {
+      const tope = Math.min(
+        MAX_APALANCAMIENTO_POR_STOP,
+        this.market()?.max_leverage ?? MAX_APALANCAMIENTO_POR_STOP,
+      );
+      if (leverage > tope) {
+        out.push({
+          message: `El apalancamiento de esta estrategia llega como mucho a ${tope}× en este par, y has pedido ${leverage}×.`,
+          severity: 'ERROR',
+        });
+      }
+      return out;
+    }
+
     // La misma cota que aplica el servidor: por debajo del 5 % de distancia a
     // liquidacion, rechaza. Se calcula igual —sobre precio unidad—, asi que es
     // puramente una funcion del apalancamiento.
@@ -829,6 +922,23 @@ export class BotCreatePage implements OnInit, OnDestroy {
   });
 
   readonly limitErrors = computed(() => this.limitIssues().filter((i) => i.severity === 'ERROR'));
+
+  /**
+   * El nocional que declara la estrategia con esta configuración, o `null` si
+   * no declara ninguno. Con un formulario a medio escribir puede no calcularse:
+   * entonces se cae a capital por apalancamiento, como antes.
+   */
+  private readonly nocionalDeclarado = computed<number | null>(() => {
+    const kind = this.strategyKind();
+    if (!kind) return null;
+    try {
+      const n = getStrategy(kind).nocionalMaximo?.(this.fullConfig());
+      const valor = n === null || n === undefined ? Number.NaN : Number(n);
+      return Number.isFinite(valor) ? valor : null;
+    } catch {
+      return null;
+    }
+  });
 
   errorFor(key: string): string {
     // Un obligatorio vacio se explica como tal y no con el mensaje generico del
@@ -909,7 +1019,10 @@ export class BotCreatePage implements OnInit, OnDestroy {
     if (this.preview()?.valid === false) {
       return 'Hay niveles inválidos en este mercado. Ajusta los parámetros y vuelve a calcular.';
     }
-    if (!this.preview()) return 'Vuelve a calcular la escalera: has cambiado algún parámetro.';
+    if (!this.preview()) return this.textos().recalcular;
+    if (this.consentimiento() && !this.conforme()) {
+      return 'Marca la casilla de conformidad para crear este bot.';
+    }
     // Lo ultimo: el Modo IA es un añadido al bot, no el bot (spec 053).
     return this.iaBloqueo();
   });
@@ -1137,6 +1250,8 @@ export class BotCreatePage implements OnInit, OnDestroy {
 
   selectStrategy(kind: StrategyKind): void {
     this.strategyKind.set(kind);
+    // La conformidad es de una estrategia: cambiar de estrategia la retira.
+    this.conforme.set(false);
     const descriptor = this.strategies().find((s) => s.kind === kind);
     // Los valores por defecto vienen del servidor, de la propia estrategia: la
     // app no tiene una segunda copia que pueda desincronizarse.
@@ -1399,6 +1514,9 @@ export class BotCreatePage implements OnInit, OnDestroy {
   readonly strategyBlurb = strategyBlurb;
 
   isRisky(kind: string): boolean {
-    return kind === 'MARTINGALE' || kind === 'GRIDMART';
+    return kind === 'MARTINGALE' || kind === 'GRIDMART' || kind === 'AI_CHANNEL';
   }
+
+  /** Las que solo ve un administrador; el servidor ya las filtra de la lista. */
+  readonly soloAdmin = esEstrategiaSoloAdmin;
 }

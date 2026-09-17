@@ -97,6 +97,17 @@ export const BUS_CHANNELS = {
   /** Órdenes de runtime de la API hacia el worker (pausar, parar, pánico). */
   BOT_COMMANDS: 'crypton:bot-commands',
   /**
+   * Canal con IA (spec 058): el worker ha escrito una intención `SOLICITADA` y
+   * esta API tiene que consultar al modelo (spec 059). Solo adelanta el
+   * momento: la solicitud está en `bot_ai_intents`.
+   */
+  BOT_AI_REQUESTS: 'crypton:bot-ai-requests',
+  /**
+   * Canal con IA: la intención de un bot ha cambiado. El worker del bot
+   * planifica en el acto en vez de esperar al latido.
+   */
+  BOT_AI_INTENTS: 'crypton:bot-ai-intents',
+  /**
    * PUBLICO: precios de mercado del worker hacia la API.
    *
    * Es el eslabon que faltaba para que los precios lleguen empujados en vez de

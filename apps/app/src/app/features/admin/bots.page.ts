@@ -18,6 +18,7 @@ import {
 } from '../../core/services/admin-bots.service';
 import type { BotStatus, StrategyKind, Venue } from '../../core/models';
 import { ModoIaService } from '../../core/services/modo-ia.service';
+import { CanalIaService } from '../../core/services/canal-ia.service';
 import { ago, errorText, strategyLabel, venueLabel } from '../../core/utils';
 import { UiBadgeComponent, UiCardComponent, UiStatusPillComponent } from '../../shared/ui';
 import { AdminForbiddenComponent } from './admin-forbidden.component';
@@ -45,6 +46,7 @@ const ESTRATEGIAS: StrategyKind[] = [
   'MARKET_MAKER_V2',
   'TREND_FOLLOW',
   'TRAILING_PROFIT',
+  'AI_CHANNEL',
 ];
 
 /**
@@ -159,10 +161,10 @@ const ESTRATEGIAS: StrategyKind[] = [
             <!-- La pastilla del Modo IA solo puede salir en los bots PROPIOS: la
                  politica de un bot ajeno no se lee (spec 046). Sin esta frase,
                  un bot de otro administrador sin pastilla se leeria «sin IA». -->
-            @if (modoIa.hayEncendidos()) {
+            @if (modoIa.hayEncendidos() || canalIa.hayBots()) {
               <p class="leyenda">
-                La pastilla «IA» solo sale en tus bots: el Modo IA de otros administradores no se
-                puede consultar desde aquí.
+                Las pastillas «IA» solo salen en tus bots: la IA de los bots de otros
+                administradores no se puede consultar desde aquí.
               </p>
             }
             <ui-card flush class="lista">
@@ -190,6 +192,20 @@ const ESTRATEGIAS: StrategyKind[] = [
                         {{ ia.texto }}
                         @if (ia.porQue) {
                           <span class="solo-lector">(no actúa: {{ ia.porQue }})</span>
+                        }
+                      </ui-badge>
+                    }
+                    <!-- El canal con IA (spec 059), también solo en los propios. -->
+                    @if (canalIa.pastilla(b.id, b); as ic) {
+                      <ui-badge
+                        size="sm"
+                        [tone]="ic.tone"
+                        [variant]="ic.variant"
+                        [attr.title]="ic.porQue"
+                      >
+                        {{ ic.texto }}
+                        @if (ic.porQue) {
+                          <span class="solo-lector">(no consulta: {{ ic.porQue }})</span>
                         }
                       </ui-badge>
                     }
@@ -325,6 +341,8 @@ export class AdminBotsPage implements OnInit {
   private readonly route = inject(ActivatedRoute);
   /** Para la pastilla del Modo IA, que solo existe en los bots propios. */
   readonly modoIa = inject(ModoIaService);
+  /** Y la del canal con IA (spec 059), por lo mismo. */
+  readonly canalIa = inject(CanalIaService);
 
   readonly venues = VENUES;
   readonly estados = ESTADOS;

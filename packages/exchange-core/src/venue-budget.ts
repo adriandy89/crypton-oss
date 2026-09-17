@@ -1,4 +1,4 @@
-import { Venue, venueKey } from '@crypton/shared';
+import { Venue, venueKey, type OrderType } from '@crypton/shared';
 import { sleep } from './rate-limit';
 import { ASTER_ORDER_QUOTA, QUOTA_HEADROOM, VENUE_QUOTA_PER_MINUTE } from './venue-weights';
 
@@ -45,9 +45,18 @@ export type BudgetPriority = 'read' | 'write' | 'critical';
  * Lleva disparador = sostiene la posición: el stop-loss y las condicionales de
  * cierre. Compiten con las recotizaciones de un market maker, que mandan cuatro
  * peticiones por capa y por tick, y perdían por volumen (spec 029).
+ *
+ * Una orden a mercado que solo reduce es un CIERRE —manual, de pánico o de una
+ * estrategia— y tampoco puede esperar; antes competía como una escritura más
+ * (spec 057, F-10). Una límite que reduce sí puede: es un objetivo, y los
+ * market makers en alto riesgo las mandan por capas.
  */
-export const prioridadDeOrden = (req: { triggerPrice?: string }): BudgetPriority =>
-  req.triggerPrice ? 'critical' : 'write';
+export const prioridadDeOrden = (req: {
+  triggerPrice?: string;
+  type?: OrderType;
+  reduceOnly?: boolean;
+}): BudgetPriority =>
+  req.triggerPrice || (req.type === 'MARKET' && req.reduceOnly === true) ? 'critical' : 'write';
 
 /**
  * Lo que el venue dice haber contado de nosotros (y de cualquier otro cliente

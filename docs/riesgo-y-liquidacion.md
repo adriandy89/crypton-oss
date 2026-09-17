@@ -94,6 +94,32 @@ El tope depende de la tasa de mantenimiento del par: 16× en BTC de Hyperliquid 
 ese mercado antes de crear el bot; la API la repite al guardar. No es un fallo del formulario: es la red
 de la cuenta.
 
+### La regla por stop (solo el Canal con IA)
+
+El [Canal con IA](./ai-channel.md) no usa la regla del 5 %: cada operación lleva su stop desde el
+primer momento, así que la distancia a la liquidación se exige **contra ese stop**. Con `s` la
+distancia al stop en tanto por uno de la entrada y `mmr` la tasa de mantenimiento del tramo:
+
+```
+distancia exigida = el mayor de (colchón · s) y (3 ATR de 1 h / precio)     colchón ≥ 3
+apalancamiento    = floor(1 / (mmr + distancia · (1 + mmr)))
+tope              = el menor de ese número, 25, tu tope del bot, el del tramo, el del par y el de tu cuenta
+```
+
+Así la liquidación queda **al menos a tres stops** de la entrada. Un stop más ancho da menos
+apalancamiento, y el tamaño sale del riesgo, no del apalancamiento: **la pérdida al stop es la misma
+a 5x que a 25x**. Lo que cambia es el margen inmovilizado y lo que se perdería si un hueco saltara el
+stop, que tiene su propio tope (25 % del capital de fábrica).
+
+Ejemplo del test de la herramienta, con 1.000 USDC y un 1 % de riesgo en un par con mantenimiento del
+1 %: stop a 0,21 de una entrada de 100,05. La regla permite hasta 29x y el tope lo deja en 25x. A 25x
+la operación inmoviliza 125 USDC y liquida en 97,02, con el stop en 99,84. A 13x, lo mínimo que
+permite el margen máximo, inmovilizaría 241 USDC y liquidaría en 93,29. En las tres bandas, el stop
+cuesta 10 USDC.
+
+Al crear o editar, la API y el formulario aplican aquí el tope y no el 5 %: «El apalancamiento de esta
+estrategia llega como mucho a 25× en este par».
+
 **Recomendación de la casa:** 1× o 2× en todo lo que retenga inventario (rejillas, DCA, escaleras) y
 nunca por encima de 3× en las estrategias que promedian a la baja (la propia app avisa en el DCA
 temporizado por encima de 3×; en Martingala y GridMart rechaza la escalera si cubre más recorrido que la
@@ -150,8 +176,14 @@ manteniendo el stop-loss** (a partir de ese momento el stop es la única defensa
 estas tres coletillas:
 
 - «El stop loss sigue vivo en el exchange.»
-- «Atención: la posición queda SIN stop loss.» (no configuraste `stopLossPct`)
-- «Atención: hay un stop loss configurado pero NO consta colocado en el exchange. Revísalo.»
+- «Atención: la posición queda SIN stop loss.» (no configuraste `stopLossPct` y la estrategia no pone
+  el suyo)
+- «Atención: hay un stop loss configurado pero NO consta colocado en el exchange. Revísalo.» En
+  Tendencia, que pone su propio stop, dice «la estrategia pone su propio stop loss pero NO consta…».
+
+«Consta» es lo que el motor ve **en el libro del exchange** en cada revisión, no solo lo que llegó a
+colocar él: tras un reinicio del worker, un stop que ya estaba cuenta como vivo. Hasta el spec 057
+(F-09) Tendencia recibía siempre «SIN stop loss», con su stop puesto.
 
 Si el bot consta **sin posición** —la ha leído una revisión y no ha entrado ninguna ejecución desde
 entonces—, la alerta dice «no tenía posición abierta» en lugar de cualquiera de las tres. Si no se sabe,
@@ -171,6 +203,34 @@ conseguía era dejar el bot pausado cuando el venue volvía. Ahora el bot **espe
 
 Un bot simulado aguanta además hasta 20 s con el último precio conocido, igual que uno real. Los fallos
 que **no** son del venue (un error del propio bot) siguen pausando a los cinco.
+
+**En el Canal con IA** cuatro guardas funcionan distinto:
+
+- **Liquidación.** Se mide el **camino** de la entrada a la liquidación: a dos tercios salta
+  `LIQUIDATION_NEAR` en CRITICAL y actúa «Al acercarse la liquidación», que aquí viene en **Cerrar
+  todo**. Por debajo no avisa: el porcentaje de aviso de tu cuenta no aplica.
+- **Pérdida diaria del bot.** Al llegar al tope, la estrategia deja de abrir **hasta las 00:00 UTC**
+  y vuelve sola, sin pausar. La guarda solo pausa si un hueco lleva la pérdida a **1,5 veces** el
+  tope, y entonces la pausa dura hasta las 00:00 UTC: reanudarlo antes no abre entradas y la guarda
+  lo vuelve a pausar. El día del canal va en UTC.
+- **Caída máxima.** Si el resultado realizado cae desde su mejor punto más de lo configurado (15 %),
+  el bot se pausa y lo reanudas tú. El mejor punto se cuenta **desde tu última reanudación**: al
+  reanudar, la caída vuelve a cero y el bot tiene otra vez todo el margen.
+- **Vigilante del stop.** Tras una entrada, si el stop no aparece en el libro a los 5 segundos (10
+  en Lighter), el bot **cierra la posición a mercado** y avisa en CRITICAL (`SIN_STOP`). También con
+  el bot pausado: pausado repone su stop si falta, y si no sale, cierra.
+
+> ⚠️ **Limitación conocida (F-05, abierta a 2026-09-17).** Ese cierre a mercado usa un identificador
+> fijo por ciclo, así que si el primero se ejecuta a medias el segundo no sale: el bot avisa «no se
+> pudo cerrar» y repite el CRITICAL cada pocos segundos.
+> **Hasta que se corrija:** ante un `SIN_STOP` repetido, cierra la posición desde el exchange.
+> Estado: `specs/060-revision-057-059/findings.md` § F-05.
+
+> ⚠️ **Limitación conocida (F-12, abierta a 2026-09-17).** Con el bot **pausado**, la guarda de
+> liquidación del canal avisa pero **no cierra**, aunque «Al acercarse la liquidación» diga «Cerrar
+> todo».
+> **Hasta que se corrija:** con un bot pausado y una posición abierta, cierra tú si se acerca la
+> liquidación. Estado: `specs/060-revision-057-059/findings.md` § F-12.
 
 > ℹ️ **Semántica fijada (F-11, 2026-09-06).** El kill-switch del bot mide la **pérdida acumulada sobre el
 > capital asignado**, no la caída desde el máximo: es un tope de pérdida absoluta, y así se rotula en la
@@ -193,6 +253,9 @@ del exchange** (`withStopLoss`, [`stop-loss.ts`](../packages/strategy-core/src/s
   Lo cancela `CANCEL_ALL_ORDERS`; `STOP_AND_CLOSE` y `PANIC` lo cancelan **solo después de que el cierre
   haya salido**: si el exchange no acepta el cierre, el stop se queda, el bot pasa a pausado y lo dice en
   CRITICAL.
+- **Tendencia y el Canal con IA ponen su propio stop** y no leen este campo: el de Tendencia sigue
+  al precio por ATR, y el del canal sale del extremo del toque. En los dos, «Stop loss (%)» no hace
+  nada.
 - Si el exchange lo **rechaza**, el evento es CRITICAL una vez por forma de orden y el motor lo
   reintenta en cada revisión (no entra en cuarentena como el resto de órdenes). Un fallo **pasajero** al
   colocarlo (un corte de red) se reintenta en el mismo instante y, si tampoco sale, es CRITICAL.
@@ -227,6 +290,7 @@ Lo que la vista previa llama «peor caso» es **todos los niveles ejecutados**. 
 | Market Maker (V1 y V2) | **Valor máximo de la posición**, en cualquiera de los dos sentidos | Ese valor ÷ apalancamiento | `capital asignado` **no** dimensiona nada aquí: solo es el denominador de la pérdida diaria. |
 | Tendencia | `riesgo por operación / (multiplicador × ATR)` en cantidad, **acotado** por `capital × apalancamiento`, el margen disponible y el `Tope de exposición` | Ese notional ÷ apalancamiento | Lo que se arriesga **no** es el notional: es el `riesgo por operación`, porque el stop está puesto desde el primer momento. Si el tope recorta, se arriesga **menos** de lo declarado y la nota del bot lo dice. |
 | Seguimiento de beneficio | **capital × apalancamiento** en una sola posición, acotado por el margen disponible y el `Tope de exposición` | capital | No hay escalera: la posición entera existe desde el primer minuto. Y hasta llegar al objetivo la única red es el `stop loss`, que por eso viene puesto de fábrica (5 %). Al cerrarse **vuelve a abrir** pasada la espera. |
+| Canal con IA | `riesgo / (distancia al stop + costes)`, acotado por `capital × nocional máximo`, `capital × apalancamiento` y el `Tope de exposición`. Es lo que cuenta como notional del bot en tus límites | notional ÷ apalancamiento, como mucho el `margen máximo` (25 % del capital) | Lo que se arriesga es el `riesgo por operación`: el stop está en el libro desde el llenado. En un hueco que salte el stop, lo más que se pierde es el margen de la operación. |
 
 ---
 
@@ -256,3 +320,9 @@ la recolocación del stop (F-35), el mínimo al disparo (F-91), la acotación de
 `019-validacion-y-parametros-muertos` cerró el resto de F-13 (la API acota lo que el formulario acota), la
 tasa de mantenimiento por mercado (F-93), el tope de apalancamiento explicado (F-44), el doble cómputo del
 propio bot al editarlo (F-42) y la medianoche de la pérdida diaria (F-43).
+
+El spec `057-stops-velas-y-simulador` corrigió dos cosas del stop:
+- **Ya no se recoloca en cada revisión (057/F-01).** El motor comparaba el precio de ejecución que
+  informa el exchange con el del stop deseado, lo daba por cambiado y lo cancelaba y volvía a
+  colocar cada quince segundos, con la posición sin red entre medias. Ahora compara el disparo.
+- **Tendencia ya no suelta su stop si le faltan velas (057/F-02).**

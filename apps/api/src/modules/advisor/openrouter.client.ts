@@ -1,5 +1,6 @@
 import { Injectable, Logger } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
+import { D } from '@crypton/shared';
 import { BANDS, PROFILES, type Band, type Knobs, type Profile } from './build';
 import type { MarketFeatures } from './market-features';
 import { knobsSchema, marketPrompt, systemPrompt } from './prompt';
@@ -49,6 +50,99 @@ interface RespuestaOpenRouter {
     message?: { content?: string | null; refusal?: string | null };
   }[];
   error?: { code?: number; message?: string };
+  usage?: unknown;
+}
+
+/**
+ * Lo que costó una llamada, tal y como lo cuenta OpenRouter (spec 059).
+ *
+ * Llega en todas las respuestas, sin pedirlo. `coste` es el de la llamada en
+ * créditos, que se compran en dólares: se guarda en cadena decimal, como
+ * cualquier importe.
+ */
+export interface UsoModelo {
+  tokensEntrada: number;
+  tokensSalida: number;
+  tokensCacheLeidos: number;
+  tokensCacheEscritos: number;
+  tokensRazonamiento: number;
+  coste: string | null;
+}
+
+/** Por qué no hubo respuesta utilizable. Es lo que se anota en el lazo del bot. */
+export type FalloModelo =
+  'SIN_CLAVE' | 'HTTP' | 'TIEMPO' | 'NEGATIVA' | 'TRUNCADA' | 'RED' | 'VACIA';
+
+/** El resultado de una llamada: el texto, lo que costó y, si no sirve, por qué. */
+export interface RespuestaModelo {
+  contenido: string | null;
+  uso: UsoModelo | null;
+  fallo: FalloModelo | null;
+}
+
+export interface PeticionCanal {
+  esquema: { name: string; schema: Record<string, unknown> };
+  system: string;
+  usuario: string;
+  /** Lo que queda hasta el plazo de la decisión, ya recortado por quien llama. */
+  limiteMs: number;
+}
+
+export interface RespuestaCanal extends RespuestaModelo {
+  latenciaMs: number;
+  modelo: string;
+}
+
+/** Cómo se cachea el prompt del canal: una hora, cinco minutos o nada. */
+export type CachePrompt = '1h' | '5m' | 'off';
+export type EsfuerzoRazonamiento = 'low' | 'medium' | 'high';
+
+const CACHES: readonly CachePrompt[] = ['1h', '5m', 'off'];
+const ESFUERZOS: readonly EsfuerzoRazonamiento[] = ['low', 'medium', 'high'];
+
+const entero = (v: unknown): number =>
+  typeof v === 'number' && Number.isFinite(v) && v > 0 ? Math.trunc(v) : 0;
+
+/**
+ * El uso de la respuesta, o null si no viene. Lo que no es un número finito y
+ * positivo cuenta como cero: es una factura, no un dato con el que decidir.
+ */
+export function usoDe(bruto: unknown): UsoModelo | null {
+  if (typeof bruto !== 'object' || bruto === null) return null;
+  const u = bruto as {
+    prompt_tokens?: unknown;
+    completion_tokens?: unknown;
+    cost?: unknown;
+    prompt_tokens_details?: { cached_tokens?: unknown; cache_write_tokens?: unknown } | null;
+    completion_tokens_details?: { reasoning_tokens?: unknown } | null;
+  };
+  const coste =
+    typeof u.cost === 'number' && Number.isFinite(u.cost) && u.cost >= 0
+      ? D(u.cost.toString()).toFixed()
+      : null;
+  return {
+    tokensEntrada: entero(u.prompt_tokens),
+    tokensSalida: entero(u.completion_tokens),
+    tokensCacheLeidos: entero(u.prompt_tokens_details?.cached_tokens),
+    tokensCacheEscritos: entero(u.prompt_tokens_details?.cache_write_tokens),
+    tokensRazonamiento: entero(u.completion_tokens_details?.reasoning_tokens),
+    coste,
+  };
+}
+
+/** El marcador de caché del mensaje de sistema, o nada. */
+export function marcadorCache(cache: CachePrompt): { type: 'ephemeral'; ttl?: '1h' } | undefined {
+  if (cache === 'off') return undefined;
+  return cache === '1h' ? { type: 'ephemeral', ttl: '1h' } : { type: 'ephemeral' };
+}
+
+interface Pedido {
+  cuerpo: Record<string, unknown>;
+  /** Solo para los mensajes de log: qué llamada falló. */
+  que: string;
+  titulo: string;
+  clave: string;
+  limiteMs: number;
 }
 
 /**
@@ -83,6 +177,15 @@ export class OpenRouterClient {
    */
   private readonly agentKey: string;
   private readonly agentModel: string;
+  /**
+   * La IA del canal (spec 059), con su interruptor, su modelo y su caché. Es un
+   * tercer trabajo: elegir entre operaciones ya calculadas para un bot con
+   * dinero dentro, en bucle y con plazo.
+   */
+  private readonly channelKey: string;
+  private readonly channelModel: string;
+  private readonly channelEffort: EsfuerzoRazonamiento;
+  private readonly channelCache: CachePrompt;
 
   constructor(private readonly config: ConfigService) {
     // Se lee con `get` y NO con `requireSecret`: sin clave la API tiene que
@@ -109,6 +212,23 @@ export class OpenRouterClient {
       this.logger.warn(
         'AI_AGENT_ENABLE está activo pero falta OPENROUTER_API_KEY: ' +
           'el Modo IA no podrá revisar ningún bot.',
+      );
+    }
+
+    const channelEnabled = this.config.get<string>('AI_CHANNEL_ENABLE', 'false') === 'true';
+    this.channelKey = channelEnabled ? apiKey : '';
+    // Sin caída al modelo de los otros, por lo mismo que el supervisor.
+    this.channelModel = this.config.get<string>('AI_CHANNEL_MODEL', 'anthropic/claude-sonnet-5');
+    this.channelEffort = this.enLista(
+      'AI_CHANNEL_REASONING',
+      ESFUERZOS,
+      'medium',
+    ) as EsfuerzoRazonamiento;
+    this.channelCache = this.enLista('AI_CHANNEL_PROMPT_CACHE', CACHES, '1h') as CachePrompt;
+    if (channelEnabled && !apiKey) {
+      this.logger.warn(
+        'AI_CHANNEL_ENABLE está activo pero falta OPENROUTER_API_KEY: ' +
+          'los bots del canal con IA no abrirán ninguna operación.',
       );
     }
 
@@ -148,6 +268,27 @@ export class OpenRouterClient {
     return this.agentModel;
   }
 
+  /** Si la IA del canal puede llamar (spec 059). Independiente de los otros dos. */
+  get canalDisponible(): boolean {
+    return this.channelKey !== '';
+  }
+
+  /** El modelo del canal: va en cada intención, como el del supervisor. */
+  get canalModelo(): string {
+    return this.channelModel;
+  }
+
+  /**
+   * Una variable que solo admite unos valores. Uno que no está en la lista no
+   * se usa: se avisa y se queda el valor por defecto, que es lo prudente.
+   */
+  private enLista(nombre: string, lista: readonly string[], defecto: string): string {
+    const valor = this.config.get<string>(nombre, defecto).trim();
+    if (lista.includes(valor)) return valor;
+    this.logger.warn(`${nombre}=${valor} no es válido (${lista.join(', ')}): se usa ${defecto}.`);
+    return defecto;
+  }
+
   /**
    * Pide tres combinaciones de perillas para este mercado.
    *
@@ -160,7 +301,13 @@ export class OpenRouterClient {
     features: MarketFeatures,
   ): Promise<{ knobs: Knobs; rationale: string }[] | null> {
     if (!this.available) return null;
-    const contenido = await this.pedir(this.body(strategy, symbol, features), 'recomendaciones');
+    const { contenido } = await this.pedir({
+      cuerpo: this.body(strategy, symbol, features),
+      que: 'recomendaciones',
+      titulo: 'Crypton bot advisor',
+      clave: this.apiKey,
+      limiteMs: TIMEOUT_MS,
+    });
     return contenido === null ? null : this.parse(contenido);
   }
 
@@ -182,8 +329,8 @@ export class OpenRouterClient {
     usuario: string,
   ): Promise<string | null> {
     if (!this.agentAvailable) return null;
-    return this.pedir(
-      {
+    const { contenido } = await this.pedir({
+      cuerpo: {
         model: this.agentModel,
         max_tokens: MAX_TOKENS,
         // Mas esfuerzo que en el asesor, y a proposito: alli se eligen tres
@@ -201,9 +348,62 @@ export class OpenRouterClient {
           { role: 'user', content: usuario },
         ],
       },
-      'revision',
-      'Crypton bot supervisor',
-    );
+      que: 'revision',
+      titulo: 'Crypton bot supervisor',
+      clave: this.agentKey,
+      limiteMs: TIMEOUT_MS,
+    });
+    return contenido;
+  }
+
+  /**
+   * Pide al modelo que elija entre las operaciones que calculó el worker para
+   * un bot del canal con IA (spec 059).
+   *
+   * Vive aquí por la misma razón que la revisión: este sigue siendo el único
+   * fichero que habla con un modelo. A diferencia de los otros dos, devuelve
+   * también lo que costó la llamada y por qué falló, si falló: el lazo del bot
+   * lo anota y lo enseña, y un fallo cuenta para dormir las consultas.
+   *
+   * El mensaje de sistema es fijo y va marcado para la caché del proveedor; la
+   * oferta, que cambia en cada llamada, va detrás, en el del usuario.
+   */
+  async decidirCanal(p: PeticionCanal): Promise<RespuestaCanal> {
+    const inicio = Date.now();
+    if (!this.canalDisponible) {
+      return {
+        contenido: null,
+        uso: null,
+        fallo: 'SIN_CLAVE',
+        latenciaMs: 0,
+        modelo: this.channelModel,
+      };
+    }
+    const cache = marcadorCache(this.channelCache);
+    const r = await this.pedir({
+      cuerpo: {
+        model: this.channelModel,
+        max_tokens: MAX_TOKENS,
+        reasoning: { effort: this.channelEffort, exclude: true },
+        response_format: {
+          type: 'json_schema',
+          json_schema: { name: p.esquema.name, strict: true, schema: p.esquema.schema },
+        },
+        provider: { require_parameters: true },
+        messages: [
+          {
+            role: 'system',
+            content: [{ type: 'text', text: p.system, ...(cache ? { cache_control: cache } : {}) }],
+          },
+          { role: 'user', content: p.usuario },
+        ],
+      },
+      que: 'decision del canal',
+      titulo: 'Crypton AI channel',
+      clave: this.channelKey,
+      limiteMs: Math.min(p.limiteMs, TIMEOUT_MS),
+    });
+    return { ...r, latenciaMs: Date.now() - inicio, modelo: this.channelModel };
   }
 
   /**
@@ -216,21 +416,22 @@ export class OpenRouterClient {
    * `max_tokens`, el `TypeError` que no es un fallo de red— y duplicarlo para el
    * supervisor habria sido perderlo a la mitad.
    *
-   * `que` solo entra en los mensajes de log, para que se sepa cual de las dos
-   * llamadas fallo.
+   * La clave y el plazo van en cada pedido (spec 059): las cabeceras usaban
+   * siempre la del asesor, y con el asesor apagado el supervisor mandaba una
+   * clave vacía.
+   *
+   * Nunca lanza. Devuelve el contenido, el uso —si hubo respuesta, porque una
+   * negativa o un truncado también se facturan— y el motivo del fallo.
    */
-  private async pedir(
-    cuerpo: Record<string, unknown>,
-    que: string,
-    titulo = 'Crypton bot advisor',
-  ): Promise<string | null> {
+  private async pedir(p: Pedido): Promise<RespuestaModelo> {
+    const { que } = p;
     try {
-      const json = JSON.stringify(cuerpo);
+      const json = JSON.stringify(p.cuerpo);
 
       // Un solo presupuesto de tiempo para los dos intentos: dos esperas
       // completas de 25 s se comerian el interceptor global de 80 s entre esto y
       // las dos series de velas que ya se han pedido antes de llegar aqui.
-      const limite = Date.now() + TIMEOUT_MS;
+      const limite = Date.now() + p.limiteMs;
       let res: Response | null = null;
 
       for (let intento = 1; intento <= 2; intento++) {
@@ -241,7 +442,7 @@ export class OpenRouterClient {
 
         const r = await fetch(OPENROUTER_URL, {
           method: 'POST',
-          headers: this.headers(titulo),
+          headers: this.headers(p.titulo, p.clave),
           body: json,
           signal: AbortSignal.timeout(restante),
         });
@@ -266,49 +467,64 @@ export class OpenRouterClient {
         await r.body?.cancel().catch(() => undefined);
       }
 
-      if (!res) return null;
-      if (!res.ok) return this.reportarFallo(res);
+      const sinRespuesta = (fallo: FalloModelo, uso: UsoModelo | null = null): RespuestaModelo => ({
+        contenido: null,
+        uso,
+        fallo,
+      });
+
+      // Sin ningún intento: el plazo no daba ni para empezar.
+      if (!res) return sinRespuesta('TIEMPO');
+      if (!res.ok) {
+        await this.reportarFallo(res, que);
+        return sinRespuesta('HTTP');
+      }
 
       const datos = (await res.json()) as RespuestaOpenRouter;
+      const uso = usoDe(datos.usage);
 
       // OpenRouter devuelve algunos errores con HTTP 200 y el fallo en el
       // cuerpo: hay que mirarlo antes de leer `choices`.
       if (datos.error) {
         this.logger.debug(
-          `El modelo no respondió (${datos.error.code ?? '?'}): ${datos.error.message ?? ''}`,
+          `El modelo no respondió a ${que} (${datos.error.code ?? '?'}): ` +
+            `${datos.error.message ?? ''}`,
         );
-        return null;
+        return sinRespuesta('HTTP', uso);
       }
 
       const eleccion = datos.choices?.[0];
-      if (!eleccion) return null;
+      if (!eleccion) return sinRespuesta('VACIA', uso);
 
       // Una negativa por seguridad tambien llega con 200, en su propio campo.
       if (eleccion.message?.refusal) {
         this.logger.warn(`El modelo declinó la petición de ${que}.`);
-        return null;
+        return sinRespuesta('NEGATIVA', uso);
       }
-      // Truncado: el JSON estara a medias y `parse()` fallaria igual, pero en
+      // Truncado: el JSON estara a medias y el parser fallaria igual, pero en
       // silencio. Se registra como aviso porque significa que el tope se ha
       // quedado corto, y eso hay que verlo en el log, no deducirlo de que las
-      // recomendaciones «siempre salen por reglas».
+      // respuestas «nunca sirven».
       if (eleccion.finish_reason === 'length') {
         this.logger.warn(
-          'La respuesta del modelo se truncó por max_tokens: se usan reglas. ' +
+          `La respuesta del modelo a ${que} se truncó por max_tokens. ` +
             'Si se repite, hay que subir MAX_TOKENS.',
         );
-        return null;
+        return sinRespuesta('TRUNCADA', uso);
       }
 
-      return eleccion.message?.content ?? '';
+      const contenido = eleccion.message?.content ?? '';
+      return { contenido, uso, fallo: contenido === '' ? 'VACIA' : null };
     } catch (e) {
       // El tiempo de espera agotado llega como `TimeoutError` desde
       // `AbortSignal.timeout`. Se registra aparte porque significa otra cosa que
       // un fallo de red: el modelo estaba pensando de mas.
       const nombre = (e as Error)?.name;
       if (nombre === 'TimeoutError' || nombre === 'AbortError') {
-        this.logger.debug(`El modelo tardó más de ${TIMEOUT_MS} ms: se usan reglas.`);
-      } else if (e instanceof TypeError) {
+        this.logger.debug(`El modelo tardó más de ${p.limiteMs} ms en ${que}.`);
+        return { contenido: null, uso: null, fallo: 'TIEMPO' };
+      }
+      if (e instanceof TypeError) {
         // Un TypeError aqui NO es un problema de red: es una peticion mal
         // construida por nosotros —una cabecera con un carácter ilegal, un
         // cuerpo que no se puede serializar— y `fetch` la rechaza antes de
@@ -318,7 +534,7 @@ export class OpenRouterClient {
       } else {
         this.logger.debug(`Fallo al pedir ${que}: ${String(e)}`);
       }
-      return null;
+      return { contenido: null, uso: null, fallo: 'RED' };
     }
   }
 
@@ -333,10 +549,13 @@ export class OpenRouterClient {
    * servia reglas para siempre mientras el cupo se seguia gastando.
    *
    * Todo lo que salga de aqui va en ASCII, y hay un test que lo comprueba.
+   *
+   * La clave es la de la llamada: cada carga tiene su interruptor, y con el
+   * asesor apagado su clave vale '' (spec 059).
    */
-  private headers(titulo: string): Record<string, string> {
+  private headers(titulo: string, clave: string): Record<string, string> {
     return {
-      Authorization: `Bearer ${this.apiKey}`,
+      Authorization: `Bearer ${clave}`,
       'Content-Type': 'application/json',
       // Identifican la llamada en el panel de OpenRouter. Sin ellas todo el
       // gasto aparece como «desconocido», que es justo lo que no quieres cuando
@@ -406,21 +625,20 @@ export class OpenRouterClient {
    * Sin separarlos, un saldo agotado se confunde con una caida de OpenRouter y
    * se busca donde no es.
    */
-  private async reportarFallo(res: Response): Promise<null> {
+  private async reportarFallo(res: Response, que: string): Promise<void> {
     const cuerpo = await res.text().catch(() => '');
     if (res.status === 401) {
       this.logger.error('La clave de OpenRouter no es válida.');
     } else if (res.status === 402) {
       this.logger.error(
-        'OpenRouter rechaza la llamada por saldo insuficiente: ' +
-          'recarga la cuenta o el asistente seguirá usando solo reglas.',
+        'OpenRouter rechaza la llamada por saldo insuficiente: recarga la cuenta. Mientras, ' +
+          'el asistente usa reglas y ni el Modo IA ni el canal con IA deciden nada.',
       );
     } else if (res.status === 429) {
-      this.logger.warn('OpenRouter está limitando el ritmo: se usan reglas.');
+      this.logger.warn(`OpenRouter está limitando el ritmo (${que}).`);
     } else {
-      this.logger.debug(`El modelo no respondió (${res.status}): ${cuerpo.slice(0, 300)}`);
+      this.logger.debug(`El modelo no respondió a ${que} (${res.status}): ${cuerpo.slice(0, 300)}`);
     }
-    return null;
   }
 
   /**

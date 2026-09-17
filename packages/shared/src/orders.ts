@@ -18,6 +18,8 @@ export interface PlaceOrderRequest {
   reduceOnly?: boolean;
   /** Precio de disparo para stops. */
   triggerPrice?: string;
+  /** Caducidad en el venue, en epoch ms. Ver `DesiredOrder.expiresAt`. */
+  expiresAt?: number;
   /**
    * Sentido del disparo: 'SL' corta pérdidas, 'TP' realiza ganancias.
    *
@@ -140,6 +142,13 @@ export class ExchangeError extends Error {
     message: string,
     readonly venue?: Venue,
     readonly raw?: unknown,
+    /**
+     * true = la escritura pudo llegar al venue y no se sabe si surtió efecto:
+     * el envío falló y la comprobación de si entró también (spec 057, F-06).
+     * No es «no entró»: quien lo recibe no debe volver a mandar lo mismo hasta
+     * saberlo.
+     */
+    readonly estadoDesconocido = false,
   ) {
     super(message);
     this.name = 'ExchangeError';

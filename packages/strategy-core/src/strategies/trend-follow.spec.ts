@@ -234,6 +234,78 @@ describe('trendFollow.plan — el stop', () => {
   });
 });
 
+/**
+ * Spec 057, F-02. Sin velas —un reinicio del worker con la caché fría, o el
+ * venue limitando las descargas— `plan()` devolvía un plan vacío ANTES de mirar
+ * la posición, y el motor cancelaba el stop vivo: la posición se quedaba sin red
+ * al menos un tick en cada despliegue, y sin plazo mientras faltaran los datos.
+ */
+describe('trendFollow.plan — el stop no depende de las velas (spec 057, F-02)', () => {
+  const largo = { position: makePosition('1', '100') };
+  const conGuardado = (stopPrice: string) => ({ cycle: { scratch: { cycleSeq: 1, stopPrice } } });
+  // Un stop que ya ha subido con el precio. Distinto a propósito del de
+  // emergencia de esta entrada (95): si coincidieran, el test no distinguiría
+  // «se queda el guardado» de «se pone el de emergencia».
+  const SUBIDO = '112.00';
+
+  it('sin velas y con stop guardado, mantiene ese stop', () => {
+    const r = plan({}, { ...largo, ...conGuardado(SUBIDO) });
+    const s = stop(r)!;
+    expect(s).toBeDefined();
+    expect(s.price).toBe(SUBIDO);
+    expect(s.triggerPrice).toBe(SUBIDO);
+    expect(s.side).toBe('SELL');
+    expect(s.reduceOnly).toBe(true);
+    expect(s.qty).toBe('1.000');
+    // Sin ATR no se puede seguir al precio: el stop no se mueve ni se reescribe.
+    expect(r.scratchPatch?.['stopPrice']).toBeUndefined();
+    expect(r.note).toContain('se queda donde estaba');
+  });
+
+  it('con menos velas de las necesarias, igual', () => {
+    const r = plan({}, { ...largo, ...conGuardado(SUBIDO), candles: rampa(5) });
+    expect(stop(r)?.price).toBe(SUBIDO);
+  });
+
+  it('con velas planas —sin ATR— tampoco lo suelta', () => {
+    const planas = serie(new Array<number>(31).fill(100), 0);
+    const r = plan({}, { ...largo, ...conGuardado(SUBIDO), candles: planas });
+    expect(stop(r)?.price).toBe(SUBIDO);
+  });
+
+  it('sin velas ni stop guardado, pone uno de emergencia anclado en la entrada', () => {
+    // El ATR de reserva de la vista previa, el 2 % del precio: con k = 2,5 son
+    // 5 puntos por debajo de una entrada en 100, aunque la marca esté en 120.
+    const r = plan({}, largo);
+    expect(stop(r)?.price).toBe('95.00');
+    // No se guarda: en cuanto lleguen las velas, manda el stop calculado.
+    expect(r.scratchPatch?.['stopPrice']).toBeUndefined();
+    expect(r.note).toContain('emergencia');
+  });
+
+  it('el de emergencia de un corto va por encima y compra', () => {
+    const s = stop(plan({}, { position: makePosition('-1', '100') }))!;
+    expect(s.side).toBe('BUY');
+    expect(s.price).toBe('105.00');
+  });
+
+  it('en cuanto vuelven las velas, manda el stop calculado', () => {
+    // Mismo caso que «el primer stop se ancla en la ENTRADA»: 95,5 con la rampa.
+    const r = plan(
+      { atrStopMultiplier: '1.5' },
+      { position: makePosition('1', '100'), price: '94', candles: rampa(30) },
+    );
+    expect(stop(r)!.price).toBe('95.50');
+    expect(r.scratchPatch?.['stopPrice']).toBe('95.50');
+  });
+
+  it('sin posición y sin velas sigue sin colocar nada', () => {
+    const r = plan({}, conGuardado(SUBIDO));
+    expect(r.orders).toHaveLength(0);
+    expect(r.note).toContain('Esperando velas');
+  });
+});
+
 describe('trendFollow.validate y preview', () => {
   const cfg = (extra: Record<string, unknown> = {}) =>
     ({ ...estrategia.defaults(), ...BASE_CONFIG, ...extra }) as unknown as BotConfig;

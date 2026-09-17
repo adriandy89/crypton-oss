@@ -58,7 +58,8 @@ export type StrategyKind =
   | 'MARKET_MAKER'
   | 'MARKET_MAKER_V2'
   | 'TREND_FOLLOW'
-  | 'TRAILING_PROFIT';
+  | 'TRAILING_PROFIT'
+  | 'AI_CHANNEL';
 
 export interface SessionUser {
   id: string;
@@ -183,6 +184,13 @@ export interface BotCycle {
   qty: string;
   realized_pnl: string;
   fees: string;
+  /**
+   * El estado de trabajo de la estrategia. El detalle y la lista de ciclos
+   * mandan la fila entera, y nunca se había declarado; el canal con IA lo lee
+   * para su panel y su gráfico (spec 059), siempre con los lectores de
+   * `shared`, que validan la forma. Opcional: es JSON y puede no venir.
+   */
+  scratch?: unknown;
 }
 
 /** Un cambio de una revisión, tal y como lo escribió `PATCH /bots/:id/config`. */

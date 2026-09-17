@@ -1,4 +1,5 @@
 import type { Venue } from './enums';
+import { D, Decimal } from './money';
 
 /**
  * Intervalos de vela, en el vocabulario único del sistema.
@@ -78,6 +79,84 @@ export interface Candle {
   c: string;
   /** Volumen en moneda BASE. null cuando el venue no lo expone. */
   v: string | null;
+}
+
+/** El intervalo más largo cuyos cubos empiezan en múltiplos exactos de su duración. */
+const MAX_CUBO_ALINEADO_MS = 86_400_000;
+
+/**
+ * Agrega velas de `origen` a `destino`, en cubos alineados a UTC.
+ *
+ * Devuelve solo los cubos CERRADOS en `hasta` —su final no pasa de ahí—: uno a
+ * medias sería decidir con una vela que aún no existe. Y solo los que empiezan
+ * con su primera vela, porque sin ella no hay apertura. Un hueco en medio (un
+ * rato sin operaciones) no invalida el cubo, como no lo invalida en el venue.
+ *
+ * Solo hasta un día: las semanas empiezan en lunes y los meses no miden lo
+ * mismo. Devuelve `null` si el destino no se puede construir desde el origen
+ * —menor, no múltiplo o más largo que un día— (spec 057, F-04).
+ *
+ * `velas` va en orden de tiempo y todas del intervalo `origen`.
+ */
+export function agregarVelas(
+  velas: readonly Candle[],
+  origen: CandleInterval,
+  destino: CandleInterval,
+  hasta: number,
+): Candle[] | null {
+  if (origen === '1M' || destino === '1M') return null;
+  const paso = INTERVAL_MS[origen];
+  const cubo = INTERVAL_MS[destino];
+  if (cubo < paso || cubo % paso !== 0 || cubo > MAX_CUBO_ALINEADO_MS) return null;
+  if (cubo === paso) return velas.filter((v) => v.t + cubo <= hasta);
+
+  const out: Candle[] = [];
+  let actual: {
+    t: number;
+    o: string;
+    h: Decimal;
+    l: Decimal;
+    c: string;
+    v: Decimal | null;
+  } | null = null;
+
+  const cerrar = (): void => {
+    if (actual && actual.t + cubo <= hasta) {
+      out.push({
+        t: actual.t,
+        o: actual.o,
+        h: actual.h.toFixed(),
+        l: actual.l.toFixed(),
+        c: actual.c,
+        v: actual.v?.toFixed() ?? null,
+      });
+    }
+    actual = null;
+  };
+
+  for (const vela of velas) {
+    const inicio = Math.floor(vela.t / cubo) * cubo;
+    if (actual && actual.t !== inicio) cerrar();
+    if (!actual) {
+      // Sin la primera vela del cubo no hay apertura: el cubo entero se salta.
+      if (vela.t !== inicio) continue;
+      actual = {
+        t: inicio,
+        o: vela.o,
+        h: D(vela.h),
+        l: D(vela.l),
+        c: vela.c,
+        v: vela.v === null ? null : D(vela.v),
+      };
+      continue;
+    }
+    actual.h = Decimal.max(actual.h, vela.h);
+    actual.l = Decimal.min(actual.l, vela.l);
+    actual.c = vela.c;
+    actual.v = actual.v === null || vela.v === null ? null : actual.v.plus(vela.v);
+  }
+  cerrar();
+  return out;
 }
 
 /**

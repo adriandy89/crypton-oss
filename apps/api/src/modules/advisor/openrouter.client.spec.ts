@@ -172,7 +172,10 @@ describe('cliente del modelo', () => {
   describe('la peticion tiene que poder salir', () => {
     /** Acceso al constructor de cabeceras: es lo que rompia la llamada entera. */
     const headers = (c: OpenRouterClient, titulo = 'Crypton bot advisor'): Record<string, string> =>
-      (c as unknown as { headers(t: string): Record<string, string> }).headers(titulo);
+      (c as unknown as { headers(t: string, k: string): Record<string, string> }).headers(
+        titulo,
+        'sk-or-x',
+      );
 
     it('las cabeceras se pueden mandar tal cual', () => {
       // El test que faltaba. Los valores de cabecera son ByteString: un guion
@@ -191,6 +194,8 @@ describe('cliente del modelo', () => {
       // Y el titulo del supervisor, que es el otro que se manda (spec 046).
       expect(() => new Headers(headers(c, 'Crypton bot supervisor'))).not.toThrow();
       expect(headers(c, 'Crypton bot supervisor')['X-Title']).toBe('Crypton bot supervisor');
+      // Y el del canal con IA (spec 059).
+      expect(() => new Headers(headers(c, 'Crypton AI channel'))).not.toThrow();
     });
 
     it('se queda con el PRIMER origen, no con la lista entera', () => {
@@ -319,6 +324,25 @@ describe('el supervisor y el asesor son independientes (spec 046)', () => {
       configCon({ ...clave, AI_AGENT_ENABLE: 'true', OPENROUTER_MODEL: 'un/modelo-barato' }),
     );
     expect((c as unknown as { agentModel: string }).agentModel).not.toBe('un/modelo-barato');
+  });
+
+  it('con el asesor apagado, el supervisor manda SU clave (spec 059)', async () => {
+    // Hallazgo latente: las cabeceras usaban siempre la clave del asesor, que
+    // vale '' si su interruptor está apagado. El supervisor encendido solo
+    // mandaba «Bearer » y recibía un 401 en cada revisión.
+    const c = new OpenRouterClient(configCon({ ...clave, AI_AGENT_ENABLE: 'true' }));
+    const fetchSpy = jest.spyOn(globalThis, 'fetch').mockResolvedValue(
+      new Response(JSON.stringify({ choices: [{ message: { content: '{}' } }] }), {
+        status: 200,
+      }),
+    );
+    try {
+      await expect(c.revisar({ name: 'x', schema: {} }, 'sys', 'user')).resolves.toBe('{}');
+      const init = fetchSpy.mock.calls[0][1];
+      expect(new Headers(init?.headers).get('Authorization')).toBe('Bearer sk-or-x');
+    } finally {
+      fetchSpy.mockRestore();
+    }
   });
 
   it('apagado, revisar() no llama a nadie', async () => {

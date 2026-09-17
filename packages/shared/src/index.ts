@@ -21,3 +21,5 @@ export * from './time';
 export * from './csv';
 export * from './activity';
 export * from './market-features';
+export * from './ia-canal';
+export * from './ia-canal-vistas';

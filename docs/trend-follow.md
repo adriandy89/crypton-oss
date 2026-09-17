@@ -62,6 +62,14 @@ El bot pide al motor las velas que necesita: la mayor de sus dos ventanas (canal
 de holgura. **Si no las tiene, no opera y lo dice.** Un ATR de catorce velas calculado sobre tres
 es un número con toda la pinta de ser válido, y de ahí saldría el tamaño de tu posición.
 
+Con una **posición abierta**, que falten velas no toca el stop. Pasa tras un reinicio del motor o
+si el exchange limita las descargas.
+- **Ya hay stop:** se queda donde estaba.
+- **Todavía no había ninguno:** se pone uno de emergencia a `k × 2 %` de tu precio de entrada.
+  Cuando vuelven las velas, lo sustituye el calculado con el ATR de verdad.
+
+Hasta el spec 057 (F-02), en ese caso el stop se retiraba.
+
 ### Paso 2 — ¿Hay ruptura?
 
 ```
@@ -233,5 +241,9 @@ bot real por par y cuenta.
 - **El backtest mueve el stop una vez por vela**, no cada quince segundos. En un movimiento rápido
   eso lo deja más atrás que el motor real, así que el replay **tiende a salir peor** de lo que
   saldría en vivo, no mejor. Lo declara entre sus avisos.
+- **En el backtest, el intervalo del replay tiene que dividir el de la estrategia** (15m o 1h para
+  una Tendencia de 1h). Si no lo divide, no hay velas con las que decidir y no opera. Además, las
+  primeras 25 velas del rango (con los valores de fábrica) se gastan en calentar el canal y el ATR
+  ([simulación y backtest](./simulacion-y-backtest.md)).
 - **La vista previa estima el tamaño con un ATR del 2 % del precio**, porque antes de crear el bot
   no hay velas que mirar. El real lo calculará el bot con el ATR de verdad del par.

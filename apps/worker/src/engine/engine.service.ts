@@ -1,10 +1,18 @@
 import { Injectable, Logger, OnModuleDestroy, OnModuleInit } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
-import type { BotConfig, CycleState, MarketSpec } from '@crypton/shared';
-import { AuditOutcome, EventSeverity } from '@crypton/shared';
+import type { BotConfig, CycleState, MarketSpec, StrategyKind, Venue } from '@crypton/shared';
+import {
+  AuditOutcome,
+  CLAVE_INTERRUPTOR_CANAL,
+  EventSeverity,
+  esEstrategiaSoloAdmin,
+  interruptorCerrado,
+} from '@crypton/shared';
+import { getStrategy } from '@crypton/strategy-core';
 import { AuditService, BUS_CHANNELS, BusService, DbService } from '../libs';
-import { BotRunner, type RunnerCommand } from './bot-runner';
+import { BotRunner, type EstadoInterruptor, type RunnerCommand } from './bot-runner';
 import { AccountHub } from './account-hub.service';
+import { AiIntentStore } from './ai-intents.store';
 import { BotStore, type RiskGuards } from './bot-store';
 import { CommandInbox } from './command-inbox.service';
 import { LeaseService } from './lease.service';
@@ -32,6 +40,49 @@ const SPAWN_CONCURRENCY = 8;
 const COMMAND_STALE_MS = 120_000;
 
 /**
+ * Tope de bots REALES del canal con IA por venue en este worker, si no se
+ * configura otro. Lighter cuenta el cupo por IP (60 peticiones por minuto sin
+ * cuenta de servicio), y cada bot del canal lee tres series y su cuenta: con
+ * más de dos, el cupo no llega (spec 058).
+ */
+const TOPE_CANAL_POR_VENUE_DEFECTO = 'LIGHTER=2';
+
+/**
+ * `AI_CHANNEL_MAX_BOTS_PER_VENUE`: pares `VENUE=n` separados por comas. Un
+ * venue que no aparece no tiene tope. Un par mal escrito se ignora con aviso.
+ */
+export function topesCanalPorVenue(
+  texto: string,
+  avisar: (mensaje: string) => void = () => undefined,
+): Map<string, number> {
+  const topes = new Map<string, number>();
+  for (const trozo of texto.split(',')) {
+    const par = trozo.trim();
+    if (!par) continue;
+    const m = /^([A-Z_]+)\s*=\s*(\d+)$/.exec(par);
+    if (!m) {
+      avisar(`AI_CHANNEL_MAX_BOTS_PER_VENUE: «${par}» no tiene la forma VENUE=n; se ignora.`);
+      continue;
+    }
+    topes.set(m[1], Number(m[2]));
+  }
+  return topes;
+}
+
+/**
+ * El interruptor global del canal con IA, leído del texto de Redis. `off`
+ * cierra; cualquier otra cosa —o la clave ausente— deja abierto. Acepta el
+ * valor con o sin comillas: lo puede escribir la API como JSON o una persona a
+ * mano. La regla es la de `shared`, la misma con la que decide la API si
+ * llamar al modelo (spec 059).
+ */
+export function leerInterruptor(texto: string | null): EstadoInterruptor {
+  return interruptorCerrado(texto)
+    ? { permitidas: false, motivo: 'las entradas del canal con IA están cortadas en la consola' }
+    : { permitidas: true, motivo: null };
+}
+
+/**
  * Supervisor del motor.
  *
  * Su trabajo es sencillo de enunciar y es todo lo que hace: mirar qué bots
@@ -53,6 +104,8 @@ export class EngineService implements OnModuleInit, OnModuleDestroy {
   private shuttingDown = false;
   private scanning = false;
   private maxBots = 250;
+  /** Ver `topesCanalPorVenue`. */
+  private topesCanal = new Map<string, number>();
 
   constructor(
     private readonly db: DbService,
@@ -66,10 +119,16 @@ export class EngineService implements OnModuleInit, OnModuleDestroy {
     private readonly priceSource: PriceSourceService,
     /** Velas compartidas, para las estrategias que las declaran (spec 038). */
     private readonly marketData: MarketDataService,
+    /** Intenciones del canal con IA (spec 058). */
+    private readonly intents: AiIntentStore,
   ) {}
 
   async onModuleInit(): Promise<void> {
     this.maxBots = Number(this.config.get('WORKER_MAX_BOTS', 250));
+    this.topesCanal = topesCanalPorVenue(
+      String(this.config.get('AI_CHANNEL_MAX_BOTS_PER_VENUE', TOPE_CANAL_POR_VENUE_DEFECTO)),
+      (m) => this.logger.warn(m),
+    );
 
     // Perder un lease tiene que soltar el runner AL INSTANTE, no en el próximo
     // barrido: mientras tanto habría dos procesos operando el mismo bot.
@@ -446,9 +505,98 @@ export class EngineService implements OnModuleInit, OnModuleDestroy {
     }
   }
 
+  /**
+   * Arranques del canal con IA en curso, por venue: el tope se cuenta con ellos
+   * para que dos adopciones simultáneas no lo pasen las dos.
+   */
+  private readonly arrancandoCanal = new Map<string, string>();
+
+  /** El dueño de una estrategia solo para administradores lo es, y está habilitado. */
+  private async comprobarDuenoAdmin(userId: string, strategy: string): Promise<void> {
+    const dueno = await this.db.user.findUnique({
+      where: { id: userId },
+      select: { role: true, disabled: true },
+    });
+    if (!dueno || dueno.role !== 'ADMIN' || dueno.disabled) {
+      throw new Error(
+        `La estrategia ${strategy} solo la puede operar un administrador habilitado, y el dueño de ` +
+          'este bot no lo es.',
+      );
+    }
+  }
+
+  /** Reserva un hueco del tope de bots reales del canal con IA en ese venue. */
+  private reservarCanal(botId: string, venue: Venue, strategy: StrategyKind): void {
+    const tope = this.topesCanal.get(venue);
+    if (tope === undefined) return;
+    const vivos = [...this.runners.values()].filter((r) => {
+      const p = r.perfil;
+      return p.strategy === strategy && p.venue === venue && !p.dryRun && r.botId !== botId;
+    }).length;
+    // Sin los que ya tienen runner: esos ya se han contado arriba.
+    const arrancando = [...this.arrancandoCanal].filter(
+      ([id, v]) => id !== botId && v === venue && !this.runners.has(id),
+    ).length;
+    if (vivos + arrancando >= tope) {
+      throw new Error(
+        `Este worker ya opera ${vivos + arrancando} bot(s) reales del canal con IA en ${venue}, el ` +
+          'tope configurado (AI_CHANNEL_MAX_BOTS_PER_VENUE): el cupo de peticiones del venue no ' +
+          'da para más.',
+      );
+    }
+    this.arrancandoCanal.set(botId, venue);
+  }
+
+  /**
+   * El interruptor global del canal con IA. Con plazo: con Redis caído el
+   * cliente encola la orden en vez de fallar, y el tick esperaría dentro del
+   * cerrojo del bot.
+   */
+  private async leerInterruptorCanal(): Promise<EstadoInterruptor> {
+    let timer: NodeJS.Timeout | undefined;
+    const plazo = new Promise<never>((_, reject) => {
+      timer = setTimeout(() => reject(new Error('Redis no contesta')), 1_000);
+    });
+    try {
+      return leerInterruptor(
+        await Promise.race([this.bus.leerTexto(CLAVE_INTERRUPTOR_CANAL), plazo]),
+      );
+    } finally {
+      clearTimeout(timer);
+    }
+  }
+
+  /** El nocional que declara la estrategia, para los agregados de exposición. */
+  private async anotarNocional(botId: string, strategy: StrategyKind, config: BotConfig) {
+    const valor = getStrategy(strategy).nocionalMaximo?.(config) ?? null;
+    await this.store
+      .setMaxNotional(botId, valor)
+      .catch((e: Error) =>
+        this.logger.warn(`No se pudo guardar el nocional de ${botId}: ${e.message}`),
+      );
+  }
+
   /** Reconstruye un bot completo desde la base de datos y lo pone en marcha. */
   private async spawn(botId: string): Promise<void> {
+    try {
+      await this.spawnSinReserva(botId);
+    } finally {
+      this.arrancandoCanal.delete(botId);
+    }
+  }
+
+  private async spawnSinReserva(botId: string): Promise<void> {
     const bot = await this.db.bot.findUniqueOrThrow({ where: { id: botId } });
+
+    // El canal con IA: solo un administrador, con el rol leído de la base, y
+    // como mucho los bots reales por venue que el cupo aguanta (spec 058). Un
+    // bot que no cumple queda en ERROR con el motivo (`trySpawn`).
+    if (esEstrategiaSoloAdmin(bot.strategy)) {
+      await this.comprobarDuenoAdmin(bot.user_id, bot.strategy);
+    }
+    if (bot.strategy === 'AI_CHANNEL' && !bot.dry_run) {
+      this.reservarCanal(bot.id, bot.venue, bot.strategy);
+    }
 
     // La red antes que nada: decide qué ficha de mercado es la buena, y con la
     // que no es el bot redondearía a una retícula que su venue no reconoce. Va
@@ -474,6 +622,7 @@ export class EngineService implements OnModuleInit, OnModuleDestroy {
       botId,
       Number(config.cooldownMinutes ?? 0),
     );
+    await this.anotarNocional(botId, bot.strategy, config);
 
     // Por CUENTA, no por bot: si ya hay otro bot de esta misma cuenta corriendo
     // en este worker, comparten conexión, firmante, limitador de caudal y
@@ -510,6 +659,8 @@ export class EngineService implements OnModuleInit, OnModuleDestroy {
       reconcileIntervalMs: Number(this.config.get('RECONCILE_INTERVAL_MS', 15_000)),
       priceSource: this.priceSource,
       candleSource: this.marketData,
+      intents: this.intents,
+      interruptorCanal: () => this.leerInterruptorCanal(),
       // Se adopta tal y como estaba: un bot pausado sigue pausado tras un
       // relevo de worker —arrancarlo sin más lo pondría a operar sin que nadie
       // se lo pidiera— y uno en STOPPING no debe colocar NADA: su siguiente
@@ -562,6 +713,14 @@ export class EngineService implements OnModuleInit, OnModuleDestroy {
       if (!runner) return;
       void this.reloadConfig(message.botId, runner, message.data);
     });
+
+    // Una intención del canal con IA ha cambiado: el bot la mira ya. Solo
+    // adelanta; el latido la vería igual (spec 058).
+    const intents$ = await this.bus.listen(BUS_CHANNELS.BOT_AI_INTENTS);
+    intents$.subscribe((message) => {
+      if (!message.botId) return;
+      this.runners.get(message.botId)?.pedirTick();
+    });
   }
 
   private async reloadConfig(
@@ -572,17 +731,16 @@ export class EngineService implements OnModuleInit, OnModuleDestroy {
     try {
       const bot = await this.db.bot.findUniqueOrThrow({
         where: { id: botId },
-        select: { config_version: true },
+        select: { config_version: true, strategy: true },
       });
       const revision = await this.db.botConfigRevision.findUniqueOrThrow({
         where: {
           bot_id_version: { bot_id: botId, version: bot.config_version },
         },
       });
-      await runner.reloadConfig(
-        revision.config as unknown as BotConfig,
-        (data.level as 'HOT' | 'WARM' | 'COLD') ?? 'HOT',
-      );
+      const config = revision.config as unknown as BotConfig;
+      await runner.reloadConfig(config, (data.level as 'HOT' | 'WARM' | 'COLD') ?? 'HOT');
+      await this.anotarNocional(botId, bot.strategy, config);
     } catch (e) {
       this.logger.error(
         `No se pudo recargar la configuración de ${botId}: ${(e as Error).message}`,

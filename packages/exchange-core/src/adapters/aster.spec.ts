@@ -1,5 +1,6 @@
 import { Wallet } from 'ethers';
-import { AsterAdapter, nextAsterNonce } from './aster';
+import { ExchangeError } from '@crypton/shared';
+import { AsterAdapter, nextAsterNonce, tramosAster } from './aster';
 import { asterCodec } from '../coid';
 
 /**
@@ -508,6 +509,59 @@ describe('lo que el venue ya mandaba y se tiraba (spec 038)', () => {
   });
 });
 
+/**
+ * Spec 057, F-01. Una condicional llega con `price: "0"` y el disparo en
+ * `stopPrice` (documentación v3, «Query Order»). Sin informarlo, el
+ * reconciliador recolocaba el stop en cada tick.
+ */
+describe('órdenes abiertas con disparo (spec 057, F-01)', () => {
+  const orden = (over: Record<string, unknown>) => ({
+    symbol: 'BTCUSDT',
+    orderId: 7,
+    clientOrderId: 'x',
+    price: '0',
+    origQty: '0.010',
+    executedQty: '0',
+    status: 'NEW',
+    side: 'SELL',
+    type: 'STOP_MARKET',
+    stopPrice: '70000',
+    reduceOnly: true,
+    time: 1,
+    ...over,
+  });
+
+  it('un STOP_MARKET es una orden a mercado con su disparo', async () => {
+    mockFetch(() => ({ body: [orden({})] }));
+    const [o] = await new AsterAdapter(creds()).getOpenOrders('BTCUSDT');
+    expect(o.type).toBe('MARKET');
+    expect(o.triggerPrice).toBe('70000');
+  });
+
+  it('un TAKE_PROFIT (límite) conserva su tipo y su disparo', async () => {
+    mockFetch(() => ({
+      body: [orden({ type: 'TAKE_PROFIT', price: '71000', stopPrice: '70900' })],
+    }));
+    const [o] = await new AsterAdapter(creds()).getOpenOrders('BTCUSDT');
+    expect(o.type).toBe('LIMIT');
+    expect(o.triggerPrice).toBe('70900');
+    expect(o.price).toBe('71000');
+  });
+
+  it('una límite normal no tiene disparo aunque el venue mande stopPrice a cero', async () => {
+    mockFetch(() => ({ body: [orden({ type: 'LIMIT', price: '69000', stopPrice: '0' })] }));
+    const [o] = await new AsterAdapter(creds()).getOpenOrders('BTCUSDT');
+    expect(o.type).toBe('LIMIT');
+    expect(o.triggerPrice).toBeNull();
+  });
+
+  it('un stopPrice vacío no tumba la lectura: es una orden sin disparo', async () => {
+    mockFetch(() => ({ body: [orden({ stopPrice: '' })] }));
+    const [o] = await new AsterAdapter(creds()).getOpenOrders('BTCUSDT');
+    expect(o.triggerPrice).toBeNull();
+  });
+});
+
 describe('una conexion colgada no retiene el cerrojo del bot (spec 050)', () => {
   /**
    * `http` llamaba a `fetch` sin tope: una conexion que el venue deja abierta sin
@@ -546,4 +600,267 @@ describe('una conexion colgada no retiene el cerrojo del bot (spec 050)', () => 
 
     expect(e.kind).toBe('RETRYABLE');
   }, 15_000);
+});
+
+/**
+ * Spec 058. El canal con IA necesita los tramos de la cuenta, que Aster solo da
+ * firmados, y el apalancamiento que el venue dice haber aplicado.
+ */
+describe('tramos de apalancamiento (spec 058)', () => {
+  /**
+   * Solo las peticiones de tramos. Una lectura de precio de un test anterior puede
+   * seguir reintentando y caer en el `fetch` de este.
+   */
+  const deTramos = (urls: string[]) => urls.filter((u) => u.includes('/leverageBracket?'));
+  /** La forma de la documentación V3 («Notional and Leverage Brackets»). */
+  const brackets = [
+    {
+      bracket: 1,
+      initialLeverage: 75,
+      notionalCap: 10000,
+      notionalFloor: 0,
+      maintMarginRatio: 0.0065,
+      cum: 0,
+    },
+    {
+      bracket: 2,
+      initialLeverage: 50,
+      notionalCap: 50000,
+      notionalFloor: 10000,
+      maintMarginRatio: 0.01,
+      cum: 35,
+    },
+  ];
+
+  it('lee el objeto que devuelve el venue cuando se pide un símbolo', () => {
+    expect(tramosAster({ symbol: 'ETHUSDT', brackets }, 'ETHUSDT')).toEqual([
+      { desdeNocional: '0', maxApalancamiento: 75, mantenimiento: 0.0065 },
+      { desdeNocional: '10000', maxApalancamiento: 50, mantenimiento: 0.01 },
+    ]);
+  });
+
+  it('y la lista, quedándose con el símbolo pedido y ordenando por nocional', () => {
+    const lista = [
+      { symbol: 'BTCUSDT', brackets: [{ ...brackets[0], initialLeverage: 125 }] },
+      { symbol: 'ETHUSDT', brackets: [brackets[1], brackets[0]] },
+    ];
+
+    expect(tramosAster(lista, 'ETHUSDT').map((t) => t.maxApalancamiento)).toEqual([75, 50]);
+  });
+
+  it('acepta los números como texto', () => {
+    const texto = {
+      symbol: 'ETHUSDT',
+      brackets: [
+        { initialLeverage: '20', notionalFloor: '0', maintMarginRatio: '0.025' },
+        { initialLeverage: '10', notionalFloor: '250000.5', maintMarginRatio: '0.05' },
+      ],
+    };
+
+    expect(tramosAster(texto, 'ETHUSDT')).toEqual([
+      { desdeNocional: '0', maxApalancamiento: 20, mantenimiento: 0.025 },
+      { desdeNocional: '250000.5', maxApalancamiento: 10, mantenimiento: 0.05 },
+    ]);
+  });
+
+  it('descarta los tramos imposibles', () => {
+    const raros = {
+      symbol: 'ETHUSDT',
+      brackets: [
+        brackets[0],
+        { ...brackets[1], initialLeverage: 0 },
+        { ...brackets[1], initialLeverage: 2.5 },
+        { ...brackets[1], maintMarginRatio: 0 },
+        { ...brackets[1], maintMarginRatio: 1 },
+        { ...brackets[1], notionalFloor: -1 },
+        { ...brackets[1], notionalFloor: undefined },
+      ],
+    };
+
+    expect(tramosAster(raros, 'ETHUSDT')).toHaveLength(1);
+  });
+
+  it('sin tramos válidos, o sin el símbolo, lanza: una lista vacía parecería «sin límites»', () => {
+    expect(() => tramosAster({ symbol: 'ETHUSDT', brackets: [] }, 'ETHUSDT')).toThrow(
+      ExchangeError,
+    );
+    expect(() => tramosAster({ symbol: 'BTCUSDT', brackets }, 'ETHUSDT')).toThrow(/ETHUSDT/);
+    expect(() => tramosAster(null, 'ETHUSDT')).toThrow(ExchangeError);
+  });
+
+  it('se piden firmados, por símbolo, y se recuerdan un rato', async () => {
+    const { urls } = mockFetch(() => ({ body: { symbol: 'ETHUSDT', brackets } }));
+    const adapter = new AsterAdapter(creds());
+
+    const primera = await adapter.getLeverageTiers('ETHUSDT');
+    const segunda = await adapter.getLeverageTiers('ETHUSDT');
+
+    expect(segunda).toEqual(primera);
+    const pedidas = deTramos(urls);
+    expect(pedidas).toHaveLength(1);
+    expect(pedidas[0]).toContain('/fapi/v3/leverageBracket?');
+    const q = Object.fromEntries(new URL(pedidas[0]).searchParams);
+    expect(q).toMatchObject({ symbol: 'ETHUSDT', user: address, signer: address });
+    expect(q.signature).toMatch(/^0x[0-9a-f]{130}$/);
+  });
+
+  it('pasado el plazo se vuelven a pedir', async () => {
+    const reloj = jest.spyOn(Date, 'now').mockReturnValue(1_000_000);
+    const { urls } = mockFetch(() => ({ body: { symbol: 'ETHUSDT', brackets } }));
+    const adapter = new AsterAdapter(creds());
+
+    await adapter.getLeverageTiers('ETHUSDT');
+    reloj.mockReturnValue(1_000_000 + 10 * 60_000 + 1);
+    await adapter.getLeverageTiers('ETHUSDT');
+
+    expect(deTramos(urls)).toHaveLength(2);
+  });
+
+  it('un fallo no se recuerda: la siguiente llamada vuelve a preguntar', async () => {
+    let vez = 0;
+    const { urls } = mockFetch(() =>
+      ++vez === 1
+        ? { status: 400, body: { code: -1022, msg: 'Signature for this request is not valid.' } }
+        : { body: { symbol: 'ETHUSDT', brackets } },
+    );
+    const adapter = new AsterAdapter(creds());
+
+    await expect(adapter.getLeverageTiers('ETHUSDT')).rejects.toMatchObject({ kind: 'AUTH' });
+    await expect(adapter.getLeverageTiers('ETHUSDT')).resolves.toHaveLength(2);
+    expect(deTramos(urls)).toHaveLength(2);
+  });
+
+  it('un adaptador sin credenciales no puede pedirlos', async () => {
+    const { urls } = mockFetch(() => ({ body: { symbol: 'ETHUSDT', brackets } }));
+    const publico = new AsterAdapter({ userAddress: '', signerAddress: '' } as never);
+
+    await expect(publico.getLeverageTiers('ETHUSDT')).rejects.toBeInstanceOf(ExchangeError);
+    expect(deTramos(urls)).toHaveLength(0);
+  });
+});
+
+describe('acuse del apalancamiento (spec 058)', () => {
+  it('devuelve el apalancamiento y el nocional máximo que contesta el venue', async () => {
+    mockFetch((url) =>
+      url.includes('/fapi/v3/leverage?')
+        ? { body: { leverage: 21, maxNotionalValue: '1000000', symbol: 'BTCUSDT' } }
+        : { body: {} },
+    );
+    const adapter = new AsterAdapter(creds());
+
+    await expect(adapter.setLeverage('BTCUSDT', 21, 'ISOLATED')).resolves.toEqual({
+      leverage: 21,
+      maxNotional: '1000000',
+    });
+  });
+
+  it('si la respuesta no trae el apalancamiento, no lo da por confirmado', async () => {
+    mockFetch(() => ({ body: {} }));
+    const adapter = new AsterAdapter(creds());
+
+    await expect(adapter.setLeverage('BTCUSDT', 21, 'ISOLATED')).resolves.toEqual({
+      leverage: null,
+    });
+  });
+
+  it('un apalancamiento distinto del pedido se devuelve tal cual, para que se vea', async () => {
+    mockFetch((url) =>
+      url.includes('/fapi/v3/leverage?') ? { body: { leverage: '20' } } : { body: {} },
+    );
+    const adapter = new AsterAdapter(creds());
+
+    await expect(adapter.setLeverage('BTCUSDT', 21, 'ISOLATED')).resolves.toEqual({
+      leverage: 20,
+    });
+  });
+});
+
+describe('modo de posición (spec 058)', () => {
+  it('lee la cobertura y el modo unidireccional de la cuenta, firmados', async () => {
+    let dual: unknown = true;
+    const { urls } = mockFetch(() => ({ body: { dualSidePosition: dual } }));
+    const adapter = new AsterAdapter(creds());
+
+    await expect(adapter.getPositionMode()).resolves.toBe('HEDGE');
+    dual = 'true';
+    await expect(adapter.getPositionMode()).resolves.toBe('HEDGE');
+    dual = 'false';
+    await expect(adapter.getPositionMode()).resolves.toBe('ONE_WAY');
+
+    const pedidas = urls.filter((u) => u.includes('/positionSide/dual?'));
+    expect(pedidas).toHaveLength(3);
+    expect(new URL(pedidas[0]).searchParams.get('signature')).toMatch(/^0x[0-9a-f]{130}$/);
+  });
+
+  it('una respuesta sin el campo no se da por unidireccional', async () => {
+    mockFetch(() => ({ body: {} }));
+    const adapter = new AsterAdapter(creds());
+
+    await expect(adapter.getPositionMode()).rejects.toBeInstanceOf(ExchangeError);
+  });
+});
+
+describe('límite IOC y caducidad (spec 058)', () => {
+  const parametros = (url: string) => Object.fromEntries(new URL(url).searchParams);
+  /** Solo las órdenes: ver `deTramos`. */
+  const deOrdenes = (urls: string[]) => urls.filter((u) => u.includes('/fapi/v3/order?'));
+  const pedido = (over: Record<string, unknown> = {}) =>
+    ({
+      symbol: 'BTCUSDT',
+      side: 'BUY',
+      type: 'LIMIT',
+      price: '79000',
+      qty: '0.001',
+      clientOrderId: 'a1b2c3d4e5f60718.1.B0',
+      reduceOnly: false,
+      ...over,
+    }) as never;
+
+  it('una límite IOC pide el resultado final, y una que no casa vuelve EXPIRED', async () => {
+    const { urls } = mockFetch(() => ({
+      body: { orderId: 11, status: 'EXPIRED', executedQty: '0', updateTime: 5 },
+    }));
+    const adapter = new AsterAdapter(creds());
+
+    const ack = await adapter.placeOrder(pedido({ timeInForce: 'IOC' }));
+
+    expect(parametros(deOrdenes(urls)[0])).toMatchObject({
+      timeInForce: 'IOC',
+      newOrderRespType: 'RESULT',
+    });
+    expect(ack).toMatchObject({ venueOrderId: '11', status: 'EXPIRED' });
+  });
+
+  it('una que casa vuelve FILLED', async () => {
+    mockFetch(() => ({ body: { orderId: 12, status: 'FILLED', executedQty: '0.001' } }));
+    const adapter = new AsterAdapter(creds());
+
+    const ack = await adapter.placeOrder(pedido({ timeInForce: 'IOC' }));
+
+    expect(ack.status).toBe('FILLED');
+  });
+
+  it('el resto de órdenes no cambia de acuse', async () => {
+    const { urls } = mockFetch(() => ({ body: { orderId: 13, status: 'NEW' } }));
+    const adapter = new AsterAdapter(creds());
+
+    await adapter.placeOrder(pedido());
+    await adapter.placeOrder(pedido({ type: 'POST_ONLY' }));
+    await adapter.placeOrder(pedido({ type: 'MARKET' }));
+
+    expect(deOrdenes(urls)).toHaveLength(3);
+    for (const url of deOrdenes(urls)) expect(parametros(url).newOrderRespType).toBeUndefined();
+  });
+
+  it('`expiresAt` no viaja: Aster no tiene órdenes con caducidad', async () => {
+    const { urls } = mockFetch(() => ({ body: { orderId: 14, status: 'NEW' } }));
+    const adapter = new AsterAdapter(creds());
+
+    await adapter.placeOrder(pedido({ expiresAt: 1_900_000_000_000 }));
+
+    const q = parametros(deOrdenes(urls)[0]);
+    expect(q.timeInForce).toBe('GTC');
+    expect(Object.values(q)).not.toContain('1900000000000');
+    expect(q.goodTillDate).toBeUndefined();
+  });
 });

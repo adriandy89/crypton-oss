@@ -285,10 +285,11 @@ tiene tesis; esta, para quien sí la tiene.
 
 ## 8. Limitaciones conocidas
 
-- **El backtest sigue al máximo con retraso.** El replay corre una revisión por vela y mide el
-  máximo sobre el cierre, así que no ve ni el recorrido dentro de la vela ni lo que el motor ve
-  entre revisiones. Los dos huecos empujan en la misma dirección: **el replay sale por debajo de lo
-  que saldría en real**. El aviso va con el resultado.
+- **El backtest mueve el disparador una vez por vela.** Lo mueve con el máximo que alcanzó la vela,
+  como la marca de agua del motor. Pero si el precio retrocede dentro de esa misma vela, el motor
+  saldría en ella y **el replay sale en la siguiente**, al precio del disparador. El aviso va con
+  el resultado. Hasta el spec 057 (F-04) el replay medía el máximo sobre el cierre y salía más
+  abajo de lo que saldría en real.
 - **Sin funding.** Ni el bot lo mira ni el backtest lo simula. En una posición de varios días puede
   ser el mayor componente del resultado.
 - **El máximo de los últimos quince segundos no sobrevive a un reinicio del worker.** Lo que se

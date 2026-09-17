@@ -1,5 +1,6 @@
 import { Injectable, computed, effect, inject, signal, untracked } from '@angular/core';
 import { filter, throttleTime } from 'rxjs';
+import { esEventoModoIa } from '@crypton/shared';
 import { AuthService } from '../auth/auth.service';
 import { conCanalEfectivo, insigniaIa, type BotParaIa, type InsigniaIa } from '../utils/modo-ia';
 import { AdminBotsService, type AiSetting, type AiSwitches } from './admin-bots.service';
@@ -24,8 +25,8 @@ const AGRUPAR_EVENTOS_IA_MS = 2_000;
  * Tres cosas lo mantienen al dia, y ninguna es un sondeo:
  *   - la sesion: al entrar un administrador se carga, y al salir o cambiar de
  *     cuenta se vacia;
- *   - los eventos `AI_*` del flujo, que publica el supervisor al actuar y la API
- *     al cambiar el modo;
+ *   - los eventos del Modo IA en el flujo (`EVENTOS_MODO_IA`), que publica el
+ *     supervisor al actuar y la API al cambiar el modo;
  *   - la vuelta del flujo tras una caida, por lo que se perdiera sin linea.
  *
  * Y un NUMERO DE SECUENCIA: una lectura que sale antes de un cambio y llega
@@ -94,10 +95,12 @@ export class ModoIaService {
     });
 
     // Suscripcion de por vida, como el propio servicio: los dos viven lo que la
-    // sesion de la app.
+    // sesion de la app. Solo con SUS eventos (spec 059): con el prefijo `AI_`
+    // entero, cada decision y cada operacion del canal con IA pedian el resumen
+    // del Modo IA sin que nada suyo hubiera cambiado.
     this.stream.stream
       .pipe(
-        filter((ev) => ev.type.startsWith('AI_')),
+        filter((ev) => esEventoModoIa(ev.type)),
         throttleTime(AGRUPAR_EVENTOS_IA_MS, undefined, { leading: true, trailing: true }),
       )
       .subscribe(() => void this.refrescar());

@@ -138,7 +138,12 @@ describe('RiskService', () => {
 
   function build(
     limits: Record<string, unknown>,
-    bots: { id: string; total_investment: string; leverage: number }[],
+    bots: {
+      id: string;
+      total_investment: string;
+      leverage: number;
+      max_notional?: string | null;
+    }[],
   ) {
     const db = {
       riskLimit: {
@@ -211,6 +216,20 @@ describe('RiskService', () => {
     // Y nunca por debajo de 1x: que ya no quepa lo dice el 403, no un tope de cero.
     const sinSitio = build({ max_notional_per_bot: decimal('10') }, []);
     await expect(sinSitio.service.topeDeApalancamiento('u1', '1000', MARKET)).resolves.toBe(1);
+  });
+
+  /**
+   * Spec 058. El canal con IA tiene 25x de TOPE y abre mucho menos: su nocional
+   * lo declara la estrategia (`bots.max_notional`). Contado como capital por
+   * apalancamiento, un solo bot llenaba el tope total del usuario.
+   */
+  it('el agregado usa el nocional que declara la estrategia, si lo hay', async () => {
+    const { service } = build({}, [
+      { id: 'canal', total_investment: '1000', leverage: 25, max_notional: '5000' },
+      { id: 'rejilla', total_investment: '200', leverage: 3, max_notional: null },
+    ]);
+
+    expect((await service.currentTotalNotional('u1')).toFixed()).toBe('5600');
   });
 
   it('la puerta del 5 % usa la tasa de mantenimiento del mercado y dice el tope', async () => {

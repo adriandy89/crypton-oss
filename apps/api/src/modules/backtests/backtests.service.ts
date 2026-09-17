@@ -13,7 +13,10 @@ import {
   candleSpanMs,
   type BacktestParams,
   type BacktestResult,
+  type BotConfig,
   type Candle,
+  type CandleInterval,
+  type StrategyKind,
 } from '@crypton/shared';
 import {
   BinanceHistory,
@@ -21,10 +24,57 @@ import {
   paginateHistory,
   type HistoryProvider,
 } from '@crypton/exchange-core';
-import { aggregateCandles, buildMetrics, fidelityWarnings, runReplay } from '@crypton/backtest';
+import { getStrategy } from '@crypton/strategy-core';
+import {
+  aggregateCandles,
+  buildMetrics,
+  fidelityWarnings,
+  metricasPorSetup,
+  runReplay,
+  ventanasConsecutivas,
+} from '@crypton/backtest';
 import { CacheService, DbService } from '../../libs';
 import { MarketsService } from '../markets/markets.service';
 import { BACKTESTABLE_INTERVALS, type CreateBacktestDto } from './dtos';
+
+/** Tope de operaciones que se devuelven y se guardan, como el de ejecuciones. */
+export const MAX_OPERACIONES = 1000;
+
+/**
+ * Velas del intervalo reproducido que hacen falta ANTES del rango para que las
+ * series de la estrategia lleguen enteras a la primera vela (spec 058): las de
+ * la serie más larga y un cubo de margen, porque el primero puede llegar
+ * partido. Cero para las estrategias sin series. Lo que el venue no sirve de una
+ * vez lo recorta el replay, como el motor.
+ */
+export function barrasDeCalentamiento(
+  strategy: StrategyKind,
+  config: BotConfig,
+  interval: CandleInterval,
+): number {
+  const series = getStrategy(strategy).series?.(config) ?? [];
+  if (series.length === 0) return 0;
+  const ms = Math.max(...series.map((s) => (s.bars + 1) * candleSpanMs(s.interval)));
+  return Math.ceil(ms / candleSpanMs(interval));
+}
+
+/**
+ * La serie más fina que la estrategia no puede construir con el intervalo
+ * reproducido, o null si todas se pueden (spec 058).
+ */
+export function serieImposible(
+  strategy: StrategyKind,
+  config: BotConfig,
+  interval: CandleInterval,
+): CandleInterval | null {
+  const paso = candleSpanMs(interval);
+  // Una más fina que el paso tampoco divide: su resto nunca es cero.
+  const imposibles = (getStrategy(strategy).series?.(config) ?? [])
+    .map((s) => s.interval)
+    .filter((iv) => candleSpanMs(iv) % paso !== 0)
+    .sort((a, b) => candleSpanMs(a) - candleSpanMs(b));
+  return imposibles[0] ?? null;
+}
 
 /**
  * Ejecuta un backtest, de principio a fin y de forma SÍNCRONA.
@@ -132,6 +182,17 @@ export class BacktestsService {
       select: { config: true, version: true },
     });
     if (!revision) throw new NotFoundException('Ese bot no tiene configuración vigente.');
+    const botConfig = revision.config as unknown as BotConfig;
+
+    // Una estrategia que decide con velas más finas que las reproducidas no
+    // operaría en todo el rango: se dice ahora, no con un resultado vacío.
+    const imposible = serieImposible(bot.strategy, botConfig, dto.interval);
+    if (imposible) {
+      throw new BadRequestException(
+        `Esta estrategia decide con velas de ${imposible} y no se pueden construir con las de ` +
+          `${dto.interval}. Reprodúcelo en ${imposible}.`,
+      );
+    }
 
     // Uno a la vez, y por una razón concreta: dos replays simultáneos en el mismo
     // proceso se reparten el bucle de eventos y la API deja de responder a todo
@@ -189,15 +250,40 @@ export class BacktestsService {
         );
       }
 
+      // El calentamiento (spec 058): las velas de antes del rango que la
+      // estrategia necesita para decidir desde la primera, con la misma caché.
+      // No se reproducen, así que no cuentan en el tope de velas.
+      const span = candleSpanMs(dto.interval);
+      const barrasPrevias = barrasDeCalentamiento(bot.strategy, botConfig, dto.interval);
+      const calentamiento =
+        barrasPrevias > 0
+          ? await paginateHistory({
+              provider,
+              symbol: sourceSymbol,
+              interval: dto.interval,
+              marketType,
+              fromMs: fromMs - barrasPrevias * span,
+              toMs: fromMs,
+              barCap: barrasPrevias,
+              gapMs: 150,
+              readCache: async (k) =>
+                (await this.cache.get<Candle[]>(`bt:candles:${k}`)) ?? undefined,
+              writeCache: async (k, page) => {
+                await this.cache.set(`bt:candles:${k}`, page, 86_400);
+              },
+            })
+          : null;
+
       const params = this.paramsOf(dto, bot);
       const out = await runReplay({
         botId: bot.id,
         strategy: bot.strategy,
-        config: revision.config as never,
+        config: botConfig,
         venue: bot.venue,
         market,
         interval: dto.interval,
         candles: historia.candles,
+        ...(calentamiento ? { warmup: calentamiento.candles } : {}),
         params,
         // Ceder el bucle de eventos: sin esto, un replay de miles de barras
         // congela la API entera para todos los usuarios mientras dura.
@@ -205,7 +291,6 @@ export class BacktestsService {
         onProgress: () => new Promise<void>((r) => setImmediate(r)),
       });
 
-      const span = candleSpanMs(dto.interval);
       const { metrics, equity } = buildMetrics(out, historia.candles, params.startingBalance, {
         barsMissing: historia.barsMissing,
         largestGapMs: historia.largestGapMs,
@@ -236,6 +321,20 @@ export class BacktestsService {
         fills: out.fills,
         fillsTruncated: out.warnings.some((w) => w.includes('ejecuciones')),
         cycles: out.cycles,
+        // Lo que registra el canal con IA: cada operación y sus cifras por setup,
+        // en todo el rango y por tramos (spec 058).
+        ...(getStrategy(bot.strategy).consumeDecisionesIa === true
+          ? {
+              operaciones: out.operaciones.slice(0, MAX_OPERACIONES),
+              porSetup: metricasPorSetup(out.operaciones),
+              ventanas: ventanasConsecutivas(
+                out.operaciones,
+                fromMs,
+                toMs,
+                dto.ventanasConsecutivas ?? 1,
+              ),
+            }
+          : {}),
         warnings: [
           ...fidelityWarnings({
             source: dto.source,
@@ -354,7 +453,16 @@ export class BacktestsService {
         ticks,
         fills_total: fillsTotal,
         duration_ms: r.meta.durationMs,
-        metrics: r.metrics as never,
+        // Las cifras del canal con IA viajan dentro de `metrics`: son JSON como
+        // ellas y no piden una columna, ni una migración (spec 058).
+        metrics: (r.porSetup
+          ? {
+              ...r.metrics,
+              porSetup: r.porSetup,
+              ventanas: r.ventanas,
+              operaciones: r.operaciones,
+            }
+          : r.metrics) as never,
         equity_curve: r.equity as never,
         candles: r.candles as never,
         warnings: r.warnings as never,

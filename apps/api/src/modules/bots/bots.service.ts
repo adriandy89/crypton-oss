@@ -21,6 +21,7 @@ import {
   type PreviewResult,
   type BotSummary,
   capitalActual,
+  esEstrategiaSoloAdmin,
   valorDePosicion,
 } from '@crypton/shared';
 import type { DryRunState } from '@crypton/exchange-core';
@@ -33,7 +34,7 @@ import type { DryRunState } from '@crypton/exchange-core';
  */
 type PaperPosition = DryRunState['positions'][number];
 import { camposEfectivos, diffConfig, getStrategy } from '@crypton/strategy-core';
-import { BotStatus, MarginMode, StrategyKind, Venue } from '@crypton/db';
+import { BotStatus, MarginMode, Role, StrategyKind, Venue } from '@crypton/db';
 import {
   BUS_CHANNELS,
   BusService,
@@ -212,6 +213,7 @@ export class BotsService implements OnModuleInit {
    * mandará al venue, no una aproximación para la interfaz.
    */
   async preview(userId: string, dto: PreviewBotDto): Promise<PreviewResult> {
+    await this.puedeUsar(userId, dto.strategy);
     const testnet = dto.testnet === true;
     const market = await this.markets.getSpec(dto.venue, dto.symbol, testnet);
     const strategy = getStrategy(dto.strategy);
@@ -634,9 +636,20 @@ export class BotsService implements OnModuleInit {
       await adapter.close().catch(() => undefined);
     }
   }
-  /** Metadatos de todas las estrategias: con esto la app genera el formulario. */
-  strategiesMeta() {
-    return Object.values(StrategyKind).map((kind) => {
+  /**
+   * Metadatos de las estrategias: con esto la app genera el formulario.
+   *
+   * Las de solo administradores (spec 058) salen solo para un administrador
+   * habilitado, con el rol leído de la base como en el resto de caminos: a
+   * quien le retiran el rol dejan de salirle en la petición siguiente (spec
+   * 059). Quien las ve y no puede usarlas se encontraría con un 403 al crear.
+   */
+  async strategiesMeta(userId: string) {
+    const admin = await this.esAdministradorHabilitado(userId);
+    const visibles = Object.values(StrategyKind).filter(
+      (kind) => admin || !esEstrategiaSoloAdmin(kind),
+    );
+    return visibles.map((kind) => {
       const strategy = getStrategy(kind);
       return {
         kind,
@@ -926,7 +939,10 @@ export class BotsService implements OnModuleInit {
         issues: validation.issues,
       });
     }
-    await this.risk.assertWithinLimits(userId, config, market);
+    await this.risk.assertWithinLimits(userId, config, market, {
+      reglaLiquidacion: strategy.reglaLiquidacion,
+      nocional: strategy.nocionalMaximo?.(config),
+    });
 
     // El preview también valida: si algún nivel es imposible en este venue, el
     // bot no llega a crearse. Vale más un error ahora que veinte rechazos luego.
@@ -953,6 +969,9 @@ export class BotsService implements OnModuleInit {
           leverage: Number(config.leverage ?? 1),
           margin_mode: config.marginMode ?? 'ISOLATED',
           total_investment: String(config.totalInvestment ?? 0),
+          // El nocional que declara la estrategia, para los agregados de
+          // exposición; nulo en las de siempre (spec 058).
+          max_notional: strategy.nocionalMaximo?.(config) ?? null,
           dry_run: dryRun,
           config_version: 1,
         },
@@ -1015,6 +1034,7 @@ export class BotsService implements OnModuleInit {
     opts: UpdateConfigOptions = {},
   ) {
     const bot = await this.mustOwn(userId, id);
+    await this.puedeUsar(userId, bot.strategy);
     if (opts.expectedVersion !== undefined && opts.expectedVersion !== bot.config_version) {
       throw new ConflictException({
         message:
@@ -1110,7 +1130,11 @@ export class BotsService implements OnModuleInit {
       });
     }
     // Excluyendo al propio bot del agregado: si no, contaba dos veces (001/F-42).
-    await this.risk.assertWithinLimits(userId, next, market, { excludeBotId: id });
+    await this.risk.assertWithinLimits(userId, next, market, {
+      excludeBotId: id,
+      reglaLiquidacion: strategy.reglaLiquidacion,
+      nocional: strategy.nocionalMaximo?.(next),
+    });
 
     const version = bot.config_version + 1;
     await this.db.$transaction(async (tx) => {
@@ -1129,6 +1153,7 @@ export class BotsService implements OnModuleInit {
           config_version: version,
           leverage: Number(next.leverage ?? bot.leverage),
           total_investment: String(next.totalInvestment ?? bot.total_investment),
+          max_notional: strategy.nocionalMaximo?.(next) ?? null,
         },
       });
       if (escritas.count !== 1) {
@@ -1233,6 +1258,8 @@ export class BotsService implements OnModuleInit {
       if (LIVE_STATUSES.includes(bot.status)) {
         throw new ConflictException('El bot ya está en marcha.');
       }
+      // Con el rol de la base: un administrador degradado ya no arranca su bot.
+      await this.puedeUsar(userId, bot.strategy);
       await this.risk.assertCanStart(userId, bot.id);
       await this.assertPairFree(bot);
       try {
@@ -1737,6 +1764,30 @@ export class BotsService implements OnModuleInit {
   // ═══════════════════════════════════════════════════════════════
   // Interno
   // ═══════════════════════════════════════════════════════════════
+
+  /**
+   * Las estrategias de solo administradores (spec 058) consultan el rol en la
+   * base; las demás no tocan nada.
+   */
+  private async puedeUsar(userId: string, strategy: StrategyKind): Promise<void> {
+    if (!esEstrategiaSoloAdmin(strategy)) return;
+    if (await this.esAdministradorHabilitado(userId)) return;
+    throw new ForbiddenException(
+      `La estrategia ${strategy} solo está disponible para administradores.`,
+    );
+  }
+
+  /**
+   * El rol, leído de la base y no del token: a quien se lo retiran deja de poder
+   * en la petición siguiente, sin esperar a que caduque su sesión.
+   */
+  private async esAdministradorHabilitado(userId: string): Promise<boolean> {
+    const usuario = await this.db.user.findUnique({
+      where: { id: userId },
+      select: { role: true, disabled: true },
+    });
+    return usuario?.role === Role.ADMIN && usuario.disabled !== true;
+  }
 
   private async mustOwn(userId: string, id: string) {
     const bot = await this.db.bot.findFirst({ where: { id, user_id: userId } });

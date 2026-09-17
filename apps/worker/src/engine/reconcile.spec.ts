@@ -273,3 +273,75 @@ describe('reconocimiento de órdenes propias en venues de id opaco', () => {
     expect(encodes).toBe(0);
   });
 });
+
+/**
+ * Las órdenes con disparo se comparan por el DISPARO (spec 057, F-01).
+ *
+ * Un stop a mercado se coloca con un límite de ejecución lejos del disparo —en
+ * Hyperliquid, ±5 %— y el venue lo informa con ese límite. Comparar el precio
+ * lo daba por cambiado en cada tick: se cancelaba y se volvía a colocar, con la
+ * posición sin stop entre medias.
+ */
+describe('reconcile — órdenes con disparo', () => {
+  const STOP = makeCoid(BOT_ID, 1, 'STOP_LOSS', 0);
+  const stopDeseado = (over: Partial<DesiredOrder> = {}): DesiredOrder =>
+    want({
+      clientOrderId: STOP,
+      levelKind: 'STOP_LOSS',
+      levelIndex: 0,
+      side: 'SELL',
+      type: 'MARKET',
+      price: '70000.0',
+      triggerPrice: '70000.0',
+      qty: '0.010',
+      reduceOnly: true,
+      ...over,
+    });
+  // Tal como lo informa Hyperliquid: `price` es el límite de ejecución.
+  const stopVivo = (over: Partial<VenueOrder> = {}): VenueOrder =>
+    have({
+      clientOrderId: STOP,
+      venueOrderId: 'sl-1',
+      side: 'SELL',
+      type: 'MARKET',
+      price: '66500.0',
+      triggerPrice: '70000.0',
+      qty: '0.010',
+      reduceOnly: true,
+      ...over,
+    });
+
+  it('un stop con el mismo disparo no se toca aunque su precio de ejecución sea otro', () => {
+    const plan = run([stopDeseado()], [stopVivo()]);
+    expect(plan.toReplace).toHaveLength(0);
+    expect(plan.unchanged).toBe(1);
+  });
+
+  it('un stop cuyo disparo se ha movido se reemplaza', () => {
+    // Es el stop de seguimiento de Tendencia: tiene que poder subir.
+    const plan = run([stopDeseado({ price: '70500.0', triggerPrice: '70500.0' })], [stopVivo()]);
+    expect(plan.toReplace).toHaveLength(1);
+    expect(plan.toReplace[0].reason).toBe('PRICE');
+  });
+
+  it('una diferencia de disparo por debajo de medio tick no provoca churn', () => {
+    const plan = run([stopDeseado()], [stopVivo({ triggerPrice: '70000.04' })]);
+    expect(plan.toReplace).toHaveLength(0);
+  });
+
+  it('si la orden viva no trae disparo, no es la misma orden y se reemplaza', () => {
+    const plan = run([stopDeseado()], [stopVivo({ triggerPrice: null, price: '70000.0' })]);
+    expect(plan.toReplace).toHaveLength(1);
+  });
+
+  it('una orden en reposo deseada no casa con una viva que tiene disparo', () => {
+    const plan = run([want()], [have({ triggerPrice: '99.0' })]);
+    expect(plan.toReplace).toHaveLength(1);
+  });
+
+  it('la cantidad se sigue comparando en las órdenes con disparo', () => {
+    const plan = run([stopDeseado({ qty: '0.020' })], [stopVivo()]);
+    expect(plan.toReplace).toHaveLength(1);
+    expect(plan.toReplace[0].reason).toBe('QTY');
+  });
+});

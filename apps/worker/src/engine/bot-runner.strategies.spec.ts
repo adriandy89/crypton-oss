@@ -21,7 +21,12 @@ import {
   type StreamHealth,
 } from '@crypton/exchange-core';
 import { getStrategy, parseCoid } from '@crypton/strategy-core';
-import { BotRunner, type FairFeedRequest, type PriceSourceLike } from './bot-runner';
+import {
+  BotRunner,
+  type CandleSourceLike,
+  type FairFeedRequest,
+  type PriceSourceLike,
+} from './bot-runner';
 import type { BotRecord, BotStore } from './bot-store';
 
 /**
@@ -322,7 +327,13 @@ interface Harness {
 function harness(
   strategy: string,
   config: Record<string, unknown>,
-  opts: { withFairFeed?: boolean; market?: MarketSpec; price?: string; spread?: string } = {},
+  opts: {
+    withFairFeed?: boolean;
+    market?: MarketSpec;
+    price?: string;
+    spread?: string;
+    candleSource?: CandleSourceLike;
+  } = {},
 ): Harness {
   const source = new PriceSource();
   if (opts.spread) source.spread = D(opts.spread);
@@ -381,6 +392,7 @@ function harness(
     // Solo cuando el test lo pide: los demás siguen corriendo SIN feed externo,
     // que es el escenario que ya cubrían.
     ...(opts.withFairFeed ? { priceSource: fairFeed } : {}),
+    ...(opts.candleSource ? { candleSource: opts.candleSource } : {}),
   });
 
   return { runner, sim, source, store, fairFeed };
@@ -771,6 +783,74 @@ describe('Seguimiento de beneficio en el simulador (spec 043)', () => {
     expect(await positionQty(h.sim)).not.toBe('0');
 
     await h.runner.dispose();
+  });
+});
+
+describe('Tendencia en el simulador (spec 057, F-02)', () => {
+  /**
+   * El caso del hallazgo, de punta a punta: la posición abierta con su stop en
+   * el libro y la caché de velas que se queda fría, como tras un reinicio del
+   * worker. Antes el plan salía vacío y el motor cancelaba el stop.
+   */
+  it('con la posición abierta, quedarse sin velas no le quita el stop', async () => {
+    // Treinta velas laterales en torno a 90 y un cierre en 100: ruptura al alza.
+    const laterales = Array.from({ length: 30 }, (_, i) => (i % 2 ? 91 : 89));
+    const velas = [...laterales, 100].map((c, i) => ({
+      t: i * 3_600_000,
+      o: String(c),
+      h: String(c + 1),
+      l: String(c - 1),
+      c: String(c),
+      v: '1',
+    }));
+    let servir = true;
+    const candleSource: CandleSourceLike = {
+      candleHistory: () => (servir ? velas : null),
+    };
+    const h = harness(
+      'TREND_FOLLOW',
+      {
+        direction: 'NEUTRAL',
+        candleInterval: '1h',
+        breakoutPeriod: 20,
+        atrPeriod: 14,
+        atrStopMultiplier: '2.5',
+        riskPerTradePct: '1',
+        entryEfficiency: '0',
+        stopRepriceBps: '20',
+        totalInvestment: '1000',
+        leverage: 1,
+      },
+      { candleSource },
+    );
+    trackCanonicals(h.store);
+
+    // Con `finally`: un `expect` que falle no puede dejar vivo el temporizador
+    // del runner, o jest no termina nunca.
+    try {
+      await h.runner.start();
+      await settle();
+      await tick(h.runner);
+      const abierta = await positionQty(h.sim);
+      expect(Number(abierta)).toBeGreaterThan(0);
+      const antes = (await book(h.sim)).filter((o) => o.kind === 'STOP_LOSS');
+      expect(antes).toHaveLength(1);
+
+      // La caché se queda fría: tres ticks sin velas.
+      servir = false;
+      for (let i = 0; i < 3; i++) await tick(h.runner);
+
+      const despues = (await book(h.sim)).filter((o) => o.kind === 'STOP_LOSS');
+      expect(despues).toEqual(antes);
+      expect(await positionQty(h.sim)).toBe(abierta);
+
+      // Y el stop sigue funcionando: el precio lo cruza y la posición se cierra.
+      h.source.move(D(antes[0].price).minus(1).toFixed());
+      await settle();
+      expect(await positionQty(h.sim)).toBe('0');
+    } finally {
+      await h.runner.dispose();
+    }
   });
 });
 

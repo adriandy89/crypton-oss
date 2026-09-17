@@ -1,5 +1,6 @@
 import { Observable, Subject } from 'rxjs';
 import {
+  D,
   ExchangeError,
   Venue,
   type Balance,
@@ -222,6 +223,7 @@ function fakeStore(over: Partial<BotStore> = {}) {
     // null = el ciclo y el venue dicen lo mismo, que es el caso de casi todo
     // test. Quien pruebe la reparación lo sobreescribe.
     repairCycleFromVenue: jest.fn().mockResolvedValue(null),
+    olvidarHistorial: jest.fn(),
     recordFill: jest.fn().mockResolvedValue(makeCoid(BOT_ID, 1, 'GRID_BUY', 0)),
     recordLiquidation: jest.fn().mockResolvedValue('liq:HYPERLIQUID:f-liq'),
     applyFillToCycle: jest.fn(async (_botId: string, cycle: CycleState) => {
@@ -792,6 +794,26 @@ describe('BotRunner', () => {
     });
   });
 
+  describe('un comando que el worker no conoce (spec 057, F-08)', () => {
+    /**
+     * `runCommand` no tenía rama por defecto: un comando nuevo que llegaba a un
+     * worker sin desplegar no hacía nada, la bandeja lo cerraba como ejecutado
+     * y la API creía que se había hecho.
+     */
+    it('falla con su nombre en vez de darse por hecho', async () => {
+      const { runner, adapter } = build({ orders: [], immediate: [] });
+      await runner.start();
+      const antes = adapter.calls.length;
+
+      await expect(runner.handleCommand('COMANDO_DEL_FUTURO' as never)).rejects.toThrow(
+        /COMANDO_DEL_FUTURO/,
+      );
+      // Y sin tocar nada por el camino.
+      expect(adapter.calls.slice(antes)).toEqual([]);
+      await runner.dispose();
+    });
+  });
+
   describe('desenganche', () => {
     it('una credencial inválida pide que el motor lo suelte', async () => {
       const { runner, adapter, detached } = build({ orders: [], immediate: [] });
@@ -920,6 +942,21 @@ describe('bot pausado', () => {
 
     expect(store.events.filter((e) => e === 'LIQUIDATION_NEAR')).toHaveLength(1);
     await runner.dispose();
+  });
+
+  /**
+   * Spec 060, F-15. La caída máxima del canal se mide desde la última
+   * reanudación, así que el historial en caché no puede sobrevivir al RESUME: el
+   * primer tick habría vuelto a pausar con el máximo de antes.
+   */
+  it('reanudar olvida el historial en caché', async () => {
+    const { runner, store } = build({ orders: [], immediate: [] });
+
+    await runner.start();
+    await runner.handleCommand('RESUME');
+    await runner.dispose();
+
+    expect(store.olvidarHistorial).toHaveBeenCalledWith(BOT_ID);
   });
 });
 
@@ -1055,6 +1092,26 @@ describe('reutilización de ids por estrategia', () => {
       expect(rechazo?.message).toContain('Precio ancla');
       expect(eventos.some((e) => e.type === 'GRID_REANCHORED')).toBe(false);
     });
+
+    /**
+     * Spec 057, F-11. La tabla no incluía Tendencia ni Seguimiento de beneficio.
+     * La API ya lo impide, pero si el comando llegaba al motor, este anunciaba
+     * «retícula recentrada» y borraba los niveles del ciclo.
+     */
+    it.each(['TREND_FOLLOW', 'TRAILING_PROFIT'])(
+      'REANCHOR_GRID en %s se rechaza con su motivo',
+      async (kind) => {
+        const { runner, store } = build({ orders: [], immediate: [] });
+        (runner as unknown as { strategy: { kind: string } }).strategy.kind = kind;
+        await runner.start();
+        await runner.handleCommand('REANCHOR_GRID');
+        await runner.dispose();
+
+        expect(store.saveCycleAnchor).not.toHaveBeenCalled();
+        expect(store.events).toContain('ACTION_FAILED');
+        expect(store.events).not.toContain('GRID_REANCHORED');
+      },
+    );
 
     /**
      * En una escalera si aplica: se vuelve a colgar todo del precio actual. Lo
@@ -1473,6 +1530,135 @@ describe('reutilización de ids por estrategia', () => {
     });
   });
 
+  describe('el stop vivo no se recoloca en cada tick (spec 057, F-01)', () => {
+    /**
+     * Hyperliquid coloca el stop a mercado con un límite un 5 % más allá del
+     * disparo y lo informa así: `price` es ese límite y el disparo va aparte.
+     * El motor comparaba `price` con el del stop deseado, lo daba por cambiado
+     * y lo cancelaba y recolocaba en cada tick: dos escrituras por bot en cada
+     * latido y la posición sin red entre la cancelación y el envío.
+     */
+    it('diez ticks con el stop en el libro: ni una cancelación ni un segundo envío', async () => {
+      const { runner, adapter } = build({ orders: [], immediate: [] }, {}, { stopLossPct: '10' });
+      adapter.position = conPos();
+      const libro: VenueOrder[] = [];
+      const colocar = adapter.placeOrder.bind(adapter);
+      adapter.placeOrder = async (req: PlaceOrderRequest) => {
+        const ack = await colocar(req);
+        libro.push({
+          venue: Venue.HYPERLIQUID,
+          symbol: req.symbol,
+          clientOrderId: hyperliquidCodec.encode(req.clientOrderId),
+          venueOrderId: ack.venueOrderId,
+          side: req.side,
+          type: req.type,
+          // Como lo informa Hyperliquid: el límite de ejecución, no el disparo.
+          price: req.triggerPrice
+            ? D(req.triggerPrice)
+                .mul(req.side === 'SELL' ? '0.95' : '1.05')
+                .toFixed(1)
+            : (req.price ?? '0'),
+          triggerPrice: req.triggerPrice ?? null,
+          qty: req.qty,
+          filledQty: '0',
+          avgPrice: null,
+          status: 'OPEN',
+          reduceOnly: req.reduceOnly === true,
+          createdAt: Date.now(),
+        });
+        return ack;
+      };
+      const cancelar = adapter.cancelOrder.bind(adapter);
+      adapter.cancelOrder = async (req: CancelRequest) => {
+        await cancelar(req);
+        const i = libro.findIndex((o) => o.venueOrderId === req.venueOrderId);
+        if (i >= 0) libro.splice(i, 1);
+      };
+      adapter.getOpenOrders = async () => libro;
+
+      await runner.start();
+      const tick = (runner as unknown as { tick(): Promise<void> }).tick.bind(runner);
+      for (let i = 0; i < 9; i++) await tick();
+      await runner.dispose();
+
+      expect(adapter.calls.filter((c) => c === 'cancelOrder')).toHaveLength(0);
+      expect(adapter.placed.filter((c) => c.includes('SL'))).toHaveLength(1);
+      expect(libro).toHaveLength(1);
+      expect(libro[0].price).toBe('85.5');
+    });
+  });
+
+  describe('con posición, un plan sin stop no desarma el stop propio (spec 057, F-02)', () => {
+    /**
+     * Tendencia pone su propio stop. Un plan que no lo traía —sin velas tras un
+     * reinicio— hacía que el motor cancelara el que había en el libro. La
+     * estrategia ya no lo suelta, y el motor tampoco lo cancela si otra vez
+     * falta: con la posición abierta, ese stop es lo único que la protege.
+     */
+    const SL = makeCoid(BOT_ID, 1, 'STOP_LOSS', 0);
+    const stopVivo = (): VenueOrder => ({
+      venue: Venue.HYPERLIQUID,
+      symbol: 'BTC',
+      clientOrderId: hyperliquidCodec.encode(SL),
+      venueOrderId: 'v-sl',
+      side: 'SELL',
+      type: 'MARKET',
+      price: '85.5',
+      triggerPrice: '90.0',
+      qty: '10.000',
+      filledQty: '0',
+      avgPrice: null,
+      status: 'OPEN',
+      reduceOnly: true,
+      createdAt: Date.now(),
+    });
+    const montar = (stopPropio: boolean) => {
+      const h = build(
+        { orders: [], immediate: [] },
+        {
+          ownVenueClientIds: jest.fn().mockResolvedValue([hyperliquidCodec.encode(SL)]) as never,
+        },
+      );
+      (h.runner as unknown as { strategy: { stopPropio?: boolean } }).strategy.stopPropio =
+        stopPropio;
+      h.adapter.position = conPos();
+      h.adapter.getOpenOrders = async () => [stopVivo()];
+      return h;
+    };
+    const tickDe = (runner: BotRunner) =>
+      (runner as unknown as { tick(): Promise<void> }).tick.call(runner);
+
+    it('una estrategia con stop propio conserva el que hay, y lo avisa una sola vez', async () => {
+      const { runner, adapter, store } = montar(true);
+      await runner.start();
+      await tickDe(runner);
+      await tickDe(runner);
+      await runner.dispose();
+
+      expect(adapter.calls).not.toContain('cancelOrder');
+      expect(store.events.filter((e) => e === 'ACTION_FAILED')).toHaveLength(1);
+    });
+
+    it('sin esa declaración, el stop que el plan ya no pide se cancela, como siempre', async () => {
+      // Es el usuario quitando `stopLossPct`: ya no quiere stop, y se retira.
+      const { runner, adapter, store } = montar(false);
+      await runner.start();
+      await runner.dispose();
+
+      expect(adapter.calls).toContain('cancelOrder');
+      expect(store.events).not.toContain('ACTION_FAILED');
+    });
+
+    it('sin posición, el stop sobrante se cancela aunque sea propio', async () => {
+      const { runner, adapter } = montar(true);
+      adapter.position = null;
+      await runner.start();
+      await runner.dispose();
+
+      expect(adapter.calls).toContain('cancelOrder');
+    });
+  });
+
   describe('un stop loss rechazado no se abandona en cuarentena', () => {
     /**
      * Spec 001, F-32. El stop loss pasa por las mismas puertas que un nivel de
@@ -1577,6 +1763,415 @@ describe('reutilización de ids por estrategia', () => {
 
       expect(adapter.placed).toHaveLength(0);
       expect(store.rejectOrder).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('la coletilla del stop dice lo que hay en el libro (spec 057, F-09)', () => {
+    /**
+     * `protectionNote` decidía solo por `stopLossPct`. Tendencia lo deja vacío y
+     * pone su propio stop, así que cada aviso decía «la posición queda SIN stop
+     * loss» con el stop vivo. Y `stopLossVivo` solo lo encendía un acuse: tras
+     * un reinicio, con el stop ya en el libro, decía que no constaba.
+     */
+    const SL = makeCoid(BOT_ID, 1, 'STOP_LOSS', 0);
+    const enLibro = (): VenueOrder => ({
+      venue: Venue.HYPERLIQUID,
+      symbol: 'BTC',
+      clientOrderId: hyperliquidCodec.encode(SL),
+      venueOrderId: 'v-sl',
+      side: 'SELL',
+      type: 'MARKET',
+      price: '85.5',
+      triggerPrice: '90.0',
+      qty: '10.000',
+      filledQty: '0',
+      avgPrice: null,
+      status: 'OPEN',
+      reduceOnly: true,
+      createdAt: Date.now(),
+    });
+    const suStop = level(0, {
+      clientOrderId: SL,
+      levelKind: 'STOP_LOSS',
+      side: 'SELL',
+      type: 'MARKET',
+      price: '90.0',
+      triggerPrice: '90.0',
+      qty: '10.000',
+      reduceOnly: true,
+    });
+    const notaAlPausar = async (opts: {
+      stopPropio: boolean;
+      conStopEnLibro: boolean;
+      config?: Record<string, unknown>;
+      plan?: DesiredState;
+    }) => {
+      const { runner, adapter, store } = build(
+        opts.plan ?? { orders: opts.stopPropio ? [suStop] : [], immediate: [] },
+        {},
+        opts.config ?? {},
+      );
+      (runner as unknown as { strategy: { stopPropio?: boolean } }).strategy.stopPropio =
+        opts.stopPropio;
+      adapter.position = conPos();
+      adapter.getOpenOrders = async () => (opts.conStopEnLibro ? [enLibro()] : []);
+      await runner.start();
+      await runner.handleCommand('PAUSE');
+      await runner.dispose();
+      const pausa = (store.event as jest.Mock).mock.calls.find((c) => c[1] === 'BOT_PAUSED');
+      return String(pausa?.[3] ?? '');
+    };
+
+    it('con stop propio en el libro, dice que sigue vivo', async () => {
+      const nota = await notaAlPausar({ stopPropio: true, conStopEnLibro: true });
+      expect(nota).toContain('sigue vivo');
+      expect(nota).not.toContain('SIN stop');
+    });
+
+    it('con stop propio que no consta en el libro, lo dice', async () => {
+      // El plan lo pide pero el venue lo rechaza: no consta.
+      const { runner, adapter, store } = build({ orders: [suStop], immediate: [] });
+      (runner as unknown as { strategy: { stopPropio?: boolean } }).strategy.stopPropio = true;
+      adapter.position = conPos();
+      adapter.placeError = new ExchangeError('RULES', 'rechazado', Venue.HYPERLIQUID);
+      await runner.start();
+      await runner.handleCommand('PAUSE');
+      await runner.dispose();
+      const pausa = (store.event as jest.Mock).mock.calls.find((c) => c[1] === 'BOT_PAUSED');
+      expect(String(pausa?.[3])).toContain('NO consta');
+    });
+
+    it('con stopLossPct y el stop ya en el libro tras un reinicio, dice que sigue vivo', async () => {
+      // Nadie lo coloca en este proceso: ya estaba. Lo que manda es el libro.
+      const nota = await notaAlPausar({
+        stopPropio: false,
+        conStopEnLibro: true,
+        config: { stopLossPct: '10' },
+        plan: { orders: [], immediate: [] },
+      });
+      expect(nota).toContain('sigue vivo');
+    });
+
+    it('sin stop de ninguna clase, sigue avisando de que no hay', async () => {
+      const nota = await notaAlPausar({ stopPropio: false, conStopEnLibro: false });
+      expect(nota).toContain('SIN stop loss');
+    });
+  });
+
+  describe('una orden en estado desconocido no se manda dos veces (spec 057, F-06)', () => {
+    /**
+     * El envío falló y la comprobación de si entró también: no se sabe. La
+     * fila se marcaba REJECTED, que no veta, y el tick siguiente mandaba la
+     * misma entrada otra vez. Una de mercado que sí entró ya no está entre las
+     * abiertas, así que la segunda doblaba la posición.
+     */
+    const desconocido = () =>
+      new ExchangeError(
+        'RETRYABLE',
+        'Estado desconocido tras «HTTP 503»',
+        Venue.HYPERLIQUID,
+        undefined,
+        true,
+      );
+
+    /** Un store que recuerda las filas, como el de verdad. */
+    const conFilas = () => {
+      const filas = new Map<
+        string,
+        { status: string; venue_order_id: string | null; updated_at: Date }
+      >();
+      return {
+        filas,
+        over: {
+          upsertPendingOrder: jest.fn(async (input: { order: DesiredOrder }) => {
+            filas.set(input.order.clientOrderId, {
+              status: 'PENDING',
+              venue_order_id: null,
+              updated_at: new Date(),
+            });
+          }) as never,
+          rejectOrder: jest.fn(async (coid: string) => {
+            const fila = filas.get(coid);
+            if (fila) fila.status = 'REJECTED';
+          }) as never,
+          findOrderByCoid: jest.fn(async (coid: string) => filas.get(coid) ?? null) as never,
+        },
+      };
+    };
+    const BASE = makeCoid(BOT_ID, 1, 'BASE', 0);
+    const entrada = level(0, { clientOrderId: BASE, levelKind: 'BASE', type: 'MARKET' });
+    const tickDe = (runner: BotRunner) =>
+      (runner as unknown as { tick(): Promise<void> }).tick.call(runner);
+
+    it('la entrada queda pendiente y el tick siguiente no la reenvía', async () => {
+      const { filas, over } = conFilas();
+      const { runner, adapter, store } = build({ orders: [], immediate: [entrada] }, over);
+      adapter.placeErrorOnce = desconocido();
+
+      await runner.start();
+      await tickDe(runner);
+      await runner.dispose();
+
+      expect(adapter.calls.filter((c) => c.startsWith('place:'))).toHaveLength(1);
+      expect(store.rejectOrder).not.toHaveBeenCalled();
+      expect(filas.get(BASE)?.status).toBe('PENDING');
+      expect(store.events).toContain('ORDER_RETRY');
+    });
+
+    it('un fallo pasajero que se sabe que no entró sí se reintenta', async () => {
+      const { over } = conFilas();
+      const { runner, adapter } = build({ orders: [], immediate: [entrada] }, over);
+      adapter.placeErrorOnce = new ExchangeError('RETRYABLE', 'timeout', Venue.HYPERLIQUID);
+
+      await runner.start();
+      await tickDe(runner);
+      await runner.dispose();
+
+      expect(adapter.calls.filter((c) => c.startsWith('place:'))).toHaveLength(2);
+    });
+
+    /**
+     * Spec 060, F-07. El veto era para TODA orden que no reduce, y una en
+     * reposo no lo necesita: si entró, se ve en el libro al tick siguiente. Con
+     * él, una cotización en estado desconocido dejaba su lado sin cotizar cinco
+     * minutos… o para siempre, porque en un hueco que reutiliza su id la fila
+     * conservaba el id de venue de la anterior y `pendienteVencida` —que exige
+     * no tenerlo— no la soltaba nunca.
+     */
+    it('una cotización en reposo en estado desconocido vuelve en el tick siguiente', async () => {
+      const reloj = Date.UTC(2026, 8, 17, 10);
+      jest.spyOn(Date, 'now').mockImplementation(() => reloj);
+      const COTIZACION = makeCoid(BOT_ID, 1, 'QUOTE_BID', 0);
+      const cotizacion = level(0, {
+        clientOrderId: COTIZACION,
+        levelKind: 'QUOTE_BID',
+        type: 'POST_ONLY',
+      });
+      // La encarnación anterior se ejecutó con su id de venue.
+      const filas = new Map([
+        [
+          COTIZACION,
+          { status: 'FILLED', venue_order_id: 'v-anterior', updated_at: new Date(reloj) },
+        ],
+      ]);
+      const { runner, adapter } = build(
+        { orders: [cotizacion], immediate: [] },
+        {
+          // Como el `upsert` real: no toca el id de venue que ya tuviera la fila.
+          upsertPendingOrder: jest.fn(async (input: { order: DesiredOrder }) => {
+            const previa = filas.get(input.order.clientOrderId);
+            filas.set(input.order.clientOrderId, {
+              status: 'PENDING',
+              venue_order_id: previa?.venue_order_id ?? null,
+              updated_at: new Date(reloj),
+            });
+          }) as never,
+          findOrderByCoid: jest.fn(async (coid: string) => filas.get(coid) ?? null) as never,
+          rejectOrder: jest.fn(async (coid: string) => {
+            const fila = filas.get(coid);
+            if (fila) fila.status = 'REJECTED';
+          }) as never,
+        },
+      );
+      (runner as unknown as { strategy: unknown }).strategy = {
+        kind: 'MARKET_MAKER',
+        reusesOrderSlots: true,
+        plan: () => ({ orders: [cotizacion], immediate: [] }),
+      };
+      adapter.placeErrorOnce = desconocido();
+
+      try {
+        await runner.start();
+        await tickDe(runner);
+        await runner.dispose();
+        expect(adapter.calls.filter((c) => c === 'place:' + COTIZACION)).toHaveLength(2);
+      } finally {
+        jest.restoreAllMocks();
+      }
+    });
+
+    it('una orden que solo reduce se sigue reintentando: repetirla no abre nada', async () => {
+      const { over } = conFilas();
+      const cierre = level(0, {
+        clientOrderId: makeCoid(BOT_ID, 1, 'TAKE_PROFIT', 999),
+        levelKind: 'TAKE_PROFIT',
+        side: 'SELL',
+        type: 'MARKET',
+        reduceOnly: true,
+      });
+      const { runner, adapter } = build({ orders: [], immediate: [cierre] }, over);
+      adapter.position = conPos();
+      adapter.placeErrorOnce = desconocido();
+
+      await runner.start();
+      await tickDe(runner);
+      await runner.dispose();
+
+      expect(adapter.calls.filter((c) => c.startsWith('place:'))).toHaveLength(2);
+    });
+  });
+
+  describe('lo que el motor cancela se anota aunque el venue lo llame por otro id (spec 060 F-01)', () => {
+    /**
+     * Reemplazar es cancelar y volver a colocar con el MISMO id. La cancelación
+     * se anotaba buscando la fila por su id de venue, y ese id no es siempre el
+     * del libro: Lighter acusa con el índice de cliente y lista con su
+     * `order_index`, y un disparador de Hyperliquid puede acusarse sin `oid`. La
+     * fila seguía viva, `place()` vetaba la recolocación y el stop, ya
+     * cancelado en el venue, no volvía: en Lighter, nunca.
+     */
+    const STOP = makeCoid(BOT_ID, 1, 'STOP_LOSS', 0);
+    const stopEn = (disparo: string): DesiredOrder => ({
+      clientOrderId: STOP,
+      levelKind: 'STOP_LOSS',
+      levelIndex: 0,
+      side: 'SELL',
+      type: 'MARKET',
+      price: disparo,
+      triggerPrice: disparo,
+      qty: '10.000',
+      reduceOnly: true,
+    });
+    const VIVAS = ['PENDING', 'OPEN', 'PARTIALLY_FILLED'];
+    const tickDe = (runner: BotRunner) =>
+      (runner as unknown as { tick(): Promise<void> }).tick.call(runner);
+
+    /**
+     * Un libro que asigna sus propios ids y unas filas que se anotan como las de
+     * verdad. `acuse` decide qué id de venue trae el acuse de cada orden.
+     */
+    const montar = (plan: DesiredState, acuse: (coid: string) => string) => {
+      const filas = new Map<
+        string,
+        {
+          status: string;
+          venue_order_id: string | null;
+          venue_client_id: string;
+          updated_at: Date;
+        }
+      >();
+      const libro: VenueOrder[] = [];
+      let secuencia = 0;
+      const h = build(plan, {
+        upsertPendingOrder: jest.fn(
+          async (input: { order: DesiredOrder; venueClientId: string }) => {
+            // Como el `upsert` real: el id de venue de la encarnación anterior
+            // no se toca hasta el acuse.
+            const previa = filas.get(input.order.clientOrderId);
+            filas.set(input.order.clientOrderId, {
+              status: 'PENDING',
+              venue_order_id: previa?.venue_order_id ?? null,
+              venue_client_id: input.venueClientId,
+              updated_at: new Date(),
+            });
+          },
+        ) as never,
+        confirmOrder: jest.fn(async (coid: string, ack: OrderAck) => {
+          const fila = filas.get(coid);
+          if (!fila) return;
+          fila.venue_order_id = ack.venueOrderId || null;
+          fila.status = ack.status;
+          fila.updated_at = new Date();
+        }) as never,
+        rejectOrder: jest.fn(async (coid: string) => {
+          const fila = filas.get(coid);
+          if (fila) fila.status = 'REJECTED';
+        }) as never,
+        findOrderByCoid: jest.fn(async (coid: string) => filas.get(coid) ?? null) as never,
+        // Lo que el bot mandó, en espacio de venue: es lo que reconoce una huérfana.
+        ownVenueClientIds: jest.fn(async () =>
+          [...filas.values()].map((f) => f.venue_client_id),
+        ) as never,
+        markOrderCanceled: jest.fn(
+          async (_bot: string, venueOrderId: string, venueClientId?: string | null) => {
+            for (const fila of filas.values()) {
+              const esa =
+                fila.venue_order_id === venueOrderId ||
+                (venueClientId != null && fila.venue_client_id === venueClientId);
+              if (esa && VIVAS.includes(fila.status)) fila.status = 'CANCELED';
+            }
+          },
+        ) as never,
+        markCoidsCanceled: jest.fn(async (_bot: string, coids: string[]) => {
+          for (const coid of coids) {
+            const fila = filas.get(coid);
+            if (fila && VIVAS.includes(fila.status)) fila.status = 'CANCELED';
+          }
+        }) as never,
+      });
+      h.adapter.position = { ...conPos(), liquidationPrice: null };
+      h.adapter.getOpenOrders = async () => libro.map((o) => ({ ...o }));
+      h.adapter.placeOrder = async (req: PlaceOrderRequest): Promise<OrderAck> => {
+        h.adapter.calls.push('place:' + req.clientOrderId);
+        h.adapter.placed.push(req.clientOrderId);
+        libro.push({
+          venue: Venue.HYPERLIQUID,
+          symbol: 'BTC',
+          clientOrderId: hyperliquidCodec.encode(req.clientOrderId),
+          venueOrderId: `libro-${++secuencia}`,
+          side: req.side,
+          type: req.type,
+          price: req.price ?? '0',
+          qty: req.qty,
+          filledQty: '0',
+          avgPrice: null,
+          status: 'OPEN',
+          reduceOnly: req.reduceOnly === true,
+          createdAt: Date.now(),
+          triggerPrice: req.triggerPrice ?? null,
+        });
+        return {
+          clientOrderId: req.clientOrderId,
+          venueOrderId: acuse(req.clientOrderId),
+          status: 'PENDING',
+          ts: Date.now(),
+        };
+      };
+      h.adapter.cancelOrder = async (req: CancelRequest): Promise<void> => {
+        h.adapter.calls.push('cancelOrder');
+        const i = libro.findIndex((o) => o.venueOrderId === req.venueOrderId);
+        if (i >= 0) libro.splice(i, 1);
+      };
+      return { ...h, filas, libro };
+    };
+
+    it.each([
+      ['Lighter: el acuse trae el índice de cliente', (coid: string) => `cliente-${coid}`],
+      ['Hyperliquid: el acuse de un disparador no trae oid', () => ''],
+    ])('%s y el stop que se mueve vuelve al libro', async (_caso, acuse) => {
+      const plan: DesiredState = { orders: [stopEn('90.0')], immediate: [] };
+      const { runner, libro } = montar(plan, acuse);
+
+      await runner.start();
+      expect(libro.map((o) => o.triggerPrice)).toEqual(['90.0']);
+
+      // El stop se mueve (a breakeven, o lo sigue la tendencia).
+      plan.orders = [stopEn('91.0')];
+      await tickDe(runner);
+      await runner.dispose();
+
+      expect(libro.map((o) => o.triggerPrice)).toEqual(['91.0']);
+    });
+
+    it('una orden cancelada por huérfana se puede volver a colocar con su id', async () => {
+      const nivel = level(0);
+      const plan: DesiredState = { orders: [nivel], immediate: [] };
+      const { runner, libro } = montar(plan, (coid) => `cliente-${coid}`);
+
+      await runner.start();
+      expect(libro).toHaveLength(1);
+
+      // El precio sale del rango: el nivel sobra y se cancela…
+      plan.orders = [];
+      await tickDe(runner);
+      expect(libro).toHaveLength(0);
+
+      // …y vuelve: es el mismo nivel del mismo ciclo, con el mismo id.
+      plan.orders = [nivel];
+      await tickDe(runner);
+      await runner.dispose();
+
+      expect(libro).toHaveLength(1);
     });
   });
 

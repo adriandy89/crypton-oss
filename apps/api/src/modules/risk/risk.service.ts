@@ -1,6 +1,7 @@
 import { BadRequestException, ForbiddenException, Injectable, Logger } from '@nestjs/common';
 import {
   D,
+  MAX_APALANCAMIENTO_POR_STOP,
   MIN_LIQUIDATION_DISTANCE_PCT,
   maintenanceMarginRateOf,
   maxLeverageWithinDistance,
@@ -11,6 +12,30 @@ import {
 } from '@crypton/shared';
 import { DbService } from 'src/libs';
 import { UpdateRiskLimitsDto } from './dtos';
+
+/** Lo que la estrategia dice de sí misma y cambia cómo se miden sus límites. */
+export interface OpcionesDeRiesgo {
+  /** Al editar un bot vivo, no se cuenta a sí mismo en el agregado. */
+  excludeBotId?: string;
+  /**
+   * `POR_STOP` (spec 058): la liquidación la gobierna el stop de cada operación,
+   * así que el tope no es el del 5 % sino `MAX_APALANCAMIENTO_POR_STOP`.
+   */
+  reglaLiquidacion?: 'POR_STOP';
+  /**
+   * El nocional máximo que declara la estrategia. Sin él se estima como
+   * capital por apalancamiento, que en una estrategia con el apalancamiento por
+   * operación exageraría el tamaño hasta 25 veces el capital.
+   */
+  nocional?: string | null;
+}
+
+/** El apalancamiento más alto que admite la regla de liquidación en ese mercado. */
+function topeDeLaRegla(market: MarketSpec, regla: OpcionesDeRiesgo['reglaLiquidacion']): number {
+  return regla === 'POR_STOP'
+    ? Math.min(MAX_APALANCAMIENTO_POR_STOP, market.maxLeverage)
+    : maxLeverageWithinDistance(maintenanceMarginRateOf(market));
+}
 
 /**
  * Guardas de riesgo del usuario.
@@ -61,12 +86,12 @@ export class RiskService {
     userId: string,
     config: BotConfig,
     market: MarketSpec,
-    opts: { excludeBotId?: string } = {},
+    opts: OpcionesDeRiesgo = {},
   ): Promise<void> {
     const limits = await this.get(userId);
     const leverage = Number(config.leverage ?? 1);
     const investment = D(config.totalInvestment ?? 0);
-    const notional = investment.mul(leverage);
+    const notional = opts.nocional ? D(opts.nocional) : investment.mul(leverage);
 
     if (limits.max_leverage != null && leverage > limits.max_leverage) {
       throw new ForbiddenException(
@@ -98,11 +123,14 @@ export class RiskService {
     // configuración temeraria. Misma cuenta que `validateCommon` y el asistente,
     // con la tasa de mantenimiento del MERCADO: la tasa plana del 0,5 %
     // prohibía 19× en todos los pares y ningún formulario lo decía (001/F-44,
-    // F-93).
-    const tope = maxLeverageWithinDistance(maintenanceMarginRateOf(market));
+    // F-93). Con la regla por stop, la distancia la pone cada operación y lo que
+    // queda es el techo (spec 058).
+    const tope = topeDeLaRegla(market, opts.reglaLiquidacion);
     if (leverage > tope) {
       throw new ForbiddenException(
-        `A ${leverage}× la liquidación estimada llega con menos del ${MIN_LIQUIDATION_DISTANCE_PCT} % de movimiento adverso en ${market.symbol}: el máximo aquí es ${tope}×.`,
+        opts.reglaLiquidacion === 'POR_STOP'
+          ? `El apalancamiento de esta estrategia llega como mucho a ${tope}× en ${market.symbol}, y has pedido ${leverage}×.`
+          : `A ${leverage}× la liquidación estimada llega con menos del ${MIN_LIQUIDATION_DISTANCE_PCT} % de movimiento adverso en ${market.symbol}: el máximo aquí es ${tope}×.`,
       );
     }
 
@@ -128,11 +156,11 @@ export class RiskService {
     userId: string,
     investment: Numeric,
     market: MarketSpec,
-    opts: { excludeBotId?: string } = {},
+    opts: Pick<OpcionesDeRiesgo, 'excludeBotId' | 'reglaLiquidacion'> = {},
   ): Promise<number> {
     const limits = await this.get(userId);
     const inversion = D(investment);
-    const topes: number[] = [maxLeverageWithinDistance(maintenanceMarginRateOf(market))];
+    const topes: number[] = [topeDeLaRegla(market, opts.reglaLiquidacion)];
     if (limits.max_leverage != null) topes.push(limits.max_leverage);
 
     // Sin inversión no hay notional que limitar: dividir por cero daría infinito
@@ -211,10 +239,18 @@ export class RiskService {
         status: { in: ['STARTING', 'RUNNING', 'PAUSED'] },
         ...(excludeBotId ? { id: { not: excludeBotId } } : {}),
       },
-      select: { total_investment: true, leverage: true },
+      select: { total_investment: true, leverage: true, max_notional: true },
     });
+    // El nocional que declara la estrategia, si lo declara (spec 058): con el
+    // apalancamiento por operación, capital por apalancamiento contaría el tope
+    // de 25x como si cada bot lo usara entero. El worker suma lo mismo.
     return bots.reduce(
-      (acc, b) => acc.plus(D(b.total_investment.toString()).mul(b.leverage)),
+      (acc, b) =>
+        acc.plus(
+          b.max_notional != null
+            ? D(b.max_notional.toString())
+            : D(b.total_investment.toString()).mul(b.leverage),
+        ),
       D(0),
     );
   }

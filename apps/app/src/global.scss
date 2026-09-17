@@ -991,6 +991,11 @@ ion-toast {
       border-top: 2px dotted var(--pnl-up);
       opacity: 0.55;
     }
+
+    /* Las líneas del canal con IA (spec 059), del color de la cruceta. */
+    &.canal {
+      background: var(--brand-2);
+    }
   }
 
   /* Lo que el grafico NO esta enseñando. Ambar y no gris: es una omision, y una

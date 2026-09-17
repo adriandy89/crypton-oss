@@ -1,6 +1,12 @@
 import { Injectable, Logger, OnApplicationShutdown, OnModuleInit } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { createClient, type RedisClientType } from 'redis';
+import {
+  ACCION_PAUSAR_CANAL,
+  PREFIJO_BOTON_CANAL,
+  PULSACION_PAUSA_CANAL,
+  esValeCanal,
+} from '@crypton/shared';
 import { BUS_CHANNELS, BusService, DbService } from '../libs';
 import { LeaseService } from '../engine';
 import { TelegramClient, escapeHtml, type TelegramUpdate } from './telegram-client';
@@ -141,7 +147,14 @@ export class TelegramPollerService implements OnModuleInit, OnApplicationShutdow
     // Cualquier pulsacion que no reconozcamos se contesta y se ignora: ampliar
     // `allowed_updates` cambia lo que llega para todo el mundo, y un update raro
     // no puede dejar el sondeo dando vueltas.
-    if (!chatId || partes.length !== 3 || partes[0] !== 'ia') {
+    const esModoIa = partes[0] === 'ia';
+    // «⏸ Pausar» de un aviso de entrada del canal con IA (spec 059): el vale es
+    // un hexadecimal y el verbo, `pausa`. Lo demás no se reconoce.
+    const esPausaCanal =
+      partes[0] === PREFIJO_BOTON_CANAL &&
+      partes[2] === ACCION_PAUSAR_CANAL &&
+      esValeCanal(partes[1]);
+    if (!chatId || partes.length !== 3 || !(esModoIa || esPausaCanal)) {
       await this.client.answerCallbackQuery(cb.id);
       return;
     }
@@ -155,6 +168,19 @@ export class TelegramPollerService implements OnModuleInit, OnApplicationShutdow
       // Neutro a proposito, como el canje de codigos: confirmar que el vale
       // existe le diria a quien prueba que ha acertado uno.
       await this.client.answerCallbackQuery(cb.id, 'No se ha podido procesar.');
+      return;
+    }
+
+    if (esPausaCanal) {
+      // Sin `botId`, como la sugerencia: la API sabe de qué bot es por el vale.
+      await this.bus
+        .publish(BUS_CHANNELS.BOT_EVENTS, {
+          userId: link.user_id,
+          type: PULSACION_PAUSA_CANAL,
+          data: { vale: token, chatId },
+        })
+        .catch(() => undefined);
+      await this.client.answerCallbackQuery(cb.id, 'Pausando…');
       return;
     }
 

@@ -88,10 +88,12 @@ export class RetentionService {
       const portfolio = await this.purgePortfolio(portfolioDays);
       const commands = await this.purgeCommands(commandDays);
       const dossiers = await this.purgeAiDossiers(aiDays);
-      if (snapshots + events + audit + portfolio + commands + dossiers > 0) {
+      const herramientas = await this.purgeAiSnapshots(aiDays);
+      if (snapshots + events + audit + portfolio + commands + dossiers + herramientas > 0) {
         this.logger.log(
           `Purga: ${snapshots} snapshot(s), ${events} evento(s), ${audit} registro(s) de actividad, ` +
-            `${portfolio} fila(s) de cartera, ${commands} comando(s) y ${dossiers} expediente(s) de IA.`,
+            `${portfolio} fila(s) de cartera, ${commands} comando(s), ${dossiers} expediente(s) de IA ` +
+            `y ${herramientas} herramienta(s) del canal.`,
         );
       }
     } catch (e) {
@@ -116,6 +118,25 @@ export class RetentionService {
     const { count } = await this.db.botAiDecision.updateMany({
       where: { created_at: { lt: cutoff }, dossier: { not: Prisma.DbNull } },
       data: { dossier: Prisma.DbNull },
+    });
+    return count;
+  }
+
+  /**
+   * Vacía la herramienta de las intenciones viejas del canal con IA (spec 059),
+   * con la misma retención que el expediente del Modo IA y por lo mismo.
+   *
+   * La FILA se queda: es lo que explica por qué el bot abrió —o no— una
+   * operación, con la elección, el plan, el modelo y el coste. Lo que se vacía
+   * es `snapshot`, la herramienta que calculó el worker: unos kilobytes por
+   * consulta, una por vela de 5 min con setup.
+   */
+  private async purgeAiSnapshots(days: number): Promise<number> {
+    if (days <= 0) return 0;
+    const cutoff = new Date(Date.now() - days * 86_400_000);
+    const { count } = await this.db.botAiIntent.updateMany({
+      where: { created_at: { lt: cutoff }, snapshot: { not: Prisma.DbNull } },
+      data: { snapshot: Prisma.DbNull },
     });
     return count;
   }

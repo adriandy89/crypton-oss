@@ -50,6 +50,7 @@ público que usan los bots reales.
 | Orden a mercado | Se ejecuta al mejor precio contrario **con un deslizamiento del 0,05 %** en contra, como taker | Depende de la profundidad |
 | Comisiones | **0,02 % maker · 0,05 % taker**, descontadas del PnL realizado | Las del venue (y las del builder, si las hay) |
 | Stop-loss / take profit condicionales | Orden **en reposo** que se dispara con el precio de marca y se ejecuta al precio del disparador con deslizamiento (corregido en el spec 004; antes cerraba en el acto) | Igual, condicional nativa |
+| Orden que solo reduce (`reduceOnly`) | Se ejecuta **como mucho por el tamaño de la posición**. Si ya no hay nada que reducir, la límite o el stop se retiran sin ejecutarse y la de mercado se rechaza. Hasta el spec 057 (F-05) se ejecutaba entera: un stop y un objetivo tocados en la misma vela giraban la posición | Igual |
 | Liquidación | Comprobada con una tasa de mantenimiento plana del 0,5 % | Escala por tramos del venue |
 | Funding | **No existe** | Se cobra o paga periódicamente |
 | Margen retenido por órdenes en reposo | **No se descuenta** del saldo disponible | Sí |
@@ -95,6 +96,7 @@ Reproduce la estrategia con las **mismas piezas puras** que usa el motor (`plan(
 | Deslizamiento | En las órdenes a mercado | 0,05 % |
 | Diferencial (bps) | Anchura fingida del libro | 2 |
 | Recorrido de la vela | **Plausible** (apertura → extremo más cercano → el otro → cierre, la convención de los emuladores) o **Pesimista** (el extremo que más duele, primero) | Plausible |
+| Tramos (solo Canal con IA) | Parte el periodo en 1 a 6 tramos seguidos, cada uno con sus cifras | 3 |
 
 Tope: **10.000 velas** por ejecución. 30 días a 5 minutos son 8.640 velas (cabe); 90 días a 5 minutos son
 25.920 (no cabe: usa 15 minutos). La pantalla avisa antes de lanzar.
@@ -114,13 +116,15 @@ escala).
 | Exposición | posición máxima, notional máximo, % del tiempo en mercado |
 | Referencia | **comprar y mantener** en el mismo periodo. Va siempre al lado: un +8 % en un mercado que subió un 40 % no es un buen resultado |
 | Calidad del dato | velas, ticks, velas que faltaban, mayor hueco |
+| Canal con IA | cada operación (setup, lado, entrada, salida, R y cómo salió), una tabla **por setup y lado** (operaciones, aciertos, límite de Wilson, R medio, resultado por operación, factor de beneficio y resultado) y otra **por tramo**. Se guardan con la ejecución y vuelven al reabrirla |
 
 Más la curva de equity, la tabla de operaciones (las últimas 200), la comparación de dos ejecuciones lado a
 lado y el historial de ejecuciones guardadas, que se pueden reabrir.
 
 ### Lo que el backtest NO reproduce
 
-Los nueve avisos que acompañan **siempre** al resultado, y que hay que leer antes que las cifras:
+Los nueve avisos comunes que acompañan **siempre** al resultado, y que hay que leer antes que las cifras
+(cada estrategia añade los suyos):
 
 1. **Orden dentro de la vela**: una vela no dice si el máximo llegó antes que el mínimo. Cuanto más larga
    la vela, mayor el error. Con «Pesimista» estresas un resultado que parece demasiado bueno.
@@ -146,6 +150,32 @@ cortacircuitos por colocaciones fallidas y las guardas que dependen de otras pos
 > puede cruzar cada línea una vez). Los rechazos del simulador al colocar una orden se **cuentan** y salen en
 > los avisos con su motivo. No dimensiones un market maker con el backtest.
 
+> ℹ️ **Tendencia en el backtest.** Decide con velas de **su** intervalo, no con las del replay.
+> - **Si el intervalo del replay lo divide** (15m para una Tendencia de 1h), las construye agrupando
+>   horas completas. Solo entra cuando la vela de su intervalo ha cerrado, como en real.
+> - **Si no lo divide** (1h para una de 15m), no tiene con qué decidir: no opera, y el aviso lo dice.
+> - **El calentamiento.** Las primeras velas del rango (25 con los valores de fábrica) se gastan en
+>   calentar el canal y el ATR.
+>
+> Hasta el spec 057 (F-04) el replay no le pasaba velas y Tendencia **no operaba nunca**: esos
+> resultados no valen.
+
+> ℹ️ **El Canal con IA en el backtest** ([guía](./ai-channel.md)).
+> - **Decide el juez, no la IA.** El replay usa el modo reglas con el mismo perfil, y el aviso lo dice:
+>   el resultado mide el motor y las reglas, no al modelo.
+> - **Solo en velas de 5 min.** Con otro intervalo, la API responde 400 antes de descargar nada. Treinta
+>   días son 8.640 velas: caben en una ejecución.
+> - **Calentamiento.** Descarga además unas 481 horas anteriores al periodo para las series de 15 min
+>   y 1 h, sin contar en el tope. Un par listado hace menos de unos 20 días se queda corto, y se avisa.
+> - **Se mide como el histórico que ve la IA.** Una límite en reposo solo se ejecuta si el precio la
+>   **cruza**, no si la toca; con posición, la vela va primero hacia el stop; y un hueco que salta el stop
+>   sale a la apertura. Un test fija que cada operación sale igual que su etiqueta.
+> - **Las cifras.** Una operación cuenta en el tramo en que se cerró; la que sigue abierta al final no
+>   cuenta. Con menos de 20 operaciones por setup no se puede concluir nada, y el acierto que importa es
+>   el de **Wilson**, no el visto.
+> - **Cómo hacer el walk-forward.** Tres ejecuciones de 30 días seguidos por par, con tramos. Un
+>   resultado que solo sale bien en un tramo es un periodo, no una ventaja.
+
 > ⚠️ **Nota histórica.** Hasta la corrección de F-45 (spec 004, septiembre de 2026) el simulador y el
 > backtest ejecutaban el stop-loss **en el acto** al colocarlo: cualquier backtest anterior con
 > `stopLossPct` cerraba la posición nada más abrir. **Esos resultados no valen**; repítelos.
@@ -161,3 +191,7 @@ cortacircuitos por colocaciones fallidas y las guardas que dependen de otras pos
    lado.
 4. **Simula** la ganadora varios días y comprueba que la bitácora se comporta como el backtest sugería.
 5. Solo entonces, **testnet** o mainnet con 20 USDC y 1× ([camino obligatorio](./buenas-practicas.md#2-el-camino-obligatorio)).
+
+En el **Canal con IA** el orden es el mismo, con dos matices: el backtest mide el juez, así que la
+simulación de 48-72 horas con la IA encendida es la que dice cómo decide el modelo; y lo primero con
+dinero real es un capital pequeño, mirando los avisos y probando el botón de pausa.

@@ -4,8 +4,12 @@ import {
   muestreoPorExtremos,
   type BacktestEquityPoint,
   type BacktestMetrics,
+  type BacktestOperacionView,
+  type BacktestSetupMetrics,
+  type BacktestVentana,
   type Candle,
 } from '@crypton/shared';
+import { wilsonInferior } from '@crypton/strategy-core';
 import type { ReplayOutput, ReplayState } from './engine';
 
 /**
@@ -196,3 +200,68 @@ export function aggregateCandles(candles: Candle[], max: number): Candle[] {
 
 const pct = (n: Decimal, base: Decimal): string =>
   base.gt(0) ? n.div(base).mul(100).toFixed(4) : '0';
+
+/**
+ * Las cifras de cada setup y lado (spec 058), con las medidas de las tasas base
+ * que ve la IA: cuántas, cuántas ganaron, su límite de Wilson y el R medio. Un
+ * acierto es una operación con resultado positivo, neto de comisiones.
+ */
+export function metricasPorSetup(
+  operaciones: readonly BacktestOperacionView[],
+): BacktestSetupMetrics[] {
+  const grupos = new Map<string, BacktestOperacionView[]>();
+  for (const o of operaciones) {
+    const clave = `${o.setup}|${o.lado}`;
+    const grupo = grupos.get(clave);
+    if (grupo) grupo.push(o);
+    else grupos.set(clave, [o]);
+  }
+  return [...grupos.values()].map((grupo) => {
+    const n = grupo.length;
+    const aciertos = grupo.filter((o) => D(o.resultado).gt(0)).length;
+    const resultados = grupo.map((o) => D(o.resultado));
+    const total = resultados.reduce((a, b) => a.plus(b), D(0));
+    const ganado = resultados.filter((x) => x.gt(0)).reduce((a, b) => a.plus(b), D(0));
+    const perdido = resultados.filter((x) => x.lt(0)).reduce((a, b) => a.plus(b.abs()), D(0));
+    return {
+      setup: grupo[0].setup,
+      lado: grupo[0].lado,
+      n,
+      aciertos,
+      wilsonInferior: wilsonInferior(aciertos, n),
+      rMedio: grupo.reduce((a, o) => a + o.r, 0) / n,
+      esperanza: total.div(n).toFixed(),
+      // Un cociente sin unidades; sin pérdidas no hay factor que dar.
+      factorBeneficio: perdido.gt(0) ? ganado.div(perdido).toNumber() : null,
+      resultado: total.toFixed(),
+    };
+  });
+}
+
+/**
+ * El rango partido en `n` tramos consecutivos del mismo largo, cada uno con sus
+ * operaciones (las que CERRARON dentro) y sus cifras por setup. Un resultado que
+ * solo sale bien en uno de los tramos no es una ventaja: es un periodo.
+ */
+export function ventanasConsecutivas(
+  operaciones: readonly BacktestOperacionView[],
+  desde: number,
+  hasta: number,
+  n: number,
+): BacktestVentana[] {
+  const partes = Math.max(1, Math.floor(n));
+  const largo = (hasta - desde) / partes;
+  return Array.from({ length: partes }, (_, i) => {
+    const inicio = Math.round(desde + i * largo);
+    const fin = i === partes - 1 ? hasta : Math.round(desde + (i + 1) * largo);
+    const dentro = operaciones.filter((o) => o.salidaEn >= inicio && o.salidaEn < fin);
+    return {
+      desde: inicio,
+      hasta: fin,
+      operaciones: dentro.length,
+      resultado: dentro.reduce((a, o) => a.plus(o.resultado), D(0)).toFixed(),
+      rTotal: dentro.reduce((a, o) => a + o.r, 0),
+      porSetup: metricasPorSetup(dentro),
+    };
+  });
+}

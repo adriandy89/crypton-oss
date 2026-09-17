@@ -74,6 +74,21 @@ El menú de la app ofrece «Adelantar seguridad» y «Recentrar la retícula» s
 un comando llega por otra vía a una estrategia en la que no aplica, la API lo rechaza al instante y el motor,
 si le llegara, lo veta con `ACTION_FAILED` y el motivo.
 
+En **Tendencia** y **Seguimiento de beneficio** tampoco aplican ninguno de los dos: no tienen ancla ni
+seguridades. «Cerrar ahora» y «Recoger beneficio» sí cierran la posición. Hasta el spec 057 (F-11), un
+«Recentrar» que llegara al motor en estas dos estrategias se anunciaba como hecho y borraba los niveles del
+ciclo.
+
+En el **Canal con IA** ([guía](./ai-channel.md)) cuatro comandos se comportan distinto:
+
+- **Pausar** cancela los objetivos y deja **solo el stop**. Mientras dure la pausa no hay salidas por
+  tiempo ni por invalidación.
+- **Cancelar órdenes** pide una revisión en el acto, y el stop propio vuelve al libro sin esperar al latido.
+- **Retirar margen** se rechaza: acercaría la liquidación al stop que calculó la operación. Aportar, sí.
+- **Recentrar** no aplica.
+
+Además, cualquier comando caduca las decisiones pendientes de la IA: la siguiente se pide de nuevo.
+
 ---
 
 ## 3. Las guardas, en una tabla
@@ -92,6 +107,10 @@ solo la de liquidación puede cerrar, y solo si tú se lo pediste en «Al acerca
 | 20 colocaciones fallidas seguidas · 5 revisiones fallidas seguidas **del propio bot** | fallos técnicos persistentes |
 | Venue sin servicio (5xx, timeouts, error de red, 429) | **no** pausa: el bot espera y avisa `VENUE_UNAVAILABLE` / `VENUE_RECOVERED` |
 | Precio externo desfasado (> 15 s) | la estrategia deja de cotizar; el bot **no** se pausa |
+| **Canal con IA** · liquidación por stop | a dos tercios del camino de la entrada a la liquidación; aviso CRITICAL y «Cerrar todo» por defecto |
+| **Canal con IA** · pérdida diaria | al tope, sin entradas hasta las 00:00 UTC y **sin pausa**; al 1,5× del tope, pausa hasta las 00:00 UTC |
+| **Canal con IA** · caída máxima | lo que ha caído el resultado realizado desde su mejor punto **desde la última reanudación**; pausa |
+| **Canal con IA** · vigilante del stop | posición sin stop en el libro a los 5 s (10 s en Lighter): **cierra a mercado** y avisa en CRITICAL |
 
 ---
 
@@ -133,6 +152,7 @@ a más viejo**. Cada evento tiene una severidad: **INFO** (sin borde), **WARN** 
 | `EXIT_PENDING_MIN_SIZE` (INFO) | Salida pendiente: tamaño mínimo | La salida es aún demasiado pequeña **y quedan entradas vivas**: se colocará en cuanto entren más ejecuciones. | Nada: no es una avería. |
 | `POSITION_BELOW_MINIMUM` (WARN) | Resto por debajo del mínimo del venue | Hay posición pero es tan pequeña que **ninguna orden puede cerrarla**, y no quedan entradas que la hagan crecer. Tu TP (o el stop) **no está puesto**. | Ciérralo a mano en el exchange o añade posición. |
 | `ORDER_RETRY` (INFO) | Orden reintentada | Fallo pasajero (red, timeout). Se reintenta en la siguiente revisión. | Nada, salvo que se repita: 20 seguidos pausan el bot. |
+| `ORDER_RETRY` (WARN) | Orden reintentada | **No se sabe si la orden llegó**: el envío falló y la comprobación también. Una orden que no solo reduce **no se reenvía** hasta saberlo: si aparece, sigue su curso; si en cinco minutos no aparece, se vuelve a intentar. Antes se reenviaba en la revisión siguiente, y una entrada a mercado que sí había entrado se doblaba (spec 057, F-06). | Mira el exchange si se repite: el venue está respondiendo mal. |
 | `INSUFFICIENT_FUNDS` (ERROR) | Fondos insuficientes | No hay margen para un nivel; la escalera queda incompleta. | Baja el capital asignado o aporta fondos a la cuenta. |
 | `CLOSE_SKIPPED` | Cierre omitido | No había posición que cerrar. | Nada. |
 | `LEVERAGE_SKIPPED` · `POSITION_MODE_SKIPPED` | Apalancamiento / modo de posición no aplicado | El venue no aceptó el ajuste (posición abierta, o no lo soporta). | El bot sigue con el valor que tenga la cuenta: compruébalo en el exchange. |
@@ -165,6 +185,7 @@ a más viejo**. Cada evento tiene una severidad: **INFO** (sin borde), **WARN** 
 | `STREAM_RECOVERED` (INFO) | La conexión volvió. Solo se anuncia si su caída llegó a anunciarse. Nada que hacer. |
 | `AUTH_ERROR` (CRITICAL) | El exchange rechazó la credencial. El bot no puede operar: revisa la clave en Cuenta → conexiones. |
 | `ACTION_FAILED` | Un comando no pudo ejecutarse. Lee el motivo. |
+| `COMMAND_FAILED` (ERROR) | El motor no pudo ejecutar un comando que le llegó, y lo cerró con el motivo en vez de dejarlo pendiente. Uno que el worker **no conoce** —uno nuevo que llega antes de desplegar el worker que lo entiende— también acaba aquí; antes se daba por hecho sin hacer nada (spec 057, F-08). Repite el comando cuando el motivo esté resuelto. |
 
 ### Modo IA (solo bots de un administrador)
 
@@ -177,7 +198,7 @@ bot suyo. Ver [Administración](./administracion.md#modo-ia-un-supervisor-que-vi
 | `AI_SUGGESTION` | Sugerencia de la IA | En «propone y espera»: la propuesta te ha llegado por Telegram con sus dos botones. Dice qué parámetros cambiaría, de cuánto a cuánto y qué perilla lo pide. Sin Telegram vinculado o con los avisos del Modo IA apagados, un bot en este modo no se revisa y no llega ninguna. |
 | `AI_APPLIED` | Ajuste aplicado por la IA | El cambio ya está hecho, con la misma lista de parámetros y valores. Si lo aprobaste tú, lo dice, y los valores son los recalculados al aprobar. Lo ves en el historial de Ajustes con la marca **IA**; deshacerlo es volver a la versión anterior. |
 | `AI_ADVICE` | La IA pide revisar el bot | La IA cree que hace falta una persona. Como mucho uno por bot y día. |
-| `AI_FAILED` (WARN) | La IA no pudo revisar el bot | No se ha tocado nada. Si se repite cinco veces seguidas, el Modo IA se duerme unas horas. |
+| `AI_FAILED` (WARN) | La IA no pudo actuar | No se ha tocado nada. Si se repite cinco veces seguidas, el Modo IA se duerme unas horas. |
 
 Así llega una sugerencia (spec 054). Un aviso aplicado dice «ha cambiado» en lugar de «propone
 cambiar»:
@@ -192,6 +213,26 @@ Motivo: …
 Como mucho salen diez parámetros; si hay más, la última línea los cuenta. Si un lote de avisos no
 cabe en un mensaje de Telegram, llega en varios.
 
+### Canal con IA (solo bots de un administrador)
+
+Solo aparecen en bots del [Canal con IA](./ai-channel.md). **En estos bots `CYCLE_CLOSED` no se
+emite**: lo sustituye `AI_EXIT`, que lleva lo mismo más el R y el motivo, para no avisar dos veces de
+la misma salida.
+
+| Evento | Etiqueta | Qué hacer |
+|---|---|---|
+| `AI_DECISION` (INFO) | Decisión de la IA | Nada: cada respuesta de la IA, o por qué no se consultó. Solo va a la bitácora. |
+| `AI_ENTRY` | Operación abierta | Llega por Telegram con sus números y el botón **⏸ Pausar el bot**, que sirve una vez y dura 24 h. |
+| `AI_EXIT` | Operación cerrada | Llega con el resultado en USDC y en R y el motivo: objetivo, stop, stop en la entrada, tiempo, invalidación, régimen, liquidación o cierre manual. |
+| `AI_CIERRE` (INFO) | Cierre a mercado ordenado | La estrategia ordena cerrar (tiempo, canal roto, régimen en contra, stop que no saltó). El resultado llega con `AI_EXIT`. |
+| `AI_BREAKEVEN` (INFO) | Stop llevado a la entrada | Primer objetivo cobrado. Nada. |
+| `AI_ENTRY_DISCARDED` | Entrada descartada | En WARN: el exchange no aceptó el apalancamiento o la operación ya no cabía; llega por Telegram. En INFO, una entrada que no se llenó dentro de su tope: solo bitácora. |
+| `AI_DAY_STOP` (WARN) | Tope diario alcanzado | Sin entradas hasta las 00:00 UTC; vuelve solo. |
+| `SIN_STOP` (CRITICAL) | Posición sin stop confirmado | El stop no apareció a tiempo y el bot cerró a mercado. Mira el exchange. |
+| `AI_CIERRE_FALLIDO` (CRITICAL) | El cierre a mercado falló | Doce intentos sin éxito: **cierra a mano**. El stop sigue puesto. |
+| `AI_POSICION_HUERFANA` (CRITICAL) | Posición sin plan | Hay posición y el bot no sabe de qué operación es: pone un stop de emergencia. Revísala. |
+| `AI_FAILED` (WARN) | La IA no pudo actuar | Cinco fallos seguidos del modelo: ese bot deja de consultar seis horas y no abre nada. |
+
 ### La nota del bot
 
 Además de los eventos, cada estrategia escribe una **nota** en cada revisión (la ves en el resumen del
@@ -205,6 +246,7 @@ bot). Es la frase que te dice en qué estado cree estar:
 | Martingala | «Abriendo ciclo.» · «Ciclo abierto: 4 seguridades pendientes.» · «En cooldown, 43 s para el próximo ciclo.» |
 | GridMart | «Núcleo 0,0501, satélite 0,0671.» · «GridMart Classic: TP satélite en 79.856,9.» |
 | Market makers | «Inventario 312.40 (62 % del tope), 6 cotizaciones.» · «Esperando a que el precio baje a 0.004.» |
+| Canal con IA | «Tope diario alcanzado (6.02 % de 6 %): sin entradas hasta las 00:00 UTC.» · «Espera tras el último stop: 12 min.» · «Solo observar: habría entrado en largo (REB-L-H…) con 31.257 a 25x, stop 99.84.» |
 
 ---
 

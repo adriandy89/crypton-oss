@@ -1,7 +1,8 @@
 import { createServer, type Server } from 'node:http';
 import type { AddressInfo } from 'node:net';
 import { SignerClient } from 'zklighter-sdk';
-import { LighterAdapter } from './adapters/lighter';
+import { ExchangeError, Venue } from '@crypton/shared';
+import { LighterAdapter, caducidadLighter } from './adapters/lighter';
 import { lighterCodec } from './coid';
 
 /**
@@ -73,6 +74,7 @@ function firmanteFalso() {
     },
     create_order: jest.fn(async (..._args: unknown[]): Promise<Tupla> => OK),
     create_market_order: jest.fn(async (..._args: unknown[]): Promise<Tupla> => OK),
+    update_leverage: jest.fn(async (..._args: unknown[]): Promise<Tupla> => OK),
     check_client: (): string | null => null,
     close: async (): Promise<void> => undefined,
   };
@@ -201,6 +203,67 @@ describe('Lighter — lo que se firma en placeOrder', () => {
   });
 
   /**
+   * Spec 058. El firmante de Lighter rechaza una límite IOC con caducidad
+   * («OrderExpiry is invalid», `lighter-go`, `create_order.go`), y se mandaba
+   * con la de 28 días: ninguna límite IOC podía entrar. Hasta el canal con IA no
+   * la pedía nadie.
+   */
+  it('una LIMIT con IOC va sin caducidad, como las órdenes a mercado del SDK', async () => {
+    const { adapter, firmante } = crear();
+    await adapter.placeOrder(limit({ timeInForce: 'IOC', expiresAt: Date.now() + 3_600_000 }));
+    expect(firmante.create_order.mock.calls[0][9]).toBe(SignerClient.DEFAULT_IOC_EXPIRY);
+  });
+
+  it('una límite que se queda en el libro lleva la caducidad por defecto si no pide otra', async () => {
+    const { adapter, firmante } = crear();
+    await adapter.placeOrder(limit());
+    expect(firmante.create_order.mock.calls[0][9]).toBe(SignerClient.DEFAULT_28_DAY_ORDER_EXPIRY);
+  });
+
+  it('y la suya, en milisegundos, si la pide', async () => {
+    const { adapter, firmante } = crear();
+    const expiresAt = Date.now() + 3_600_000;
+    await adapter.placeOrder(limit({ expiresAt }));
+    expect(firmante.create_order.mock.calls[0][9]).toBe(expiresAt);
+  });
+
+  it('un stop a mercado es IOC pero CON caducidad, que el venue la exige', async () => {
+    const { adapter, firmante } = crear();
+    const expiresAt = Date.now() + 3_600_000;
+    await adapter.placeOrder(
+      limit({
+        side: 'SELL',
+        type: 'MARKET',
+        triggerPrice: '76000',
+        reduceOnly: true,
+        intent: 'SL',
+        expiresAt,
+      }),
+    );
+    const args = firmante.create_order.mock.calls[0];
+    expect(args[6]).toBe(SignerClient.ORDER_TIME_IN_FORCE_IMMEDIATE_OR_CANCEL);
+    expect(args[9]).toBe(expiresAt);
+  });
+
+  it('el acuse del apalancamiento no lo da por aplicado: sendTx solo dice que está bien formada', async () => {
+    const { adapter, firmante } = crear();
+
+    const acuse = await adapter.setLeverage('BTC', 10, 'ISOLATED');
+
+    expect(acuse).toEqual({ leverage: null });
+    expect(firmante.update_leverage).toHaveBeenCalledWith(1, SignerClient.ISOLATED_MARGIN_MODE, 10);
+  });
+
+  it('los tramos son uno, con la ficha del mercado', async () => {
+    const { adapter } = crear();
+
+    // min_initial_margin_fraction 200 → 50x; sin mantenimiento, la mitad del inicial.
+    await expect(adapter.getLeverageTiers('BTC')).resolves.toEqual([
+      { desdeNocional: '0', maxApalancamiento: 50, mantenimiento: 0.01 },
+    ]);
+  });
+
+  /**
    * Spec 001, F-48. La tupla del SDK solo trae el texto: «Too Many Requests!»
    * sin estado HTTP caia en RETRYABLE y withWriteRetry lo reintentaba tres
    * veces, justo lo que alarga el corte del cortafuegos (60 s para toda la IP).
@@ -281,5 +344,58 @@ describe('Lighter — lo que se firma en placeOrder', () => {
     expect(firmante.nonce_manager.hard_refresh_nonce).toHaveBeenCalledTimes(1);
     expect(firmante.create_order).toHaveBeenCalledTimes(2);
     expect(ack.status).toBe('PENDING');
+  });
+
+  /**
+   * Spec 060, F-02: el caso de Lighter que nombraba 001/F-68 y que su arreglo
+   * no alcanzó. Tras un envío sin respuesta se comprueba si la orden entró: una
+   * MARKET ejecutada ya no está entre las abiertas, así que la prueba son las
+   * ejecuciones. Si leerlas falla, no se sabe; `findPlaced` se tragaba el fallo
+   * y lo convertía en «no entró», y la MARKET salía otra vez: posición doblada.
+   */
+  it('una MARKET sin respuesta no se reenvía si no se pueden leer las ejecuciones', async () => {
+    const { adapter, firmante } = crear();
+    firmante.create_market_order.mockRejectedValueOnce(
+      new ExchangeError('RETRYABLE', 'timeout', Venue.LIGHTER),
+    );
+    const sinRespuesta = adapter as unknown as {
+      getOpenOrders: () => Promise<unknown[]>;
+      getRecentFills: () => Promise<unknown[]>;
+    };
+    sinRespuesta.getOpenOrders = async () => [];
+    sinRespuesta.getRecentFills = async () => {
+      throw new ExchangeError('THROTTLED', 'Too Many Requests!', Venue.LIGHTER);
+    };
+
+    await expect(
+      adapter.placeOrder(limit({ type: 'MARKET', price: '77000' })),
+    ).rejects.toMatchObject({ estadoDesconocido: true });
+    expect(firmante.create_market_order).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe('caducidadLighter (spec 058)', () => {
+  const AHORA = 1_900_000_000_000;
+  const MINUTO = 60_000;
+
+  it('sin caducidad pedida, la del SDK', () => {
+    expect(caducidadLighter(undefined, AHORA)).toBe(SignerClient.DEFAULT_28_DAY_ORDER_EXPIRY);
+    expect(caducidadLighter(Number.NaN, AHORA)).toBe(SignerClient.DEFAULT_28_DAY_ORDER_EXPIRY);
+  });
+
+  it('dentro de lo que admite el venue, la pedida, en milisegundos enteros', () => {
+    expect(caducidadLighter(AHORA + 60 * MINUTO + 0.7, AHORA)).toBe(AHORA + 60 * MINUTO);
+  });
+
+  it('por debajo de los cinco minutos del venue, se alarga hasta el mínimo con margen', () => {
+    expect(caducidadLighter(AHORA + MINUTO, AHORA)).toBe(AHORA + 5.5 * MINUTO);
+    // Una ya vencida también: el venue la rechazaría entera.
+    expect(caducidadLighter(AHORA - MINUTO, AHORA)).toBe(AHORA + 5.5 * MINUTO);
+  });
+
+  it('por encima de 28 días, se recorta', () => {
+    expect(caducidadLighter(AHORA + 40 * 24 * 60 * MINUTO, AHORA)).toBe(
+      AHORA + 28 * 24 * 60 * MINUTO,
+    );
   });
 });

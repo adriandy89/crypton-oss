@@ -145,6 +145,17 @@ services:
       AI_AGENT_DRY_RUN_ONLY: ${AI_AGENT_DRY_RUN_ONLY:-true}
       # Horas entre dos avisos «revisa este bot» del mismo bot (spec 051).
       AI_AGENT_ADVICE_COOLDOWN_H: ${AI_AGENT_ADVICE_COOLDOWN_H:-24}
+      # Canal con IA (spec 059). Apagado por defecto: sin estas variables la API
+      # arranca igual y los bots del canal en modo IA no abren nada.
+      AI_CHANNEL_ENABLE: ${AI_CHANNEL_ENABLE:-false}
+      AI_CHANNEL_MODEL: ${AI_CHANNEL_MODEL:-anthropic/claude-sonnet-5}
+      AI_CHANNEL_REASONING: ${AI_CHANNEL_REASONING:-medium}
+      AI_CHANNEL_TIMEOUT_MS: ${AI_CHANNEL_TIMEOUT_MS:-20000}
+      AI_CHANNEL_DAILY_LIMIT: ${AI_CHANNEL_DAILY_LIMIT:-48}
+      AI_CHANNEL_GLOBAL_DAILY_LIMIT: ${AI_CHANNEL_GLOBAL_DAILY_LIMIT:-400}
+      AI_CHANNEL_PROMPT_CACHE: ${AI_CHANNEL_PROMPT_CACHE:-1h}
+      AI_CHANNEL_SHADOW_ONLY: ${AI_CHANNEL_SHADOW_ONLY:-false}
+      AI_CHANNEL_CONCURRENCY: ${AI_CHANNEL_CONCURRENCY:-4}
     depends_on:
       migrate:
         condition: service_completed_successfully
@@ -234,6 +245,8 @@ services:
       # leases, y los bots que sobren esperan a que haya otra réplica. Sin tope,
       # la primera que arrancaba se los llevaba todos.
       WORKER_MAX_BOTS: ${WORKER_MAX_BOTS:-250}
+      # Canal con IA: tope de bots reales por venue en cada replica (spec 058).
+      AI_CHANNEL_MAX_BOTS_PER_VENUE: ${AI_CHANNEL_MAX_BOTS_PER_VENUE:-LIGHTER=2}
 
       # Puerto de salud. No se publica al host: lo consulta el healthcheck desde
       # dentro del contenedor, y con --scale no podría haber dos publicando el

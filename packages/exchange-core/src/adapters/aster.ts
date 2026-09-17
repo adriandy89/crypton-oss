@@ -13,6 +13,7 @@ import {
   type MarginAction,
   type MarginMode,
   type MarketSpec,
+  type NivelApalancamiento,
   type OrderAck,
   type OrderSide,
   type OrderStatus as OrderStatusT,
@@ -45,6 +46,7 @@ import { asterWeight } from '../venue-weights';
 import { VenueCooldown } from '../cooldown';
 import { ReconnectingSocket, sharedStream } from '../ws';
 import type {
+  AcuseApalancamiento,
   AdapterOptions,
   CandleQuery,
   ExchangeAdapter,
@@ -53,6 +55,13 @@ import type {
 } from '../types';
 
 type AsterCreds = Extract<VenueCredentials, { venue: 'ASTER' }>;
+
+/**
+ * Cuánto vale una lectura de tramos. Los tramos de una cuenta cambian muy de
+ * tarde en tarde, y el canal con IA los pide antes de cada entrada: sin memoria
+ * serían una lectura firmada por operación, sin ganar nada.
+ */
+const TRAMOS_TTL_MS = 10 * 60_000;
 
 /**
  * Nonce en microsegundos, estrictamente creciente y COMPARTIDO por todos los
@@ -120,8 +129,55 @@ const EIP712_TYPES: Record<string, { name: string; type: string }[]> = {
  * `leverageBracket`, que exige firma). Se usa un tope conservador para poder
  * validar configuraciones sin credenciales; el venue rechazará cualquier valor
  * real que se pase de su bracket, y ese rechazo se traduce a un error de reglas.
+ * Quien tiene credenciales y necesita el dato de verdad lo pide con
+ * `getLeverageTiers` (spec 058).
  */
 const ASSUMED_MAX_LEVERAGE = 50;
+
+/**
+ * Los tramos de `GET /fapi/v3/leverageBracket` (spec 058).
+ *
+ * Con `symbol` el venue contesta un objeto; sin él, una lista por símbolo. Se
+ * aceptan las dos formas. Cada tramo rige desde `notionalFloor`, con
+ * `initialLeverage` como máximo y `maintMarginRatio` como mantenimiento. Un
+ * tramo con algún número imposible se descarta, y si no queda ninguno se lanza:
+ * sin tramos leídos el canal con IA no entra en Aster, y una lista vacía
+ * pasaría por «este par no tiene límites».
+ */
+export function tramosAster(respuesta: unknown, symbol: string): NivelApalancamiento[] {
+  const filas = (Array.isArray(respuesta) ? respuesta : [respuesta]) as AsterBracketRow[];
+  const fila = filas.find((f) => f?.symbol === symbol);
+  const tramos = (fila?.brackets ?? [])
+    .map((b) => ({
+      desde: firstNum(b.notionalFloor, -1),
+      lev: Number(b.initialLeverage),
+      mmr: Number(b.maintMarginRatio),
+    }))
+    .filter(
+      (t) =>
+        t.desde.gte(0) &&
+        Number.isInteger(t.lev) &&
+        t.lev >= 1 &&
+        Number.isFinite(t.mmr) &&
+        t.mmr > 0 &&
+        t.mmr < 1,
+    )
+    .map((t) => ({
+      desdeNocional: t.desde.toFixed(),
+      maxApalancamiento: t.lev,
+      mantenimiento: t.mmr,
+    }))
+    .sort((a, b) => D(a.desdeNocional).comparedTo(b.desdeNocional));
+  if (tramos.length === 0) {
+    throw new ExchangeError(
+      'FATAL',
+      `Aster no ha devuelto tramos de apalancamiento válidos para ${symbol}.`,
+      Venue.ASTER,
+      respuesta,
+    );
+  }
+  return tramos;
+}
 
 export class AsterAdapter implements ExchangeAdapter {
   readonly venue = Venue.ASTER;
@@ -205,6 +261,11 @@ export class AsterAdapter implements ExchangeAdapter {
    * va a entregar nada mas.
    */
   private readonly closed$ = new Subject<void>();
+  /** Tramos por símbolo, con su hora. Ver `TRAMOS_TTL_MS`. */
+  private readonly tramosMemo = new Map<
+    string,
+    { at: number; value: Promise<NivelApalancamiento[]> }
+  >();
 
   constructor(
     private readonly creds: AsterCreds,
@@ -490,6 +551,25 @@ export class AsterAdapter implements ExchangeAdapter {
     return this.markets.all();
   }
 
+  /**
+   * Los tramos de la CUENTA en el símbolo. Es una lectura firmada: Aster los
+   * da por usuario, y un adaptador sin credenciales no puede pedirlos.
+   *
+   * Un fallo no se guarda: la siguiente llamada vuelve a preguntar.
+   */
+  getLeverageTiers(symbol: string): Promise<NivelApalancamiento[]> {
+    const hit = this.tramosMemo.get(symbol);
+    if (hit && Date.now() - hit.at < TRAMOS_TTL_MS) return hit.value;
+    const value = this.signedRequest<unknown>('GET', '/fapi/v3/leverageBracket', { symbol }).then(
+      (r) => tramosAster(r, symbol),
+    );
+    this.tramosMemo.set(symbol, { at: Date.now(), value });
+    void value.catch(() => {
+      if (this.tramosMemo.get(symbol)?.value === value) this.tramosMemo.delete(symbol);
+    });
+    return value;
+  }
+
   async getBalances(): Promise<Balance[]> {
     const balances = await this.signedRequest<AsterBalance[]>('GET', '/fapi/v3/balance');
     return balances
@@ -724,7 +804,17 @@ export class AsterAdapter implements ExchangeAdapter {
       // orden si fuera a cruzar el libro, que es exactamente el contrato de una
       // post-only y lo que mantiene al market maker del lado maker.
       params.timeInForce = req.type === 'POST_ONLY' ? 'GTX' : (req.timeInForce ?? 'GTC');
+      // Una límite IOC se resuelve en el acto, y con `RESULT` el acuse trae su
+      // estado FINAL: «LIMIT order with special timeInForce: the final status
+      // result of the order (FILLED or EXPIRED) will be returned directly».
+      // Con el `ACK` por defecto diría NEW de una orden que ya no existe
+      // (spec 058). EXPIRED puede llevar una parte ejecutada: lo que cuenta es
+      // la posición.
+      if (params.timeInForce === 'IOC') params.newOrderRespType = 'RESULT';
     }
+    // `expiresAt` no viaja: la API V3 de Aster no tiene órdenes con caducidad
+    // (sus vigencias son GTC, IOC, FOK, GTX y HIDDEN; no hay GTD). Una orden que
+    // ya no se desea la cancela la reconciliación.
     if (req.triggerPrice) {
       params.stopPrice = req.triggerPrice;
       params.workingType = 'MARK_PRICE';
@@ -838,7 +928,16 @@ export class AsterAdapter implements ExchangeAdapter {
   // resultado con menos superficie de fallo (001/F-79: el comentario anterior
   // decía que solo existía la variante en lote).
 
-  async setLeverage(symbol: string, leverage: number, mode: MarginMode): Promise<void> {
+  /**
+   * Devuelve lo que contesta el venue: `{leverage, maxNotionalValue, symbol}`
+   * (API V3, «Change Initial Leverage»). `maxNotionalValue` es el nocional
+   * máximo que ese apalancamiento admite para esta cuenta (spec 058).
+   */
+  async setLeverage(
+    symbol: string,
+    leverage: number,
+    mode: MarginMode,
+  ): Promise<AcuseApalancamiento> {
     // El orden importa: cambiar el modo de margen con posición abierta falla,
     // así que se intenta primero y se ignora el rechazo "sin cambios".
     try {
@@ -857,7 +956,20 @@ export class AsterAdapter implements ExchangeAdapter {
       // con posición (001/F-79).
       if (!/no need to change|not change|cannot be changed|-4046|-4047|-4048/i.test(msg)) throw e;
     }
-    await this.signedRequest('POST', '/fapi/v3/leverage', { symbol, leverage }, 'write');
+    const r = await this.signedRequest<AsterLeverageAck | null>(
+      'POST',
+      '/fapi/v3/leverage',
+      { symbol, leverage },
+      'write',
+    );
+    const aplicado = Number(r?.leverage);
+    const tope = firstNum(r?.maxNotionalValue, -1);
+    return {
+      // Solo lo que el venue dice de verdad: una respuesta sin el campo no
+      // confirma nada, y un eco de lo pedido lo haría pasar por confirmado.
+      leverage: r?.leverage != null && Number.isFinite(aplicado) ? aplicado : null,
+      ...(tope.gt(0) ? { maxNotional: tope.toFixed() } : {}),
+    };
   }
 
   /**
@@ -901,6 +1013,28 @@ export class AsterAdapter implements ExchangeAdapter {
       amount: amount.toFixed(),
       type: action === 'REMOVE' ? 2 : 1,
     });
+  }
+
+  /**
+   * `GET /fapi/v3/positionSide/dual`: `{"dualSidePosition": true}` es cobertura
+   * (API V3, «Get Current Position Mode»). El valor se lee también si llega
+   * como texto. Una respuesta sin el campo no se da por unidireccional: se lanza,
+   * y quien pregunta no entra sin saberlo.
+   */
+  async getPositionMode(): Promise<PositionMode> {
+    const r = await this.signedRequest<{ dualSidePosition?: boolean | string } | null>(
+      'GET',
+      '/fapi/v3/positionSide/dual',
+    );
+    const dual = r?.dualSidePosition;
+    if (dual === true || dual === 'true') return 'HEDGE';
+    if (dual === false || dual === 'false') return 'ONE_WAY';
+    throw new ExchangeError(
+      'FATAL',
+      'Aster no ha dicho el modo de posición de la cuenta.',
+      this.venue,
+      r,
+    );
   }
 
   async setPositionMode(mode: PositionMode): Promise<void> {
@@ -1152,7 +1286,10 @@ export class AsterAdapter implements ExchangeAdapter {
       clientOrderId: o.c ?? null,
       venueOrderId: String(o.i),
       side: o.S as OrderSide,
-      type: o.o === 'MARKET' ? 'MARKET' : 'LIMIT',
+      // Igual que `toVenueOrder`: el tipo real y el disparo (`sp`) de una
+      // condicional (spec 057, F-01).
+      type: o.o === 'MARKET' || A_MERCADO_CON_DISPARO_ASTER.has(o.o) ? 'MARKET' : 'LIMIT',
+      triggerPrice: disparoAster(o.o, o.sp),
       price: D(o.p).toFixed(),
       qty: D(o.q).toFixed(),
       filledQty: D(o.z).toFixed(),
@@ -1223,13 +1360,19 @@ export class AsterAdapter implements ExchangeAdapter {
   }
 
   private toVenueOrder(o: AsterOrder): VenueOrder {
+    // Una condicional llega con `price: "0"` y el disparo en `stopPrice`
+    // (documentación de la API v3, «Query Order»). Sin informarlo, el
+    // reconciliador comparaba el stop deseado con ese cero y lo recolocaba en
+    // cada tick (spec 057, F-01). Un `STOP_MARKET` es una orden A MERCADO con
+    // disparo, no una límite.
     return {
       venue: Venue.ASTER,
       symbol: o.symbol,
       clientOrderId: o.clientOrderId ?? null,
       venueOrderId: String(o.orderId),
       side: o.side as OrderSide,
-      type: o.type === 'MARKET' ? 'MARKET' : 'LIMIT',
+      type: o.type === 'MARKET' || A_MERCADO_CON_DISPARO_ASTER.has(o.type) ? 'MARKET' : 'LIMIT',
+      triggerPrice: disparoAster(o.type, o.stopPrice),
       price: D(o.price).toFixed(),
       qty: D(o.origQty).toFixed(),
       filledQty: D(o.executedQty).toFixed(),
@@ -1239,6 +1382,34 @@ export class AsterAdapter implements ExchangeAdapter {
       createdAt: o.time ?? o.updateTime ?? Date.now(),
     };
   }
+}
+
+/**
+ * Tipos de Aster que esperan un disparo (`stopPrice`). `TRAILING_STOP_MARKET`
+ * no entra: su `stopPrice` no es el disparo («please ignore» en la
+ * documentación) y el motor no coloca órdenes de ese tipo.
+ */
+const CONDICIONALES_ASTER: ReadonlySet<string> = new Set([
+  'STOP',
+  'STOP_MARKET',
+  'TAKE_PROFIT',
+  'TAKE_PROFIT_MARKET',
+]);
+
+/** Las condicionales que, una vez disparadas, se ejecutan a mercado. */
+const A_MERCADO_CON_DISPARO_ASTER: ReadonlySet<string> = new Set([
+  'STOP_MARKET',
+  'TAKE_PROFIT_MARKET',
+]);
+
+/**
+ * El disparo de una orden de Aster, o null si no es condicional o no lo trae.
+ * Con `firstNum`: un valor que no es un número —la cadena vacía— se lee como
+ * «sin disparo» en vez de tumbar el tick.
+ */
+function disparoAster(tipo: string, stopPrice: string | undefined): string | null {
+  const disparo = firstNum(stopPrice, 0);
+  return CONDICIONALES_ASTER.has(tipo) && disparo.gt(0) ? disparo.toFixed() : null;
 }
 
 function mapOrderType(req: PlaceOrderRequest): string {
@@ -1298,6 +1469,29 @@ interface AsterBalance {
   availableBalance: string;
 }
 
+/**
+ * Una fila de `leverageBracket`. Los números llegan como número en la
+ * documentación; se leen igual si llegan como texto.
+ */
+interface AsterBracketRow {
+  symbol?: string;
+  brackets?: {
+    bracket?: number;
+    initialLeverage?: number | string;
+    notionalCap?: number | string;
+    notionalFloor?: number | string;
+    maintMarginRatio?: number | string;
+    cum?: number | string;
+  }[];
+}
+
+/** Respuesta de `POST /fapi/v3/leverage`. */
+interface AsterLeverageAck {
+  leverage?: number | string;
+  maxNotionalValue?: string;
+  symbol?: string;
+}
+
 interface AsterPosition {
   symbol: string;
   positionAmt: string;
@@ -1315,6 +1509,8 @@ interface AsterOrder {
   orderId: number;
   clientOrderId?: string;
   price: string;
+  /** Disparo de una condicional; `"0"` o ausente en el resto. */
+  stopPrice?: string;
   origQty: string;
   executedQty: string;
   avgPrice?: string;
@@ -1395,6 +1591,8 @@ interface AsterUserEvent {
     S: string;
     o: string;
     p: string;
+    /** Disparo de una condicional; `"0"` en el resto. */
+    sp?: string;
     q: string;
     z: string;
     ap?: string;

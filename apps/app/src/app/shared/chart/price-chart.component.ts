@@ -24,6 +24,7 @@ import type {
   Time,
   UTCTimestamp,
 } from 'lightweight-charts';
+import { lineasDelCanal, type LineasCanal } from '@crypton/shared';
 import type { Candle } from '../../core/models';
 import { chartPalette, fade, overlayPalette } from './chart-theme';
 import type { OverlayEventMarker, OverlayLine, OverlayMarker, OverlayStyle } from './bot-overlay';
@@ -198,6 +199,12 @@ export class PriceChartComponent {
    */
   readonly result = input<ChartLinePoint[]>([]);
   /**
+   * El canal del canal con IA (spec 059): soporte, resistencia y media como tres
+   * líneas sobre las velas cargadas. `null` = no se crea ninguna serie, y el
+   * gráfico ejecuta el código de antes.
+   */
+  readonly canal = input<LineasCanal | null>(null);
+  /**
    * Rango que hay que poder ver. Al entrar desde un bot, el grafico se ABRE a
    * la escalera entera: uno ajustado solo a las velas deja fuera justo la orden
    * de seguridad que se venia a mirar.
@@ -269,6 +276,8 @@ export class PriceChartComponent {
   private volume: ISeriesApi<'Histogram'> | null = null;
   private avgSeries: ISeriesApi<'Line'> | null = null;
   private resultSeries: ISeriesApi<'Baseline'> | null = null;
+  /** Soporte, resistencia y media, en ese orden; vacío sin canal. */
+  private canalSeries: ISeriesApi<'Line'>[] = [];
   /** El motor, una vez cargado: las series auxiliares se crean tarde y lo necesitan. */
   private lw: typeof import('lightweight-charts') | null = null;
   /** Con volumen el panel de resultado es el tercero; sin él, el segundo. */
@@ -406,6 +415,10 @@ export class PriceChartComponent {
     });
     effect(() => {
       this.applyResult(this.result());
+    });
+    // Con las velas: los puntos del canal se ponen en los instantes que existen.
+    effect(() => {
+      this.applyCanal(this.canal(), this.candles());
     });
 
     // Cambia lo que se esta mirando -> se suelta el ajuste manual.
@@ -598,6 +611,7 @@ export class PriceChartComponent {
     this.applyOverlay(this.lines(), this.markers(), this.events(), this.fitSpan());
     this.applyAverage(this.average());
     this.applyResult(this.result());
+    this.applyCanal(this.canal(), this.candles());
     this.ready.set(true);
   }
 
@@ -667,6 +681,7 @@ export class PriceChartComponent {
     this.volume = null;
     this.avgSeries = null;
     this.resultSeries = null;
+    this.canalSeries = [];
     this.lw = null;
     this.main = null;
     try {
@@ -1254,6 +1269,59 @@ export class PriceChartComponent {
           pt.v === null ? { time: toTime(pt.t) } : { time: toTime(pt.t), value: pt.v },
         ),
       );
+    });
+  }
+
+  /**
+   * Las líneas del canal (spec 059). Los puntos los calcula `lineasDelCanal`
+   * de `shared`, la misma cuenta que el motor, solo en las velas que existen y
+   * nunca antes del primer toque. Del color de la cruceta y no del de las
+   * órdenes: un borde del canal no es una compra ni una venta. La media, de
+   * puntos, como la línea media de cualquier canal de un terminal.
+   */
+  private applyCanal(canal: LineasCanal | null, candles: Candle[]): void {
+    const chart = this.chart;
+    const lw = this.lw;
+    if (!chart || !lw) return;
+    this.zone.runOutsideAngular(() => {
+      const puntos = canal
+        ? lineasDelCanal(
+            canal,
+            dedupeAscending(candles).map((c) => c.t),
+          )
+        : null;
+      if (!puntos || puntos.media.length === 0) {
+        for (const serie of this.canalSeries) chart.removeSeries(serie);
+        this.canalSeries = [];
+        return;
+      }
+      if (this.canalSeries.length === 0) {
+        const o = overlayPalette();
+        const decimals = untracked(() => this.priceDecimals());
+        const comun = {
+          color: fade(o.average, 0.85),
+          lineWidth: 1 as const,
+          priceLineVisible: false,
+          lastValueVisible: false,
+          crosshairMarkerVisible: false,
+          priceFormat: {
+            type: 'price' as const,
+            precision: decimals,
+            minMove: Math.pow(10, -decimals),
+          },
+        };
+        this.canalSeries = [
+          chart.addSeries(lw.LineSeries, comun, 0),
+          chart.addSeries(lw.LineSeries, comun, 0),
+          chart.addSeries(lw.LineSeries, { ...comun, lineStyle: lw.LineStyle.Dotted }, 0),
+        ];
+      }
+      const [soporte, resistencia, media] = this.canalSeries;
+      const datos = (lista: { t: number; v: number }[]) =>
+        lista.map((p) => ({ time: toTime(p.t), value: p.v }));
+      soporte.setData(datos(puntos.soporte));
+      resistencia.setData(datos(puntos.resistencia));
+      media.setData(datos(puntos.media));
     });
   }
 

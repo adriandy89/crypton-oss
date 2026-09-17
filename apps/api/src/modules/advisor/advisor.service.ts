@@ -1,8 +1,9 @@
-import { Injectable, Logger } from '@nestjs/common';
+import { BadRequestException, Injectable, Logger } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import type { Venue } from '@crypton/db';
 import { getStrategy } from '@crypton/strategy-core';
 import {
+  esEstrategiaSoloAdmin,
   maintenanceMarginRateOf,
   maxLeverageWithinDistance,
   type BotConfig,
@@ -132,6 +133,13 @@ export class AdvisorService {
       direction?: 'LONG' | 'SHORT' | 'NEUTRAL';
     },
   ): Promise<RecommendationSet> {
+    // El canal con IA no tiene perillas: sus números los calcula su propio motor
+    // en cada operación (spec 058). Se dice antes de pedir nada al venue.
+    if (esEstrategiaSoloAdmin(input.strategy)) {
+      throw new BadRequestException(
+        `El asesor no propone configuraciones para ${input.strategy}: esa estrategia calcula sus números en cada operación.`,
+      );
+    }
     const testnet = input.testnet === true;
     const market = await this.markets.getSpec(input.venue, input.symbol, testnet);
     const features = await this.features(input.venue, input.symbol, testnet);

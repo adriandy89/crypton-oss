@@ -1,6 +1,6 @@
 import { StrategyKind } from '@crypton/db';
 import { composeSpreadBps, getStrategy } from '@crypton/strategy-core';
-import { D, type BotConfig, type MarketSpec } from '@crypton/shared';
+import { D, esEstrategiaSoloAdmin, type BotConfig, type MarketSpec } from '@crypton/shared';
 import { BANDS, buildConfig, defaultKnobs, PROFILES, type BuildContext } from './build';
 import type { MarketFeatures } from './market-features';
 import { coerceConfig, enforceCouplings, ladderCoveragePct, MAX_SAFE_LEVERAGE } from './sanitize';
@@ -19,7 +19,12 @@ import { coerceConfig, enforceCouplings, ladderCoveragePct, MAX_SAFE_LEVERAGE } 
  * tick grande y pequeno, notional minimo alto, y capital desde 50 hasta 5000.
  */
 
-const ESTRATEGIAS = Object.values(StrategyKind);
+/**
+ * Las estrategias que el asesor sabe configurar: todas menos las de solo
+ * administradores (spec 058), que calculan sus números en cada operación y que
+ * `suggest()` rechaza antes de llegar al generador.
+ */
+const ESTRATEGIAS = Object.values(StrategyKind).filter((kind) => !esEstrategiaSoloAdmin(kind));
 
 /** Mercados que cubren los casos donde esto se rompe primero. */
 const MERCADOS: { nombre: string; spec: MarketSpec; mark: number }[] = [

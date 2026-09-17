@@ -362,14 +362,153 @@ export const FIELD_LABELS: Record<string, string> = {
     'dure el ciclo; hoy el armado se pierde al cerrarse un ciclo y puede volver a esperar.',
   'strategy.mmv2.activationPrice': 'Precio de disparo',
   'strategy.mmv2.activationPriceHelp': 'Precio que tiene que cruzarse para que el bot empiece.',
+
+  // Canal con IA (specs 058-059). Las ayudas dicen lo que hace el motor
+  // (`canal/config.ts` y `ai-channel.ts`), no lo que sugiere el nombre.
+  'strategy.aiChannel.label': 'Canal con IA',
+  'strategy.aiChannel.description':
+    'Rebotes en el borde de un rango o canal, con el apalancamiento que permite el stop.',
+  'strategy.aiChannel.direction': 'Lados que opera',
+  'strategy.aiChannel.directionHelp':
+    'Los dos, solo largos o solo cortos. Solo cambia las entradas nuevas, nunca la posición abierta.',
+  'strategy.aiChannel.leverage': 'Tope de apalancamiento',
+  'strategy.aiChannel.leverageHelp':
+    'Cada operación calcula el suyo con su stop, y nunca pasa de este tope ni del máximo del par. ' +
+    'Un stop más ancho da menos apalancamiento. 25x como mucho.',
+  'strategy.aiChannel.maxDailyLossPct': 'Pérdida diaria máxima',
+  'strategy.aiChannel.maxDailyLossPctHelp':
+    'Sobre el capital, por día UTC. Al llegar no abre nada hasta las 00:00 UTC y vuelve sola; al ' +
+    '1,5 veces del tope se pausa y la reanudas tú. 6 % como mucho.',
+  'strategy.aiChannel.cooldownMinutes': 'Espera entre operaciones',
+  'strategy.aiChannel.cooldownMinutesHelp': 'Minutos sin entrar después de cerrar una operación.',
+  'strategy.aiChannel.structureInterval': 'Velas del canal',
+  'strategy.aiChannel.structureIntervalHelp':
+    'Dónde se dibuja el canal. 15 min es lo recomendado; con 5 min salen canales más cortos y con ' +
+    'más ruido. No se puede cambiar después.',
+  'strategy.aiChannel.decisionMode': 'Quién elige',
+  'strategy.aiChannel.decisionModeHelp':
+    'IA: el modelo elige entre las operaciones que calculó el motor. Reglas: elige un juez fijo con ' +
+    'el perfil, sin consultar a nadie.',
+  'strategy.aiChannel.aiProfile': 'Perfil',
+  'strategy.aiChannel.aiProfileHelp':
+    'Ordena las preferencias al elegir stop, objetivo y apalancamiento. Nunca afloja un límite.',
+  'strategy.aiChannel.entriesEnabled': 'Entradas permitidas',
+  'strategy.aiChannel.entriesEnabledHelp':
+    'Apagado no abre operaciones nuevas. La abierta sigue con su stop y sus objetivos.',
+  'strategy.aiChannel.observeOnly': 'Solo observar',
+  'strategy.aiChannel.observeOnlyHelp':
+    'Analiza y decide como siempre, también consultando a la IA, pero no abre nada.',
+  'strategy.aiChannel.riskPerTradePct': 'Riesgo por operación',
+  'strategy.aiChannel.riskPerTradePctHelp':
+    'Lo que se pierde si salta el stop, con comisiones, sobre el capital. 2 % como mucho.',
+  'strategy.aiChannel.maxMarginPct': 'Margen máximo por operación',
+  'strategy.aiChannel.maxMarginPctHelp':
+    'Lo más que inmoviliza una operación, y por tanto lo más que se pierde si un hueco salta el stop.',
+  'strategy.aiChannel.maxNotionalMultiple': 'Nocional máximo',
+  'strategy.aiChannel.maxNotionalMultipleHelp':
+    'En veces el capital. Una operación no pasa de aquí, sea cual sea su stop.',
+  'strategy.aiChannel.liqBufferStops': 'Distancia a la liquidación',
+  'strategy.aiChannel.liqBufferStopsHelp':
+    'En distancias de stop: la liquidación queda al menos así de lejos. Subirlo baja el ' +
+    'apalancamiento; nunca menos de 3.',
+  'strategy.aiChannel.maxStopPct': 'Stop más ancho',
+  'strategy.aiChannel.maxStopPctHelp': 'Una operación que pida un stop más lejano no se ofrece.',
+  'strategy.aiChannel.minRewardRisk': 'Beneficio mínimo',
+  'strategy.aiChannel.minRewardRiskHelp':
+    'Lo que tiene que pagar el objetivo, neto de costes, en veces lo arriesgado. Por debajo, la ' +
+    'operación no se ofrece.',
+  'strategy.aiChannel.maxEntrySlippageR': 'Deslizamiento máximo de la entrada',
+  'strategy.aiChannel.maxEntrySlippageRHelp':
+    'Cuánto peor que la referencia puede llenarse la entrada, en veces lo arriesgado. Si el libro ' +
+    'se ha ido, la orden no se llena y no pasa nada.',
+  'strategy.aiChannel.maxSpreadFraction': 'Spread máximo',
+  'strategy.aiChannel.maxSpreadFractionHelp':
+    'En fracción del ATR de 15 min. Con un spread más ancho no entra.',
+  'strategy.aiChannel.makerFeeBps': 'Comisión maker',
+  'strategy.aiChannel.takerFeeBps': 'Comisión taker',
+  'strategy.aiChannel.feeBpsHelp':
+    'Vacío, la tabla del exchange. Ponla si tu nivel de comisiones es otro: entra en cada cuenta.',
+  'strategy.aiChannel.slippageBps': 'Deslizamiento estimado',
+  'strategy.aiChannel.slippageBpsHelp':
+    'Lo que se estima perder al salir a mercado. Vacío, el del exchange.',
+  'strategy.aiChannel.maxTradesPerDay': 'Operaciones al día',
+  'strategy.aiChannel.maxTradesPerDayHelp':
+    'Por día UTC. Alcanzadas, no abre más hasta las 00:00 UTC.',
+  'strategy.aiChannel.maxConsecutiveLosses': 'Pérdidas seguidas',
+  'strategy.aiChannel.maxConsecutiveLossesHelp':
+    'Tras estas pérdidas seguidas espera lo que diga «Espera tras la racha».',
+  'strategy.aiChannel.lossStreakCooldownMinutes': 'Espera tras la racha',
+  'strategy.aiChannel.lossStreakCooldownMinutesHelp':
+    'Minutos sin entrar tras la racha de pérdidas.',
+  'strategy.aiChannel.stopCooldownMinutes': 'Espera tras un stop',
+  'strategy.aiChannel.stopCooldownMinutesHelp': 'Minutos sin entrar después de que salte un stop.',
+  'strategy.aiChannel.dailyProfitTargetPct': 'Objetivo de ganancia del día',
+  'strategy.aiChannel.dailyProfitTargetPctHelp':
+    'Sobre el capital. Alcanzado, no abre más hasta las 00:00 UTC. Con 0 no hay objetivo.',
+  'strategy.aiChannel.maxDrawdownPct': 'Caída máxima',
+  'strategy.aiChannel.maxDrawdownPctHelp':
+    'Lo que ha caído el resultado realizado desde su máximo, sobre el capital. Al llegar, el bot se ' +
+    'pausa y lo reanudas tú; la cuenta empieza de nuevo en cada reanudación.',
+  'strategy.aiChannel.aiDailyCallBudget': 'Consultas a la IA al día',
+  'strategy.aiChannel.aiDailyCallBudgetHelp':
+    'Solo se consulta con una operación lista. El servidor tiene su propio techo y manda el menor.',
+  'strategy.aiChannel.takeProfitSchemes': 'Objetivos permitidos',
+  'strategy.aiChannel.takeProfitSchemesHelp':
+    'Dónde puede salir con beneficio: en la línea media, cerca del borde opuesto o repartido entre ' +
+    'los dos.',
+  'strategy.aiChannel.tp1Fraction': 'Parte en la media',
+  'strategy.aiChannel.tp1FractionHelp':
+    'En el esquema escalonado, qué parte de la posición se cierra en la línea media.',
+  'strategy.aiChannel.breakevenAfterTp1': 'Stop a la entrada tras la media',
+  'strategy.aiChannel.breakevenAfterTp1Help':
+    'Cobrado el primer objetivo, el stop pasa a la entrada más los costes.',
+  'strategy.aiChannel.maxHoldBars': 'Tiempo máximo',
+  'strategy.aiChannel.maxHoldBarsHelp': 'En velas de 15 min. Pasado, cierra a mercado.',
+  'strategy.aiChannel.invalidationAtr': 'Cierre fuera del canal',
+  'strategy.aiChannel.invalidationAtrHelp':
+    'Si una vela de 15 min cierra fuera del borde por más de esto, en ATR, cierra a mercado.',
+  'strategy.aiChannel.allowedSetups': 'Operaciones',
+  'strategy.aiChannel.allowedSetupsHelp':
+    'El rebote en el borde es lo de por defecto. La ruptura fallida entra contra un movimiento que ' +
+    'acaba de romper el canal: tiene más riesgo.',
+  'strategy.aiChannel.allowedChannels': 'Canales',
+  'strategy.aiChannel.allowedChannelsHelp': 'Horizontales (un rango), inclinados o los dos.',
+  'strategy.aiChannel.slopedWithTrendOnly': 'Inclinados solo a favor',
+  'strategy.aiChannel.slopedWithTrendOnlyHelp':
+    'En un canal inclinado solo entra en el sentido de su pendiente.',
+  'strategy.aiChannel.channelWindowBars': 'Velas para buscar el canal',
+  'strategy.aiChannel.channelWindowBarsHelp': 'Cuántas velas hacia atrás se miran para dibujarlo.',
+  'strategy.aiChannel.minChannelQuality': 'Nota mínima del canal',
+  'strategy.aiChannel.minChannelQualityHelp': 'A es el más limpio; con C entran canales dudosos.',
+  'strategy.aiChannel.minConfirmations': 'Confirmaciones mínimas',
+  'strategy.aiChannel.minConfirmationsHelp':
+    'Mecha de rechazo, RSI extremo, divergencia o volumen tranquilo: cuántas hacen falta para dar ' +
+    'el rebote por listo.',
+  'strategy.aiChannel.requireEvidence': 'Histórico exigido',
+  'strategy.aiChannel.requireEvidenceHelp':
+    'Cuántos casos parecidos tiene que haber en el histórico del par para ofrecer la operación: ' +
+    'débil, 20 o más; moderada, más de 60.',
+  'strategy.aiChannel.minAiConfidence': 'Confianza mínima de la IA',
+  'strategy.aiChannel.minAiConfidenceHelp':
+    'Por debajo no entra. Con confianza media entra con la mitad del tamaño.',
+  'strategy.aiChannel.maxAdverseFundingBps': 'Funding máximo en contra',
+  'strategy.aiChannel.maxAdverseFundingBpsHelp': 'Con un funding en contra mayor, no entra.',
+  'strategy.aiChannel.fundingBlackoutMinutes': 'Sin entradas antes del funding',
+  'strategy.aiChannel.fundingBlackoutMinutesHelp':
+    'Minutos antes de cada cobro de funding en los que no abre.',
+  'strategy.aiChannel.noEntryWindowsUtc': 'Horas sin entradas (UTC)',
+  'strategy.aiChannel.noEntryWindowsUtcHelp':
+    'HH:MM-HH:MM separadas por comas, hasta seis. Por ejemplo 12:25-12:45 alrededor de un dato ' +
+    'macro.',
 };
 
 /**
  * Nombre visible de cada valor de un `enum`.
  *
  * Sin esto la app pintaba la constante cruda —«PAUSE_ENTRIES», «SOURCE_GLOBAL»—
- * en un desplegable de cara al usuario. Es un mapa plano y no uno por campo
- * porque los valores no se repiten con significados distintos.
+ * en un desplegable de cara al usuario. Es un mapa plano para los valores que
+ * significan lo mismo en todas partes; los que cambian de sentido según el
+ * campo van en `OPTION_LABELS_BY_FIELD`, abajo.
  */
 export const OPTION_LABELS: Record<string, string> = {
   // Dirección
@@ -442,6 +581,40 @@ const OPTION_LABELS_BY_FIELD: Record<string, Record<string, string>> = {
     LONG: 'Intención Long',
     SHORT: 'Intención Short',
   },
+  // El canal con IA (spec 059) va entero aquí y no en el mapa general: sus
+  // valores SÍ se repiten con significados distintos. `MEDIA` es la línea media
+  // en los objetivos y la confianza media en la IA; `TODOS` son tres esquemas en
+  // un campo y dos setups en otro; y `NEUTRAL` no es «neutral», son los dos lados.
+  'strategy.aiChannel.direction': {
+    NEUTRAL: 'Ambas',
+    LONG: 'Solo largos',
+    SHORT: 'Solo cortos',
+  },
+  'strategy.aiChannel.structureInterval': { '15m': '15 min', '5m': '5 min' },
+  'strategy.aiChannel.decisionMode': { IA: 'IA', REGLAS: 'Reglas' },
+  'strategy.aiChannel.aiProfile': {
+    PRUDENTE: 'Prudente',
+    EQUILIBRADA: 'Equilibrada',
+    AGRESIVA: 'Agresiva',
+  },
+  'strategy.aiChannel.takeProfitSchemes': {
+    TODOS: 'Los tres',
+    MEDIA: 'Línea media',
+    ESCALONADO: 'Escalonado',
+    OPUESTO: 'Borde opuesto',
+  },
+  'strategy.aiChannel.allowedSetups': {
+    REBOTE: 'Rebote',
+    FALSO_QUIEBRE: 'Ruptura fallida',
+    TODOS: 'Los dos',
+  },
+  'strategy.aiChannel.allowedChannels': {
+    TODOS: 'Los dos',
+    HORIZONTAL: 'Horizontales',
+    INCLINADO: 'Inclinados',
+  },
+  'strategy.aiChannel.requireEvidence': { NO: 'No exigir', DEBIL: 'Débil', MODERADA: 'Moderada' },
+  'strategy.aiChannel.minAiConfidence': { MEDIA: 'Media', ALTA: 'Alta' },
 };
 
 /** Nombre visible de un valor de enum; el valor crudo si no está catalogado. */
@@ -462,7 +635,24 @@ export const GROUP_LABELS: Record<string, string> = {
   venue: 'Exchange',
 };
 
-export const groupLabel = (group: string): string => GROUP_LABELS[group] ?? group;
+/**
+ * Títulos propios de una estrategia, cuando el genérico no dice lo que hay
+ * dentro. En el canal con IA, «Tiempos» guarda los límites del día y
+ * «Microestructura» los filtros del mercado (spec 059).
+ */
+const GROUP_LABELS_BY_STRATEGY: Record<string, Record<string, string>> = {
+  AI_CHANNEL: {
+    core: 'Base',
+    risk: 'Riesgo',
+    timing: 'Límites del día y horario (UTC)',
+    levels: 'Salidas',
+    intelligence: 'Mercado',
+    venue: 'Margen y costes',
+  },
+};
+
+export const groupLabel = (group: string, strategy?: string): string =>
+  GROUP_LABELS_BY_STRATEGY[strategy ?? '']?.[group] ?? GROUP_LABELS[group] ?? group;
 
 /**
  * Nombre visible de un campo. Si la clave no esta en el catalogo se cae al

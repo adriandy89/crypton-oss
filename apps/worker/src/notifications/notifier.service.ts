@@ -1,7 +1,13 @@
 import { Injectable, Logger, OnModuleDestroy, OnModuleInit } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { Cron, CronExpression } from '@nestjs/schedule';
-import { D } from '@crypton/shared';
+import {
+  ACCION_PAUSAR_CANAL,
+  D,
+  EventoCanal,
+  PREFIJO_BOTON_CANAL,
+  esValeCanal,
+} from '@crypton/shared';
 import { LeaseService } from '../engine';
 import { BUS_CHANNELS, BusService, DbService, type BusMessage } from '../libs';
 import {
@@ -74,6 +80,20 @@ const EVENT_PREF: Record<string, keyof TelegramPrefs> = {
   // llegaba y el de vuelta no, y el usuario se quedaba creyendo que seguía caído.
   VENUE_UNAVAILABLE: 'errors',
   VENUE_RECOVERED: 'errors',
+  // El canal con IA (spec 059). La entrada y la salida son operaciones, como un
+  // ciclo cerrado: en estos bots `AI_EXIT` sustituye a `CYCLE_CLOSED`. Lo que
+  // pone en juego la posición va con `risk` y no con `errors`: una posición sin
+  // stop no puede depender de que el usuario quiera enterarse de las averías.
+  AI_ENTRY: 'cycles',
+  AI_EXIT: 'cycles',
+  AI_DAY_STOP: 'risk',
+  SIN_STOP: 'risk',
+  AI_CIERRE_FALLIDO: 'risk',
+  AI_POSICION_HUERFANA: 'risk',
+  AI_ENTRY_DISCARDED: 'errors',
+  // `AI_DECISION` NO está: va solo a la línea de tiempo, y nace en la API sin
+  // entrega forzada. `AI_CIERRE` tampoco: es la orden de salir, y el aviso con
+  // el resultado llega con `AI_EXIT`.
   // `EXIT_PENDING_MIN_SIZE` NO está aquí a propósito: es informativo y se cura
   // solo en cuanto entra otra ejecución. Notificarlo sería enseñar a silenciar
   // el canal justo antes del aviso que sí había que leer.
@@ -89,6 +109,9 @@ const EVENT_PREF: Record<string, keyof TelegramPrefs> = {
  */
 const MIN_SEVERITY: Record<string, string[]> = {
   ORDER_REJECTED: ['WARN', 'ERROR', 'CRITICAL'],
+  // Una IOC que no se llenó es INFO y se queda en la línea de tiempo; la que el
+  // motor descarta por el venue o los límites es WARN y se avisa (spec 059).
+  AI_ENTRY_DISCARDED: ['WARN', 'ERROR', 'CRITICAL'],
 };
 
 const ICON: Record<string, string> = {
@@ -112,6 +135,10 @@ const ICON: Record<string, string> = {
   AI_ADVICE: '🤖',
   AI_APPLIED: '🤖',
   AI_FAILED: '🤖',
+  AI_ENTRY: '📥',
+  AI_EXIT: '📤',
+  AI_DAY_STOP: '⛔',
+  AI_ENTRY_DISCARDED: '↩️',
   BOT_STARTED: '▶',
   BOT_PAUSED: '⏸',
   BOT_STOPPED: '⏹',
@@ -315,6 +342,24 @@ export class NotifierService implements OnModuleInit, OnModuleDestroy {
    * entra nada mas — ni el id del bot ni una descripcion del cambio.
    */
   private tecladoDe(message: BusMessage): InlineKeyboard | null {
+    // La entrada del canal con IA lleva su botón de pausa (spec 059). El vale
+    // lo guardó el worker al emitir el aviso; aquí solo se copia, y uno mal
+    // formado no pinta botón: pulsarlo no serviría de nada.
+    if (message.type === EventoCanal.ENTRADA) {
+      const vale = (message.data as { vale?: unknown })?.vale;
+      if (!esValeCanal(vale)) return null;
+      return {
+        inline_keyboard: [
+          [
+            {
+              text: '⏸ Pausar el bot',
+              callback_data: `${PREFIJO_BOTON_CANAL}:${vale}:${ACCION_PAUSAR_CANAL}`,
+            },
+          ],
+        ],
+      };
+    }
+
     if (message.type !== 'AI_SUGGESTION') return null;
     const token = (message.data as { token?: string })?.token;
     if (typeof token !== 'string' || token.length === 0) return null;

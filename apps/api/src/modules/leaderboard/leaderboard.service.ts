@@ -7,7 +7,7 @@ import {
   NotFoundException,
 } from '@nestjs/common';
 import { Cron, CronExpression } from '@nestjs/schedule';
-import { D, type BotConfig } from '@crypton/shared';
+import { D, esEstrategiaSoloAdmin, ESTRATEGIAS_SOLO_ADMIN, type BotConfig } from '@crypton/shared';
 import { getStrategy } from '@crypton/strategy-core';
 import { LeaderboardPeriod, StrategyKind, Venue } from '@crypton/db';
 import { CacheService, DbService } from 'src/libs';
@@ -130,6 +130,11 @@ export class LeaderboardService {
     });
     if (!bot) throw new NotFoundException('Bot no encontrado.');
 
+    // Solo administradores (spec 058): ni se publica ni se copia.
+    if (esEstrategiaSoloAdmin(bot.strategy)) {
+      throw new BadRequestException('Los bots de esta estrategia no se pueden publicar.');
+    }
+
     if (bot.dry_run) {
       // Publicar un bot simulado engañaría al que lo copie: su histórico no
       // proviene de operaciones reales.
@@ -218,6 +223,10 @@ export class LeaderboardService {
     });
     if (!share || !share.public)
       throw new NotFoundException('Ese código no existe o ya no es público.');
+    // Una publicación anterior a la regla tampoco se copia: como si no existiera.
+    if (esEstrategiaSoloAdmin(share.bot.strategy)) {
+      throw new NotFoundException('Ese código no existe o ya no es público.');
+    }
 
     const blob = share.config_blob as unknown as SharedConfig;
     if (blob.v !== 1) {
@@ -304,6 +313,7 @@ export class LeaderboardService {
         dry_run: false,
         exchange_account: { testnet: false },
         share: { public: true },
+        strategy: { notIn: [...ESTRATEGIAS_SOLO_ADMIN] },
         started_at: { not: null },
         status: { in: ['RUNNING', 'PAUSED', 'STOPPED'] },
       },

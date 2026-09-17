@@ -21,6 +21,7 @@ import {
   liquidationDistancePct,
   maintenanceMarginRateOf,
   maxLeverageWithinDistance,
+  MAX_APALANCAMIENTO_POR_STOP,
   MIN_LIQUIDATION_DISTANCE_PCT,
 } from '@crypton/shared';
 import { weightedAverage } from './ladder';
@@ -205,8 +206,20 @@ export const warn = (field: string | null, message: string): ValidationIssue => 
   severity: 'WARNING',
 });
 
+export interface OpcionesValidacionComun {
+  /**
+   * `POR_STOP`: la liquidación la gobierna el stop de cada operación (spec
+   * 058). El 5 % fijo no aplica y el techo es `MAX_APALANCAMIENTO_POR_STOP`.
+   */
+  reglaLiquidacion?: 'POR_STOP';
+}
+
 /** Validaciones que aplican a cualquier estrategia. */
-export function validateCommon(config: CommonBotConfig, market: MarketSpec): ValidationIssue[] {
+export function validateCommon(
+  config: CommonBotConfig,
+  market: MarketSpec,
+  opciones: OpcionesValidacionComun = {},
+): ValidationIssue[] {
   const issues: ValidationIssue[] = [];
 
   // Aster en modo cobertura exige `positionSide` en cada orden y prohíbe
@@ -235,6 +248,18 @@ export function validateCommon(config: CommonBotConfig, market: MarketSpec): Val
     issues.push(
       err('leverage', market.symbol + ' admite como maximo ' + market.maxLeverage + 'x aqui.'),
     );
+  } else if (opciones.reglaLiquidacion === 'POR_STOP') {
+    // El apalancamiento de cada operación lo decide su stop, y la liquidación
+    // queda siempre a tres stops o más: el 5 % fijo no tiene nada que medir.
+    // Lo que sí manda es el techo (spec 058).
+    if (lev > MAX_APALANCAMIENTO_POR_STOP) {
+      issues.push(
+        err(
+          'leverage',
+          'El tope de apalancamiento de esta estrategia es ' + MAX_APALANCAMIENTO_POR_STOP + 'x.',
+        ),
+      );
+    }
   } else if (lev > maxLeverageWithinDistance(maintenanceMarginRateOf(market))) {
     // La misma cuenta que la API (`RiskService`) y el asistente, con la tasa
     // de mantenimiento de ESTE mercado: antes el formulario avisaba a 12x, la

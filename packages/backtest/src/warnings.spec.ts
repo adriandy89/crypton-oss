@@ -43,6 +43,20 @@ describe('fidelityWarnings', () => {
     expect(sinCaducidad.some((a) => /vela alterna/i.test(a))).toBe(false);
   });
 
+  it('el canal con IA dice con qué reglas se mide y qué guardas no están (spec 058)', () => {
+    const avisos = fidelityWarnings({ ...base, strategy: StrategyKind.AI_CHANNEL, config: {} });
+    const reglas = avisos.find((a) => a.startsWith('Canal con IA: se mide')) ?? '';
+    expect(reglas).toMatch(/pasa/);
+    expect(reglas).toMatch(/hacia el stop/);
+    expect(reglas).toMatch(/apertura/);
+    const limites = avisos.find((a) => a.startsWith('Canal con IA: un solo tramo')) ?? '';
+    expect(limites).toMatch(/funding/);
+    expect(limites).toMatch(/1,5/);
+    // Y a las demás estrategias no les llegan.
+    const rejilla = fidelityWarnings({ ...base, strategy: StrategyKind.GRID_CLASSIC, config: {} });
+    expect(rejilla.some((a) => a.startsWith('Canal con IA'))).toBe(false);
+  });
+
   it('el aviso de guardas no promete guardas por bot', () => {
     const avisos = fidelityWarnings(base);
     const guardas = avisos.find((a) => /guardas/i.test(a)) ?? '';

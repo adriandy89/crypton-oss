@@ -300,6 +300,8 @@ enum StrategyKind {
   MARKET_MAKER_V2
   TREND_FOLLOW
   TRAILING_PROFIT
+  // Canal con IA (spec 058): solo administradores.
+  AI_CHANNEL
 }
 
 enum BotStatus {
@@ -348,6 +350,13 @@ model Bot {
   /// bot_config_revisions por config_version en cada listado seria caro.
   total_investment Decimal @default(0) @db.Decimal(38, 18)
 
+  /// El nocional más grande que puede abrir el bot con su configuración, cuando
+  /// su estrategia lo declara (`Strategy.nocionalMaximo`, spec 058). Nulo en las
+  /// demás: para ellas el agregado sigue siendo capital por apalancamiento, que
+  /// en una estrategia con el apalancamiento por operación exageraría el tamaño
+  /// hasta 25 veces el capital.
+  max_notional Decimal? @db.Decimal(38, 18)
+
   /// Versión de configuración vigente. Apunta a BotConfigRevision.version.
   config_version Int @default(1)
 
@@ -386,6 +395,9 @@ model Bot {
   /// mayoria de los bots no lo tienen encendido.
   ai_setting   BotAiSetting?
   ai_decisions BotAiDecision[]
+  /// Canal con IA (spec 058): sus intenciones de operación y el estado de su lazo.
+  ai_intents   BotAiIntent[]
+  ai_loop      BotAiLoop?
   /// Backtests lanzados sobre su configuración. Ver `BacktestRun`.
   backtests    BacktestRun[]
 
@@ -978,6 +990,117 @@ model BotAiDecision {
   /// El barrido que caduca las propuestas vencidas.
   @@index([state, expires_at])
   @@map("bot_ai_decisions")
+}
+
+/// Estado de una intención de operación del canal con IA (spec 058). Lo calca
+/// `EstadoIntencion` en `@crypton/shared`, valor a valor.
+///
+/// Camino feliz: SOLICITADA → CONSULTANDO → DECIDIDA → ACEPTADA → ABIERTA →
+/// CERRADA. El resto son terminales sin operación.
+enum AiIntentState {
+  /// El worker vio un setup listo y pide decisión.
+  SOLICITADA
+  /// La API la reclamó y está preguntando al modelo.
+  CONSULTANDO
+  /// El modelo eligió; falta que el worker la revalide.
+  DECIDIDA
+  /// El modelo, o el juez, no quiso operar.
+  SIN_ENTRADA
+  /// El modelo no contestó, o no cumplió el contrato.
+  FALLIDA
+  /// El worker la revalidó y va a mandar la entrada. Se escribe ANTES del venue.
+  ACEPTADA
+  /// La entrada se llenó.
+  ABIERTA
+  /// La operación terminó.
+  CERRADA
+  /// El worker la descartó: venue, límites, huella, plazo, oferta, puerta o estado.
+  RECHAZADA
+  /// Se le pasó el plazo, o el mundo cambió debajo.
+  CADUCADA
+}
+
+/// Una intención de operación del canal con IA: la oferta que vio quien
+/// decidía, lo que eligió y lo que pasó después (spec 058).
+///
+/// La fila NO se borra nunca, por lo mismo que `bot_ai_decisions`: es la única
+/// explicación de por qué un bot con dinero dentro abrió una operación. Lo que
+/// sí se vacía pasado el plazo de retención es `snapshot`, que es el grueso.
+///
+/// OJO: en la base hay además un índice ÚNICO PARCIAL que Prisma no sabe
+/// declarar:
+///
+///   uq_bot_ai_intent_viva ON (bot_id) WHERE estado IN (ACEPTADA, ABIERTA)
+///
+/// Una sola operación viva por bot, pase lo que pase en el proceso.
+model BotAiIntent {
+  /// Un UUID para las de la IA; `reglas:<bot>:<vela>` para las del juez, que
+  /// las crea el worker con el id que le da la estrategia.
+  id     String @id @default(uuid()) @db.VarChar(80)
+  bot_id String
+  bot    Bot    @relation(fields: [bot_id], references: [id], onDelete: Cascade)
+
+  /// Apertura de la vela de 5 min en la que se basa la oferta.
+  bar_t DateTime @db.Timestamptz(6)
+  /// ENTRADA. Hueco para otras clases de decisión sin romper la unicidad.
+  kind  String   @default("ENTRADA") @db.VarChar(16)
+  /// IA | REGLAS.
+  origen String @db.VarChar(8)
+
+  estado       AiIntentState @default(SOLICITADA)
+  candidato_id String?       @db.VarChar(64)
+  /// La oferta: vela, canal y candidatos con su estado.
+  huella       String        @db.VarChar(512)
+
+  /// La herramienta tal y como se ofreció. Se vacía con la retención.
+  snapshot Json?
+  /// Lo que se eligió, con los enums del contrato.
+  decision Json?
+  /// La operación con sus números, tal y como el worker la aceptó.
+  plan     Json?
+  /// MotivoRechazo, o el porqué de un SIN_ENTRADA o un FALLIDA.
+  motivo   String? @db.VarChar(512)
+
+  expires_at DateTime @db.Timestamptz(6)
+  cycle_seq  Int
+
+  /// Qué modelo y qué versión del contrato la decidieron, y lo que costó.
+  modelo         String?  @db.VarChar(64)
+  prompt_version String?  @db.VarChar(64)
+  latencia_ms    Int?
+  coste          Decimal? @db.Decimal(38, 18)
+
+  created_at DateTime  @default(now()) @db.Timestamptz(6)
+  updated_at DateTime? @updatedAt @db.Timestamptz(6)
+
+  /// Una decisión por vela y clase: dos réplicas no piden dos veces.
+  @@unique([bot_id, bar_t, kind], map: "uq_bot_ai_intent_bar")
+  /// El barrido que caduca las vencidas.
+  @@index([estado, expires_at], map: "idx_bot_ai_intent_estado_vence")
+  /// «Qué ha decidido este bot», que es la pantalla.
+  @@index([bot_id, created_at(sort: Desc)], map: "idx_bot_ai_intent_bot_fecha")
+  @@map("bot_ai_intents")
+}
+
+/// El lazo de la IA de un bot del canal (spec 058): fallos seguidos, pausa y el
+/// uso del día UTC. Una fila por bot, creada la primera vez que se consulta.
+model BotAiLoop {
+  bot_id String @id
+  bot    Bot    @relation(fields: [bot_id], references: [id], onDelete: Cascade)
+
+  /// Fallos seguidos del modelo. Al llegar al tope, sin entradas unas horas.
+  fallos        Int       @default(0)
+  pausado_hasta DateTime? @db.Timestamptz(6)
+  ultimo_error  String?   @db.Text
+
+  /// El día UTC al que se refieren los dos contadores.
+  dia          DateTime? @db.Date
+  llamadas_hoy Int       @default(0)
+  coste_hoy    Decimal   @default(0) @db.Decimal(38, 18)
+
+  updated_at DateTime? @updatedAt @db.Timestamptz(6)
+
+  @@map("bot_ai_loops")
 }
 
 /// Contadores propios de market making, uno por bot.

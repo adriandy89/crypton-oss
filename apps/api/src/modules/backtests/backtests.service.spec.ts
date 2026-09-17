@@ -1,5 +1,16 @@
-import { BacktestSource, SourceMarketType, Venue } from '@crypton/shared';
-import { BacktestsService, MAX_BARS } from './backtests.service';
+import { BacktestSource, SourceMarketType, StrategyKind, Venue } from '@crypton/shared';
+import {
+  HORAS_CALENTAMIENTO,
+  MERCADO_CANAL,
+  configCanal,
+  mercadoCanal,
+} from '@crypton/backtest/dist/testing-canal';
+import {
+  BacktestsService,
+  MAX_BARS,
+  barrasDeCalentamiento,
+  serieImposible,
+} from './backtests.service';
 import type { CreateBacktestDto } from './dtos';
 
 /**
@@ -234,4 +245,103 @@ describe('BacktestsService — validación', () => {
     expect(cache.setnx).toHaveBeenCalled();
     expect(cache.getDel).toHaveBeenCalledWith('lock:backtest:run');
   });
+});
+
+/**
+ * Spec 058. El canal con IA decide con series que empiezan antes del rango: el
+ * backtest las descarga, avisa de que decide el juez y devuelve las cifras por
+ * setup, en todo el rango y por tramos.
+ */
+describe('BacktestsService — el canal con IA', () => {
+  const CINCO = 300_000;
+  const canal = { ...bot, name: 'canal', strategy: StrategyKind.AI_CHANNEL, leverage: 20 };
+
+  it('el calentamiento es la serie más larga, con un cubo de margen, en velas reproducidas', () => {
+    // 480 velas de 1 h y una de margen, en velas de 5 min: la serie de 15 min
+    // (1000 velas, unas 250 h) se queda corta a su lado.
+    expect(barrasDeCalentamiento(StrategyKind.AI_CHANNEL, configCanal(), '5m')).toBe(481 * 12);
+    // Las estrategias sin series no piden nada.
+    expect(barrasDeCalentamiento(StrategyKind.GRID_CLASSIC, {} as never, '5m')).toBe(0);
+  });
+
+  it('un intervalo con el que no se construyen sus series se rechaza antes de descargar', async () => {
+    expect(serieImposible(StrategyKind.AI_CHANNEL, configCanal(), '15m')).toBe('5m');
+    expect(serieImposible(StrategyKind.AI_CHANNEL, configCanal(), '5m')).toBeNull();
+    expect(serieImposible(StrategyKind.GRID_CLASSIC, {} as never, '1h')).toBeNull();
+
+    db.bot.findFirst.mockResolvedValue(canal);
+    db.botConfigRevision.findFirst.mockResolvedValue({ config: configCanal(), version: 1 });
+    await expect(svc().run(dto({ interval: '15m' }), 'admin')).rejects.toThrow(
+      /velas de 5m.*Reprodúcelo en 5m/,
+    );
+    expect(cache.setnx).not.toHaveBeenCalled();
+  });
+
+  it('descarga el calentamiento, avisa del juez y devuelve las cifras por setup y por tramos', async () => {
+    const sinteticas = mercadoCanal({ horasRango: 60 });
+    // La fuente deja de paginar en la primera página vacía, como Binance antes
+    // del listado: lo anterior a la serie sintética se rellena, plano.
+    const relleno = Array.from({ length: 2400 }, (_, i) => ({
+      t: sinteticas[0].t - (2400 - i) * CINCO,
+      o: '100',
+      h: '100.05',
+      l: '99.95',
+      c: '100',
+      v: '10',
+    }));
+    const velas = [...relleno, ...sinteticas];
+    const desde = sinteticas[HORAS_CALENTAMIENTO * 12].t;
+    const hasta = velas[velas.length - 1].t + CINCO;
+    const paginas: { startMs: number; endMs: number }[] = [];
+    const proveedor = {
+      id: BacktestSource.BINANCE,
+      intervals: ['5m'],
+      marketTypes: [SourceMarketType.PERP],
+      maxBarsPerRequest: 1500,
+      symbolFor: () => 'SOLUSDT',
+      page: jest.fn(async (q: { startMs: number; endMs: number; limit: number }) => {
+        paginas.push(q);
+        return velas.filter((v) => v.t >= q.startMs && v.t < q.endMs).slice(0, q.limit);
+      }),
+    };
+    db.bot.findFirst.mockResolvedValue(canal);
+    db.botConfigRevision.findFirst.mockResolvedValue({ config: configCanal(), version: 1 });
+    db.backtestRun.create.mockResolvedValue({ id: 'run-1' });
+    db.backtestFill.createMany.mockResolvedValue({ count: 0 });
+    markets.getSpec.mockResolvedValue(MERCADO_CANAL);
+    const s = svc();
+    (s as unknown as { providers: Record<string, unknown> }).providers[BacktestSource.BINANCE] =
+      proveedor;
+
+    const r = await s.run(
+      dto({ interval: '5m', fromMs: desde, toMs: hasta, ventanasConsecutivas: 2 }),
+      'admin',
+    );
+
+    // Primero el rango y luego lo de antes, que llega hasta su primera vela.
+    expect(Math.min(...paginas.map((p) => p.startMs))).toBeLessThan(desde);
+    expect(paginas.filter((p) => p.startMs < desde).every((p) => p.endMs <= desde)).toBe(true);
+    expect(r.metrics.bars).toBe(sinteticas.length - HORAS_CALENTAMIENTO * 12);
+    expect(r.warnings.some((w) => w.includes('decide el juez de reglas'))).toBe(true);
+
+    expect(r.operaciones!.length).toBeGreaterThan(0);
+    expect(new Set(r.porSetup!.map((x) => `${x.setup}|${x.lado}`))).toEqual(
+      new Set(['REBOTE|LONG', 'REBOTE|SHORT']),
+    );
+    expect(r.ventanas).toHaveLength(2);
+    expect(r.ventanas![0].desde).toBe(desde);
+    expect(r.ventanas![1].hasta).toBe(hasta);
+    expect(r.ventanas!.reduce((n, v) => n + v.operaciones, 0)).toBe(r.operaciones!.length);
+
+    // Y se guardan con el run, dentro de sus métricas.
+    const guardado = db.backtestRun.create.mock.calls[0][0] as {
+      data: { metrics: Record<string, unknown> };
+    };
+    expect(guardado.data.metrics).toMatchObject({
+      porSetup: r.porSetup,
+      ventanas: r.ventanas,
+      operaciones: r.operaciones,
+    });
+    // La descarga espera entre páginas y el replay recorre seiscientas velas.
+  }, 30_000);
 });

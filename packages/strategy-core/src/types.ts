@@ -77,6 +77,17 @@ export interface Strategy<C extends CommonBotConfig = BotConfig> {
   readonly keepCycleOnFlat?: boolean;
 
   /**
+   * true = el stop de la posición lo pone la ESTRATEGIA, no `stopLossPct`.
+   *
+   * Tendencia lo calcula con el ATR y lo mueve con el precio, y deja
+   * `stopLossPct` vacío a propósito. Lo consume el motor: con la posición
+   * abierta, un plan de esta estrategia que no trae `STOP_LOSS` es un fallo, no
+   * una decisión del usuario, y el stop que hay en el libro no se cancela
+   * (spec 057, F-02).
+   */
+  readonly stopPropio?: boolean;
+
+  /**
    * Velas que esta estrategia necesita en `plan()`, si necesita alguna.
    *
    * Va en el CÓDIGO y no en la configuración del usuario a propósito: así el
@@ -92,6 +103,60 @@ export interface Strategy<C extends CommonBotConfig = BotConfig> {
    * pueden querer uno velas de 1 h y otro de 1 d (spec 040).
    */
   readonly candles?: (config: C) => { interval: CandleInterval; bars: number };
+
+  // ── El contrato del canal (spec 058) ──────────────────────────────────
+  //
+  // Todo es opcional y todo es opt-in: una estrategia que no declara nada de
+  // esto no ve ningún cambio en el motor.
+
+  /**
+   * Varias series de velas cerradas, cada una con su intervalo y su número de
+   * velas. Es `candles` en plural: el canal mira 5 min, 15 min y 1 h a la vez.
+   * Llegan en `BotContext.series`; una que el motor no pudo servir entera no
+   * viene.
+   */
+  readonly series?: (config: C) => { interval: CandleInterval; bars: number }[];
+
+  /**
+   * true = el apalancamiento lo pide cada entrada (`DesiredState.apalancamiento`).
+   * El motor no lo sincroniza al arrancar ni al recargar, y solo lo fija con la
+   * posición plana, antes de la entrada.
+   */
+  readonly apalancamientoPorOperacion?: boolean;
+
+  /**
+   * `POR_STOP` = la liquidación se mide contra el stop de cada operación y no
+   * contra el 5 % fijo: el apalancamiento sale de la distancia del stop
+   * (`apalancamientoPorStop`). Lo miran `validateCommon`, el `RiskService` de
+   * la API y la guarda de liquidación del motor.
+   */
+  readonly reglaLiquidacion?: 'POR_STOP';
+
+  /**
+   * true = la estrategia cierra las entradas al llegar a `maxDailyLossPct` y las
+   * reabre sola a las 00:00 UTC. La guarda diaria del motor solo pausa al 1,5×
+   * del tope: pausar al 1× obligaría a reanudar a mano cada día.
+   */
+  readonly topeDiarioReanuda?: boolean;
+
+  /**
+   * true = el motor carga la intención vigente (`BotContext.decisionIa`),
+   * anota las que el plan usa o descarta y escribe las solicitudes.
+   */
+  readonly consumeDecisionesIa?: boolean;
+
+  /**
+   * La misma configuración decidiendo SIN la IA, para el backtest: allí no hay
+   * a quién consultar, y es la estrategia quien sabe cómo sustituirla (el canal,
+   * con su juez de reglas y el mismo perfil). Solo con `consumeDecisionesIa`.
+   */
+  readonly sinIa?: (config: C) => C;
+
+  /**
+   * El nocional más grande que puede abrir el bot con esta configuración, para
+   * los agregados de exposición (`bots.max_notional`). null = sin cota propia.
+   */
+  readonly nocionalMaximo?: (config: C) => string | null;
 
   /** Valores por defecto sensatos para un usuario que empieza. */
   defaults(): Record<string, unknown>;

@@ -72,12 +72,33 @@
       </ion-segment>
     </label>
 
+    <!-- El canal con IA registra sus operaciones: su resultado se parte en
+         tramos para ver si se sostiene (spec 059). -->
+    @if (esCanal()) {
+      <label class="campo">
+        <span>Tramos</span>
+        <ion-segment [value]="tramos()" (ionChange)="tramos.set(+$any($event).detail.value)">
+          @for (n of opcionesTramos; track n) {
+            <ion-segment-button [value]="n">{{ n }}</ion-segment-button>
+          }
+        </ion-segment>
+        <small>
+          Parte el periodo en tramos seguidos, cada uno con sus cifras: un resultado que solo sale
+          en uno es un periodo, no una ventaja. En el backtest no se consulta a la IA: decide el
+          juez fijo con el mismo perfil.
+        </small>
+      </label>
+    }
+
     <!-- El numero de velas se enseña ANTES de mandar nada: descubrir el tope
          despues de esperar es la peor forma de enterarse. -->
-    <p class="barras" [class.mal]="demasiadas()">
+    <p class="barras" [class.mal]="demasiadas() || intervaloInvalido()">
       ≈ {{ barras() }} velas
       @if (demasiadas()) {
         · demasiadas, usa un intervalo mayor o menos dias
+      }
+      @if (intervaloInvalido()) {
+        · el canal con IA se reproduce en velas de 5 min
       }
     </p>
 
@@ -216,6 +237,75 @@
         <ui-notice tone="warn">
           Esta configuracion NO bate a comprar y mantener en este periodo.
         </ui-notice>
+      }
+
+      <!-- ── Canal con IA: por setup y por tramo (spec 059) ──
+           Las mismas medidas que las tasas base que ve la IA. -->
+      @if (r.porSetup; as setups) {
+        <h3>Por setup</h3>
+        @if (setups.length) {
+          <div class="ops-wrap">
+            <table class="ops">
+              <thead>
+                <tr>
+                  <th>Setup</th>
+                  <th class="num">Operaciones</th>
+                  <th class="num">Aciertos</th>
+                  <th class="num">Wilson</th>
+                  <th class="num">R medio</th>
+                  <th class="num">Por operación</th>
+                  <th class="num">Resultado</th>
+                </tr>
+              </thead>
+              <tbody>
+                @for (s of setups; track s.setup + s.lado) {
+                  <tr>
+                    <td>{{ setup(s) }}</td>
+                    <td class="num">{{ s.n }}</td>
+                    <td class="num">{{ acierto(s) }}</td>
+                    <td class="num">{{ wilson(s) }}</td>
+                    <td class="num">{{ signed(s.rMedio) }}</td>
+                    <td class="num">{{ signed(s.esperanza) }}</td>
+                    <td class="num">{{ signed(s.resultado) }}</td>
+                  </tr>
+                }
+              </tbody>
+            </table>
+          </div>
+          <p class="meta">
+            «Wilson» es el acierto más bajo compatible con lo visto (95 %): con pocas operaciones
+            queda muy por debajo del acierto, y es el que hay que mirar.
+          </p>
+        } @else {
+          <p class="meta">Ninguna operación del canal en este periodo.</p>
+        }
+      }
+      @if (r.ventanas; as tramos) {
+        @if (tramos.length > 1) {
+          <h3>Por tramos</h3>
+          <div class="ops-wrap">
+            <table class="ops">
+              <thead>
+                <tr>
+                  <th>Tramo</th>
+                  <th class="num">Operaciones</th>
+                  <th class="num">R total</th>
+                  <th class="num">Resultado</th>
+                </tr>
+              </thead>
+              <tbody>
+                @for (v of tramos; track v.desde) {
+                  <tr>
+                    <td>{{ tramo(v) }}</td>
+                    <td class="num">{{ v.operaciones }}</td>
+                    <td class="num">{{ signed(v.rTotal) }}</td>
+                    <td class="num">{{ signed(v.resultado) }}</td>
+                  </tr>
+                }
+              </tbody>
+            </table>
+          </div>
+        }
       }
 
       <h3>Precio y operaciones</h3>

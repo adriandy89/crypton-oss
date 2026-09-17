@@ -1,6 +1,7 @@
 import { Module } from '@nestjs/common';
 import { MarketDataModule } from '../marketdata';
 import { AccountHub } from './account-hub.service';
+import { AiIntentStore } from './ai-intents.store';
 import { BotStore } from './bot-store';
 import { CommandInbox } from './command-inbox.service';
 import { CredentialsService } from './credentials.service';
@@ -15,6 +16,7 @@ import { RetentionService } from './retention.service';
   providers: [
     EngineService,
     BotStore,
+    AiIntentStore,
     LeaseService,
     CredentialsService,
     CommandInbox,

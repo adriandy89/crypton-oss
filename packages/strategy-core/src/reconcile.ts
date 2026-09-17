@@ -181,7 +181,7 @@ export function reconcile(input: ReconcileInput): ReconcilePlan {
       continue;
     }
 
-    const priceChanged = !samePrice(have.price, want.price, market);
+    const priceChanged = cambioDePrecio(have, want, market);
     // Una orden parcialmente ejecutada sigue siendo correcta en dos casos, y los
     // dos se aceptan: si lo deseado coincide con lo que QUEDA vivo (una salida
     // cuyo tamaño sale de la posición: el plan pide el resto) o con la cantidad
@@ -240,6 +240,36 @@ function isOurs(venueClientId: string, prefix: string, ownIds: ReadonlySet<strin
     return parsed.botShort.slice(0, width) === prefix.slice(0, width);
   }
   return ownIds.has(venueClientId);
+}
+
+/**
+ * ¿Ha cambiado el precio que define la orden?
+ *
+ * En una orden con disparo —un stop nativo, el objetivo con disparo de
+ * Trailing— lo que la define es el DISPARO. Su `price` es el límite de ejecución
+ * que el adaptador pone lejos del disparo (en Hyperliquid, un 5 %), y el venue
+ * lo informa así. Comparar ese precio daba el stop por cambiado en CADA tick: se
+ * cancelaba y se volvía a colocar, con la posición sin red entre medias y dos
+ * escrituras por bot cada quince segundos (spec 057, F-01).
+ *
+ * Una deseada con disparo y una viva sin él —o al revés— no son la misma orden
+ * aunque compartan id, y se reemplaza. Es también lo que hace que un adaptador
+ * que no informa del disparo siga moviendo el stop, en vez de dejarlo quieto
+ * para siempre.
+ */
+function cambioDePrecio(have: VenueOrder, want: DesiredOrder, market: MarketSpec): boolean {
+  const disparoVivo = conValor(have.triggerPrice);
+  const disparoDeseado = conValor(want.triggerPrice);
+  if ((disparoVivo === null) !== (disparoDeseado === null)) return true;
+  if (disparoVivo !== null && disparoDeseado !== null) {
+    return !samePrice(disparoVivo, disparoDeseado, market);
+  }
+  return !samePrice(have.price, want.price, market);
+}
+
+/** El valor de un campo de precio opcional, o `null` si falta o viene vacío. */
+function conValor(precio: string | null | undefined): string | null {
+  return precio == null || precio === '' ? null : precio;
 }
 
 /**

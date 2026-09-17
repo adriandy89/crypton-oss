@@ -26,6 +26,7 @@ qué números, y qué **no** hace todavía.
 | Market Maker V2 (`MARKET_MAKER_V2`) | Medio | Diferencial compuesto con volatilidad, libro y coste de operar. | [market-maker-v2.md](./market-maker-v2.md) | [`market-maker-v2.guide.ts`](../apps/app/src/app/core/content/market-maker-v2.guide.ts) | [`market-maker-v2.ts`](../packages/strategy-core/src/strategies/market-maker-v2.ts) |
 | Tendencia (`TREND_FOLLOW`) | **Alto** | Rompe el rango, entra, y sale con un stop por ATR que sigue al precio. La única que gana en línea recta. | [trend-follow.md](./trend-follow.md) | [`trend-follow.guide.ts`](../apps/app/src/app/core/content/trend-follow.guide.ts) | [`trend-follow.ts`](../packages/strategy-core/src/strategies/trend-follow.ts) |
 | Seguimiento de beneficio (`TRAILING_PROFIT`) | **Alto** | Una operación que deja correr el beneficio: al llegar a tu objetivo sigue al máximo y cierra al retroceder. | [trailing-profit.md](./trailing-profit.md) | [`trailing-profit.guide.ts`](../apps/app/src/app/core/content/trailing-profit.guide.ts) | [`trailing-profit.ts`](../packages/strategy-core/src/strategies/trailing-profit.ts) |
+| Canal con IA (`AI_CHANNEL`) · solo administradores | **Alto** | Rebotes en el borde de un rango o canal, con el apalancamiento que permite el stop. El motor calcula las operaciones y una IA elige entre ellas. | [ai-channel.md](./ai-channel.md) | [`ai-channel.guide.ts`](../apps/app/src/app/core/content/ai-channel.guide.ts) | [`ai-channel.ts`](../packages/strategy-core/src/strategies/ai-channel.ts) |
 
 Cada guía de estrategia tiene la misma espina: qué es · cómo funciona paso a paso · cómo configurarla con
 poco riesgo (configuraciones A/B/C con sus números, checklist, señales de alarma) · lo que no mira ·
@@ -36,11 +37,12 @@ poco riesgo (configuraciones A/B/C con sus números, checklist, señales de alar
 | Documento | Qué cubre |
 |---|---|
 | [Buenas prácticas](./buenas-practicas.md) | El camino obligatorio, mínimos, apalancamiento, stop, funding, comisiones, cuándo no usar cada bot, bitácora, Lighter, checklist |
-| [Riesgo y liquidación](./riesgo-y-liquidacion.md) | Fórmula de liquidación, aislado/cruzado, semáforo 25/10 % y regla del 5 %, límites de la cuenta, guardas del motor, el stop-loss, peor caso por estrategia, funding |
+| [Riesgo y liquidación](./riesgo-y-liquidacion.md) | Fórmula de liquidación, aislado/cruzado, semáforo 25/10 % y regla del 5 %, la regla por stop del canal con IA, límites de la cuenta, guardas del motor, el stop-loss, peor caso por estrategia, funding |
 | [Venues y mínimos](./venues-y-minimos.md) | Cupos de peticiones, mínimos y retículas por venue, la credencial de cada venue y qué pasa cuando caduca, testnet frente a mainnet, límites de Lighter, qué hace el motor con una orden que no cumple |
-| [Simulación y backtest](./simulacion-y-backtest.md) | La cuenta «Simulación», qué simula y qué no, el backtest y sus nueve avisos |
-| [Comandos, guardas y eventos](./comandos-guardas-y-eventos.md) | Los trece comandos y qué conservan el stop, en caliente/tibio/frío, las guardas, cada evento con qué hacer (también los del Modo IA), la nota del bot |
-| [Administración](./administracion.md) | Qué ve y qué puede hacer un `ADMIN`: las tres pantallas, los dos únicos comandos sobre bots ajenos y por qué los demás no están, que deshabilitar no para los bots, qué queda registrado, y el **Modo IA** que vigila bots vivos: su pastilla, su panel en Ajustes y cómo encenderlo al crear el bot |
+| [Simulación y backtest](./simulacion-y-backtest.md) | La cuenta «Simulación», qué simula y qué no, el backtest y sus avisos, y las cifras por setup y por tramos del canal con IA |
+| [Comandos, guardas y eventos](./comandos-guardas-y-eventos.md) | Los trece comandos y qué conservan el stop, en caliente/tibio/frío, las guardas, cada evento con qué hacer (también los del Modo IA y los del canal con IA), la nota del bot |
+| [Administración](./administracion.md) | Qué ve y qué puede hacer un `ADMIN`: las tres pantallas, los dos únicos comandos sobre bots ajenos y por qué los demás no están, que deshabilitar no para los bots, qué queda registrado, el **Modo IA** que vigila bots vivos (su pastilla, su panel en Ajustes y cómo encenderlo al crear el bot) y el **canal con IA**: su interruptor global, su panel y sus variables |
+| [Canal con IA](./ai-channel.md) | El reparto entre el motor y la IA, la regla del apalancamiento por stop, los límites que se comprueban tres veces, los avisos con botón de pausa y cómo empezar |
 | [Market Maker V1](./market-maker.md) · [V2](./market-maker-v2.md) | Las dos guías de market making, con su comparativa |
 | [Tendencia](./trend-follow.md) | La única que gana cuando el precio se va recto, y por qué pierde más veces de las que acierta |
 | [Seguimiento de beneficio](./trailing-profit.md) | El take profit que sigue al máximo, el suelo de lo que se cobra y por qué nace con stop puesto |

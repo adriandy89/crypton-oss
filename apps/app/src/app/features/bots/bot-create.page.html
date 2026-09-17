@@ -169,6 +169,9 @@
                 @if (isRisky(s.kind)) {
                   <ui-badge size="sm" tone="down" caps>riesgo alto</ui-badge>
                 }
+                @if (soloAdmin(s.kind)) {
+                  <ui-badge size="sm" tone="brand" variant="outline" caps>administración</ui-badge>
+                }
               </div>
               <p>{{ strategyBlurb(s.kind) }}</p>
             </button>
@@ -225,25 +228,27 @@
            usuario ya tiene delante el par, el precio y su saldo, que es lo que
            necesita para juzgar si una propuesta le encaja. Fuera de cualquier
            `ui-card flush`, que declara `overflow: hidden`. -->
-      <ui-recommendations
-        [set]="recommendations()"
-        [loading]="recoLoading()"
-        [error]="recoError()"
-        [applied]="appliedProfile()"
-        [stale]="recoStale()"
-        (apply)="applyRecommendation($event)"
-        (retry)="loadRecommendations()"
-      />
-      @if (!recommendations() && !recoLoading() && !recoError()) {
-        <ion-button
-          size="small"
-          fill="outline"
-          class="reco-cta"
-          [disabled]="!hasCapital()"
-          (click)="loadRecommendations()"
-        >
-          Proponer configuraciones
-        </ion-button>
+      @if (mostrarAsesor()) {
+        <ui-recommendations
+          [set]="recommendations()"
+          [loading]="recoLoading()"
+          [error]="recoError()"
+          [applied]="appliedProfile()"
+          [stale]="recoStale()"
+          (apply)="applyRecommendation($event)"
+          (retry)="loadRecommendations()"
+        />
+        @if (!recommendations() && !recoLoading() && !recoError()) {
+          <ion-button
+            size="small"
+            fill="outline"
+            class="reco-cta"
+            [disabled]="!hasCapital()"
+            (click)="loadRecommendations()"
+          >
+            Proponer configuraciones
+          </ion-button>
+        }
       }
 
       <!-- El capital de este paso se mide contra el saldo OPERABLE. Si es cero
@@ -356,7 +361,7 @@
         @if (previewing()) {
           <ion-spinner name="crescent" />
         } @else {
-          Calcular la escalera
+          {{ textos().calcular }}
         }
       </ion-button>
 
@@ -370,11 +375,8 @@
   <!-- ═══ 4. REVISION ═══ -->
   @if (step() === 'preview' && preview(); as p) {
     <div class="pad">
-      <h2 class="title">Esto es lo que se colocará</h2>
-      <p class="hint">
-        Calculado con el mismo código que ejecutará el motor. Si algún nivel es inválido en este
-        mercado, el bot no se crea.
-      </p>
+      <h2 class="title">{{ textos().titulo }}</h2>
+      <p class="hint">{{ textos().nota }}</p>
 
       @if (showQuotePreview()) {
         <ui-card class="qprev">
@@ -406,7 +408,7 @@
 
       <!-- El peor caso es LA cifra que hay que leer antes de arrancar. -->
       <div class="worst">
-        <h3>Si se ejecuta la escalera entera</h3>
+        <h3>{{ textos().peor }}</h3>
         <div class="wgrid">
           <div>
             <span class="k">Exposición total</span>
@@ -499,6 +501,22 @@
           </div>
           <ion-toggle [(ngModel)]="startActive" name="startActive" />
         </div>
+
+        <!-- La conformidad de las estrategias que la piden (spec 059). Obligatoria:
+             sin marcarla, «Crear bot» se queda apagado y lo dice debajo. -->
+        @if (consentimiento(); as texto) {
+          <div class="srow">
+            <div class="slbl">
+              <span>Conformidad</span>
+              <p>{{ texto }}</p>
+            </div>
+            <ion-checkbox
+              aria-label="Conformidad"
+              [checked]="conforme()"
+              (ionChange)="conforme.set($event.detail.checked)"
+            />
+          </div>
+        }
       </ui-card>
 
       <!-- ── Modo IA (spec 053) ──

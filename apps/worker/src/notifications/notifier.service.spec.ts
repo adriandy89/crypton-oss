@@ -465,3 +465,118 @@ describe('NotifierService — mensajes que Telegram acepta (spec 054)', () => {
     expect(trocear([mil, `${mil}m`], 2001)).toEqual([mil, `${mil}m`]);
   });
 });
+
+/**
+ * Los avisos del canal con IA (spec 059, CA-5). La entrada va sola y con su
+ * botón de pausa; la salida sustituye al ciclo cerrado; lo que pone en juego la
+ * posición no depende de la preferencia de errores; y la decisión de la IA no
+ * sale de la línea de tiempo.
+ */
+describe('NotifierService — el canal con IA (spec 059)', () => {
+  const VALE = '0123456789abcdef0123456789abcdef';
+  const delWorker = (type: string, severity: string, extra: Record<string, unknown> = {}) => ({
+    userId: 'u-1',
+    botId: 'bot-1',
+    type,
+    origin: 'worker-1',
+    ts: 1,
+    data: { severity, message: `${type} de prueba`, ...extra },
+  });
+
+  it('la entrada sale sola, al momento y con el botón de pausa', async () => {
+    const { onEvent, enviados, lineas } = buildEntrega();
+    await onEvent(delWorker('AI_ENTRY', 'INFO', { vale: VALE, intentId: 'ia-1' }));
+
+    expect(lineas()).toEqual([]);
+    expect(enviados).toEqual([
+      {
+        chatId: '111',
+        text: '📥 <b>bot (BTC)</b> — AI_ENTRY de prueba',
+        teclado: {
+          inline_keyboard: [[{ text: '⏸ Pausar el bot', callback_data: `ic:${VALE}:pausa` }]],
+        },
+      },
+    ]);
+    // Cabe en los 64 bytes de `callback_data`.
+    const boton = (enviados[0].teclado as { inline_keyboard: { callback_data: string }[][] })
+      .inline_keyboard[0][0].callback_data;
+    expect(boton.length).toBeLessThanOrEqual(64);
+  });
+
+  it('sin un vale válido, la entrada va al lote sin botón', async () => {
+    for (const vale of [undefined, '', 'corto', VALE.toUpperCase(), `${VALE}:x`]) {
+      const { onEvent, enviados, lineas } = buildEntrega();
+      await onEvent(delWorker('AI_ENTRY', 'INFO', { vale }));
+      expect(enviados).toEqual([]);
+      expect(lineas()).toEqual(['📥 <b>bot (BTC)</b> — AI_ENTRY de prueba']);
+    }
+  });
+
+  it('entrada y salida van con los ciclos: se apagan con ellos', async () => {
+    const conCiclos = buildEntrega();
+    await conCiclos.onEvent(delWorker('AI_EXIT', 'INFO'));
+    expect(conCiclos.lineas()).toEqual(['📤 <b>bot (BTC)</b> — AI_EXIT de prueba']);
+
+    const sinCiclos = buildEntrega({ cycles: false });
+    await sinCiclos.onEvent(delWorker('AI_EXIT', 'INFO'));
+    await sinCiclos.onEvent(delWorker('AI_ENTRY', 'INFO', { vale: VALE }));
+    expect(sinCiclos.lineas()).toEqual([]);
+    expect(sinCiclos.enviados).toEqual([]);
+  });
+
+  it('lo que pone en juego la posición va con los avisos de riesgo, no con los de errores', async () => {
+    const tipos: [string, string, string][] = [
+      ['AI_DAY_STOP', 'WARN', '⛔'],
+      ['SIN_STOP', 'CRITICAL', '🔥'],
+      ['AI_CIERRE_FALLIDO', 'CRITICAL', '🔥'],
+      ['AI_POSICION_HUERFANA', 'CRITICAL', '🔥'],
+    ];
+    const sinErrores = buildEntrega({ errors: false });
+    for (const [tipo, severidad] of tipos) await sinErrores.onEvent(delWorker(tipo, severidad));
+    const lineas = sinErrores.lineas();
+    expect(lineas).toHaveLength(tipos.length);
+    tipos.forEach(([, , icono], i) => expect(lineas[i].startsWith(`${icono} <b>`)).toBe(true));
+
+    const sinRiesgo = buildEntrega({ risk: false });
+    for (const [tipo, severidad] of tipos) await sinRiesgo.onEvent(delWorker(tipo, severidad));
+    expect(sinRiesgo.lineas()).toEqual([]);
+  });
+
+  it('una entrada descartada avisa si es grave; una IOC sin llenar, no', async () => {
+    const { onEvent, lineas } = buildEntrega();
+    await onEvent(delWorker('AI_ENTRY_DISCARDED', 'INFO'));
+    expect(lineas()).toEqual([]);
+    await onEvent(delWorker('AI_ENTRY_DISCARDED', 'WARN'));
+    expect(lineas()).toEqual(['↩️ <b>bot (BTC)</b> — AI_ENTRY_DISCARDED de prueba']);
+
+    const sinErrores = buildEntrega({ errors: false });
+    await sinErrores.onEvent(delWorker('AI_ENTRY_DISCARDED', 'WARN'));
+    expect(sinErrores.lineas()).toEqual([]);
+  });
+
+  it('la decisión de la IA y la orden de salir no se notifican', async () => {
+    const { onEvent, lineas, enviados } = buildEntrega();
+    await onEvent(delWorker('AI_DECISION', 'INFO'));
+    await onEvent(delWorker('AI_CIERRE', 'INFO'));
+    // Ni aunque llegue de la API con entrega forzada.
+    await onEvent({
+      ...deLaApi({ entregaForzada: true }),
+      type: 'AI_DECISION',
+      data: { severity: 'INFO', message: 'x' },
+    });
+    expect(lineas()).toEqual([]);
+    expect(enviados).toEqual([]);
+  });
+
+  it('el fallo de la IA del canal llega de la API y va con los errores', async () => {
+    const { onEvent, lineas } = buildEntrega();
+    await onEvent({
+      ...deLaApi({ entregaForzada: true }),
+      type: 'AI_FAILED',
+      data: { severity: 'WARN', message: 'La IA del canal no ha dado una respuesta válida.' },
+    });
+    expect(lineas()).toEqual([
+      '🤖 <b>bot (BTC)</b> — La IA del canal no ha dado una respuesta válida.',
+    ]);
+  });
+});

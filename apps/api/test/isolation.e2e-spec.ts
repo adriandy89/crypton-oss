@@ -228,6 +228,12 @@ describe('Aislamiento entre usuarios (e2e)', () => {
       ['get', '/admin/ai'],
       ['get', '/admin/bots/00000000-0000-0000-0000-000000000000/ai'],
       ['put', '/admin/bots/00000000-0000-0000-0000-000000000000/ai'],
+      // El canal con IA (spec 059).
+      ['get', '/admin/ai-channel'],
+      ['put', '/admin/ai-channel/entries'],
+      ['get', '/admin/bots/00000000-0000-0000-0000-000000000000/ai-channel'],
+      ['get', '/admin/bots/00000000-0000-0000-0000-000000000000/ai-channel/decisiones'],
+      ['get', '/admin/bots/00000000-0000-0000-0000-000000000000/ai-channel/decisiones/int-1'],
       ['get', '/admin/maintenance'],
       ['post', '/admin/maintenance/preview'],
       ['post', '/admin/maintenance/purge'],

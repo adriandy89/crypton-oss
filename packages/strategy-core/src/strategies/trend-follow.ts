@@ -214,6 +214,13 @@ const distanciaStop = (cfg: TrendFollowConfig, atrValor: Decimal): Decimal =>
   atrValor.mul(D(cfg.atrStopMultiplier ?? 2.5));
 
 /**
+ * ATR supuesto cuando no hay velas, en tanto por uno del precio: el orden de
+ * magnitud de un par líquido en 4 h. Lo usan la vista previa y el stop de
+ * emergencia, y por eso es uno solo.
+ */
+const ATR_DE_RESERVA = '0.02';
+
+/**
  * Cantidad por objetivo de volatilidad.
  *
  * El riesgo en dinero es constante y lo que varía es el tamaño, no al revés.
@@ -241,6 +248,107 @@ function techoNocional(cfg: TrendFollowConfig, availableBalance: string): Decima
   const cap = D(cfg.maxNotionalCap ?? 0);
   if (cap.gt(0)) topes.push(cap);
   return topes.reduce((a, b) => (b.lt(a) ? b : a));
+}
+
+/**
+ * El stop de la posición abierta. **No necesita velas** (spec 057, F-02).
+ *
+ * Con velas, sigue al precio a `k × ATR` y nunca retrocede. Sin ellas no hay
+ * ATR con el que seguirlo, y el stop no se mueve:
+ * - si hay uno guardado, se queda ese;
+ * - si no —la posición se abrió y el worker se reinició antes del primer tick
+ *   con ella—, se pone uno de emergencia anclado en la entrada, con el ATR de
+ *   reserva.
+ *
+ * El de emergencia no se guarda: en cuanto vuelvan las velas manda el
+ * calculado, que es con el que se dimensionó la posición.
+ */
+function stopDeLaPosicion(
+  ctx: BotContext,
+  cfg: TrendFollowConfig,
+  seq: number,
+  qtyPos: Decimal,
+): DesiredState {
+  const scratchPatch: Record<string, unknown> = {};
+  const largo = qtyPos.gt(0);
+  const guardado = ctx.cycle.scratch['stopPrice'];
+  const previo = typeof guardado === 'string' ? D(guardado) : null;
+  const entrada = D(ctx.position?.entryPrice ?? 0);
+  const velas = ctx.candles ?? [];
+  const s = velas.length >= barsNecesarias(cfg) ? senal(ctx, cfg) : null;
+
+  let vigente: Decimal;
+  let motivo: string;
+  if (s) {
+    const riesgo = distanciaStop(cfg, s.atrValor);
+    const referencia = D(ctx.ticker.mark);
+    const candidato = largo ? referencia.minus(riesgo) : referencia.plus(riesgo);
+
+    // El PRIMER stop se ancla en el precio de ENTRADA, no en la marca.
+    //
+    // Si el precio se mueve en contra entre la ejecución y este tick, anclar
+    // en la marca pondría el stop más lejos y la operación arriesgaría más
+    // que el porcentaje declarado — que es justo la promesa que sostiene esta
+    // estrategia. Con entrada en 100 y 3 de distancia, el stop va a 97 aunque
+    // el precio ya esté en 94 (spec 041 R-2).
+    //
+    // Y el seguimiento no se pierde: si el precio se ha ido a FAVOR, manda el
+    // candidato, que ya está más arriba.
+    const inicial = entrada.gt(0)
+      ? largo
+        ? entrada.minus(riesgo)
+        : entrada.plus(riesgo)
+      : candidato;
+
+    // NUNCA en contra. Es la única regla que hace que un stop de seguimiento
+    // sea un stop de seguimiento y no un stop que persigue al precio.
+    const base = previo ?? inicial;
+    const stop = largo ? Decimal.max(base, candidato) : Decimal.min(base, candidato);
+
+    // Recolocar solo si se ha movido de verdad: un trailing que se reescribe
+    // en cada tick son 2 peticiones cada quince segundos contra el cupo.
+    const movidoBps = previo?.gt(0)
+      ? stop.minus(previo).abs().div(previo).mul(D(10_000))
+      : D(Number.MAX_SAFE_INTEGER);
+    const recoloca = !previo || movidoBps.gte(D(cfg.stopRepriceBps ?? 20));
+    if (recoloca) scratchPatch['stopPrice'] = stop.toFixed(ctx.market.priceDecimals);
+
+    vigente = recoloca ? stop : previo;
+    motivo =
+      `(${D(cfg.atrStopMultiplier ?? 2.5).toFixed(1)} ATR), eficiencia ` +
+      `${s.eficiencia.toFixed(2)}.`;
+  } else if (previo?.gt(0)) {
+    vigente = previo;
+    motivo = '(sin velas con las que seguir al precio, se queda donde estaba).';
+  } else {
+    const ancla = entrada.gt(0) ? entrada : D(ctx.ticker.mark);
+    const riesgo = distanciaStop(cfg, ancla.mul(D(ATR_DE_RESERVA)));
+    vigente = largo ? ancla.minus(riesgo) : ancla.plus(riesgo);
+    motivo =
+      '(de emergencia: sin velas no hay ATR, y se estima en un 2 % del precio hasta que ' +
+      'lleguen).';
+  }
+
+  const side = largo ? 'SELL' : 'BUY';
+  const precio = px(ctx.market, vigente, side);
+  const orden: DesiredOrder = {
+    clientOrderId: makeCoid(ctx.botId, seq, LevelKind.STOP_LOSS, 0),
+    levelKind: LevelKind.STOP_LOSS,
+    levelIndex: 0,
+    side,
+    type: 'MARKET',
+    price: precio,
+    triggerPrice: precio,
+    qty: qy(ctx.market, qtyPos.abs()),
+    reduceOnly: true,
+  };
+
+  return {
+    orders: [orden],
+    immediate: [],
+    note: `${largo ? 'Largo' : 'Corto'} en marcha. Stop en ${precio} ${motivo}`,
+    scratchPatch: Object.keys(scratchPatch).length ? scratchPatch : undefined,
+  };
 }
 
 /**
@@ -289,6 +397,10 @@ export const trendFollow: Strategy<TrendFollowConfig> = {
   //
   // No se pierde nada: al cerrarse la posición se cierra el ciclo —no se
   // declara `keepCycleOnFlat`—, sube `cycleSeq` y los ids siguientes son otros.
+
+  // El stop es suyo, calculado con el ATR: `stopLossPct` no se usa aquí, y el
+  // motor no debe leer su ausencia como «el usuario no quiere stop».
+  stopPropio: true,
 
   candles: (cfg) => ({
     interval: cfg.candleInterval ?? '4h',
@@ -371,7 +483,7 @@ export const trendFollow: Strategy<TrendFollowConfig> = {
     // Sin velas no hay ATR, así que el preview usa una estimación honesta: un
     // ATR del 2 % del precio, que es el orden de magnitud de un par líquido en
     // 4 h. Se dice en un aviso, porque el tamaño REAL saldrá del ATR de verdad.
-    const atrEstimado = precio.mul(D(0.02));
+    const atrEstimado = precio.mul(D(ATR_DE_RESERVA));
     const riesgo = distanciaStop(config, atrEstimado);
     // Con el MISMO techo que `plan()`, o la vista previa prometería un tamaño
     // que el bot no va a colocar. Sin `availableBalance` —que no existe antes
@@ -420,7 +532,16 @@ export const trendFollow: Strategy<TrendFollowConfig> = {
   plan(ctx: BotContext): DesiredState {
     const cfg = ctx.config as unknown as TrendFollowConfig;
     const seq = Number(ctx.cycle.scratch['cycleSeq'] ?? 0);
-    const scratchPatch: Record<string, unknown> = {};
+
+    // ── Con posición: solo el stop, y ANTES de mirar las velas ─────────
+    //
+    // Esta rama iba detrás de la comprobación de velas. Sin ellas —tras cada
+    // reinicio del worker, con la caché fría, o con el venue limitando las
+    // descargas— el plan salía vacío y el motor cancelaba el stop vivo: la
+    // posición se quedaba sin red al menos un tick en cada despliegue, y sin
+    // plazo mientras faltaran los datos (spec 057, F-02).
+    const qtyPos = ctx.position ? D(ctx.position.qty) : D(0);
+    if (!qtyPos.isZero()) return stopDeLaPosicion(ctx, cfg, seq, qtyPos);
 
     const necesarias = barsNecesarias(cfg);
     const velas = ctx.candles ?? [];
@@ -439,72 +560,7 @@ export const trendFollow: Strategy<TrendFollowConfig> = {
       return { orders: [], immediate: [], note: 'Sin ATR ni canal: velas insuficientes o planas.' };
     }
 
-    const qtyPos = ctx.position ? D(ctx.position.qty) : D(0);
     const riesgo = distanciaStop(cfg, s.atrValor);
-
-    // ── Con posición: solo el stop, que sigue al precio ────────────────
-    if (!qtyPos.isZero()) {
-      const largo = qtyPos.gt(0);
-      const referencia = D(ctx.ticker.mark);
-      const candidato = largo ? referencia.minus(riesgo) : referencia.plus(riesgo);
-      const guardado = ctx.cycle.scratch['stopPrice'];
-      const previo = typeof guardado === 'string' ? D(guardado) : null;
-
-      // El PRIMER stop se ancla en el precio de ENTRADA, no en la marca.
-      //
-      // Si el precio se mueve en contra entre la ejecución y este tick, anclar
-      // en la marca pondría el stop más lejos y la operación arriesgaría más
-      // que el porcentaje declarado — que es justo la promesa que sostiene esta
-      // estrategia. Con entrada en 100 y 3 de distancia, el stop va a 97 aunque
-      // el precio ya esté en 94 (spec 041 R-2).
-      //
-      // Y el seguimiento no se pierde: si el precio se ha ido a FAVOR, manda el
-      // candidato, que ya está más arriba.
-      const entrada = D(ctx.position?.entryPrice ?? 0);
-      const inicial = entrada.gt(0)
-        ? largo
-          ? entrada.minus(riesgo)
-          : entrada.plus(riesgo)
-        : candidato;
-
-      // NUNCA en contra. Es la única regla que hace que un stop de seguimiento
-      // sea un stop de seguimiento y no un stop que persigue al precio.
-      const base = previo ?? inicial;
-      const stop = largo ? Decimal.max(base, candidato) : Decimal.min(base, candidato);
-
-      // Recolocar solo si se ha movido de verdad: un trailing que se reescribe
-      // en cada tick son 2 peticiones cada quince segundos contra el cupo.
-      const movidoBps = previo?.gt(0)
-        ? stop.minus(previo).abs().div(previo).mul(D(10_000))
-        : D(Number.MAX_SAFE_INTEGER);
-      const recoloca = !previo || movidoBps.gte(D(cfg.stopRepriceBps ?? 20));
-      if (recoloca) scratchPatch['stopPrice'] = stop.toFixed(ctx.market.priceDecimals);
-
-      const vigente = recoloca ? stop : previo;
-      const side = largo ? 'SELL' : 'BUY';
-      const precio = px(ctx.market, vigente, side);
-      const orden: DesiredOrder = {
-        clientOrderId: makeCoid(ctx.botId, seq, LevelKind.STOP_LOSS, 0),
-        levelKind: LevelKind.STOP_LOSS,
-        levelIndex: 0,
-        side,
-        type: 'MARKET',
-        price: precio,
-        triggerPrice: precio,
-        qty: qy(ctx.market, qtyPos.abs()),
-        reduceOnly: true,
-      };
-
-      return {
-        orders: [orden],
-        immediate: [],
-        note:
-          `${largo ? 'Largo' : 'Corto'} en marcha. Stop en ${precio} ` +
-          `(${D(cfg.atrStopMultiplier ?? 2.5).toFixed(1)} ATR), eficiencia ` +
-          `${s.eficiencia.toFixed(2)}.`,
-        scratchPatch: Object.keys(scratchPatch).length ? scratchPatch : undefined,
-      };
-    }
 
     // ── Plana: ¿hay ruptura que valga la pena? ─────────────────────────
     if (!s.lado) {

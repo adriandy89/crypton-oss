@@ -1,4 +1,5 @@
 import { Module } from '@nestjs/common';
+import { AiChannelModule } from '../ai-channel';
 import { SupervisorModule } from '../supervisor';
 import { AuthModule } from '../auth';
 import { BotsModule } from '../bots';
@@ -6,6 +7,7 @@ import { AdminBotsController } from './admin-bots.controller';
 import { AdminBotsService } from './admin-bots.service';
 import { AdminMaintenanceController } from './admin-maintenance.controller';
 import { AdminMaintenanceService } from './admin-maintenance.service';
+import { AdminAiChannelController } from './admin-ai-channel.controller';
 import { AdminAiController } from './admin-ai.controller';
 import { AdminUsersController } from './admin-users.controller';
 import { AdminUsersService } from './admin-users.service';
@@ -38,14 +40,20 @@ import { AdminUsersService } from './admin-users.service';
  * contencion y nada mas. Y tampoco trae adaptadores: solo mercados y velas.
  * Desde el spec 053 aporta tambien el resumen de los bots PROPIOS con el modo
  * encendido y los interruptores globales, que solo se leen.
+ *
+ * `AiChannelModule` (spec 059) aporta el estado del canal con IA de los bots
+ * PROPIOS y el interruptor global de sus entradas. Tampoco trae adaptadores ni
+ * amplía la superficie sobre bots ajenos: su servicio responde 403 a cualquier
+ * bot que no sea del administrador que pregunta.
  */
 @Module({
-  imports: [BotsModule, AuthModule, SupervisorModule],
+  imports: [BotsModule, AuthModule, SupervisorModule, AiChannelModule],
   controllers: [
     AdminUsersController,
     AdminBotsController,
     AdminMaintenanceController,
     AdminAiController,
+    AdminAiChannelController,
   ],
   providers: [AdminUsersService, AdminBotsService, AdminMaintenanceService],
 })

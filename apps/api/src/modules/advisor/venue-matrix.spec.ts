@@ -1,6 +1,6 @@
 import { StrategyKind } from '@crypton/db';
 import { getStrategy, VENUE_MARKETS } from '@crypton/strategy-core';
-import { D, type BotConfig, type MarketSpec } from '@crypton/shared';
+import { D, esEstrategiaSoloAdmin, type BotConfig, type MarketSpec } from '@crypton/shared';
 import { buildConfig, defaultKnobs, PROFILES, type BuildContext } from './build';
 import type { MarketFeatures } from './market-features';
 import { coerceConfig, enforceCouplings } from './sanitize';
@@ -27,7 +27,12 @@ import { coerceConfig, enforceCouplings } from './sanitize';
  * rechazos tick tras tick hasta que salta el cortacircuitos.
  */
 
-const ESTRATEGIAS = Object.values(StrategyKind);
+/**
+ * Las estrategias que el asesor sabe configurar: todas menos las de solo
+ * administradores (spec 058), que calculan sus números en cada operación y que
+ * `suggest()` rechaza antes de llegar al generador.
+ */
+const ESTRATEGIAS = Object.values(StrategyKind).filter((kind) => !esEstrategiaSoloAdmin(kind));
 const CAPITALES = ['50', '200', '1000', '5000'];
 
 /**

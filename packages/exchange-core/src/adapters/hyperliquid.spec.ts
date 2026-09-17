@@ -50,7 +50,8 @@ jest.mock(
 );
 
 // Despues del mock a proposito: el adaptador carga su SDK con require(esm).
-const { HyperliquidAdapter } = require('./hyperliquid') as typeof import('./hyperliquid');
+const { HyperliquidAdapter, tramosHyperliquid } =
+  require('./hyperliquid') as typeof import('./hyperliquid');
 
 const creds = () =>
   ({
@@ -395,6 +396,32 @@ describe('cuerpo de placeOrder (F-21)', () => {
     await adapter.close();
   });
 
+  /**
+   * Spec 057, F-07. Una límite salía SIEMPRE como Gtc: la que pedía IOC —la
+   * entrada con tope de precio— se quedaba en el libro en vez de cancelarse.
+   */
+  it('una límite que pide IOC va como Ioc y con su propio precio, sin holgura', async () => {
+    const { adapter, order } = armar();
+
+    await adapter.placeOrder(pedido({ timeInForce: 'IOC' }));
+    await adapter.placeOrder(pedido({ timeInForce: 'ALO' }));
+
+    const [ioc, alo] = order.mock.calls.map((c) => (c[0] as { orders: unknown[] }).orders[0]);
+    expect(ioc).toMatchObject({ b: true, p: '79000', t: { limit: { tif: 'Ioc' } } });
+    expect(alo).toMatchObject({ t: { limit: { tif: 'Alo' } } });
+    await adapter.close();
+  });
+
+  it('una FOK se rechaza: Hyperliquid no la tiene y mandarla como Gtc la dejaría en el libro', async () => {
+    const { adapter, order } = armar();
+
+    await expect(adapter.placeOrder(pedido({ timeInForce: 'FOK' }))).rejects.toMatchObject({
+      kind: 'RULES',
+    });
+    expect(order).not.toHaveBeenCalled();
+    await adapter.close();
+  });
+
   it('un stop lleva disparador nativo con el sentido que declara quien lo pide', async () => {
     const { adapter, order } = armar();
 
@@ -416,6 +443,203 @@ describe('cuerpo de placeOrder (F-21)', () => {
       p: '66500',
       t: { trigger: { isMarket: true, triggerPx: '70000', tpsl: 'sl' } },
     });
+    await adapter.close();
+  });
+});
+
+/**
+ * Spec 058. La entrada del canal con IA es una límite IOC. Cuando no encuentra
+ * contra quién ejecutarse, Hyperliquid contesta con un error en el estado de la
+ * orden, el SDK lanza, y ese texto no casaba con ningún patrón: salía FATAL,
+ * como un fallo, cuando es justo lo que se pedía.
+ */
+describe('una IOC que no casa (spec 058)', () => {
+  const NO_CASA = 'Order could not immediately match against any resting orders. asset=0';
+  /** Lo que lanza el SDK: `ApiRequestError`, con la respuesta cruda dentro. */
+  const errorDelSdk = () =>
+    Object.assign(new Error('order 0: ' + NO_CASA), {
+      name: 'ApiRequestError',
+      response: {
+        status: 'ok',
+        response: { type: 'order', data: { statuses: [{ error: NO_CASA }] } },
+      },
+    });
+  const armar = () => {
+    const adapter = new HyperliquidAdapter(creds());
+    const p = adapter as unknown as Privado;
+    p.markets = { get: async () => spec(), all: async () => [spec()] };
+    p.assetIndex.set('BTC', 0);
+    const order = jest.fn().mockRejectedValue(errorDelSdk());
+    p.signingClient = { order };
+    return { adapter, order };
+  };
+  const pedido = (over: Record<string, unknown> = {}) =>
+    ({
+      symbol: 'BTC',
+      side: 'BUY',
+      type: 'LIMIT',
+      price: '79000',
+      qty: '0.001',
+      clientOrderId: 'a1b2c3d4e5f60718.1.B0',
+      reduceOnly: false,
+      timeInForce: 'IOC',
+      ...over,
+    }) as never;
+
+  it('una límite IOC que no casa vuelve CANCELED, sin id y sin reintentar', async () => {
+    const { adapter, order } = armar();
+
+    const ack = await adapter.placeOrder(pedido());
+
+    expect(ack).toMatchObject({ status: 'CANCELED', venueOrderId: '' });
+    expect(order).toHaveBeenCalledTimes(1);
+    // Ni se pregunta si entró: la respuesta ya dice que no.
+    expect(mockInfo.orderStatus).not.toHaveBeenCalled();
+    await adapter.close();
+  });
+
+  it('una MARKET que no casa sigue siendo un error: cerrar y no poder es un problema', async () => {
+    const { adapter } = armar();
+
+    await expect(adapter.placeOrder(pedido({ type: 'MARKET' }))).rejects.toBeInstanceOf(
+      ExchangeError,
+    );
+    await adapter.close();
+  });
+
+  it('una límite que no es IOC con ese texto tampoco se da por cancelada', async () => {
+    const { adapter } = armar();
+
+    await expect(adapter.placeOrder(pedido({ timeInForce: undefined }))).rejects.toBeInstanceOf(
+      ExchangeError,
+    );
+    await adapter.close();
+  });
+
+  it('otro rechazo de una límite IOC se propaga como antes', async () => {
+    const { adapter, order } = armar();
+    order.mockRejectedValue(new Error('order 0: Insufficient margin to place order. asset=0'));
+
+    await expect(adapter.placeOrder(pedido())).rejects.toMatchObject({
+      kind: 'INSUFFICIENT_FUNDS',
+    });
+    await adapter.close();
+  });
+});
+
+/**
+ * Spec 058. El canal con IA decide el apalancamiento de cada operación y no
+ * puede ofrecer una que el venue no admita por tamaño.
+ */
+describe('tramos y acuse del apalancamiento (spec 058)', () => {
+  const tabla = (
+    id: number,
+    tiers: { lowerBound: string; maxLeverage: number }[],
+  ): [number, { description: string; marginTiers: typeof tiers }] => [
+    id,
+    { description: 'tiered', marginTiers: tiers },
+  ];
+
+  it('lee la tabla del activo: cada tramo con su máximo y la mitad de su margen inicial', () => {
+    const tramos = tramosHyperliquid({ maxLeverage: 40, marginTableId: 56 }, [
+      tabla(55, [{ lowerBound: '0.0', maxLeverage: 3 }]),
+      tabla(56, [
+        { lowerBound: '150000000.0', maxLeverage: 20 },
+        { lowerBound: '0.0', maxLeverage: 40 },
+      ]),
+    ]);
+
+    // Ordenados por nocional aunque la tabla no lo esté.
+    expect(tramos).toEqual([
+      { desdeNocional: '0', maxApalancamiento: 40, mantenimiento: 1 / 80 },
+      { desdeNocional: '150000000', maxApalancamiento: 20, mantenimiento: 1 / 40 },
+    ]);
+  });
+
+  it('sin tabla para el activo, un tramo con su máximo', () => {
+    expect(tramosHyperliquid({ maxLeverage: 10, marginTableId: 10 }, [])).toEqual([
+      { desdeNocional: '0', maxApalancamiento: 10, mantenimiento: 1 / 20 },
+    ]);
+  });
+
+  it('ningún tramo pasa del máximo del activo, y los imposibles se descartan', () => {
+    const tramos = tramosHyperliquid({ maxLeverage: 25, marginTableId: 7 }, [
+      tabla(7, [
+        { lowerBound: '0', maxLeverage: 50 },
+        { lowerBound: 'x', maxLeverage: 10 },
+        { lowerBound: '1000', maxLeverage: 0 },
+      ]),
+    ]);
+
+    expect(tramos).toEqual([{ desdeNocional: '0', maxApalancamiento: 25, mantenimiento: 1 / 100 }]);
+  });
+
+  it('getLeverageTiers sale del mismo catálogo, sin otra petición', async () => {
+    mockInfo.metaAndAssetCtxs.mockResolvedValue([
+      {
+        universe: [{ name: 'BTC', szDecimals: 5, maxLeverage: 40, marginTableId: 56 }],
+        marginTables: [
+          tabla(56, [
+            { lowerBound: '0.0', maxLeverage: 40 },
+            { lowerBound: '150000000.0', maxLeverage: 20 },
+          ]),
+        ],
+      },
+      [{ midPx: '79583.5', markPx: '79587.0' }],
+    ]);
+    const adapter = new HyperliquidAdapter(creds());
+
+    const tramos = await adapter.getLeverageTiers('BTC');
+
+    expect(tramos.map((t) => [t.desdeNocional, t.maxApalancamiento])).toEqual([
+      ['0', 40],
+      ['150000000', 20],
+    ]);
+    expect(mockInfo.metaAndAssetCtxs).toHaveBeenCalledTimes(1);
+    await adapter.close();
+  });
+
+  it('un catálogo sin tablas deja a cada activo con su tramo único', async () => {
+    mockInfo.metaAndAssetCtxs.mockResolvedValue(catalogo());
+    const adapter = new HyperliquidAdapter(creds());
+
+    await expect(adapter.getLeverageTiers('BTC')).resolves.toEqual([
+      { desdeNocional: '0', maxApalancamiento: 40, mantenimiento: 1 / 80 },
+    ]);
+    await adapter.close();
+  });
+
+  it('un símbolo que no existe no se inventa tramos', async () => {
+    mockInfo.metaAndAssetCtxs.mockResolvedValue(catalogo());
+    const adapter = new HyperliquidAdapter(creds());
+
+    await expect(adapter.getLeverageTiers('NOPE')).rejects.toThrow(/desconocido/i);
+    await adapter.close();
+  });
+
+  it('setLeverage manda aislado o cruzado y acusa lo aplicado', async () => {
+    const adapter = new HyperliquidAdapter(creds());
+    const p = adapter as unknown as Privado;
+    p.assetIndex.set('BTC', 0);
+    const updateLeverage = jest.fn().mockResolvedValue({ status: 'ok' });
+    p.signingClient = { updateLeverage };
+
+    const acuse = await adapter.setLeverage('BTC', 17, 'ISOLATED');
+
+    expect(updateLeverage).toHaveBeenCalledWith({ asset: 0, isCross: false, leverage: 17 });
+    expect(acuse).toEqual({ leverage: 17 });
+    await adapter.close();
+  });
+
+  it('si el venue lo rechaza, no hay acuse: se lanza', async () => {
+    const adapter = new HyperliquidAdapter(creds());
+    const p = adapter as unknown as Privado;
+    p.assetIndex.set('BTC', 0);
+    p.signingClient = {
+      updateLeverage: jest.fn().mockRejectedValue(new Error('Invalid leverage value')),
+    };
+
+    await expect(adapter.setLeverage('BTC', 99, 'ISOLATED')).rejects.toBeInstanceOf(ExchangeError);
     await adapter.close();
   });
 });

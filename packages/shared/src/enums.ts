@@ -38,8 +38,27 @@ export const StrategyKind = {
   TREND_FOLLOW: 'TREND_FOLLOW',
   /** Entra una vez y sale siguiendo al maximo desde su objetivo (spec 043). */
   TRAILING_PROFIT: 'TRAILING_PROFIT',
+  /**
+   * Rebotes en el borde de un rango o canal, con apalancamiento por operacion y
+   * una IA que elige entre opciones ya calculadas (specs 058-059). Solo para
+   * administradores.
+   */
+  AI_CHANNEL: 'AI_CHANNEL',
 } as const;
 export type StrategyKind = (typeof StrategyKind)[keyof typeof StrategyKind];
+
+/**
+ * Estrategias que solo puede usar un administrador (spec 058).
+ *
+ * Ningun plan las vende, no salen en el listado de la app, el asesor y el Modo
+ * IA las rechazan, no se publican en el ranking, y el worker no adopta un bot
+ * suyo si su dueno no es administrador. Una sola lista para todos esos sitios:
+ * una copia en cada uno es un sitio mas donde olvidarse de la siguiente.
+ */
+export const ESTRATEGIAS_SOLO_ADMIN: readonly StrategyKind[] = [StrategyKind.AI_CHANNEL];
+
+export const esEstrategiaSoloAdmin = (kind: string): boolean =>
+  (ESTRATEGIAS_SOLO_ADMIN as readonly string[]).includes(kind);
 
 /**
  * STARTING/STOPPING son estados de transición: existen para que la UI no mienta

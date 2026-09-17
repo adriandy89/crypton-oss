@@ -120,6 +120,19 @@ export class CreateBacktestDto {
   @IsOptional()
   @IsEnum(BarPath)
   barPath?: BarPath;
+
+  /**
+   * Parte el rango en tramos consecutivos del mismo largo, cada uno con sus
+   * cifras por setup (spec 058). Un resultado que solo sale bien en uno de los
+   * tramos es un periodo, no una ventaja. Lo usan las estrategias que registran
+   * sus operaciones: el canal con IA.
+   */
+  @IsOptional()
+  @Type(() => Number)
+  @IsInt()
+  @Min(1)
+  @Max(6)
+  ventanasConsecutivas?: number;
 }
 
 export class ListBacktestsQueryDto {

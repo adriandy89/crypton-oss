@@ -18,6 +18,7 @@ import {
 import { AdminModule } from './modules/admin';
 import { ActivityModule } from './modules/activity';
 import { AdvisorModule } from './modules/advisor';
+import { AiChannelModule } from './modules/ai-channel';
 import { BacktestsModule } from './modules/backtests';
 import { AuthModule } from './modules/auth';
 import { CustomThrottlerGuard } from './modules/auth/guards';
@@ -76,6 +77,8 @@ import { TelegramModule } from './modules/telegram';
     // El supervisor de bots vivos (spec 046). Despues del asesor porque comparte
     // su cliente del modelo; no depende de el de ninguna otra forma.
     SupervisorModule,
+    // La IA del canal (spec 059): también usa el cliente del modelo.
+    AiChannelModule,
     BacktestsModule,
     TelegramModule,
     LeaderboardModule,

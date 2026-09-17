@@ -2,10 +2,12 @@ import { Injectable, Logger } from '@nestjs/common';
 import {
   D,
   Decimal,
+  rachaDePerdidas,
   startOfDay,
   type CycleState,
   type DesiredOrder,
   type Fill,
+  type HistorialOperaciones,
   type MarketSpec,
   type OrderAck,
   type VenueOrder,
@@ -21,6 +23,14 @@ import { BUS_CHANNELS, BusService, DbService } from '../libs';
  * añadir un modelo al esquema no obligue a tocar este tipo.
  */
 type TxClient = Parameters<Parameters<DbService['$transaction']>[0]>[0];
+
+/** El evento que anuncia el cierre de un ciclo. */
+export interface EventoCierre {
+  type: string;
+  severity: 'DEBUG' | 'INFO' | 'WARN' | 'ERROR' | 'CRITICAL';
+  message: string;
+  payload: Record<string, unknown>;
+}
 
 export interface BotRecord {
   id: string;
@@ -69,6 +79,44 @@ export interface RiskGuards {
 /** Cuánto vale la pérdida diaria de un usuario antes de recalcularla. */
 const DAILY_PNL_TTL_MS = 20_000;
 
+const DIA_MS = 86_400_000;
+
+/**
+ * Cuántos cierres recientes se miran para la racha de pérdidas. La espera tras
+ * una racha se configura hasta diez; cincuenta dejan margen sin leer el
+ * histórico entero de un bot que lleva meses.
+ */
+const RACHA_MAXIMA = 50;
+
+/** Lo que trae la consulta del acumulado del bot (ver `historialOperaciones`). */
+export interface Acumulado {
+  total: { toString(): string } | null;
+  pico: { toString(): string } | null;
+  /** La última reanudación del usuario, o null si nunca reanudó. */
+  reanudado_en: Date | null;
+  /** Lo realizado hasta esa reanudación. */
+  antes: { toString(): string } | null;
+  /** El mejor acumulado alcanzado desde ella. */
+  pico_desde: { toString(): string } | null;
+}
+
+/**
+ * El máximo contra el que se mide la caída del canal (spec 060, F-15).
+ *
+ * Sin reanudaciones es el mejor momento de toda la vida del bot, con el cero de
+ * partida incluido. Con ellas, la caída se mide desde la última: el máximo es lo
+ * que había al reanudar, o lo mejor que se haya alcanzado después. Así reanudar
+ * sirve de algo; antes, un bot pausado por caída volvía a pausarse en la
+ * revisión siguiente sin haber operado.
+ */
+export function picoDeCaida(fila: Acumulado | undefined): Decimal {
+  if (!fila) return D(0);
+  if (fila.reanudado_en == null) return D(fila.pico?.toString() ?? 0);
+  const antes = D(fila.antes?.toString() ?? 0);
+  const desde = fila.pico_desde == null ? antes : D(fila.pico_desde.toString());
+  return Decimal.max(desde, antes);
+}
+
 // La medianoche del usuario (`startOfDay`) vive en `shared` desde el spec 019:
 // la API la calculaba a la medianoche del servidor y este proceso a la del
 // usuario, dos «días» distintos para la misma guarda (001/F-43).
@@ -79,6 +127,10 @@ export class BotStore {
   private readonly dailyLoss = new Map<string, { value: Decimal; at: number }>();
   private readonly dailyLossByBot = new Map<string, { value: Decimal; at: number }>();
   private readonly totalNotional = new Map<string, { value: Decimal; at: number }>();
+  private readonly historiales = new Map<
+    string,
+    { value: HistorialOperaciones; at: number; dia: number }
+  >();
 
   constructor(
     private readonly db: DbService,
@@ -327,10 +379,14 @@ export class BotStore {
     // cuando apenas había empezado, y a partir de ahí el motor la daba por
     // hecha y no la volvía a colocar. La historia completa no se pierde: vive
     // en `bot_fills`, que es de donde sale la contabilidad del ciclo.
+    // Y arranca SIN id de venue. Se quedaba el de la encarnación anterior, y
+    // `pendienteVencida` —que exige una fila PENDING sin id— no soltaba nunca
+    // una que se quedara pendiente: una cotización en estado desconocido vetaba
+    // su hueco para siempre (spec 060, F-07). El acuse lo vuelve a poner.
     await this.db.botOrder.upsert({
       where: { client_order_id: order.clientOrderId },
       create: data,
-      update: { ...data, filled_qty: 0, closed_at: null },
+      update: { ...data, filled_qty: 0, closed_at: null, venue_order_id: null },
     });
   }
 
@@ -341,6 +397,9 @@ export class BotStore {
         venue_order_id: ack.venueOrderId || null,
         status: ack.status,
         raw_error: null,
+        // Una IOC que no se ejecutó llega ya muerta en el acuse (spec 058): la
+        // fila se cierra ahí, como cualquier otra cancelada.
+        ...(ack.status === 'CANCELED' || ack.status === 'EXPIRED' ? { closed_at: new Date() } : {}),
       },
     });
   }
@@ -363,14 +422,27 @@ export class BotStore {
    * Aster pueden coincidir. Sin filtrar por bot, cancelar una orden marcaba
    * como CANCELED la fila viva de otro — que seguía en el libro del venue. Su
    * reconciliador la daba por perdida y la reponía, duplicando posición.
+   *
+   * Con el id de cliente del libro, además (spec 060, F-01). El id de venue de
+   * la fila es el del ACUSE, y no siempre es el del libro: Lighter acusa con el
+   * índice de cliente y lista con su `order_index`, y un disparador de
+   * Hyperliquid puede acusarse sin `oid`. La fila seguía viva, y `place()`
+   * vetaba volver a colocar ese id: un stop que se movía no volvía nunca.
    */
-  async markOrderCanceled(botId: string, venueOrderId: string): Promise<void> {
+  async markOrderCanceled(
+    botId: string,
+    venueOrderId: string,
+    venueClientId?: string | null,
+  ): Promise<void> {
     await this.db.botOrder
       .updateMany({
         where: {
           bot_id: botId,
-          venue_order_id: venueOrderId,
           status: { in: ['PENDING', 'OPEN', 'PARTIALLY_FILLED'] },
+          OR: [
+            { venue_order_id: venueOrderId },
+            ...(venueClientId ? [{ venue_client_id: venueClientId }] : []),
+          ],
         },
         data: { status: 'CANCELED', closed_at: new Date() },
       })
@@ -388,7 +460,10 @@ export class BotStore {
           status: order.status,
           filled_qty: order.filledQty,
           avg_price: order.avgPrice,
-          ...(order.status === 'FILLED' || order.status === 'CANCELED'
+          ...(order.status === 'FILLED' ||
+          order.status === 'CANCELED' ||
+          order.status === 'EXPIRED' ||
+          order.status === 'REJECTED'
             ? { closed_at: new Date() }
             : {}),
         },
@@ -596,6 +671,12 @@ export class BotStore {
       keepCycleOnFlat?: boolean;
       trackMmStats?: boolean;
       cooldownMinutes?: number;
+      /**
+       * El evento que anuncia el cierre, si no es el `CYCLE_CLOSED` de siempre.
+       * El canal con IA avisa con `AI_EXIT`, que lleva además el R y el motivo
+       * (spec 059): dos avisos por la misma salida serían ruido.
+       */
+      eventoCierre?: (cierre: { seq: number; pnl: Decimal }) => EventoCierre;
     } = {},
   ): Promise<CycleState> {
     const outcome = await this.db.$transaction(async (tx) => {
@@ -731,12 +812,19 @@ export class BotStore {
         // Se acaba de realizar resultado: la pérdida diaria cacheada de este
         // usuario ya no vale, y de ella depende una guarda de riesgo.
         this.forgetDailyLoss(bot.user_id, botId);
+        const cierre = { seq: outcome.closedSeq, pnl: outcome.closedPnl };
+        const evento: EventoCierre = opts.eventoCierre?.(cierre) ?? {
+          type: 'CYCLE_CLOSED',
+          severity: 'INFO',
+          message: `Ciclo #${cierre.seq} cerrado con ${cierre.pnl.toFixed(2)} de resultado.`,
+          payload: { realizedPnl: cierre.pnl.toFixed(), seq: cierre.seq },
+        };
         await this.event(
           { id: botId, user_id: bot.user_id },
-          'CYCLE_CLOSED',
-          'INFO',
-          `Ciclo #${outcome.closedSeq} cerrado con ${outcome.closedPnl.toFixed(2)} de resultado.`,
-          { realizedPnl: outcome.closedPnl.toFixed(), seq: outcome.closedSeq },
+          evento.type,
+          evento.severity,
+          evento.message,
+          evento.payload,
         ).catch(() => undefined);
       }
     }
@@ -991,20 +1079,144 @@ export class BotStore {
 
     const bots = await this.db.bot.findMany({
       where: { user_id: userId, status: { in: ['STARTING', 'RUNNING', 'PAUSED'] } },
-      select: { total_investment: true, leverage: true },
+      select: { total_investment: true, leverage: true, max_notional: true },
     });
+    // El nocional que declara la estrategia, si lo declara (spec 058). Con el
+    // apalancamiento por operación, capital por apalancamiento contaría el tope
+    // de 25x como si cada bot lo usara entero.
     const value = bots.reduce(
-      (acc, b) => acc.plus(D(b.total_investment.toString()).mul(b.leverage)),
+      (acc, b) =>
+        acc.plus(
+          b.max_notional != null
+            ? D(b.max_notional.toString())
+            : D(b.total_investment.toString()).mul(b.leverage),
+        ),
       D(0),
     );
     this.totalNotional.set(userId, { value, at: Date.now() });
     return value;
   }
 
+  /**
+   * Guarda el nocional máximo que declara la estrategia (`bots.max_notional`).
+   * Solo escribe si cambia: se llama al adoptar el bot y al recargar.
+   */
+  async setMaxNotional(botId: string, valor: string | null): Promise<void> {
+    await this.db.bot.updateMany({
+      where: {
+        id: botId,
+        // Un `NOT` sobre una columna nula no la incluye (en SQL, NOT NULL es
+        // NULL): el nulo va aparte, o un bot de antes no se escribiría nunca.
+        ...(valor === null
+          ? { max_notional: { not: null } }
+          : { OR: [{ max_notional: null }, { NOT: { max_notional: valor } }] }),
+      },
+      data: { max_notional: valor },
+    });
+  }
+
+  /**
+   * Lo operado por el bot, con el día cortado a las 00:00 UTC (spec 058).
+   *
+   * Sale de los ciclos CERRADOS, que en el canal con IA son las operaciones:
+   * cada una abre y cierra su ciclo. Lo realizado de un ciclo abierto —un
+   * primer objetivo— no cuenta hasta que cierra: el tope diario se mide sobre
+   * lo que ya no puede cambiar.
+   *
+   * UTC y no la zona del usuario: el tope diario del canal se reabre a las
+   * 00:00 UTC, y eso es lo que le dice la guía.
+   *
+   * Con la caché corta de las demás lecturas diarias y la misma invalidación al
+   * cerrarse un ciclo; un cambio de día la invalida también.
+   */
+  async historialOperaciones(botId: string, ahora = Date.now()): Promise<HistorialOperaciones> {
+    const dia = Math.floor(ahora / DIA_MS) * DIA_MS;
+    const cached = this.historiales.get(botId);
+    if (cached && cached.dia === dia && ahora - cached.at < DAILY_PNL_TTL_MS) return cached.value;
+
+    const [hoy, recientes, acumulado, ultimoStop] = await Promise.all([
+      this.db.botCycle.aggregate({
+        where: { bot_id: botId, closed_at: { gte: new Date(dia) } },
+        _sum: { realized_pnl: true },
+        _count: { _all: true },
+      }),
+      this.db.botCycle.findMany({
+        where: { bot_id: botId, closed_at: { not: null } },
+        orderBy: { seq: 'desc' },
+        take: RACHA_MAXIMA,
+        select: { realized_pnl: true, closed_at: true },
+      }),
+      // El total y su máximo histórico en una pasada: el máximo es el de la
+      // suma acumulada por orden de ciclo, con el cero de partida incluido.
+      //
+      // Y lo mismo contado desde la última vez que el usuario reanudó el bot
+      // (spec 060, F-15): la caída máxima se mide desde el resultado de ese
+      // momento, así que reanudar vuelve a dar cuerda. Sin esto, un bot pausado
+      // por caída volvía a pausarse en la revisión siguiente sin haber operado,
+      // y solo se podía sacar de ahí subiendo el límite. Qué máximo se usa lo
+      // decide `picoDeCaida`; aquí se traen los dos.
+      this.db.$queryRaw<Acumulado[]>`
+        WITH reanudado AS (
+          SELECT MAX(created_at) AS en
+          FROM bot_events
+          WHERE bot_id = ${botId} AND type = 'BOT_RESUMED'
+        ), cerrados AS (
+          SELECT realized_pnl AS pnl, closed_at,
+                 SUM(realized_pnl) OVER (ORDER BY seq) AS acumulado
+          FROM bot_cycles
+          WHERE bot_id = ${botId} AND closed_at IS NOT NULL
+        )
+        SELECT COALESCE(SUM(pnl), 0) AS total,
+               GREATEST(COALESCE(MAX(acumulado), 0), 0) AS pico,
+               MAX(r.en) AS reanudado_en,
+               COALESCE(SUM(pnl) FILTER (WHERE r.en IS NOT NULL AND closed_at < r.en), 0) AS antes,
+               MAX(acumulado) FILTER (WHERE r.en IS NOT NULL AND closed_at >= r.en) AS pico_desde
+        FROM cerrados, reanudado r`,
+      // El último stop que saltó: la última ejecución de una orden de stop.
+      this.db.botFill.findFirst({
+        where: { order: { bot_id: botId, level_kind: 'STOP_LOSS' } },
+        orderBy: { executed_at: 'desc' },
+        select: { executed_at: true },
+      }),
+    ]);
+
+    const perdida = (c: { realized_pnl: { toString(): string } }): boolean =>
+      D(c.realized_pnl.toString()).lt(0);
+    // La misma cuenta que enseña la consola (spec 059).
+    const racha = rachaDePerdidas(recientes.map((c) => c.realized_pnl.toString()));
+    const ultimaPerdida = recientes.find(perdida);
+
+    const value: HistorialOperaciones = {
+      dia,
+      operacionesHoy: hoy._count._all,
+      realizadoHoy: D(hoy._sum.realized_pnl?.toString() ?? 0).toFixed(),
+      rachaPerdidas: racha,
+      ultimoCierreEn: recientes[0]?.closed_at?.getTime() ?? null,
+      ultimaPerdidaEn: ultimaPerdida?.closed_at?.getTime() ?? null,
+      ultimoStopEn: ultimoStop?.executed_at.getTime() ?? null,
+      realizadoTotal: D(acumulado[0]?.total?.toString() ?? 0).toFixed(),
+      picoRealizado: picoDeCaida(acumulado[0]).toFixed(),
+    };
+    this.historiales.set(botId, { value, at: ahora, dia });
+    return value;
+  }
+
+  /**
+   * Olvida el historial del bot: se llama al reanudarlo.
+   *
+   * La caída máxima se mide desde la última reanudación (spec 060, F-15), y con
+   * la caché de veinte segundos el primer tick tras el RESUME habría vuelto a
+   * pausar con el máximo viejo.
+   */
+  olvidarHistorial(botId: string): void {
+    this.historiales.delete(botId);
+  }
+
   /** Invalida la caché de pérdida diaria: se llama al cerrarse un ciclo. */
   private forgetDailyLoss(userId: string, botId: string): void {
     this.dailyLoss.delete(userId);
     this.dailyLossByBot.delete(botId);
+    this.historiales.delete(botId);
   }
 
   // ═══════════════════════════════════════════════════════════════

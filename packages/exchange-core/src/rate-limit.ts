@@ -108,11 +108,14 @@ export async function withRetry<T>(fn: () => Promise<T>, opts: RetryOptions = {}
  * sostenido (Aster: «the execution status is UNKNOWN and could have been a
  * success»), 429, nonce rechazado, `getRecentFills` caído en Lighter— se
  * mandaba la misma orden otra vez. Una MARKET ya ejecutada no está entre las
- * abiertas: la segunda DOBLABA la posición (001/F-68). Se lanza y quien llama
- * marca la fila como rechazada; el tick siguiente reconcilia contra el venue: si
- * la orden entró, la reconoce como propia por su id y repone la fila; si no,
- * la vuelve a colocar. Es la única forma de no equivocarse en ninguno de los
- * dos sentidos.
+ * abiertas: la segunda DOBLABA la posición (001/F-68). Se lanza con
+ * `estadoDesconocido`, y quien llama NO debe volver a mandarla hasta saberlo: el
+ * motor deja su fila pendiente, que veta el reenvío hasta que la sincronización
+ * con el venue la resuelva o venza (spec 057, F-06). Marcarla rechazada, como
+ * se hacía, dejaba que el tick siguiente la mandara otra vez.
+ *
+ * Tras el ÚLTIMO intento fallido también se pregunta: antes se lanzaba sin más,
+ * y ese intento podía haber entrado igual que los anteriores.
  */
 export async function withWriteRetry<T>(
   send: () => Promise<T>,
@@ -128,7 +131,7 @@ export async function withWriteRetry<T>(
       return await send();
     } catch (e) {
       lastError = e;
-      if (!isRetryable(e) || i === attempts - 1) break;
+      if (!isRetryable(e)) break;
 
       let landed: T | null;
       try {
@@ -138,12 +141,14 @@ export async function withWriteRetry<T>(
         throw new ExchangeError(
           original.kind,
           `Estado desconocido tras «${original.message}»: la comprobación de si la orden entró ` +
-            `también falló (${messageOf(verifyError)}). No se reenvía; la reconciliación del ` +
-            'siguiente tick decide.',
+            `también falló (${messageOf(verifyError)}). No se reenvía hasta saberlo.`,
           opts.venue,
+          undefined,
+          true,
         );
       }
       if (landed !== null) return landed;
+      if (i === attempts - 1) break;
 
       await sleep(base * 2 ** i);
     }

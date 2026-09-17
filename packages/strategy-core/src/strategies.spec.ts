@@ -1450,6 +1450,27 @@ describe('registro de estrategias', () => {
     expect(conVelas).toEqual([StrategyKind.TREND_FOLLOW]);
   });
 
+  it('solo el canal pide series, y solo él lleva el contrato del canal (spec 058)', () => {
+    // `series` es `candles` en plural: cada serie declarada es un sondeo más
+    // contra el cupo del venue. Los demás flags cambian cómo el motor fija el
+    // apalancamiento, mide la liquidación y lleva el tope diario: ninguna otra
+    // estrategia puede verse afectada por ellos.
+    const con = (flag: keyof ReturnType<typeof getStrategy>) =>
+      listStrategies()
+        .filter((s) => s[flag] !== undefined)
+        .map((s) => s.kind);
+    for (const flag of [
+      'series',
+      'apalancamientoPorOperacion',
+      'reglaLiquidacion',
+      'topeDiarioReanuda',
+      'consumeDecisionesIa',
+      'nocionalMaximo',
+    ] as const) {
+      expect({ flag, kinds: con(flag) }).toEqual({ flag, kinds: [StrategyKind.AI_CHANNEL] });
+    }
+  });
+
   it('comunCon revienta al cargar si la clave no existe', () => {
     // El motivo de que exista: `COMMON_FIELDS.find(...)!` convertia una clave
     // mal escrita en un descriptor SIN `key`, que `commonFieldsWith` anade como

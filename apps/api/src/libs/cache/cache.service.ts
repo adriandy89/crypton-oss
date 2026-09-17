@@ -149,6 +149,25 @@ export class CacheService implements OnModuleInit, OnModuleDestroy {
     }
   }
 
+  /**
+   * GET del texto tal cual, sin pasar por JSON, y que LANZA si Redis no
+   * responde (spec 059).
+   *
+   * Es para las claves que escribe una persona a mano además de este servicio,
+   * como el interruptor del canal con IA: `off` sin comillas no es JSON, y por
+   * `getOrThrow` se leería como «no hay clave».
+   */
+  async getTextoOrThrow(key: string): Promise<string | null> {
+    if (!this.client?.isReady) {
+      throw new CacheUnavailableError('GET');
+    }
+    try {
+      return await this.client.get(key);
+    } catch (error) {
+      throw new CacheUnavailableError(`GET ${key}: ${(error as Error).message}`);
+    }
+  }
+
   /** Atomic GET + DEL (single-use tokens: refresh rotation, SSE tickets). */
   async getDel<T>(key: string): Promise<T | null> {
     if (!this.client?.isReady) {

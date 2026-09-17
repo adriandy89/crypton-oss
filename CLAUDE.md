@@ -21,13 +21,14 @@ sitio web, ni infraestructura de nadie: todo lo que hace está disponible para q
 |---|---|
 | `apps/api` | NestJS 11. REST + SSE: cuentas, credenciales cifradas, CRUD de bots, preview, riesgo, backtest, bitácora. **No ejecuta nada**: escribe el comando en `bot_commands` y avisa por Redis. |
 | `apps/api` → `modules/admin` | La consola de administración (spec 033). **Mirar y contener**: lee cuentas y bots de todos, y sobre un bot ajeno solo puede `PAUSE` y `STOP_KEEP_POSITION`. Nunca importa `ExchangeAccountsModule`: es la puerta a descifrar la clave de firma. |
-| `apps/api` → `modules/advisor` | El asesor: propone tres configuraciones al **crear** un bot. Único fichero que habla con un LLM (`openrouter.client.ts`). El modelo emite **perillas**, nunca parámetros. |
+| `apps/api` → `modules/advisor` | El asesor: propone tres configuraciones al **crear** un bot. El modelo emite **perillas**, nunca parámetros. `openrouter.client.ts` es el único fichero que habla con un LLM, y sirve también al supervisor y al canal con IA, cada uno con su interruptor y su clave por llamada. |
 | `apps/api` → `modules/supervisor` | El **Modo IA** (spec 046): vigila bots que **ya operan**. El modelo emite **desplazamientos** sobre las perillas guardadas, y `apply.ts` los traduce aplicando solo el **delta**. Solo bots propios de un `ADMIN`; no manda comandos; aplica por `BotsService.updateConfig`, que es el único camino de escritura. |
+| `apps/api` → `modules/ai-channel` | La IA del **canal con IA** (`AI_CHANNEL`, specs 058-059): atiende las solicitudes que escribe el worker en `bot_ai_intents`, con barreras y cupos contados **antes** de llamar. El modelo ve la herramienta en unidades relativas y **elige entre las operaciones que ya calculó el worker**, con enums; la API escribe la decisión y avisa al worker. No manda órdenes ni toca configuración; solo bots de un `ADMIN`. También la consola del canal y la pausa por botón de Telegram. |
 | `apps/worker` | NestJS 11 sin HTTP. **El motor**: lease en Redis → un `BotRunner` por bot → tick. Único proceso que descifra claves y firma. También escribe la curva de la cartera (`portfolio_snapshots`) y purga las series. |
 | `apps/app` | Ionic 8 + Angular 21 + Capacitor. Ejecuta `strategy-core` **también en cliente** (`features/bots/bot-create.page.ts`, `fullConfig`). |
 | `packages/shared` | Tipos, enums (calcan Prisma), `money.ts` (Decimal), `precision.ts` (redondeo), `liquidation.ts`, `series.ts` (la aritmética de las series y la analítica que pintan las pantallas: la app no suma dinero, lo pide aquí con test). |
 | `packages/db` | Prisma 7. Genera TypeScript, así que **se compila** (`dist/src`). Fuente única del modelo. |
-| `packages/strategy-core` | Cada estrategia como funciones puras: `validate()`, `preview()`, `plan()`. Más `reconcile`, `order-gate`, `stop-loss`, `cycle-accounting`, `client-order-id`, `mutability`. |
+| `packages/strategy-core` | Cada estrategia como funciones puras: `validate()`, `preview()`, `plan()`. Más `reconcile`, `order-gate`, `stop-loss`, `cycle-accounting`, `client-order-id`, `mutability`, y el motor del canal con IA (`canal/`: régimen, canales, setups, herramienta, tasas base y juez). |
 | `packages/exchange-core` | Adaptadores HL/Lighter/Aster tras `ExchangeAdapter`, `DryRunAdapter`, `coid`, `errors`, `rate-limit`, `venue-budget`, `venue-weights`, `endpoints`. |
 | `packages/backtest` | Replay sobre velas con las **mismas** piezas que el motor. |
 | `specs/` | Metodología SDD. **Empieza por `specs/README.md`.** |
@@ -40,7 +41,7 @@ Ficheros que hay que leer **enteros** antes de cambiarlos: `apps/worker/src/engi
 
 ## Invariantes de dinero (no negociables)
 
-1. **Solo `Decimal`** (`packages/shared/src/money.ts`, precisión 40). Dinero y cantidades viajan como `string` en el cable y en la BD (`Decimal(38,18)`). Nunca `number`, nunca `parseFloat`.
+1. **Solo `Decimal`** para el dinero, las cantidades y los precios de las órdenes (`packages/shared/src/money.ts`, precisión 40). Viajan como `string` en el cable y en la BD (`Decimal(38,18)`). Nunca `number`, nunca `parseFloat`. Las estadísticas adimensionales —ADX, RSI, CHOP, percentiles, rectas OLS, media vida, Wilson— pueden ir en `number`, como `MarketFeatures`; un nivel que acaba en una orden cruza a `Decimal` una sola vez y pasa por `precision.ts`.
 2. **Redondeo a la retícula del venue** en `precision.ts`: compra redondea **abajo**, venta **arriba**, cantidad **siempre abajo**. Es la única puerta; ningún adaptador manda nada que no haya pasado por ahí.
 3. **`clientOrderId` determinista** `<16 hex del bot>.<ciclo>.<KIND><índice>` (`client-order-id.ts`). Es la idempotencia: dos ticks no colocan dos veces y un worker reiniciado reconoce sus órdenes. Cambiar el formato rompe la reconciliación de todos los bots vivos.
 4. **La fila de `bot_orders` se escribe ANTES de llamar al venue** (`bot-runner.ts`, `place()`). Lo que no puede pasar es mandar una orden sin constancia de haberlo hecho.
@@ -53,7 +54,7 @@ Ficheros que hay que leer **enteros** antes de cambiarlos: `apps/worker/src/engi
 11. **Un solo bot real por par y cuenta** (índice único parcial en `bots`). Los simulados quedan fuera de la regla.
 12. **Mutabilidad HOT/WARM/COLD** de cada campo (`meta.fields`) decide lo que hace el motor al recargar la configuración. No es una etiqueta decorativa.
 13. **Una escritura con estado desconocido no se reenvía** (`withWriteRetry`): si no se puede saber si la orden entró, se lanza y el tick siguiente reconcilia contra el venue.
-14. **Ninguna IA escribe configuración por su cuenta.** El asesor y el supervisor emiten enumeraciones —nunca números, nunca importes— y un generador determinista las traduce; todo pasa por `validate()`, `preview()`, `assertWithinLimits` y `diffConfig`, y el supervisor aplica por `updateConfig` como cualquier usuario. No hay un segundo camino de escritura.
+14. **Ninguna IA escribe configuración ni fija un número por su cuenta.** El asesor, el supervisor y la IA del canal (`AI_CHANNEL`) emiten enumeraciones —nunca números, importes ni precios— y un generador determinista las traduce. La configuración pasa por `validate()`, `preview()`, `assertWithinLimits` y `diffConfig`, y solo cambia por `updateConfig`, como la de cualquier usuario: no hay un segundo camino de escritura de configuración. La IA del canal escribe una **intención de operación** (`bot_ai_intents`): elige entre las opciones que la herramienta ya calculó en el worker dentro de los topes del dueño, y el worker la vuelve a derivar con datos frescos, la revalida y la ejecuta por el mismo `plan()` → `reconcile()` → `place()`. El stop y los objetivos son órdenes nativas, ninguna salida espera al modelo y sin respuesta válida no hay entrada.
 
 ## Comandos
 

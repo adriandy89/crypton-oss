@@ -805,3 +805,224 @@ describe('candleHistory() — la ventana que ve el motor (spec 038)', () => {
     await service.onModuleDestroy();
   });
 });
+
+/**
+ * Spec 057, F-03. «Cerrada» se decidía con el reloj de AHORA: una vela
+ * descargada a las 10:14:30 —con la de las 10:00 todavía en curso— pasaba por
+ * cerrada a las 10:15:00, con los datos de antes del cierre, hasta el siguiente
+ * refresco, que llegaba cuando tocaba por TTL y no cuando cerraba la vela.
+ */
+describe('candleHistory() — la vela cerrada es la que ya lo estaba al pedirla (spec 057, F-03)', () => {
+  const MIN = 60_000;
+  const QUINCE = 15 * MIN;
+  const DIEZ = Date.UTC(2026, 8, 17, 10, 0, 0);
+  const esperar = () => new Promise((r) => setTimeout(r, 0));
+  let reloj = 0;
+
+  beforeEach(() => {
+    jest.spyOn(Date, 'now').mockImplementation(() => reloj);
+  });
+  afterEach(() => {
+    jest.restoreAllMocks();
+  });
+
+  /** Velas de 15 min desde las 08:45 hasta `ultima`, con el cierre de esa aparte. */
+  const serie = (ultima: number, cierreUltima = '1') => {
+    const velas = [];
+    for (let t = DIEZ - 5 * QUINCE; t <= ultima; t += QUINCE) {
+      velas.push({ t, o: '1', h: '3', l: '0.5', c: t === ultima ? cierreUltima : '1', v: '1' });
+    }
+    return velas;
+  };
+
+  /** El servicio con un venue que responde lo que diga `respuesta` y anota cuándo se le pide. */
+  const montar = () => {
+    const h = build();
+    const pedidas: number[] = [];
+    const estado = { respuesta: serie(DIEZ) };
+    (h.fake.adapter as { getCandles: unknown }).getCandles = () => {
+      pedidas.push(reloj);
+      return Promise.resolve(estado.respuesta);
+    };
+    return { ...h, pedidas, estado };
+  };
+
+  it('una vela descargada en curso no se entrega como cerrada aunque ya haya cerrado', async () => {
+    const { service, pedidas, estado } = montar();
+    // 10:14:30: la vela de las 10:00 llega a medias.
+    reloj = DIEZ + 14 * MIN + 30_000;
+    estado.respuesta = serie(DIEZ, '1.5');
+    service.candleHistory(HL, 'BTC', '15m', 3);
+    await esperar();
+
+    // 10:15:05: ya cerró, pero lo que hay es de antes del cierre.
+    reloj = DIEZ + 15 * MIN + 5_000;
+    estado.respuesta = [...serie(DIEZ, '2.5'), ...serie(DIEZ + QUINCE).slice(-1)];
+    const antes = service.candleHistory(HL, 'BTC', '15m', 3)!;
+    expect(antes.at(-1)!.t).toBe(DIEZ - QUINCE);
+    expect(antes.map((v) => v.c)).not.toContain('1.5');
+
+    // Y no espera al TTL: la pide en cuanto cierra.
+    expect(pedidas).toEqual([DIEZ + 14 * MIN + 30_000, DIEZ + 15 * MIN + 5_000]);
+    await esperar();
+
+    reloj += 1_000;
+    const despues = service.candleHistory(HL, 'BTC', '15m', 3)!;
+    expect(despues.at(-1)).toMatchObject({ t: DIEZ, c: '2.5' });
+    await service.onModuleDestroy();
+  });
+
+  it('si el venue aún no la tiene, reintenta una vez y después vuelve al TTL', async () => {
+    const { service, pedidas, estado } = montar();
+    // El venue va con retraso: su última vela es la de las 09:45.
+    estado.respuesta = serie(DIEZ - QUINCE);
+    reloj = DIEZ + 14 * MIN + 30_000;
+    service.candleHistory(HL, 'BTC', '15m', 3);
+    await esperar();
+
+    const en = async (ms: number) => {
+      reloj = DIEZ + 15 * MIN + ms;
+      service.candleHistory(HL, 'BTC', '15m', 3);
+      await esperar();
+    };
+    await en(5_000); // primer intento
+    await en(7_000); // demasiado pronto para el segundo
+    await en(11_000); // segundo intento
+    await en(20_000); // ya no hay más
+    await en(50_000);
+    expect(pedidas).toHaveLength(3);
+
+    // El TTL sigue funcionando: un minuto después de la última descarga.
+    await en(72_000);
+    expect(pedidas).toHaveLength(4);
+    await service.onModuleDestroy();
+  });
+
+  it('con la vela esperada ya en la ventana no se pide nada antes del TTL', async () => {
+    const { service, pedidas, estado } = montar();
+    // Descargada a las 10:15:10: la de las 10:00 ya es definitiva.
+    estado.respuesta = serie(DIEZ + QUINCE);
+    reloj = DIEZ + 15 * MIN + 10_000;
+    service.candleHistory(HL, 'BTC', '15m', 3);
+    await esperar();
+
+    reloj = DIEZ + 15 * MIN + 40_000;
+    expect(service.candleHistory(HL, 'BTC', '15m', 3)!.at(-1)!.t).toBe(DIEZ);
+    expect(pedidas).toHaveLength(1);
+    await service.onModuleDestroy();
+  });
+
+  /**
+   * Spec 058. El canal con IA lee tres series por par; con el refresco de un
+   * minuto eran tres peticiones por minuto y par para volver a traer velas
+   * cerradas. Sus series piden un TTL largo, y la vela que cierra la sigue
+   * trayendo `faltaElCierre`.
+   */
+  describe('TTL por petición (spec 058)', () => {
+    it('con un TTL largo no se vuelve a pedir al minuto', async () => {
+      const { service, pedidas, estado } = montar();
+      estado.respuesta = serie(DIEZ + QUINCE);
+      reloj = DIEZ + 15 * MIN + 10_000;
+      service.candleHistory(HL, 'BTC', '15m', 3, false, { ttlMs: QUINCE });
+      await esperar();
+
+      reloj = DIEZ + 17 * MIN;
+      service.candleHistory(HL, 'BTC', '15m', 3, false, { ttlMs: QUINCE });
+      await esperar();
+      expect(pedidas).toHaveLength(1);
+
+      // Pasado su TTL, sí.
+      reloj = DIEZ + 15 * MIN + 10_000 + QUINCE + 1;
+      estado.respuesta = serie(DIEZ + 2 * QUINCE);
+      service.candleHistory(HL, 'BTC', '15m', 3, false, { ttlMs: QUINCE });
+      await esperar();
+      expect(pedidas).toHaveLength(2);
+      await service.onModuleDestroy();
+    });
+
+    it('con dos interesados manda el TTL más corto', async () => {
+      const { service, pedidas, estado } = montar();
+      estado.respuesta = serie(DIEZ + QUINCE);
+      reloj = DIEZ + 15 * MIN + 10_000;
+      service.candleHistory(HL, 'BTC', '15m', 3, false, { ttlMs: QUINCE });
+      // Otro bot, sin TTL propio: el de siempre, un minuto.
+      service.candleHistory(HL, 'BTC', '15m', 3);
+      await esperar();
+
+      reloj = DIEZ + 15 * MIN + 10_000 + MIN + 1;
+      service.candleHistory(HL, 'BTC', '15m', 3, false, { ttlMs: QUINCE });
+      await esperar();
+      expect(pedidas).toHaveLength(2);
+      await service.onModuleDestroy();
+    });
+
+    it('la vela que cierra se pide igual, sin esperar al TTL largo', async () => {
+      const { service, pedidas, estado } = montar();
+      estado.respuesta = serie(DIEZ);
+      reloj = DIEZ + 14 * MIN;
+      service.candleHistory(HL, 'BTC', '15m', 3, false, { ttlMs: QUINCE });
+      await esperar();
+
+      reloj = DIEZ + 15 * MIN + 6_000;
+      service.candleHistory(HL, 'BTC', '15m', 3, false, { ttlMs: QUINCE });
+      await esperar();
+      expect(pedidas).toEqual([DIEZ + 14 * MIN, DIEZ + 15 * MIN + 6_000]);
+      await service.onModuleDestroy();
+    });
+  });
+
+  /**
+   * Spec 058. El canal con IA decide al cierre de cada vela de 5 min. Con la
+   * lectura síncrona recibía la ventana de antes del cierre y decidía una vela
+   * tarde.
+   */
+  describe('candleWindow() — esperar a la vela que acaba de cerrar (spec 058)', () => {
+    it('espera al refresco del cierre y devuelve ya la vela nueva', async () => {
+      const { service, estado } = montar();
+      estado.respuesta = serie(DIEZ);
+      reloj = DIEZ + 14 * MIN;
+      service.candleHistory(HL, 'BTC', '15m', 3);
+      await esperar();
+
+      reloj = DIEZ + 15 * MIN + 6_000;
+      estado.respuesta = serie(DIEZ + QUINCE);
+      const velas = await service.candleWindow(HL, 'BTC', '15m', 3, false, { esperarMs: 1_000 });
+
+      expect(velas!.at(-1)!.t).toBe(DIEZ);
+      await service.onModuleDestroy();
+    });
+
+    it('sin `esperarMs` no espera: devuelve lo que hay', async () => {
+      const { service, estado } = montar();
+      estado.respuesta = serie(DIEZ);
+      reloj = DIEZ + 14 * MIN;
+      service.candleHistory(HL, 'BTC', '15m', 3);
+      await esperar();
+
+      reloj = DIEZ + 15 * MIN + 6_000;
+      estado.respuesta = serie(DIEZ + QUINCE);
+      const velas = await service.candleWindow(HL, 'BTC', '15m', 3);
+
+      expect(velas!.at(-1)!.t).toBe(DIEZ - QUINCE);
+      await service.onModuleDestroy();
+    });
+
+    it('un venue que no contesta no la retiene más de lo pedido', async () => {
+      const { service, fake, estado } = montar();
+      estado.respuesta = serie(DIEZ);
+      reloj = DIEZ + 14 * MIN;
+      service.candleHistory(HL, 'BTC', '15m', 3);
+      await esperar();
+
+      (fake.adapter as { getCandles: unknown }).getCandles = () => new Promise(() => undefined);
+      reloj = DIEZ + 15 * MIN + 6_000;
+      const empezado = performance.now();
+      const velas = await service.candleWindow(HL, 'BTC', '15m', 3, false, { esperarMs: 30 });
+
+      expect(performance.now() - empezado).toBeLessThan(1_000);
+      // La de antes, que es lo que hay.
+      expect(velas!.at(-1)!.t).toBe(DIEZ - QUINCE);
+      await service.onModuleDestroy();
+    });
+  });
+});

@@ -1,4 +1,4 @@
-import { Component, OnInit, computed, inject, signal } from '@angular/core';
+import { Component, OnInit, computed, effect, inject, signal, untracked } from '@angular/core';
 import { ActivatedRoute } from '@angular/router';
 import { Clipboard } from '@capacitor/clipboard';
 import {
@@ -34,7 +34,13 @@ import type {
   Candle,
   CandleInterval,
 } from '@crypton/shared';
-import { aCsv, candleSpanMs } from '@crypton/shared';
+import {
+  aCsv,
+  candleSpanMs,
+  cifrasCanalDe,
+  type BacktestSetupMetrics,
+  type BacktestVentana,
+} from '@crypton/shared';
 import {
   BacktestsService,
   BotsService,
@@ -44,6 +50,7 @@ import {
   type BacktestSummary,
 } from '../../core/services';
 import { errorText, intervalLabel, money, pct, shortDate, signed } from '../../core/utils';
+import { SETUP, textoDe } from '../../core/utils/canal-ia';
 import {
   PriceChartComponent,
   buildFillMarkers,
@@ -67,6 +74,9 @@ const ATAJOS = [
 
 /** El mismo tope que aplica el servidor. Se comprueba aquí para avisar ANTES. */
 const MAX_BARS = 10_000;
+
+/** Los tramos que admite el servidor para el canal con IA (spec 058). */
+const TRAMOS = [1, 2, 3, 4, 5, 6] as const;
 
 /** Operaciones que se pintan en la tabla; el CSV lleva todas las que llegaron. */
 const MAX_OPERACIONES_EN_PANTALLA = 200;
@@ -199,6 +209,9 @@ export class BacktestPage implements OnInit {
   readonly slippageRate = signal('0.0005');
   readonly spreadBps = signal(2);
   readonly barPath = signal<'NEAREST_FIRST' | 'PESSIMISTIC'>('NEAREST_FIRST');
+  /** Tramos consecutivos del periodo, solo para el canal con IA (spec 059). */
+  readonly tramos = signal(3);
+  readonly opcionesTramos = TRAMOS;
 
   readonly running = signal(false);
   readonly result = signal<BacktestResult | null>(null);
@@ -214,6 +227,14 @@ export class BacktestPage implements OnInit {
   /** Solo los de simulación: el backtest reproduce una configuración, no una cuenta. */
   readonly simulados = computed(() => this.bots.bots().filter((b) => b.dryRun));
 
+  /**
+   * El bot elegido es del canal con IA: registra sus operaciones, y el
+   * resultado trae cifras por setup y por tramo.
+   */
+  readonly esCanal = computed(
+    () => this.simulados().find((b) => b.id === this.botId())?.strategy === 'AI_CHANNEL',
+  );
+
   readonly intervalos = computed<CandleInterval[]>(() => {
     const s = this.backtests.sources()?.find((x) => x.id === this.source());
     return s?.intervals ?? [];
@@ -224,8 +245,16 @@ export class BacktestPage implements OnInit {
   );
   readonly demasiadas = computed(() => this.barras() > MAX_BARS);
 
+  /** El canal con IA solo se reproduce en velas de 5 min: con otras, la API responde 400. */
+  readonly intervaloInvalido = computed(() => this.esCanal() && this.interval() !== '5m');
+
   readonly puedeLanzar = computed(
-    () => !!this.botId() && !this.demasiadas() && this.barras() >= 10 && !this.running(),
+    () =>
+      !!this.botId() &&
+      !this.demasiadas() &&
+      !this.intervaloInvalido() &&
+      this.barras() >= 10 &&
+      !this.running(),
   );
 
   // ── Derivados del resultado ────────────────────────────────────────────
@@ -313,6 +342,11 @@ export class BacktestPage implements OnInit {
 
   constructor() {
     addIcons({ playOutline, trashOutline, warningOutline, openOutline, gitCompareOutline });
+
+    // Al elegir un bot del canal con IA, sus velas: decide con las de 5 min (spec 058).
+    effect(() => {
+      if (this.esCanal()) untracked(() => this.interval.set('5m'));
+    });
   }
 
   /**
@@ -366,6 +400,7 @@ export class BacktestPage implements OnInit {
         slippageRate: this.slippageRate(),
         spreadBps: this.spreadBps(),
         barPath: this.barPath(),
+        ...(this.esCanal() ? { ventanasConsecutivas: this.tramos() } : {}),
       });
       this.result.set(r);
       this.origen.set({ tipo: 'nueva' });
@@ -471,6 +506,24 @@ export class BacktestPage implements OnInit {
     return shortDate(new Date(ms));
   }
 
+  /** «rebote · largo»: un setup y su lado. */
+  setup(s: BacktestSetupMetrics): string {
+    return `${textoDe(SETUP, s.setup)} · ${s.lado === 'LONG' ? 'largo' : 'corto'}`;
+  }
+
+  /** Aciertos sobre el total, en %; el límite de Wilson va aparte. */
+  acierto(s: BacktestSetupMetrics): string {
+    return s.n > 0 ? money((s.aciertos / s.n) * 100, 0) + ' %' : '—';
+  }
+
+  wilson(s: BacktestSetupMetrics): string {
+    return money(s.wilsonInferior * 100, 0) + ' %';
+  }
+
+  tramo(v: BacktestVentana): string {
+    return `${this.fecha(v.desde)} → ${this.fecha(v.hasta)}`;
+  }
+
   duracion(ms: number | null): string {
     if (!ms) return '—';
     const h = Math.floor(ms / 3_600_000);
@@ -529,6 +582,16 @@ function resultadoDeGuardado(
     })),
     fillsTruncated: run.fills_total > fills.length,
     cycles: [],
+    // Las cifras del canal con IA viajan dentro de `metrics` (spec 058). Se leen
+    // con el lector de `shared`, que descarta una lista que no encaja entera.
+    ...cifrasDe(run),
     warnings: run.warnings,
   };
+}
+
+function cifrasDe(run: BacktestRun): Partial<BacktestResult> {
+  const cifras = cifrasCanalDe(run.metrics);
+  return cifras
+    ? { porSetup: cifras.porSetup, ventanas: cifras.ventanas, operaciones: cifras.operaciones }
+    : {};
 }

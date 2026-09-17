@@ -19,6 +19,7 @@ import {
   type MarginMode,
   type MarketSpec,
   type ModifyRequest,
+  type NivelApalancamiento,
   type OrderAck,
   type OrderUpdate,
   type PlaceOrderRequest,
@@ -26,13 +27,14 @@ import {
   type PositionSide,
   type Ticker,
   type VenueOrder,
+  maintenanceMarginRateOf,
   roundPriceForSide,
 } from '@crypton/shared';
 import { changePct, checkInterval, finishCandles, num, numOrNull, resolveRange } from '../candles';
 import { HL_INTERVALS, VENUE_CAPABILITIES } from '../capabilities';
 import { hyperliquidCodec } from '../coid';
 import { VenueCooldown } from '../cooldown';
-import { toExchangeError } from '../errors';
+import { messageOf, toExchangeError } from '../errors';
 import { MarketSpecCache, canonicalSymbol } from '../market-cache';
 import { RateLimiter, withRetry, withWriteRetry } from '../rate-limit';
 import {
@@ -43,6 +45,7 @@ import {
 } from '../venue-budget';
 import { hyperliquidWeight } from '../venue-weights';
 import type {
+  AcuseApalancamiento,
   AdapterOptions,
   CandleQuery,
   ExchangeAdapter,
@@ -141,6 +144,57 @@ export function esLiquidacionHl(fill: unknown): boolean {
   return typeof dir === 'string' && dir.toLowerCase().includes('liquidat');
 }
 
+/**
+ * Lo que dice Hyperliquid de una IOC que no encuentra contra quién ejecutarse:
+ * «Order could not immediately match against any resting orders». No casa
+ * con ningún patrón de `classify`, así que salía como FATAL.
+ */
+const NO_CASA_HL = /could not immediately match/i;
+
+/** Una tabla de márgenes tal y como llega en `meta.marginTables`. */
+type TablaMargenesHl = readonly [
+  number,
+  { marginTiers: readonly { lowerBound: string; maxLeverage: number }[] },
+];
+
+/**
+ * Los tramos de apalancamiento de un activo de Hyperliquid (spec 058).
+ *
+ * El activo apunta a su tabla con `marginTableId`, y cada tramo de la tabla
+ * rige desde `lowerBound` (nocional en USDC) con su `maxLeverage`. El
+ * mantenimiento de cada tramo es la mitad del margen inicial a su máximo:
+ * «the maintenance margin is half of the initial margin at max leverage»
+ * (docs, Margining), la misma regla que ya usa la ficha del mercado.
+ *
+ * Si el activo no tiene tabla en la respuesta, rige un tramo único con el máximo
+ * del activo, que es lo que ya decía la ficha. Ningún tramo pasa de ese máximo.
+ */
+export function tramosHyperliquid(
+  asset: { maxLeverage: number; marginTableId?: number },
+  tablas: readonly TablaMargenesHl[],
+): NivelApalancamiento[] {
+  const tabla = tablas.find(([id]) => id === asset.marginTableId)?.[1];
+  const tramos = (tabla?.marginTiers ?? []).filter(
+    (t) => t.maxLeverage > 0 && firstNum(t.lowerBound, -1).gte(0),
+  );
+  if (tramos.length === 0) {
+    return [
+      {
+        desdeNocional: '0',
+        maxApalancamiento: asset.maxLeverage,
+        mantenimiento: maintenanceMarginRateOf({ maxLeverage: asset.maxLeverage }),
+      },
+    ];
+  }
+  return tramos
+    .map((t) => ({
+      desdeNocional: D(t.lowerBound).toFixed(),
+      maxApalancamiento: Math.min(t.maxLeverage, asset.maxLeverage),
+      mantenimiento: maintenanceMarginRateOf({ maxLeverage: t.maxLeverage }),
+    }))
+    .sort((a, b) => D(a.desdeNocional).comparedTo(b.desdeNocional));
+}
+
 export class HyperliquidAdapter implements ExchangeAdapter {
   readonly venue = Venue.HYPERLIQUID;
 
@@ -226,6 +280,11 @@ export class HyperliquidAdapter implements ExchangeAdapter {
   private readonly budget: VenueBudget;
   private readonly markets: MarketSpecCache;
   private readonly assetIndex = new Map<string, number>();
+  /**
+   * Los tramos de cada activo. Llegan en la misma respuesta que el catálogo
+   * (`metaAndAssetCtxs`) y se refrescan con él: no cuestan ni una petición.
+   */
+  private readonly tramos = new Map<string, NivelApalancamiento[]>();
 
   private readonly orders$ = new Subject<OrderUpdate>();
   private readonly fills$ = new Subject<Fill>();
@@ -324,8 +383,12 @@ export class HyperliquidAdapter implements ExchangeAdapter {
 
   private async loadMarkets(): Promise<MarketSpec[]> {
     const [meta, ctxs] = await this.call(() => this.info.metaAndAssetCtxs(), 20);
+    // `?? []` aunque el tipo la declare: una respuesta sin tablas deja a cada
+    // activo con su tramo único, no tumba el catálogo entero.
+    const tablas = (meta.marginTables as TablaMargenesHl[] | undefined) ?? [];
     return meta.universe.map((asset, index) => {
       this.assetIndex.set(asset.name, index);
+      this.tramos.set(asset.name, tramosHyperliquid(asset, tablas));
       const ctx = ctxs[index];
       const mid = firstNum(ctx?.midPx, ctx?.markPx, 0);
       const tick = hyperliquidTickSize(mid, asset.szDecimals);
@@ -467,6 +530,23 @@ export class HyperliquidAdapter implements ExchangeAdapter {
 
   getMarkets(): Promise<MarketSpec[]> {
     return this.markets.all();
+  }
+
+  /**
+   * Los tramos del activo, de la tabla que llegó con el catálogo. Es una
+   * lectura pública: la sirve igual un adaptador sin credenciales.
+   */
+  async getLeverageTiers(symbol: string): Promise<NivelApalancamiento[]> {
+    const spec = await this.markets.get(symbol);
+    return (
+      this.tramos.get(symbol) ?? [
+        {
+          desdeNocional: '0',
+          maxApalancamiento: spec.maxLeverage,
+          mantenimiento: maintenanceMarginRateOf(spec),
+        },
+      ]
+    );
   }
 
   /** Estado de cuenta memoizado: posiciones y saldo salen de UNA llamada. */
@@ -784,23 +864,23 @@ export class HyperliquidAdapter implements ExchangeAdapter {
               tpsl: req.intent === 'TP' ? ('tp' as const) : ('sl' as const),
             },
           }
-        : {
-            limit: {
-              tif:
-                req.type === 'POST_ONLY'
-                  ? ('Alo' as const)
-                  : req.type === 'MARKET'
-                    ? ('Ioc' as const)
-                    : ('Gtc' as const),
-            },
-          };
+        : { limit: { tif: this.tifDe(req) } };
 
     const formattedPrice = await this.formatPrice(req.symbol, price, req.side);
     const builder = this.builder();
+    // Una límite IOC que no encuentra contra quién ejecutarse no es un fallo:
+    // es lo que se pedía, y el venue la ha cancelado sin que llegara a estar en
+    // el libro (spec 058). Solo la límite: una MARKET que no se ejecuta sí es
+    // un problema, y sigue saliendo como error.
+    const limiteInmediata = req.type === 'LIMIT' && orderType.limit?.tif === 'Ioc';
 
     // Sin reintento a ciegas: si el envío falla con algo reintentable, primero
     // se comprueba si la orden llegó a entrar (por cloid) y solo si no, se
     // reenvía. Reenviar sin comprobar dejaba filas REJECTED con la orden viva.
+    //
+    // `expiresAt` no viaja: Hyperliquid no tiene caducidad por orden (solo
+    // `expiresAfter`, que caduca la ACCIÓN firmada si llega tarde, no la orden
+    // en el libro). Una orden que ya no se desea la cancela la reconciliación.
     return withWriteRetry(
       async () => {
         const result = await this.callWrite(
@@ -821,7 +901,18 @@ export class HyperliquidAdapter implements ExchangeAdapter {
               ...(builder ? { builder } : {}),
             }),
           prioridadDeOrden(req),
-        );
+        ).catch((e: unknown) => {
+          if (limiteInmediata && NO_CASA_HL.test(messageOf(e))) return null;
+          throw e;
+        });
+        if (result === null) {
+          return {
+            clientOrderId: req.clientOrderId,
+            venueOrderId: '',
+            status: OrderStatus.CANCELED,
+            ts: Date.now(),
+          };
+        }
         const status = result.response.data.statuses?.[0];
         if (status === undefined) {
           // Sin estados no hay acuse que leer; reventar aquí con un TypeError
@@ -838,6 +929,23 @@ export class HyperliquidAdapter implements ExchangeAdapter {
       () => this.findPlaced(req.symbol, req.clientOrderId, cloid),
       { venue: this.venue },
     );
+  }
+
+  /**
+   * La vigencia de una orden límite en el vocabulario de Hyperliquid.
+   *
+   * Se miraba solo el tipo y el `timeInForce` pedido se ignoraba: una límite IOC
+   * —la entrada con tope de precio— salía como Gtc y se quedaba en el libro
+   * (spec 057, F-07). Hyperliquid no tiene FOK, y mandarla como otra cosa sería
+   * el mismo fallo: se rechaza.
+   */
+  private tifDe(req: PlaceOrderRequest): 'Alo' | 'Ioc' | 'Gtc' {
+    if (req.type === 'POST_ONLY' || req.timeInForce === 'ALO') return 'Alo';
+    if (req.type === 'MARKET' || req.timeInForce === 'IOC') return 'Ioc';
+    if (req.timeInForce === 'FOK') {
+      throw new ExchangeError('RULES', 'Hyperliquid no admite órdenes FOK.', this.venue);
+    }
+    return 'Gtc';
   }
 
   /** Traduce el acuse crudo de Hyperliquid al del motor. */
@@ -960,7 +1068,17 @@ export class HyperliquidAdapter implements ExchangeAdapter {
     };
   }
 
-  async setLeverage(symbol: string, leverage: number, mode: MarginMode): Promise<void> {
+  /**
+   * El acuse repite el apalancamiento pedido, y no es un eco sin más.
+   * `updateLeverage` es atómico y el venue no contesta con cifras: o lo aplica
+   * entero o responde un error, y el SDK lanza ante cualquier error
+   * (`assertSuccessResponse`). Llegar aquí es la confirmación.
+   */
+  async setLeverage(
+    symbol: string,
+    leverage: number,
+    mode: MarginMode,
+  ): Promise<AcuseApalancamiento> {
     const asset = await this.assetIdOf(symbol);
     await this.call(
       () =>
@@ -972,6 +1090,7 @@ export class HyperliquidAdapter implements ExchangeAdapter {
       1,
       'write',
     );
+    return { leverage };
   }
 
   /**

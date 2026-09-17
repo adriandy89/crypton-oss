@@ -153,6 +153,63 @@ export interface BacktestMetrics {
   largestGapMs: number;
 }
 
+/** Cómo terminó una operación del canal con IA (spec 058). */
+export type SalidaOperacion = 'OBJETIVO' | 'STOP' | 'CIERRE' | 'LIQUIDACION';
+
+/**
+ * Una operación del canal con IA en el replay (spec 058): lo que se planeó y lo
+ * que salió. El resultado va en USDC, neto de comisiones, y en R: el riesgo que
+ * la operación declaró al entrar.
+ */
+export interface BacktestOperacionView {
+  setup: string;
+  lado: 'LONG' | 'SHORT';
+  candidatoId: string;
+  entradaEn: number;
+  salidaEn: number;
+  precioEntrada: string;
+  precioSalida: string;
+  stop: string;
+  /** Los precios de sus objetivos, del primero al último. */
+  objetivos: string[];
+  apalancamiento: number;
+  riesgo: string;
+  resultado: string;
+  r: number;
+  rPlaneado: number;
+  salida: SalidaOperacion;
+}
+
+/**
+ * Las cifras de un setup en el replay (spec 058), con las mismas medidas que
+ * las tasas base que ve la IA. Los cocientes son adimensionales y van en
+ * `number`; el dinero, en cadena.
+ */
+export interface BacktestSetupMetrics {
+  setup: string;
+  lado: 'LONG' | 'SHORT';
+  n: number;
+  aciertos: number;
+  /** Límite inferior de Wilson (95 %) de la tasa de aciertos. */
+  wilsonInferior: number;
+  rMedio: number;
+  /** Resultado medio por operación, en USDC. */
+  esperanza: string;
+  /** Ganado entre perdido; null sin pérdidas. */
+  factorBeneficio: number | null;
+  resultado: string;
+}
+
+/** Un tramo del rango con sus cifras: se miran juntos para ver si el resultado se sostiene. */
+export interface BacktestVentana {
+  desde: number;
+  hasta: number;
+  operaciones: number;
+  resultado: string;
+  rTotal: number;
+  porSetup: BacktestSetupMetrics[];
+}
+
 export interface BacktestResult {
   meta: BacktestMeta;
   params: BacktestParams;
@@ -170,6 +227,11 @@ export interface BacktestResult {
   fills: BacktestFillView[];
   fillsTruncated: boolean;
   cycles: BacktestCycleView[];
+  /** Solo las estrategias que registran operaciones: el canal con IA (spec 058). */
+  operaciones?: BacktestOperacionView[];
+  porSetup?: BacktestSetupMetrics[];
+  /** El rango partido en tramos consecutivos (`ventanasConsecutivas`). */
+  ventanas?: BacktestVentana[];
   /** Redactados en español y listos para pintar. Ver `FIDELITY_WARNINGS`. */
   warnings: string[];
 }

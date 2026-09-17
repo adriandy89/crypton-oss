@@ -38,6 +38,7 @@ import {
 } from '../../core/services';
 import type { BotSummary } from '../../core/models';
 import { ModoIaService } from '../../core/services/modo-ia.service';
+import { CanalIaService } from '../../core/services/canal-ia.service';
 import {
   errorText,
   money,
@@ -311,6 +312,21 @@ const VIVOS = ['STARTING', 'RUNNING', 'PAUSED'];
                           }
                         </ui-badge>
                       }
+                      <!-- El canal con IA (spec 059), con el mismo criterio. -->
+                      @if (canalIa.pastilla(bot.id, bot); as ic) {
+                        <ui-badge
+                          size="sm"
+                          caps
+                          [tone]="ic.tone"
+                          [variant]="ic.variant"
+                          [attr.title]="ic.porQue"
+                        >
+                          {{ ic.texto }}
+                          @if (ic.porQue) {
+                            <span class="solo-lector">(no consulta: {{ ic.porQue }})</span>
+                          }
+                        </ui-badge>
+                      }
                     </p>
                   </div>
                   <ui-status-pill [status]="bot.status" />
@@ -418,6 +434,8 @@ export class BotsListPage implements OnInit {
   private readonly network = inject(NetworkService);
   /** El Modo IA de los bots, para la pastilla. Solo pinta algo a un administrador. */
   readonly modoIa = inject(ModoIaService);
+  /** Y el canal con IA (spec 059), con el mismo criterio. */
+  readonly canalIa = inject(CanalIaService);
   /** La red que se esta mirando. La lista ya viene filtrada por ella. */
   readonly testnet = this.network.testnet;
 
@@ -582,9 +600,14 @@ export class BotsListPage implements OnInit {
   }
 
   async reload(event: CustomEvent): Promise<void> {
-    // El Modo IA tambien: `refrescar()` no hace nada para quien no es
-    // administrador y nunca falla hacia fuera.
-    await Promise.all([this.bots.refresh(), this.cargarConexiones(), this.modoIa.refrescar()]);
+    // El Modo IA y el canal con IA tambien: `refrescar()` no hace nada para
+    // quien no es administrador y nunca falla hacia fuera.
+    await Promise.all([
+      this.bots.refresh(),
+      this.cargarConexiones(),
+      this.modoIa.refrescar(),
+      this.canalIa.refrescar(),
+    ]);
     void (event.target as HTMLIonRefresherElement).complete();
   }
 

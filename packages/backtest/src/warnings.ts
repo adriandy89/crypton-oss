@@ -91,15 +91,29 @@ export function fidelityWarnings(opts: {
     );
   }
 
-  // El seguimiento de beneficio tiene el mismo hueco que el stop de tendencia, y
-  // uno mas suyo: la MARCA DE AGUA del motor -el maximo visto entre dos
-  // planificaciones- no existe en el replay, que solo ve el cierre de la vela.
-  // Los dos huecos empujan en la misma direccion: el replay sale mas abajo.
+  // El seguimiento de beneficio tiene el mismo hueco que el stop de tendencia.
+  // El maximo SI se mide sobre la vela entera desde el spec 057 (F-04): el
+  // replay pasa sus extremos como la marca de agua del motor. Lo que queda es el
+  // momento: un retroceso dentro de la misma vela sale en la siguiente.
   if (opts.strategy === StrategyKind.TRAILING_PROFIT) {
     avisos.push(
-      'Seguimiento de beneficio: el disparador se mueve UNA vez por vela y el maximo se mide ' +
-        'sobre el cierre, no sobre lo que el motor ve entre revisiones. Las dos cosas hacen que ' +
-        'el replay siga al maximo con retraso y salga por debajo de lo que saldria en real.',
+      'Seguimiento de beneficio: el disparador se mueve UNA vez por vela, con el maximo que ' +
+        'alcanzo la vela. Si el precio retrocede dentro de esa misma vela, el motor saldria en ' +
+        'ella y el replay sale en la siguiente, al precio del disparador.',
+    );
+  }
+
+  // El canal con IA se mide como las tasas base que ve la IA: si el backtest
+  // fuera más generoso que ellas, validaría una ventaja que no existe (spec 058).
+  if (opts.strategy === StrategyKind.AI_CHANNEL) {
+    avisos.push(
+      'Canal con IA: se mide con las reglas de sus tasas base, a propósito pesimistas. Los ' +
+        'objetivos se llenan solo si el precio los pasa; con posición abierta, cada vela va ' +
+        'primero hacia el stop; y un hueco que salta el stop sale a la apertura.',
+      'Canal con IA: un solo tramo de apalancamiento, con el mantenimiento del simulador, y sin ' +
+        'funding, así que la puerta del funding en contra no actúa. De las guardas, las de la ' +
+        'estrategia (tope diario, operaciones del día, rachas y esperas) sí se reproducen; las del ' +
+        'motor (pausa al 1,5 del tope diario, liquidación a dos tercios del camino), no.',
     );
   }
 

@@ -51,6 +51,7 @@ export const STRATEGY_LABELS: Record<StrategyKind, string> = {
   MARKET_MAKER_V2: 'Market maker V2',
   TREND_FOLLOW: 'Tendencia',
   TRAILING_PROFIT: 'Seguimiento de beneficio',
+  AI_CHANNEL: 'Canal con IA',
 };
 
 /**
@@ -73,6 +74,8 @@ export const STRATEGY_BLURBS: Record<StrategyKind, string> = {
     'Entra cuando el precio rompe su rango y sale con un stop que le sigue. La unica que gana en linea recta.',
   TRAILING_PROFIT:
     'Una operacion que deja correr el beneficio: al llegar a tu objetivo sigue al maximo y cierra al retroceder.',
+  AI_CHANNEL:
+    'Rebotes en el borde de un rango o canal, con el apalancamiento que permite el stop. Una IA elige entre operaciones ya calculadas.',
 };
 
 /** Las dos estrategias que llevan ficha de market making. */
@@ -183,12 +186,26 @@ export const EVENT_LABELS: Record<string, string> = {
   VENUE_RECOVERED: 'El exchange vuelve a responder',
   AUTH_ERROR: 'Credencial rechazada por el exchange',
   ACTION_FAILED: 'Accion fallida',
+  COMMAND_FAILED: 'Comando no ejecutado',
   // El Modo IA (spec 046). Salían con la constante tal cual hasta el spec 053.
   AI_MODE: 'Modo IA cambiado',
   AI_SUGGESTION: 'Sugerencia de la IA',
   AI_APPLIED: 'Ajuste aplicado por la IA',
   AI_ADVICE: 'La IA pide revisar el bot',
-  AI_FAILED: 'La IA no pudo revisar el bot',
+  // Lo emiten el Modo IA (un cambio que no se aplicó) y el canal con IA (fallos
+  // seguidos del modelo): el texto vale para los dos.
+  AI_FAILED: 'La IA no pudo actuar',
+  // El canal con IA (specs 058-059). `AI_EXIT` sustituye a `CYCLE_CLOSED`.
+  AI_DECISION: 'Decisión de la IA',
+  AI_ENTRY: 'Operación abierta',
+  AI_EXIT: 'Operación cerrada',
+  AI_CIERRE: 'Cierre a mercado ordenado',
+  AI_ENTRY_DISCARDED: 'Entrada descartada',
+  AI_DAY_STOP: 'Tope diario alcanzado',
+  AI_BREAKEVEN: 'Stop llevado a la entrada',
+  AI_CIERRE_FALLIDO: 'El cierre a mercado falló',
+  AI_POSICION_HUERFANA: 'Posición sin plan',
+  SIN_STOP: 'Posición sin stop confirmado',
 };
 
 export function eventLabel(type: string): string {

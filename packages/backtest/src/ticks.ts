@@ -16,6 +16,13 @@ export function tickPath(
   candle: Candle,
   interval: CandleInterval,
   path: BarPath,
+  /**
+   * El lado de la posición abierta, cuando la estrategia se mide como las tasas
+   * base (el canal con IA, spec 058): la vela va primero hacia el stop, sea cual
+   * sea `path`. Así una vela que toca el stop y el objetivo sale por el stop,
+   * igual que en la triple barrera. Sin posición manda `path`.
+   */
+  adversoPara: 'LONG' | 'SHORT' | null = null,
 ): { ts: number; price: Decimal; role: 'open' | 'high' | 'low' | 'close' }[] {
   const span = candleSpanMs(interval);
   const o = D(candle.o);
@@ -24,11 +31,14 @@ export function tickPath(
   const c = D(candle.c);
 
   const primeroElMinimo =
-    path === BarPath.PESSIMISTIC
-      ? // El que más duele: si la vela sube, primero el suelo.
-        c.gte(o)
-      : // El más cercano a la apertura.
-        o.minus(l).abs().lte(h.minus(o).abs());
+    adversoPara !== null
+      ? // El stop de un largo está abajo; el de un corto, arriba.
+        adversoPara === 'LONG'
+      : path === BarPath.PESSIMISTIC
+        ? // El que más duele: si la vela sube, primero el suelo.
+          c.gte(o)
+        : // El más cercano a la apertura.
+          o.minus(l).abs().lte(h.minus(o).abs());
 
   const extremos: { price: Decimal; role: 'high' | 'low' }[] = primeroElMinimo
     ? [

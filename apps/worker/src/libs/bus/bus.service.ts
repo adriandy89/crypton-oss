@@ -88,6 +88,19 @@ export const BUS_CHANNELS = {
   /** Órdenes de runtime de la API hacia el worker (pausar, parar, pánico). */
   BOT_COMMANDS: 'crypton:bot-commands',
   /**
+   * Canal con IA (spec 058): el worker ha escrito una intención `SOLICITADA` y
+   * la API tiene que consultar al modelo. Solo adelanta el momento: la
+   * solicitud está en `bot_ai_intents`, y la API la encuentra también
+   * sondeando. Lo publica el worker y lo escucha la API (spec 059).
+   */
+  BOT_AI_REQUESTS: 'crypton:bot-ai-requests',
+  /**
+   * Canal con IA: la intención de un bot ha cambiado (la API la decidió, la
+   * descartó o falló). El worker del bot planifica en el acto en vez de esperar
+   * al latido. Lo publica la API y lo escucha el worker.
+   */
+  BOT_AI_INTENTS: 'crypton:bot-ai-intents',
+  /**
    * PUBLICO: precios de mercado del worker hacia la API.
    *
    * Es el eslabon que faltaba para que los precios lleguen empujados en vez de
@@ -213,6 +226,19 @@ export class BusService implements OnModuleInit, OnModuleDestroy {
     } catch {
       return null;
     }
+  }
+
+  /**
+   * El valor de una clave tal cual, sin interpretarlo como JSON.
+   *
+   * Para las que no escribe `cacheSet`: el interruptor del canal con IA se
+   * puede poner a mano con `redis-cli SET … off`, y leído con `cacheGet` ese
+   * `off` sin comillas no era JSON y pasaba por «no hay clave» (spec 058).
+   * Lanza si Redis no responde: quien pregunta decide qué significa eso.
+   */
+  async leerTexto(key: string): Promise<string | null> {
+    const raw = await this.publisher.get(key);
+    return typeof raw === 'string' ? raw : null;
   }
 
   /** Se suscribe a un canal (idempotente) y devuelve sus mensajes. */

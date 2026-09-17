@@ -1,4 +1,5 @@
 import type { Direction, MarginMode } from './enums';
+import type { NivelApalancamiento } from './ia-canal';
 import { D, Decimal, type Numeric } from './money';
 
 /**
@@ -50,6 +51,16 @@ export function liquidationDistancePct(currentPrice: Numeric, liquidationPrice: 
  * otro mensaje y ninguna pantalla decía dónde estaba el límite (001/F-44).
  */
 export const MIN_LIQUIDATION_DISTANCE_PCT = 5;
+
+/**
+ * Tope absoluto de apalancamiento con la regla por stop (spec 058).
+ *
+ * Con esa regla el 5 % de arriba no manda: la liquidación se mide contra el
+ * stop de cada operación. Lo que queda es este techo, que es una decisión del
+ * usuario («hasta 25x o el máximo del par»), y lo miran la herramienta del
+ * canal, `validateCommon` y `RiskService`.
+ */
+export const MAX_APALANCAMIENTO_POR_STOP = 25;
 
 /**
  * Tasa de mantenimiento de un mercado. La ficha la trae cuando el venue la
@@ -177,4 +188,129 @@ export function liquidationOfPosition(
     qty.gt(0) ? 'LONG' : 'SHORT',
     maintenanceMarginRate,
   );
+}
+
+// ── La regla por stop del canal con IA (spec 058) ──────────────────────────
+
+/**
+ * Precio de liquidación EXACTO de una posición aislada, sin comisiones.
+ *
+ * La equidad a precio `P` es `margen + qty·(P − E)`, y el venue liquida cuando
+ * baja del mantenimiento `mmr·qty·P`. Despejando:
+ * - LARGO: `P = E·(1 − 1/L) / (1 − mmr)`
+ * - CORTO: `P = E·(1 + 1/L) / (1 + mmr)`
+ *
+ * `estimateLiquidationPrice` es la aproximación lineal de lo mismo, y en el
+ * corto queda algo optimista. El canal, que opera a 25×, usa esta.
+ */
+export function precioLiquidacionAislada(
+  entrada: Numeric,
+  apalancamiento: number,
+  mantenimiento: number,
+  lado: 'LONG' | 'SHORT',
+): Decimal | null {
+  if (!(apalancamiento > 0)) return null;
+  const e = D(entrada);
+  if (!e.isFinite() || e.lte(0)) return null;
+  const inv = D(1).div(apalancamiento);
+  const m = D(mantenimiento);
+  const p =
+    lado === 'SHORT'
+      ? e.mul(D(1).plus(inv)).div(D(1).plus(m))
+      : e.mul(D(1).minus(inv)).div(D(1).minus(m));
+  return p.gt(0) ? p : null;
+}
+
+/**
+ * Distancia relativa entrada-liquidación en aislado, en tanto por uno.
+ *
+ * - LARGO: `(1/L − mmr)/(1 − mmr)`
+ * - CORTO: `(1/L − mmr)/(1 + mmr)`
+ *
+ * La del corto es siempre la más estrecha de las dos.
+ */
+export function distanciaLiquidacionAislada(
+  apalancamiento: number,
+  mantenimiento: number,
+  lado: 'LONG' | 'SHORT',
+): Decimal {
+  if (!(apalancamiento > 0)) return D(0);
+  const m = D(mantenimiento);
+  const num = D(1).div(apalancamiento).minus(m);
+  return num.div(lado === 'SHORT' ? D(1).plus(m) : D(1).minus(m));
+}
+
+/**
+ * El tramo que rige para un nocional: el de mayor `desdeNocional` que no lo
+ * supera. Sin tramos, el del mercado entero.
+ */
+export function tramoDeApalancamiento(
+  tramos: readonly NivelApalancamiento[],
+  nocional: Numeric,
+  maxMercado: number,
+  mantenimientoMercado: number,
+): NivelApalancamiento {
+  const n = D(nocional);
+  let elegido: NivelApalancamiento | null = null;
+  for (const t of tramos) {
+    if (D(t.desdeNocional).lte(n) && (!elegido || D(t.desdeNocional).gt(elegido.desdeNocional))) {
+      elegido = t;
+    }
+  }
+  return (
+    elegido ?? {
+      desdeNocional: '0',
+      maxApalancamiento: maxMercado,
+      mantenimiento: mantenimientoMercado,
+    }
+  );
+}
+
+export interface EntradaApalancamientoPorStop {
+  /** Distancia del stop a la entrada, en tanto por uno. */
+  distanciaStop: Numeric;
+  /** ATR de 1 h sobre el precio, en tanto por uno. */
+  atr1hRelativo: Numeric;
+  /** Cuántos stops, como mínimo, entre la entrada y la liquidación. Nunca menos de 3. */
+  liqBufferStops: number;
+  /** Mantenimiento del tramo que rige. */
+  mantenimiento: number;
+  /** El resto de topes: 25, el del usuario, el del tramo, el del mercado… */
+  topes: readonly number[];
+}
+
+export interface ApalancamientoPorStop {
+  /** La distancia mínima exigida hasta la liquidación, en tanto por uno. */
+  necesaria: Decimal;
+  /** El mayor apalancamiento que la respeta. 0 = ni a 1× cabe. */
+  porStop: number;
+  /** `porStop` con el resto de topes aplicados. */
+  maximo: number;
+}
+
+/**
+ * El apalancamiento máximo que admite un stop (spec 058, «La regla por stop»).
+ *
+ *   need  = max(liqBufferStops·s, 3·ATR(1h))
+ *   Lstop = floor(1 / (mmr + need·(1 + mmr)))
+ *
+ * **Por qué el `(1 + mmr)`.** Con él, la distancia del corto
+ * —`(1/L − mmr)/(1 + mmr)`— queda por encima de `need`, y la del largo, más
+ * holgada, también.
+ *
+ * **Qué garantiza.** Un stop más ancho da MENOS apalancamiento, y la
+ * liquidación queda siempre al menos a tres stops y a tres ATR de 1 h de la
+ * entrada.
+ */
+export function apalancamientoPorStop(e: EntradaApalancamientoPorStop): ApalancamientoPorStop {
+  const buffer = Math.max(3, e.liqBufferStops);
+  const necesaria = Decimal.max(D(e.distanciaStop).mul(buffer), D(e.atr1hRelativo).mul(3));
+  const m = D(e.mantenimiento);
+  const denominador = m.plus(necesaria.mul(D(1).plus(m)));
+  const porStop = denominador.gt(0)
+    ? D(1).div(denominador).toDecimalPlaces(0, Decimal.ROUND_FLOOR).toNumber()
+    : 0;
+  const topes = e.topes.filter((t) => Number.isFinite(t) && t > 0);
+  const maximo = Math.max(0, Math.floor(Math.min(porStop, ...topes)));
+  return { necesaria, porStop, maximo };
 }

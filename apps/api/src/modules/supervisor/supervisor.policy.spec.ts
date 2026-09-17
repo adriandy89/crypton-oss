@@ -593,4 +593,12 @@ describe('SupervisorPolicyService — lo que ve la lista y la cobertura (spec 05
       ForbiddenException,
     );
   });
+
+  it('el canal con IA queda fuera: su IA es otra y no se supervisa (spec 058)', async () => {
+    const { service } = build(bot({ strategy: 'AI_CHANNEL' }));
+    expect(service.estrategias()).not.toContain('AI_CHANNEL');
+    await expect(service.set(ADMIN, 'bot-1', { mode: AiMode.AUTO })).rejects.toBeInstanceOf(
+      ForbiddenException,
+    );
+  });
 });

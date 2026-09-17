@@ -349,6 +349,10 @@ describe('AccountHub — un sandbox por bot, una fuente por venue', () => {
 
     expect(typeof handle.adjustIsolatedMargin).toBe('function');
     expect(typeof handle.setPositionMode).toBe('function');
+    // Y las dos lecturas del canal con IA (spec 058): sin ellas, el runner
+    // tomaría el venue por uno sin tramos ni modo.
+    expect(typeof handle.getPositionMode).toBe('function');
+    expect(typeof handle.getLeverageTiers).toBe('function');
     await hub.onModuleDestroy();
   });
 
@@ -365,6 +369,41 @@ describe('AccountHub — un sandbox por bot, una fuente por venue', () => {
 
     expect(handle.adjustIsolatedMargin).toBeUndefined();
     expect(handle.setPositionMode).toBeUndefined();
+    // En Hyperliquid y Lighter no hay modo que leer: posición neta.
+    expect(handle.getPositionMode).toBeUndefined();
+    expect(handle.getLeverageTiers).toBeUndefined();
+    await hub.onModuleDestroy();
+  });
+
+  it('los tramos, el modo y el acuse del apalancamiento llegan tal cual (spec 058)', async () => {
+    const { hub, credentials } = buildHub();
+    const tramos = [{ desdeNocional: '0', maxApalancamiento: 20, mantenimiento: 0.025 }];
+    const getLeverageTiers = jest.fn().mockResolvedValue(tramos);
+    const getPositionMode = jest.fn().mockResolvedValue('HEDGE');
+    const setLeverage = jest.fn().mockResolvedValue({ leverage: 12, maxNotional: '50000' });
+    const getPositions = jest.fn().mockResolvedValue([]);
+    credentials.openAdapter.mockResolvedValue({
+      venue: VENUE,
+      getLeverageTiers,
+      getPositionMode,
+      setLeverage,
+      getPositions,
+      close: jest.fn().mockResolvedValue(undefined),
+    });
+    const handle = await hub.open(ACCOUNT_ID, 'bot-a', VENUE, 'BTC', false, false);
+
+    await expect(handle.getLeverageTiers!('BTC')).resolves.toBe(tramos);
+    expect(getLeverageTiers).toHaveBeenCalledWith('BTC');
+    await expect(handle.getPositionMode!()).resolves.toBe('HEDGE');
+
+    await handle.getPositions('BTC');
+    await expect(handle.setLeverage('BTC', 12, 'ISOLATED')).resolves.toEqual({
+      leverage: 12,
+      maxNotional: '50000',
+    });
+    // Fijar el apalancamiento sigue invalidando lo leído del símbolo.
+    await handle.getPositions('BTC');
+    expect(getPositions).toHaveBeenCalledTimes(2);
     await hub.onModuleDestroy();
   });
 

@@ -54,8 +54,8 @@ export class BotsController {
     description:
       'Cada campo trae su mutabilidad (HOT/WARM/COLD), rango y valor por defecto: la app genera el formulario a partir de esto, sin código por estrategia.',
   })
-  strategies() {
-    return this.bots.strategiesMeta();
+  strategies(@GetUserInfo() user: SessionUser) {
+    return this.bots.strategiesMeta(user.id);
   }
 
   /**

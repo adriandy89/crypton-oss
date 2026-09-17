@@ -47,6 +47,9 @@ function usedIn(dir) {
     // «vacio» de «cero». Sin esta linea sus variables quedaban fuera de la
     // comprobacion, y una que faltara en el compose no avisaba (spec 051).
     for (const m of src.matchAll(/this\.num\(\s*'([A-Z][A-Z0-9_]*)'/g)) used.add(m[1]);
+    // Y las que solo admiten unos valores, con `this.enLista('X', lista, defecto)`
+    // en el cliente del modelo (spec 059).
+    for (const m of src.matchAll(/this\.enLista\(\s*'([A-Z][A-Z0-9_]*)'/g)) used.add(m[1]);
     // Los secretos no se leen con `config.get` directamente, sino a traves de
     // ayudantes que ademas validan (`requireSecret`, `this.require`). Sin esta
     // linea, JWT_ACCESS_SECRET o GOOGLE_CLIENT_ID —justo las que impiden

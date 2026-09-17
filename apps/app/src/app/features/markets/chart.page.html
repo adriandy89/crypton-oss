@@ -173,6 +173,7 @@
         [events]="visibleEvents()"
         [average]="averageSeries()"
         [result]="resultSeries()"
+        [canal]="visibleCanal()"
         [fitSpan]="bot() ? overlaySpan() : null"
         [scaleKey]="scaleKey()"
         (needHistory)="loadMoreHistory()"
@@ -257,6 +258,13 @@
       >
         <i class="sw liq"></i>Liquidación
       </button>
+      <!-- El canal que ve el canal con IA (spec 059): soporte, media y
+           resistencia. Solo en sus bots, y solo si hay un canal que pintar. -->
+      @if (canalDelBot()) {
+        <button type="button" [class.off]="!layers().canal" (click)="toggleLayer('canal')">
+          <i class="sw canal"></i>Canal
+        </button>
+      }
 
       <!-- Órdenes vivas que no se han podido situar: una orden a mercado sin
            ejecutar todavía no tiene precio al que dibujarla. Se dice en vez de

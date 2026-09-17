@@ -9,12 +9,14 @@ import {
   type Fill,
   type MarketSpec,
   type MarketTicker,
+  type NivelApalancamiento,
   type OrderAck,
+  type OrderUpdate,
   type Position,
   type Ticker,
   type VenueOrder,
 } from '@crypton/shared';
-import { DryRunAdapter } from './adapters/dry-run';
+import { DryRunAdapter, type DryRunState } from './adapters/dry-run';
 import { esLiquidacionHl } from './adapters/hyperliquid';
 import { asterCodec, codecFor, hyperliquidCodec, lighterCodec } from './coid';
 import { classify, isRetryable, isVenueUnavailable, messageOf, toExchangeError } from './errors';
@@ -29,7 +31,7 @@ import {
   resolveRange,
 } from './candles';
 import { RateLimiter, withRetry, withWriteRetry } from './rate-limit';
-import { MemoryVenueBudget } from './venue-budget';
+import { MemoryVenueBudget, prioridadDeOrden } from './venue-budget';
 import type { ExchangeAdapter, StreamHealth } from './types';
 import { hyperliquidTickSize } from './adapters/hyperliquid';
 import { oldestPrice, scaled } from './adapters/lighter';
@@ -875,12 +877,499 @@ describe('DryRunAdapter', () => {
       expect(await otro.getPositions()).toHaveLength(0);
     });
 
+    /**
+     * Spec 057, F-01. El motor compara las órdenes con disparo por su disparo.
+     * El simulador no lo informaba, y con esa comparación el stop simulado
+     * pasaba por otra orden en cada tick.
+     */
+    it('la condicional que espera se informa con su disparo; la disparada ya no', async () => {
+      const { source, sim } = await conLargo();
+      await sim.placeOrder(stop({ price: '88', triggerPrice: '90' }));
+      await sim.placeOrder(
+        stop({ type: 'LIMIT', price: '93', triggerPrice: '92', clientOrderId: 'sl-limit' }),
+      );
+      await sim.placeOrder(order({ side: 'SELL', price: '120', clientOrderId: 'tp' }));
+      // Por precio: el id sale codificado como en Hyperliquid.
+      const disparos = async () =>
+        new Map((await sim.getOpenOrders('BTC')).map((o) => [o.price, o.triggerPrice]));
+
+      expect(await disparos()).toEqual(
+        new Map([
+          ['88', '90'],
+          ['93', '92'],
+          ['120', null],
+        ]),
+      );
+
+      // Cruza la stop-limit (92) sin llegar al stop (90): queda como limit.
+      await mover(sim, source, '91.5', '91.7');
+      expect(await disparos()).toEqual(
+        new Map([
+          ['88', '90'],
+          ['93', null],
+          ['120', null],
+        ]),
+      );
+    });
+
     it('cancelar una condicional la retira, como a cualquier otra', async () => {
       const { source, sim } = await conLargo();
       await sim.placeOrder(stop());
       await sim.cancelOrder({ symbol: 'BTC', clientOrderId: 'sl' });
       await mover(sim, source, '89', '89.2');
       expect(await sim.getPositions()).toHaveLength(1);
+    });
+  });
+
+  /**
+   * Spec 057, F-05. El simulador aplicaba la cantidad entera sin mirar
+   * `reduceOnly`: un stop y un objetivo de la misma posición que se tocaban en
+   * la misma vela la GIRABAN, y un cierre mayor que la posición abría otra en
+   * contra. En el venue, una orden que solo reduce no puede abrir nada.
+   */
+  describe('reduceOnly (spec 057, F-05)', () => {
+    const conLargo = async () => {
+      const source = new StubSource();
+      const sim = new DryRunAdapter(source, {
+        makerFeeRate: '0',
+        takerFeeRate: '0',
+        slippageRate: '0',
+      });
+      await sim.getTicker('BTC');
+      await sim.placeOrder(order({ type: 'MARKET', clientOrderId: 'entrada' }));
+      return { source, sim };
+    };
+    const mover = async (sim: DryRunAdapter, source: StubSource, bid: string, ask: string) => {
+      source.move(bid, ask);
+      await sim.getTicker('BTC');
+    };
+    const qty = async (sim: DryRunAdapter) => (await sim.getPositions('BTC'))[0]?.qty ?? '0';
+
+    it('el stop y el objetivo tocados en la misma vela no giran la posición', async () => {
+      const { source, sim } = await conLargo();
+      await sim.placeOrder(
+        order({
+          type: 'MARKET',
+          side: 'SELL',
+          price: '90',
+          triggerPrice: '90',
+          intent: 'SL',
+          reduceOnly: true,
+          clientOrderId: 'sl',
+        }),
+      );
+      await sim.placeOrder(
+        order({ side: 'SELL', price: '110', reduceOnly: true, clientOrderId: 'tp' }),
+      );
+
+      // Cae al stop y luego sube al objetivo, como en el recorrido de una vela.
+      await mover(sim, source, '89', '89.2');
+      expect(await qty(sim)).toBe('0');
+      await mover(sim, source, '111', '111.2');
+
+      expect(await qty(sim)).toBe('0');
+      // El objetivo ya no tenía nada que reducir: no se ejecuta y deja el libro.
+      expect(await sim.getOpenOrders('BTC')).toHaveLength(0);
+      expect((await sim.getRecentFills('BTC', 0)).filter((f) => f.side === 'SELL')).toHaveLength(1);
+    });
+
+    it('un cierre a mercado mayor que la posición solo cierra lo que hay', async () => {
+      const { sim } = await conLargo();
+      await sim.placeOrder(
+        order({ type: 'MARKET', side: 'SELL', qty: '3', reduceOnly: true, clientOrderId: 'x' }),
+      );
+      expect(await qty(sim)).toBe('0');
+      const [, cierre] = await sim.getRecentFills('BTC', 0);
+      expect(cierre.qty).toBe('1');
+    });
+
+    it('una límite que solo reduce se recorta a la posición', async () => {
+      const { source, sim } = await conLargo();
+      await sim.placeOrder(
+        order({ side: 'SELL', price: '110', qty: '2', reduceOnly: true, clientOrderId: 'tp' }),
+      );
+      await mover(sim, source, '111', '111.2');
+      expect(await qty(sim)).toBe('0');
+    });
+
+    it('una orden a mercado que solo reduce, sin nada que reducir, se rechaza', async () => {
+      const sim = new DryRunAdapter(new StubSource());
+      await sim.getTicker('BTC');
+      await expect(
+        sim.placeOrder(order({ type: 'MARKET', side: 'SELL', reduceOnly: true })),
+      ).rejects.toMatchObject({ kind: 'RULES' });
+      expect(await sim.getPositions('BTC')).toHaveLength(0);
+    });
+
+    it('ni tampoco si va en el sentido que aumenta la posición', async () => {
+      const { sim } = await conLargo();
+      await expect(
+        sim.placeOrder(
+          order({ type: 'MARKET', side: 'BUY', reduceOnly: true, clientOrderId: 'y' }),
+        ),
+      ).rejects.toMatchObject({ kind: 'RULES' });
+      expect(await qty(sim)).toBe('1');
+    });
+
+    it('sin reduceOnly, una venta mayor que la posición sí la gira, como en el venue', async () => {
+      const { sim } = await conLargo();
+      await sim.placeOrder(order({ type: 'MARKET', side: 'SELL', qty: '3', clientOrderId: 'z' }));
+      expect(await qty(sim)).toBe('-2');
+    });
+  });
+
+  /**
+   * Spec 058. La entrada del canal con IA es una límite IOC con tope de precio,
+   * sus objetivos son límites en los bordes del canal y su backtest necesita un
+   * relleno pesimista. El simulador guardaba la IOC como una límite más: se
+   * quedaba esperando y se ejecutaba minutos después, con el canal en otro sitio.
+   */
+  describe('límite IOC (spec 058)', () => {
+    const sinCostes = { makerFeeRate: '0', takerFeeRate: '0', slippageRate: '0' };
+
+    it('si llega al otro lado del libro se ejecuta en el acto, como taker, y no queda en reposo', async () => {
+      const sim = new DryRunAdapter(new StubSource(), sinCostes);
+      await sim.getTicker('BTC');
+      const fills: Fill[] = [];
+      sim.streamFills().subscribe((f) => fills.push(f));
+
+      const ack = await sim.placeOrder(order({ price: '100.2', timeInForce: 'IOC' }));
+
+      expect(ack.status).toBe(OrderStatus.FILLED);
+      expect(await sim.getOpenOrders()).toHaveLength(0);
+      // Al ask del momento (100,1), no a su límite: cruza el libro.
+      expect(fills).toEqual([expect.objectContaining({ price: '100.1', qty: '1', isTaker: true })]);
+    });
+
+    it('paga el deslizamiento en contra, pero nunca por encima de su límite', async () => {
+      const poco = new DryRunAdapter(new StubSource(), { ...sinCostes, slippageRate: '0.001' });
+      const mucho = new DryRunAdapter(new StubSource(), { ...sinCostes, slippageRate: '0.01' });
+      await poco.getTicker('BTC');
+      await mucho.getTicker('BTC');
+
+      await poco.placeOrder(order({ price: '100.5', timeInForce: 'IOC' }));
+      await mucho.placeOrder(order({ price: '100.5', timeInForce: 'IOC' }));
+
+      // 100,1 × 1,001 = 100,2001, por debajo del tope.
+      expect((await poco.getPositions())[0].entryPrice).toBe('100.2001');
+      // 100,1 × 1,01 = 101,101 pasaría del tope: se queda en 100,5.
+      expect((await mucho.getPositions())[0].entryPrice).toBe('100.5');
+    });
+
+    it('si no llega, se cancela: ni queda en el libro ni se ejecuta después', async () => {
+      const source = new StubSource();
+      const sim = new DryRunAdapter(source, sinCostes);
+      await sim.getTicker('BTC');
+
+      // El ask está en 100,1.
+      const ack = await sim.placeOrder(order({ price: '100', timeInForce: 'IOC' }));
+
+      expect(ack.status).toBe(OrderStatus.CANCELED);
+      expect(await sim.getOpenOrders()).toHaveLength(0);
+      source.move('99', '99.2');
+      await sim.getTicker('BTC');
+      expect(await sim.getPositions()).toHaveLength(0);
+    });
+
+    it('la venta mira el bid', async () => {
+      const sim = new DryRunAdapter(new StubSource(), sinCostes);
+      await sim.getTicker('BTC');
+
+      const alta = await sim.placeOrder(
+        order({ side: 'SELL', price: '100', timeInForce: 'IOC', clientOrderId: 'v1' }),
+      );
+      const justa = await sim.placeOrder(
+        order({ side: 'SELL', price: '99.9', timeInForce: 'IOC', clientOrderId: 'v2' }),
+      );
+
+      expect(alta.status).toBe(OrderStatus.CANCELED);
+      expect(justa.status).toBe(OrderStatus.FILLED);
+      expect((await sim.getPositions())[0]).toMatchObject({ qty: '-1', entryPrice: '99.9' });
+    });
+
+    it('una FOK se trata igual: el simulador no tiene profundidad y todo se ejecuta entero', async () => {
+      const sim = new DryRunAdapter(new StubSource(), sinCostes);
+      await sim.getTicker('BTC');
+
+      const ack = await sim.placeOrder(order({ price: '99', timeInForce: 'FOK' }));
+
+      expect(ack.status).toBe(OrderStatus.CANCELED);
+      expect(await sim.getOpenOrders()).toHaveLength(0);
+    });
+
+    it('una IOC que solo reduce y no tiene nada que reducir se rechaza, como la de mercado', async () => {
+      const sim = new DryRunAdapter(new StubSource());
+      await sim.getTicker('BTC');
+
+      await expect(
+        sim.placeOrder(order({ side: 'SELL', price: '99', timeInForce: 'IOC', reduceOnly: true })),
+      ).rejects.toMatchObject({ kind: 'RULES' });
+    });
+
+    it('una IOC que solo reduce se recorta a la posición', async () => {
+      const sim = new DryRunAdapter(new StubSource(), sinCostes);
+      await sim.getTicker('BTC');
+      await sim.placeOrder(order({ type: 'MARKET', clientOrderId: 'entrada' }));
+
+      await sim.placeOrder(
+        order({
+          side: 'SELL',
+          price: '99',
+          qty: '3',
+          timeInForce: 'IOC',
+          reduceOnly: true,
+          clientOrderId: 'cierre',
+        }),
+      );
+
+      expect(await sim.getPositions()).toHaveLength(0);
+    });
+
+    it('el número de una IOC cancelada se guarda: tras un reinicio no se repite', async () => {
+      const cambios = jest.fn();
+      const sim = new DryRunAdapter(new StubSource(), { onStateChange: cambios });
+      await sim.getTicker('BTC');
+
+      await sim.placeOrder(order({ price: '90', timeInForce: 'IOC' }));
+
+      expect(cambios).toHaveBeenCalled();
+      expect(sim.exportState().seq).toBe(1);
+    });
+  });
+
+  describe('relleno TRADE_THROUGH (spec 058)', () => {
+    const conPaso = () => {
+      const source = new StubSource();
+      const sim = new DryRunAdapter(source, {
+        makerFeeRate: '0',
+        takerFeeRate: '0',
+        slippageRate: '0',
+        limitFill: 'TRADE_THROUGH',
+      });
+      const mover = async (bid: string, ask: string) => {
+        source.move(bid, ask);
+        await sim.getTicker('BTC');
+      };
+      return { sim, mover };
+    };
+
+    it('una compra a la que el ask solo llega no se ejecuta; si baja de ella, sí, a su precio', async () => {
+      const { sim, mover } = conPaso();
+      await sim.getTicker('BTC');
+      await sim.placeOrder(order({ price: '95' }));
+
+      await mover('94.9', '95');
+      expect(await sim.getOpenOrders()).toHaveLength(1);
+
+      await mover('94.8', '94.9');
+      expect(await sim.getOpenOrders()).toHaveLength(0);
+      expect((await sim.getPositions())[0].entryPrice).toBe('95');
+    });
+
+    it('una venta necesita el bid por encima de su precio', async () => {
+      const { sim, mover } = conPaso();
+      await sim.getTicker('BTC');
+      await sim.placeOrder(order({ type: 'MARKET', clientOrderId: 'entrada' }));
+      await sim.placeOrder(
+        order({ side: 'SELL', price: '110', reduceOnly: true, clientOrderId: 'objetivo' }),
+      );
+
+      await mover('110', '110.2');
+      expect(await sim.getOpenOrders()).toHaveLength(1);
+
+      await mover('110.1', '110.3');
+      expect(await sim.getOpenOrders()).toHaveLength(0);
+      expect(await sim.getPositions()).toHaveLength(0);
+    });
+
+    it('no cambia las condicionales: un stop salta al llegar a su disparador', async () => {
+      const { sim, mover } = conPaso();
+      await sim.getTicker('BTC');
+      await sim.placeOrder(order({ type: 'MARKET', clientOrderId: 'entrada' }));
+      await sim.placeOrder(
+        order({
+          type: 'MARKET',
+          side: 'SELL',
+          price: '90',
+          triggerPrice: '90',
+          intent: 'SL',
+          reduceOnly: true,
+          clientOrderId: 'sl',
+        }),
+      );
+
+      await mover('90', '90.2');
+
+      expect(await sim.getPositions()).toHaveLength(0);
+    });
+  });
+
+  describe('caducidad de las órdenes (spec 058)', () => {
+    it('una orden con `expiresAt` sale del libro al vencer y se avisa como EXPIRED', async () => {
+      let ahora = 1_000_000;
+      const source = new StubSource();
+      const sim = new DryRunAdapter(source, { now: () => ahora });
+      await sim.getTicker('BTC');
+      const avisos: OrderUpdate[] = [];
+      sim.streamOrders().subscribe((o) => avisos.push(o));
+      await sim.placeOrder(order({ price: '95', expiresAt: ahora + 60_000 }));
+      await sim.placeOrder(order({ price: '94', clientOrderId: 'sin-caducidad' }));
+
+      ahora += 59_999;
+      expect(await sim.getOpenOrders()).toHaveLength(2);
+      ahora += 1;
+      expect(await sim.getOpenOrders()).toHaveLength(1);
+      expect(avisos).toEqual([expect.objectContaining({ price: '95', status: 'EXPIRED' })]);
+
+      // Y aunque el precio llegue después, la vencida ya no se ejecuta.
+      source.move('93', '93.5');
+      await sim.getTicker('BTC');
+      expect((await sim.getPositions())[0]).toMatchObject({ qty: '1', entryPrice: '94' });
+    });
+
+    it('vence también sin que nadie pida el libro: con el siguiente precio', async () => {
+      let ahora = 1_000_000;
+      const source = new StubSource();
+      const sim = new DryRunAdapter(source, { now: () => ahora });
+      await sim.getTicker('BTC');
+      await sim.placeOrder(order({ price: '95', expiresAt: ahora + 1_000 }));
+
+      ahora += 1_000;
+      source.move('94', '94.5');
+      await sim.getTicker('BTC');
+
+      expect(await sim.getPositions()).toHaveLength(0);
+    });
+
+    it('una condicional con caducidad también vence', async () => {
+      let ahora = 1_000_000;
+      const source = new StubSource();
+      const sim = new DryRunAdapter(source, {
+        now: () => ahora,
+        makerFeeRate: '0',
+        takerFeeRate: '0',
+        slippageRate: '0',
+      });
+      await sim.getTicker('BTC');
+      await sim.placeOrder(order({ type: 'MARKET', clientOrderId: 'entrada' }));
+      await sim.placeOrder(
+        order({
+          type: 'MARKET',
+          side: 'SELL',
+          price: '90',
+          triggerPrice: '90',
+          intent: 'SL',
+          reduceOnly: true,
+          clientOrderId: 'sl',
+          expiresAt: ahora + 1_000,
+        }),
+      );
+
+      ahora += 1_000;
+      source.move('89', '89.2');
+      await sim.getTicker('BTC');
+
+      expect(await sim.getPositions()).toHaveLength(1);
+    });
+
+    it('la caducidad sobrevive al guardado del estado', async () => {
+      let ahora = 1_000_000;
+      const source = new StubSource();
+      const sim = new DryRunAdapter(source, { now: () => ahora });
+      await sim.getTicker('BTC');
+      await sim.placeOrder(order({ price: '95', expiresAt: ahora + 1_000 }));
+
+      const revivido = new DryRunAdapter(source, {
+        now: () => ahora,
+        initialState: JSON.parse(JSON.stringify(sim.exportState())) as DryRunState,
+      });
+      ahora += 1_000;
+
+      expect(await revivido.getOpenOrders()).toHaveLength(0);
+    });
+  });
+
+  describe('apalancamiento y tramos (spec 058)', () => {
+    const ficha: MarketSpec = {
+      venue: Venue.HYPERLIQUID,
+      symbol: 'BTC',
+      canonical: 'BTC/USDC',
+      base: 'BTC',
+      quote: 'USDC',
+      tickSize: '0.1',
+      stepSize: '0.001',
+      minNotional: '10',
+      minQty: null,
+      maxQty: null,
+      maxLeverage: 40,
+      priceDecimals: 1,
+      qtyDecimals: 3,
+      active: true,
+    };
+    const tramos: NivelApalancamiento[] = [
+      { desdeNocional: '0', maxApalancamiento: 40, mantenimiento: 0.0125 },
+      { desdeNocional: '150000000', maxApalancamiento: 20, mantenimiento: 0.025 },
+    ];
+
+    it('la cuenta simulada es siempre unidireccional', async () => {
+      const sim = new DryRunAdapter(new StubSource());
+
+      await expect(sim.getPositionMode()).resolves.toBe('ONE_WAY');
+    });
+
+    it('el acuse dice el apalancamiento aplicado', async () => {
+      const sim = new DryRunAdapter(new StubSource());
+
+      await expect(sim.setLeverage('BTC', 7, 'ISOLATED')).resolves.toEqual({ leverage: 7 });
+    });
+
+    it('los tramos son los de la fuente cuando sabe leerlos', async () => {
+      const source = Object.assign(new StubSource(), { getLeverageTiers: async () => tramos });
+      const sim = new DryRunAdapter(source);
+
+      await expect(sim.getLeverageTiers('BTC')).resolves.toEqual(tramos);
+    });
+
+    it('si la fuente no los declara, un tramo con la ficha del mercado', async () => {
+      const source = new StubSource();
+      source.getMarkets = async () => [ficha];
+      const sim = new DryRunAdapter(source);
+
+      await expect(sim.getLeverageTiers('BTC')).resolves.toEqual([
+        { desdeNocional: '0', maxApalancamiento: 40, mantenimiento: 1 / 80 },
+      ]);
+    });
+
+    it('si la fuente no puede leerlos (Aster sin firma), también la ficha', async () => {
+      const source = Object.assign(new StubSource(), {
+        getLeverageTiers: () =>
+          Promise.reject(
+            new ExchangeError('FATAL', 'sin credenciales: no puede firmar', Venue.ASTER),
+          ),
+      });
+      source.getMarkets = async () => [{ ...ficha, maintenanceMarginRate: 0.004 }];
+      const sim = new DryRunAdapter(source);
+
+      await expect(sim.getLeverageTiers('BTC')).resolves.toEqual([
+        { desdeNocional: '0', maxApalancamiento: 40, mantenimiento: 0.004 },
+      ]);
+    });
+
+    it('una caída del venue se propaga: la ficha daría otros números sin avisar', async () => {
+      const caida = new ExchangeError('RETRYABLE', 'HTTP 502', Venue.HYPERLIQUID);
+      const source = Object.assign(new StubSource(), {
+        getLeverageTiers: () => Promise.reject(caida),
+      });
+      source.getMarkets = async () => [ficha];
+      const sim = new DryRunAdapter(source);
+
+      await expect(sim.getLeverageTiers('BTC')).rejects.toBe(caida);
+    });
+
+    it('un símbolo que no está en la ficha es un error de reglas', async () => {
+      const sim = new DryRunAdapter(new StubSource());
+
+      await expect(sim.getLeverageTiers('XYZ')).rejects.toMatchObject({ kind: 'RULES' });
     });
   });
 
@@ -1417,6 +1906,20 @@ describe('MemoryVenueBudget', () => {
     const antesCrit = Date.now();
     await budget2.take(Venue.HYPERLIQUID, 1, 'critical', false);
     expect(Date.now() - antesCrit).toBeLessThan(20);
+  });
+
+  /**
+   * Spec 057, F-10. `critical` es, según su propio comentario, «el stop-loss,
+   * los cierres y el pánico», pero `prioridadDeOrden` solo miraba el disparador:
+   * un cierre a mercado —manual, de pánico o de una estrategia— competía como
+   * una recotización más.
+   */
+  it('un cierre a mercado es crítico; una entrada a mercado o una límite que reduce, no', () => {
+    expect(prioridadDeOrden({ triggerPrice: '90' })).toBe('critical');
+    expect(prioridadDeOrden({ type: 'MARKET', reduceOnly: true })).toBe('critical');
+    expect(prioridadDeOrden({ type: 'MARKET', reduceOnly: false })).toBe('write');
+    expect(prioridadDeOrden({ type: 'LIMIT', reduceOnly: true })).toBe('write');
+    expect(prioridadDeOrden({ type: 'POST_ONLY' })).toBe('write');
   });
 
   /**

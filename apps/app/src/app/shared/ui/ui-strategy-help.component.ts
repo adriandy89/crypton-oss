@@ -321,7 +321,7 @@ export class UiStrategyHelpComponent {
     const rest = [...byKey.keys()].filter((k) => !known.includes(k));
     return [...known, ...rest].map((key) => ({
       key,
-      title: groupLabel(key),
+      title: groupLabel(key, this.kind()),
       rows: byKey.get(key) ?? [],
     }));
   });

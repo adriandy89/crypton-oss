@@ -7,6 +7,7 @@ import {
   ExchangeError,
   OrderStatus,
   liquidationOfPosition,
+  maintenanceMarginRateOf,
   type Balance,
   type CancelRequest,
   type Fill,
@@ -27,11 +28,12 @@ import {
   type CollateralPosition,
   type CandleInterval,
   type MarketTicker,
+  type NivelApalancamiento,
   type VenueCapabilities,
 } from '@crypton/shared';
 import { codecFor } from '../coid';
 import { isVenueUnavailable } from '../errors';
-import type { CandleQuery, ExchangeAdapter, StreamHealth } from '../types';
+import type { AcuseApalancamiento, CandleQuery, ExchangeAdapter, StreamHealth } from '../types';
 
 /**
  * Cuánto vale el último precio conocido si la fuente deja de responder.
@@ -100,7 +102,25 @@ export interface DryRunOptions {
    * configuraciones.
    */
   runId?: string;
+  /**
+   * Cuándo se da por ejecutada una límite en reposo. Por defecto, `TOUCH`.
+   * Ver `LimitFillMode`.
+   */
+  limitFill?: LimitFillMode;
 }
+
+/**
+ * Cuándo se ejecuta una límite en reposo (spec 058).
+ *
+ * `TOUCH`, el de siempre, la ejecuta en cuanto el precio llega a ella. Con
+ * `TRADE_THROUGH` el precio tiene que pasarla. Que el precio llegue no dice nada
+ * de la cola, y en el venue una límite a la que el precio solo llega a menudo se
+ * queda sin ejecutar. Es el supuesto pesimista que necesita el backtest del
+ * canal con IA: sus objetivos están en los bordes del canal, justo donde el
+ * precio suele dar la vuelta, y `TOUCH` daría por buenos objetivos a los que el
+ * precio solo llegó sin pasarlos.
+ */
+export type LimitFillMode = 'TOUCH' | 'TRADE_THROUGH';
 
 /**
  * Hacia dónde tiene que moverse el precio de marca para disparar una orden
@@ -182,6 +202,11 @@ interface SimPosition {
  * aplica cada venue. Los tramos altos son peores que ese 0,5 %, así que la
  * estimación es OPTIMISTA: una posición grande revienta en el venue algo antes
  * de lo que revienta aquí.
+ *
+ * Los tramos que INFORMA (`getLeverageTiers`) son los del venue cuando la
+ * fuente sabe leerlos. Si no puede, porque Aster los sirve firmados y la fuente
+ * de un simulado no firma, informa un tramo único con el máximo de la ficha:
+ * otra estimación optimista.
  */
 export class DryRunAdapter implements ExchangeAdapter {
   readonly venue: Venue;
@@ -228,6 +253,7 @@ export class DryRunAdapter implements ExchangeAdapter {
   private readonly slippage: Decimal;
   private readonly mmr: number;
   private readonly closeSource: boolean;
+  private readonly limitFill: LimitFillMode;
 
   /**
    * Aviso de «esto ha cambiado, vuelve a guardarlo». Ver `DryRunOptions`.
@@ -263,6 +289,7 @@ export class DryRunAdapter implements ExchangeAdapter {
     this.slippage = D(opts.slippageRate ?? '0.0005');
     this.mmr = opts.maintenanceMarginRate ?? DEFAULT_MAINTENANCE_MARGIN_RATE;
     this.closeSource = opts.closeSource !== false;
+    this.limitFill = opts.limitFill ?? 'TOUCH';
     this.runId = opts.runId ?? randomUUID().slice(0, 8);
     this.clock = opts.now ?? Date.now;
     this.notifyChange = opts.onStateChange ?? (() => undefined);
@@ -495,6 +522,9 @@ export class DryRunAdapter implements ExchangeAdapter {
   }
 
   getOpenOrders(symbol?: string): Promise<VenueOrder[]> {
+    // Sin esperar a un precio: una orden vencida ya no está en el libro del
+    // venue, llegue o no un tick que lo diga.
+    this.caducar(symbol);
     const out: VenueOrder[] = [];
     for (const o of this.orders.values()) {
       if (symbol && o.req.symbol !== symbol) continue;
@@ -533,11 +563,21 @@ export class DryRunAdapter implements ExchangeAdapter {
     }
 
     if (req.type === 'MARKET') {
+      // Una orden que solo reduce y no tiene qué reducir la rechaza el venue:
+      // aquí también, o abriría una posición en contra (spec 057, F-05).
+      const ejecutable = this.cantidadEjecutable(req, D(req.qty));
+      if (!ejecutable.gt(0)) {
+        throw new ExchangeError(
+          'RULES',
+          'Reduce-only rechazada: no hay posición que reducir en ese sentido.',
+          this.venue,
+        );
+      }
       // Una orden a mercado cruza el libro: paga taker y se lleva el
       // deslizamiento en contra. Simularla sin coste daría PnL de fantasía.
       const ref = D(req.side === 'BUY' ? ticker.ask : ticker.bid);
       const slip = D(1).plus(req.side === 'BUY' ? this.slippage : this.slippage.neg());
-      this.executeFill(req, ref.mul(slip), D(req.qty), venueOrderId, true);
+      this.executeFill(req, ref.mul(slip), ejecutable, venueOrderId, true);
       return {
         clientOrderId: req.clientOrderId,
         venueOrderId,
@@ -561,6 +601,14 @@ export class DryRunAdapter implements ExchangeAdapter {
       }
     }
 
+    // Una límite IOC nunca se queda en el libro (spec 058). Antes se guardaba
+    // como cualquier otra: la entrada con tope de precio del canal con IA se
+    // habría quedado esperando y se habría ejecutado minutos después, con el
+    // canal ya en otro sitio.
+    if (req.timeInForce === 'IOC' || req.timeInForce === 'FOK') {
+      return this.ejecutarInmediata(req, ticker, price, venueOrderId);
+    }
+
     this.orders.set(req.clientOrderId, {
       req,
       venueOrderId,
@@ -573,6 +621,56 @@ export class DryRunAdapter implements ExchangeAdapter {
       clientOrderId: req.clientOrderId,
       venueOrderId,
       status: OrderStatus.OPEN,
+      ts: this.clock(),
+    };
+  }
+
+  /**
+   * Una límite IOC (o FOK) contra el libro del momento.
+   *
+   * Se ejecuta si el otro lado del libro está a su precio o mejor. Paga taker y
+   * el deslizamiento en contra, como una orden a mercado, pero nunca a un precio
+   * peor que su límite, que es para lo que se pone. Si no llega a su precio, el
+   * venue la cancela sin que llegue a estar en el libro: el acuse dice CANCELED.
+   *
+   * FOK va por aquí igual. El simulador no tiene profundidad y todo se ejecuta
+   * entero, así que «entera o nada» y «lo que se pueda» dan lo mismo.
+   */
+  private ejecutarInmediata(
+    req: PlaceOrderRequest,
+    ticker: Ticker,
+    price: Decimal,
+    venueOrderId: string,
+  ): OrderAck {
+    const ejecutable = this.cantidadEjecutable(req, D(req.qty));
+    if (!ejecutable.gt(0)) {
+      throw new ExchangeError(
+        'RULES',
+        'Reduce-only rechazada: no hay posición que reducir en ese sentido.',
+        this.venue,
+      );
+    }
+    const compra = req.side === 'BUY';
+    const ref = D(compra ? ticker.ask : ticker.bid);
+    const casa = ref.gt(0) && (compra ? ref.lte(price) : ref.gte(price));
+    if (!casa) {
+      // El número de orden ya se ha gastado y tiene que sobrevivir a un
+      // reinicio: los ids no se repiten nunca.
+      this.notifyChange();
+      return {
+        clientOrderId: req.clientOrderId,
+        venueOrderId,
+        status: OrderStatus.CANCELED,
+        ts: this.clock(),
+      };
+    }
+    const deslizado = ref.mul(D(1).plus(compra ? this.slippage : this.slippage.neg()));
+    const ejecucion = compra ? Decimal.min(deslizado, price) : Decimal.max(deslizado, price);
+    this.executeFill(req, ejecucion, ejecutable, venueOrderId, true);
+    return {
+      clientOrderId: req.clientOrderId,
+      venueOrderId,
+      status: OrderStatus.FILLED,
       ts: this.clock(),
     };
   }
@@ -616,7 +714,7 @@ export class DryRunAdapter implements ExchangeAdapter {
     return Promise.resolve();
   }
 
-  setLeverage(symbol: string, leverage: number, mode: MarginMode): Promise<void> {
+  setLeverage(symbol: string, leverage: number, mode: MarginMode): Promise<AcuseApalancamiento> {
     this.leverage.set(symbol, { value: leverage, mode });
     const pos = this.positions.get(symbol);
     if (pos) {
@@ -624,11 +722,48 @@ export class DryRunAdapter implements ExchangeAdapter {
       pos.marginMode = mode;
     }
     this.notifyChange();
-    return Promise.resolve();
+    return Promise.resolve({ leverage });
+  }
+
+  /**
+   * Los tramos del venue, si la fuente sabe leerlos.
+   *
+   * Si no sabe (la fuente no los declara, o no puede firmar la lectura, como la
+   * de Aster en un simulado), un tramo único con la ficha del mercado. Una caída
+   * del venue sí se propaga: sustituirla por la ficha daría otros números en un
+   * tick cualquiera sin que nadie lo supiera.
+   */
+  async getLeverageTiers(symbol: string): Promise<NivelApalancamiento[]> {
+    if (this.source.getLeverageTiers) {
+      try {
+        return await this.source.getLeverageTiers(symbol);
+      } catch (e) {
+        if (isVenueUnavailable(e)) throw e;
+      }
+    }
+    const market = (await this.source.getMarkets()).find((m) => m.symbol === symbol);
+    if (!market) {
+      throw new ExchangeError('RULES', `Mercado desconocido: ${symbol}`, this.venue);
+    }
+    return [
+      {
+        desdeNocional: '0',
+        maxApalancamiento: market.maxLeverage,
+        mantenimiento: maintenanceMarginRateOf(market),
+      },
+    ];
   }
 
   setPositionMode(_mode: PositionMode): Promise<void> {
     return Promise.resolve();
+  }
+
+  /**
+   * Unidireccional siempre: el simulador lleva una posición neta por símbolo,
+   * y una venta reduce la compra en vez de abrir un corto aparte.
+   */
+  getPositionMode(): Promise<PositionMode> {
+    return Promise.resolve('ONE_WAY');
   }
 
   /**
@@ -728,6 +863,10 @@ export class DryRunAdapter implements ExchangeAdapter {
    * lo que determina de verdad si alguien cruzaría contra nuestra orden.
    */
   private matchRestingOrders(symbol: string, ticker: Ticker): void {
+    // Lo vencido, antes que nada: una orden caducada ya no está para ejecutarse
+    // con este precio.
+    this.caducar(symbol);
+
     // Las condicionales van ANTES que la liquidación: un stop por encima de la
     // liquidación se dispara al pasar el precio por él, y en un tick que cruza
     // los dos el camino real pasó primero por el stop. Un stop por DEBAJO de la
@@ -742,6 +881,8 @@ export class DryRunAdapter implements ExchangeAdapter {
 
     const bid = D(ticker.bid);
     const ask = D(ticker.ask);
+    // Ver `LimitFillMode`: con `TRADE_THROUGH`, llegar al precio no basta.
+    const pasar = this.limitFill === 'TRADE_THROUGH';
 
     for (const [coid, order] of [...this.orders]) {
       if (order.req.symbol !== symbol) continue;
@@ -749,15 +890,42 @@ export class DryRunAdapter implements ExchangeAdapter {
       if (order.triggerDir) continue;
       const price = D(order.req.price ?? 0);
       const touched =
-        order.req.side === 'BUY' ? ask.gt(0) && ask.lte(price) : bid.gt(0) && bid.gte(price);
+        order.req.side === 'BUY'
+          ? ask.gt(0) && (pasar ? ask.lt(price) : ask.lte(price))
+          : bid.gt(0) && (pasar ? bid.gt(price) : bid.gte(price));
       if (!touched) continue;
 
       this.orders.delete(coid);
       const remaining = D(order.req.qty).minus(order.filledQty);
+      const ejecutable = this.cantidadEjecutable(order.req, remaining);
+      if (!ejecutable.gt(0)) {
+        // Ya no reduce nada: el venue la cancela en vez de abrir en contra.
+        this.notifyChange();
+        continue;
+      }
       // Se ejecuta al precio LIMIT, no al de mercado: una orden en reposo que
       // se toca se llena a su propio precio, nunca mejor.
-      this.executeFill(order.req, price, remaining, order.venueOrderId, false);
+      this.executeFill(order.req, price, ejecutable, order.venueOrderId, false);
     }
+  }
+
+  /**
+   * Retira las órdenes cuya caducidad (`expiresAt`) ya pasó, como hace el venue
+   * que la admite, y avisa de cada una con estado EXPIRED.
+   *
+   * Con el reloj de la simulación: en el backtest caducan en la vela que toca.
+   */
+  private caducar(symbol?: string): void {
+    const ahora = this.clock();
+    let alguna = false;
+    for (const [coid, o] of [...this.orders]) {
+      if (symbol && o.req.symbol !== symbol) continue;
+      if (o.req.expiresAt === undefined || o.req.expiresAt > ahora) continue;
+      this.orders.delete(coid);
+      alguna = true;
+      this.orders$.next({ ...this.toVenueOrder(o), status: OrderStatus.EXPIRED });
+    }
+    if (alguna) this.notifyChange();
   }
 
   /**
@@ -795,8 +963,14 @@ export class DryRunAdapter implements ExchangeAdapter {
       this.orders.delete(coid);
       const remaining = D(order.req.qty).minus(order.filledQty);
       if (order.req.type === 'MARKET') {
+        const ejecutable = this.cantidadEjecutable(order.req, remaining);
+        if (!ejecutable.gt(0)) {
+          // Un stop cuya posición ya se cerró no tiene nada que cerrar.
+          this.notifyChange();
+          continue;
+        }
         const slip = D(1).plus(order.req.side === 'BUY' ? this.slippage : this.slippage.neg());
-        this.executeFill(order.req, trigger.mul(slip), remaining, order.venueOrderId, true);
+        this.executeFill(order.req, trigger.mul(slip), ejecutable, order.venueOrderId, true);
       } else {
         const { triggerPrice: _disparada, ...req } = order.req;
         void _disparada;
@@ -930,6 +1104,21 @@ export class DryRunAdapter implements ExchangeAdapter {
     return true;
   }
 
+  /**
+   * Lo que de verdad puede ejecutarse de una orden (spec 057, F-05).
+   *
+   * Sin `reduceOnly`, todo. Con él, solo lo que reduce la posición: nada si no
+   * la hay o si la orden va en el sentido que la aumenta, y como mucho su
+   * tamaño. Antes se aplicaba la cantidad entera, y un stop y un objetivo
+   * tocados en la misma vela giraban la posición en papel y en backtest.
+   */
+  private cantidadEjecutable(req: PlaceOrderRequest, qty: Decimal): Decimal {
+    if (req.reduceOnly !== true) return qty;
+    const pos = this.positions.get(req.symbol)?.qty ?? D(0);
+    const reduce = req.side === 'BUY' ? pos.lt(0) : pos.gt(0);
+    return reduce ? Decimal.min(qty, pos.abs()) : D(0);
+  }
+
   private executeFill(
     req: PlaceOrderRequest,
     price: Decimal,
@@ -1028,6 +1217,11 @@ export class DryRunAdapter implements ExchangeAdapter {
       side: o.req.side,
       type: o.req.type,
       price: D(o.req.price ?? 0).toFixed(),
+      // La condicional que aún espera se informa con su disparo, como en los
+      // venues reales: el motor compara las órdenes con disparo por él, y sin
+      // él daría el stop simulado por otra orden y lo recolocaría en cada tick
+      // (spec 057, F-01). Una stop-limit ya disparada es una limit más.
+      triggerPrice: o.triggerDir ? D(o.req.triggerPrice ?? 0).toFixed() : null,
       qty: D(o.req.qty).toFixed(),
       filledQty: o.filledQty.toFixed(),
       avgPrice: null,

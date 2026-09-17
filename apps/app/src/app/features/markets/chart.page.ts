@@ -10,7 +10,14 @@ import {
   viewChild,
 } from '@angular/core';
 import { takeUntilDestroyed } from '@angular/core/rxjs-interop';
-import { D, SNAPSHOT_CADENCE_MS, liquidationDistancePct } from '@crypton/shared';
+import {
+  D,
+  SNAPSHOT_CADENCE_MS,
+  liquidationDistancePct,
+  operacionCanalDe,
+  vistaCanalDe,
+  type LineasCanal,
+} from '@crypton/shared';
 import { liqNum } from '../../core/utils/risk';
 import { ActivatedRoute, Router } from '@angular/router';
 import {
@@ -236,7 +243,22 @@ export class MarketChartPage implements OnInit {
     fills: true,
     liquidation: true,
     events: true,
+    canal: true,
   });
+
+  /**
+   * El canal del canal con IA (spec 059): el de la operación abierta si la hay
+   * —es contra el que se juzga su invalidación—, y si no, el que vio el último
+   * análisis. `null` en cualquier otra estrategia, o sin canal válido.
+   */
+  readonly canalDelBot = computed<LineasCanal | null>(() => {
+    const b = this.bot();
+    if (b?.strategy !== 'AI_CHANNEL') return null;
+    const scratch = b.cycle?.scratch;
+    return operacionCanalDe(scratch)?.lineas ?? vistaCanalDe(scratch)?.canal ?? null;
+  });
+
+  readonly visibleCanal = computed(() => (this.layers().canal ? this.canalDelBot() : null));
   /**
    * El panel de resultado bajo el precio (spec 005, R-5). APAGADO por defecto y
    * a propósito: es lo único de este spec que crea un panel más en el motor
@@ -1330,7 +1352,7 @@ export class MarketChartPage implements OnInit {
     void this.router.navigateByUrl(b ? `/bots/${b.id}` : '/tabs/markets');
   }
 
-  toggleLayer(layer: 'ladder' | 'planned' | 'fills' | 'liquidation' | 'events'): void {
+  toggleLayer(layer: 'ladder' | 'planned' | 'fills' | 'liquidation' | 'events' | 'canal'): void {
     this.layers.update((l) => ({ ...l, [layer]: !l[layer] }));
   }
 

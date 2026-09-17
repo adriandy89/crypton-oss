@@ -36,6 +36,10 @@ export type { MarketMakerConfig } from './strategies/market-maker';
 export type { MarketMakerV2Config } from './strategies/market-maker-v2';
 export type { TrendFollowConfig } from './strategies/trend-follow';
 export type { TrailingProfitConfig } from './strategies/trailing-profit';
+export type { AiChannelConfig } from './strategies/ai-channel';
+// El primer índice de los cierres a mercado de la operación: el motor lo lee
+// para contar por qué terminó (spec 059).
+export { INDICE_CIERRE } from './strategies/ai-channel';
 export * from './indicadores';
 export { composeSpreadBps, resolveAnchor } from './strategies/market-maker-v2';
 export { MAX_VOL_SAMPLES, sampleVolatility } from './strategies/mm-shared';
@@ -52,3 +56,35 @@ export * from './reconcile';
 export * from './order-gate';
 export * from './stop-loss';
 export * from './cycle-accounting';
+
+// El motor determinista del canal (spec 058). Nombres explícitos: su
+// estadística (`rsi`, `sma`…) comparte nombre con la de `indicadores`, y el
+// worker y el backtest solo necesitan la entrada y la salida.
+export {
+  DEFAULTS_CANAL,
+  enVentanaSinEntradas,
+  leerConfig as leerConfigCanal,
+  leerVentanas,
+  type ConfigCanal,
+  type VentanaUtc,
+} from './canal/config';
+export { COSTES_VENUE, costesDe, type Costes } from './canal/costes';
+export {
+  analizarMercado,
+  seriesNecesarias,
+  vaciarCacheAnalisis,
+  type EntradaAnalisis,
+  type ResultadoAnalisis,
+} from './canal/analisis';
+export {
+  construirOperacion,
+  esElegible,
+  herramientaCanal,
+  huellaDe,
+  type ResultadoOperacion,
+} from './canal/herramienta';
+export { juezDeReglas } from './canal/juez';
+export { wilsonInferior } from './canal/estadistica';
+export { etiquetarTripleBarrera, resumirTasas, type Etiqueta } from './canal/tasas-base';
+export { serieNumerica, type SerieNumerica } from './canal/numeros';
+export { serieFresca, ultimaCerradaEsperada } from './canal/velas';

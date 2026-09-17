@@ -12,6 +12,7 @@ describe('RetentionService', () => {
     const db = {
       $executeRaw: jest.fn().mockResolvedValue(0),
       botAiDecision: { updateMany: jest.fn().mockResolvedValue({ count: 0 }) },
+      botAiIntent: { updateMany: jest.fn().mockResolvedValue({ count: 0 }) },
     };
     const leases = { tryLock: jest.fn().mockResolvedValue(true) };
     const config = {
@@ -53,6 +54,7 @@ describe('RetentionService — el expediente del Modo IA (spec 046)', () => {
     const db = {
       $executeRaw: jest.fn().mockResolvedValue(0),
       botAiDecision: { updateMany },
+      botAiIntent: { updateMany: jest.fn().mockResolvedValue({ count: 0 }) },
     };
     const leases = { tryLock: jest.fn().mockResolvedValue(true) };
     const config = {
@@ -89,5 +91,62 @@ describe('RetentionService — el expediente del Modo IA (spec 046)', () => {
     const { svc, updateMany } = build(0);
     await svc.purge();
     expect(updateMany).not.toHaveBeenCalled();
+  });
+});
+
+describe('RetentionService — la herramienta del canal con IA (spec 059)', () => {
+  const DIA = 86_400_000;
+
+  function build(aiDays: number | null = null) {
+    const intents = jest.fn().mockResolvedValue({ count: 2 });
+    const db = {
+      $executeRaw: jest.fn().mockResolvedValue(0),
+      botAiDecision: { updateMany: jest.fn().mockResolvedValue({ count: 0 }) },
+      botAiIntent: { updateMany: intents },
+    };
+    const leases = { tryLock: jest.fn().mockResolvedValue(true) };
+    const config = {
+      get: (k: string, d: unknown) =>
+        k === 'RETENTION_AI_DOSSIER_DAYS' && aiDays != null ? aiDays : d,
+    };
+    return { svc: new RetentionService(db as never, leases as never, config as never), intents };
+  }
+
+  const corte = (args: { where: Record<string, unknown> }): number =>
+    (args.where['created_at'] as { lt: Date }).lt.getTime();
+
+  it('vacía la herramienta de las intenciones viejas pero NO borra la fila', async () => {
+    // La fila explica por qué el bot abrió (o no) una operación con dinero
+    // dentro, y eso no caduca. La herramienta son unos kilobytes por consulta,
+    // una por vela de 5 min con setup: es el grueso del peso de la tabla.
+    const { svc, intents } = build();
+    const antes = Date.now();
+
+    await svc.purge();
+
+    expect(intents).toHaveBeenCalledTimes(1);
+    const args = intents.mock.calls[0][0] as {
+      where: Record<string, unknown>;
+      data: Record<string, unknown>;
+    };
+    expect(Object.keys(args.data)).toEqual(['snapshot']);
+    expect(args.where['snapshot']).toBeDefined();
+    expect(corte(args)).toBeGreaterThanOrEqual(antes - 90 * DIA);
+    expect(corte(args)).toBeLessThanOrEqual(Date.now() - 90 * DIA);
+  });
+
+  it('con la misma retención que el expediente del Modo IA', async () => {
+    const { svc, intents } = build(30);
+    const antes = Date.now();
+    await svc.purge();
+    const args = intents.mock.calls[0][0] as { where: Record<string, unknown> };
+    expect(corte(args)).toBeGreaterThanOrEqual(antes - 30 * DIA);
+    expect(corte(args)).toBeLessThanOrEqual(Date.now() - 30 * DIA);
+  });
+
+  it('a 0 no toca nada', async () => {
+    const { svc, intents } = build(0);
+    await svc.purge();
+    expect(intents).not.toHaveBeenCalled();
   });
 });

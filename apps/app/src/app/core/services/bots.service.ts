@@ -2,6 +2,7 @@ import { HttpClient } from '@angular/common/http';
 import { Injectable, effect, inject, signal, untracked } from '@angular/core';
 import { firstValueFrom } from 'rxjs';
 import { environment } from '../../../environments/environment';
+import { AuthService } from '../auth/auth.service';
 import { NetworkService } from './network.service';
 import { StreamService } from './stream.service';
 import type {
@@ -37,19 +38,27 @@ export class BotsService {
   private readonly http = inject(HttpClient);
   private readonly network = inject(NetworkService);
   private readonly stream = inject(StreamService);
+  private readonly auth = inject(AuthService);
   private readonly base = `${environment.apiUrl}/bots`;
 
   readonly bots = signal<BotSummary[]>([]);
   readonly loading = signal(false);
 
   /**
-   * Descriptores de estrategia, cacheados en memoria.
+   * Descriptores de estrategia, cacheados en memoria POR USUARIO.
    *
    * De aquí salen TODOS los formularios de la app: etiquetas, rangos, valores
    * por defecto y la mutabilidad de cada campo. Anadir un parámetro a una
    * estrategia en el servidor lo hace aparecer aquí sin tocar la app.
+   *
+   * La lista depende de quién pregunta desde el spec 059: las estrategias de
+   * solo administradores salen solo a un administrador. Con una caché única,
+   * cambiar de cuenta en el mismo dispositivo le enseñaría a la segunda las
+   * estrategias de la primera. Se guarda la PROMESA, con el usuario y su rol
+   * como clave: dos pantallas que piden a la vez comparten una petición, y un
+   * fallo no se queda guardado.
    */
-  private strategiesCache: StrategyDescriptor[] | null = null;
+  private strategiesCache: { clave: string; lista: Promise<StrategyDescriptor[]> } | null = null;
 
   constructor() {
     // Cambio de lente: la lista que hay en pantalla es de la OTRA red.
@@ -113,11 +122,18 @@ export class BotsService {
   }
 
   async loadStrategies(force = false): Promise<StrategyDescriptor[]> {
-    if (this.strategiesCache && !force) return this.strategiesCache;
-    this.strategiesCache = await firstValueFrom(
-      this.http.get<StrategyDescriptor[]>(`${this.base}/strategies`),
-    );
-    return this.strategiesCache;
+    const user = this.auth.user();
+    const clave = `${user?.id ?? ''}|${user?.role ?? ''}`;
+    const enCache = this.strategiesCache;
+    if (enCache && enCache.clave === clave && !force) return enCache.lista;
+    const lista = firstValueFrom(this.http.get<StrategyDescriptor[]>(`${this.base}/strategies`));
+    this.strategiesCache = { clave, lista };
+    try {
+      return await lista;
+    } catch (e) {
+      if (this.strategiesCache?.lista === lista) this.strategiesCache = null;
+      throw e;
+    }
   }
 
   async strategy(kind: StrategyKind): Promise<StrategyDescriptor | undefined> {

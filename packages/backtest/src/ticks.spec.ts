@@ -80,6 +80,25 @@ describe('tickPath', () => {
       expect(pasos[1].role).toBe('high');
     });
   });
+
+  describe('con el lado de la posición (canal con IA, spec 058): primero hacia el stop', () => {
+    it.each([BarPath.NEAREST_FIRST, BarPath.PESSIMISTIC])(
+      '%s: un largo va primero al mínimo y un corto al máximo, abra donde abra',
+      (path) => {
+        // Abre junto al máximo y cierra al alza: ninguna de las dos reglas
+        // iría primero al mínimo.
+        const cercaDelMaximo = vela('109', '110', '90', '100');
+        expect(tickPath(cercaDelMaximo, '15m', path, 'LONG')[1].role).toBe('low');
+        const cercaDelMinimo = vela('91', '110', '90', '108');
+        expect(tickPath(cercaDelMinimo, '15m', path, 'SHORT')[1].role).toBe('high');
+      },
+    );
+
+    it('sin posición manda la regla elegida', () => {
+      const pasos = tickPath(vela('108', '110', '90', '95'), '15m', BarPath.NEAREST_FIRST, null);
+      expect(pasos[1].role).toBe('high');
+    });
+  });
 });
 
 describe('tickerAt', () => {

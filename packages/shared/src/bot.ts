@@ -15,7 +15,16 @@ import type {
   TimeInForce,
   Venue,
 } from './enums';
-import type { Candle } from './candle';
+import type { Candle, CandleInterval } from './candle';
+import type {
+  AvisoEstrategia,
+  DecisionIa,
+  HistorialOperaciones,
+  LimitesExternos,
+  MarcaDecision,
+  NivelApalancamiento,
+  SolicitudIa,
+} from './ia-canal';
 import type { MarketSpec, Position, Ticker } from './market';
 import type { VenueOrder } from './orders';
 
@@ -79,6 +88,14 @@ export interface DesiredOrder {
   timeInForce?: TimeInForce;
   triggerPrice?: string;
   /**
+   * Caducidad de la orden en el venue, en epoch ms (spec 058).
+   *
+   * Lighter la lleva en `order_expiry`; los venues que no la admiten la
+   * ignoran, y lo dice su adaptador. El motor no depende de ella: una orden
+   * que ya no se desea la cancela la reconciliación igual.
+   */
+  expiresAt?: number;
+  /**
    * Sentido del disparo, cuando no es el que se deduciría del `levelKind`.
    *
    * El motor deduce 'TP' de `TAKE_PROFIT` y 'SL' del resto, y eso vale para
@@ -114,6 +131,31 @@ export interface DesiredState {
    * GridMart) pueda pedir que se recuerde algo para el siguiente tick.
    */
   scratchPatch?: Record<string, unknown>;
+
+  // ── Solo las estrategias que declaran el contrato del canal (spec 058) ──
+
+  /**
+   * Apalancamiento que la entrada de este plan necesita.
+   *
+   * El motor lo fija ANTES de colocar la entrada y SOLO con la posición plana.
+   * Si el venue no lo acepta, la entrada no sale. Solo lo miran las
+   * estrategias con `apalancamientoPorOperacion`.
+   */
+  apalancamiento?: number;
+  /** La intención que el plan usa o descarta en este tick. */
+  decision?: MarcaDecision;
+  /** Una oferta nueva para la IA: el motor la escribe como `SOLICITADA`. */
+  solicitudIa?: SolicitudIa;
+  /** Avisos de la estrategia; el motor emite cada `clave` una sola vez. */
+  avisos?: AvisoEstrategia[];
+  /**
+   * Pausar el bot, con el motivo. Reanudar es cosa del usuario.
+   *
+   * Es para lo que no se cura solo: la caída máxima, el 1,5× del tope diario.
+   * Lo que sí se cura —el tope diario, una espera— es una puerta del plan, no
+   * una pausa.
+   */
+  pausar?: string;
 }
 
 /** Estado del ciclo en curso (abierto → take profit → cooldown → siguiente). */
@@ -224,6 +266,25 @@ export interface BotContext {
    * bot salga un poco más abajo, nunca más arriba (spec 042 R-6).
    */
   extremos?: { alto: string; bajo: string };
+
+  // ── Solo las estrategias que declaran el contrato del canal (spec 058) ──
+
+  /**
+   * Varias series de velas CERRADAS, por intervalo, cada una de la más antigua a
+   * la más reciente.
+   *
+   * Solo llegan a la estrategia que declara `series`, y una serie que el motor
+   * no pudo servir entera NO viene: la estrategia lo trata como «sin datos».
+   */
+  series?: Partial<Record<CandleInterval, Candle[]>>;
+  /** Lo operado por el bot, con el día en UTC. */
+  historial?: HistorialOperaciones;
+  /** La intención vigente del bot, si la hay. */
+  decisionIa?: DecisionIa | null;
+  /** Tramos de apalancamiento del venue para el par, ordenados por nocional. */
+  nivelesApalancamiento?: NivelApalancamiento[];
+  /** Lo que puede cerrar las entradas desde fuera de la configuración. */
+  limites?: LimitesExternos;
 }
 
 // ── Preview previo a crear el bot ─────────────────────────────────────────

@@ -13,6 +13,7 @@ import {
   ExchangeError,
   firstNum,
   isFiniteNum,
+  maintenanceMarginRateOf,
   OrderStatus,
   Venue,
   type Balance,
@@ -21,6 +22,7 @@ import {
   type MarginAction,
   type MarginMode,
   type MarketSpec,
+  type NivelApalancamiento,
   type OrderAck,
   type OrderUpdate,
   type PlaceOrderRequest,
@@ -50,6 +52,7 @@ import { lighterCost } from '../venue-weights';
 import { VenueCooldown } from '../cooldown';
 import { ReconnectingSocket, sharedStream } from '../ws';
 import type {
+  AcuseApalancamiento,
   AdapterOptions,
   CandleQuery,
   ExchangeAdapter,
@@ -58,6 +61,41 @@ import type {
 } from '../types';
 
 type LighterCreds = Extract<VenueCredentials, { venue: 'LIGHTER' }>;
+
+/**
+ * La caducidad más corta que admite Lighter: `MinOrderExpiryPeriod`, cinco
+ * minutos (`lighter-go`, `types/txtypes/constants.go`), más medio minuto para
+ * el viaje y los relojes.
+ */
+const CADUCIDAD_MINIMA_MS = 5 * 60_000 + 30_000;
+
+/**
+ * La más larga: los 28 días que pone el SDK por defecto, dentro de los 30 del
+ * venue (`MaxOrderExpiryPeriod`).
+ */
+const CADUCIDAD_MAXIMA_MS = 28 * 24 * 60 * 60_000;
+
+/**
+ * El `order_expiry` de una orden que se queda en el libro (spec 058).
+ *
+ * Sin `expiresAt`, el valor por defecto del SDK (-1, que su firmante convierte
+ * en «dentro de 28 días»). Con él, la marca en milisegundos, dentro de lo que
+ * admite el venue: una caducidad más corta de cinco minutos se alarga hasta el
+ * mínimo. No pasa nada por alargarla: `expiresAt` es una red por si el worker
+ * muere, y mientras vive, una orden que ya no se desea la cancela la
+ * reconciliación.
+ *
+ * Las IOC no pasan por aquí: ver `placeOrder`.
+ */
+export function caducidadLighter(expiresAt: number | undefined, ahora: number): number {
+  if (expiresAt === undefined || !Number.isFinite(expiresAt)) {
+    return SignerClient.DEFAULT_28_DAY_ORDER_EXPIRY;
+  }
+  return Math.min(
+    Math.max(Math.floor(expiresAt), ahora + CADUCIDAD_MINIMA_MS),
+    ahora + CADUCIDAD_MAXIMA_MS,
+  );
+}
 
 /**
  * Las URLs viven en `VENUE_ENDPOINTS` (`../endpoints`). El stream es UNA sola
@@ -1322,6 +1360,18 @@ export class LighterAdapter implements ExchangeAdapter {
         )
       : price;
 
+    // Una límite IOC va SIN caducidad (0), y no es un detalle: el firmante de
+    // Lighter rechaza la límite IOC que la lleve («OrderExpiry is invalid»,
+    // `lighter-go`, `types/txtypes/create_order.go`), y es lo que hace el propio
+    // SDK con sus órdenes a mercado (`DEFAULT_IOC_EXPIRY`). Se mandaba con la de
+    // 28 días, así que ninguna límite IOC podía entrar en Lighter; hasta el
+    // spec 058 no la pedía nadie. El resto, incluidos los disparadores a mercado
+    // (que el venue exige CON caducidad), llevan la suya.
+    const caducidad =
+      !condicional && timeInForce === SignerClient.ORDER_TIME_IN_FORCE_IMMEDIATE_OR_CANCEL
+        ? SignerClient.DEFAULT_IOC_EXPIRY
+        : caducidadLighter(req.expiresAt, Date.now());
+
     return withWriteRetry(
       async () => {
         await this.budget.take(this.venue, 1, prioridadDeOrden(req), this.testnet);
@@ -1339,7 +1389,7 @@ export class LighterAdapter implements ExchangeAdapter {
               req.triggerPrice
                 ? scaled(req.triggerPrice, spec.priceDecimals)
                 : SignerClient.NIL_TRIGGER_PRICE,
-              SignerClient.DEFAULT_28_DAY_ORDER_EXPIRY,
+              caducidad,
             ),
           ),
         );
@@ -1400,7 +1450,11 @@ export class LighterAdapter implements ExchangeAdapter {
       };
     }
 
-    const fills = await this.getRecentFills(symbol, Date.now() - 120_000).catch(() => []);
+    // Sin `catch`: si las ejecuciones no se pueden leer, no se sabe si entró, y
+    // eso no es «no entró». Tragarse el fallo devolvía null y `withWriteRetry`
+    // mandaba la MARKET otra vez: el caso de Lighter que nombraba 001/F-68 y
+    // que su arreglo no alcanzó (spec 060, F-02).
+    const fills = await this.getRecentFills(symbol, Date.now() - 120_000);
     const filled = fills.find((f) => f.clientOrderId === clientIndex);
     if (filled) {
       return {
@@ -1505,7 +1559,18 @@ export class LighterAdapter implements ExchangeAdapter {
     );
   }
 
-  async setLeverage(symbol: string, leverage: number, mode: MarginMode): Promise<void> {
+  /**
+   * El acuse NO confirma el apalancamiento (`leverage: null`). Un 200 de
+   * `sendTx` solo dice que la transacción está bien formada, «does not
+   * guarantee the execution»: el secuenciador todavía puede rechazarla. Quien
+   * necesite el apalancamiento aplicado lo lee de la posición
+   * (`initial_margin_fraction`) cuando la haya.
+   */
+  async setLeverage(
+    symbol: string,
+    leverage: number,
+    mode: MarginMode,
+  ): Promise<AcuseApalancamiento> {
     const marketId = await this.marketIdOf(symbol);
     this.unwrap(
       await this.signedWrite((signer) =>
@@ -1521,6 +1586,23 @@ export class LighterAdapter implements ExchangeAdapter {
         ),
       ),
     );
+    return { leverage: null };
+  }
+
+  /**
+   * Lighter no escalona el apalancamiento por nocional: cada mercado tiene una
+   * fracción de margen inicial y otra de mantenimiento, sin tramos. Es un tramo
+   * único con la ficha del mercado, y una lectura pública.
+   */
+  async getLeverageTiers(symbol: string): Promise<NivelApalancamiento[]> {
+    const spec = await this.markets.get(symbol);
+    return [
+      {
+        desdeNocional: '0',
+        maxApalancamiento: spec.maxLeverage,
+        mantenimiento: maintenanceMarginRateOf(spec),
+      },
+    ];
   }
 
   /**
@@ -2336,14 +2418,21 @@ export class LighterAdapter implements ExchangeAdapter {
 
   private toVenueOrder(o: LighterOrder, symbol: string): VenueOrder {
     const filled = D(o.initial_base_amount).minus(o.remaining_base_amount);
+    // Una orden con disparo se informa con su DISPARO. Su `price` es el de
+    // ejecución —el que `placeOrder` pone un 5 % más allá en un stop a
+    // mercado—, y sin el disparo el motor comparaba ese precio con el del stop
+    // deseado, lo daba por cambiado y lo cancelaba y recolocaba en cada tick
+    // (spec 057, F-01). El tipo, por lo mismo: el stop a mercado es MARKET.
+    const disparo = firstNum(o.trigger_price, 0);
     return {
       venue: Venue.LIGHTER,
       symbol,
       clientOrderId: String(o.client_order_index),
       venueOrderId: String(o.order_index),
       side: o.is_ask ? 'SELL' : 'BUY',
-      type: o.type === 'market' ? 'MARKET' : 'LIMIT',
+      type: o.type === 'market' || A_MERCADO_CON_DISPARO_LIGHTER.has(o.type) ? 'MARKET' : 'LIMIT',
       price: D(o.price).toFixed(),
+      triggerPrice: CONDICIONALES_LIGHTER.has(o.type) && disparo.gt(0) ? disparo.toFixed() : null,
       qty: D(o.initial_base_amount).toFixed(),
       filledQty: filled.toFixed(),
       avgPrice:
@@ -2359,6 +2448,17 @@ export class LighterAdapter implements ExchangeAdapter {
     };
   }
 }
+
+/** Tipos de orden de Lighter que esperan a un disparo (`Order.type` del SDK). */
+const CONDICIONALES_LIGHTER: ReadonlySet<string> = new Set([
+  'stop-loss',
+  'stop-loss-limit',
+  'take-profit',
+  'take-profit-limit',
+]);
+
+/** Los que, al dispararse, cruzan el libro: `placeOrder` los crea con tipo 2 y 4. */
+const A_MERCADO_CON_DISPARO_LIGHTER: ReadonlySet<string> = new Set(['stop-loss', 'take-profit']);
 
 /** Hora de creación de una orden del venue, en ms; si no la trae, ahora. */
 function creadaEn(o: { timestamp?: number; created_at?: number }): number {
