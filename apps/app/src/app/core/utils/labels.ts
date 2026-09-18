@@ -176,6 +176,7 @@ export const EVENT_LABELS: Record<string, string> = {
   FAIR_PRICE_STALE: 'Precio de referencia desfasado',
   FAIR_PRICE_UNAVAILABLE: 'Precio de referencia no disponible',
   RISK_GUARD_TRIPPED: 'Guarda de riesgo disparada',
+  RISK_GUARD_CLEARED: 'La guarda ya no se cumple',
   LIQUIDATION_NEAR: 'Liquidacion cerca',
   LIQUIDATED: 'Posicion liquidada',
   PANIC: 'Panico: todo cancelado y cerrado',

@@ -143,6 +143,16 @@ significa que la plataforma se apaga, y por eso está prohibido).
 | Kill-switch por pérdida acumulada (%) | Pérdida acumulada del bot sobre su capital asignado | Cada revisión |
 | Aviso de liquidación (%) · por defecto **10** | A qué distancia salta `LIQUIDATION_NEAR` | Cada revisión |
 
+**Cuándo llega un límite nuevo a un bot que ya está en marcha.** El motor relee tus topes cada minuto,
+y la lectura se comparte entre todos tus bots durante veinte segundos: un cambio muerde en menos de
+dos minutos, sin parar nada. Vale en los dos sentidos —bajar un tope pausa al bot que lo incumpla,
+subirlo deja de pausarlo— y reanudar un bot relee los topes antes de arrancarlo, así que no puede
+rebotar contra el tope viejo.
+
+Un bot pausado por una guarda **no se reanuda solo** cuando la condición desaparece: el motor no pone
+a operar lo que no le has pedido. Lo que sí hace es retirar el aviso de su tarjeta y avisarte con
+`RISK_GUARD_CLEARED` de que ya puedes reanudarlo tú.
+
 Y el **kill-switch global** (`POST /risk/kill-switch`, el botón rojo de la pantalla): marca **todos** tus
 bots para parar y cerrar; el worker, que es quien tiene las claves, cancela y cierra. Es el único
 comando con alcance de cuenta: los comandos de un bot nunca tocan las órdenes de otro.

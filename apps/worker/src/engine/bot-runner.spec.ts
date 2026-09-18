@@ -224,6 +224,15 @@ function fakeStore(over: Partial<BotStore> = {}) {
     // test. Quien pruebe la reparación lo sobreescribe.
     repairCycleFromVenue: jest.fn().mockResolvedValue(null),
     olvidarHistorial: jest.fn(),
+    riskGuards: jest.fn().mockResolvedValue({
+      maxNotionalPerBot: null,
+      maxDailyLoss: null,
+      killSwitchDrawdownPct: null,
+      liquidationAlertPct: null,
+      maxLeverage: null,
+      maxTotalNotional: null,
+    }),
+    pausadoPorRiesgo: jest.fn().mockResolvedValue(false),
     recordFill: jest.fn().mockResolvedValue(makeCoid(BOT_ID, 1, 'GRID_BUY', 0)),
     recordLiquidation: jest.fn().mockResolvedValue('liq:HYPERLIQUID:f-liq'),
     applyFillToCycle: jest.fn(async (_botId: string, cycle: CycleState) => {
@@ -3174,6 +3183,163 @@ describe('liquidación del venue', () => {
 
     expect(store.applyFillToCycle).not.toHaveBeenCalled();
     expect(store.setStatus).not.toHaveBeenCalledWith(BOT_ID, 'PAUSED', expect.anything());
+    await runner.dispose();
+  });
+});
+
+// ─── Spec 063: los límites de riesgo llegan a un bot que ya está en marcha ──
+//
+// Los guards se leían una sola vez, al adoptar el bot, y no se releían jamás.
+// Un usuario que subía su tope de apalancamiento de 10x a 25x se encontraba el
+// bot pausado con «apalancamiento 25x por encima de tu límite (10x)» y sin
+// forma de sacarlo de ahí: reanudar lo volvía a pausar en el tick siguiente.
+
+describe('los límites de riesgo se releen con el bot vivo (spec 063)', () => {
+  const tickDe = (runner: BotRunner) => (runner as unknown as { tick(): Promise<void> }).tick();
+  const cuantos = (store: ReturnType<typeof fakeStore>, tipo: string) =>
+    store.events.filter((e) => e === tipo).length;
+
+  /** Guards completos con el tope de apalancamiento que se quiera. */
+  const limites = (maxLeverage: number | null) => ({
+    maxNotionalPerBot: null,
+    maxDailyLoss: null,
+    killSwitchDrawdownPct: null,
+    liquidationAlertPct: null,
+    maxLeverage,
+    maxTotalNotional: null,
+  });
+
+  /** Un bot con apalancamiento 20 y el tope que diga la base en cada momento. */
+  const conTope = (
+    alAdoptar: number | null,
+    enLaBase: number | null,
+    startPaused = false,
+    storeExtra: Partial<BotStore> = {},
+  ) => {
+    const riskGuards = jest.fn().mockResolvedValue(limites(enLaBase));
+    const h = build(
+      { orders: [], immediate: [] },
+      { riskGuards, ...storeExtra },
+      { leverage: 20 },
+      limites(alAdoptar) as never,
+      { startPaused },
+    );
+    return { ...h, riskGuards };
+  };
+
+  it('bajar el tope pausa un bot que ya estaba corriendo', async () => {
+    // Sin esto, un tope nuevo no llegaba a un bot vivo hasta pararlo y
+    // arrancarlo: el que ya operaba seguía con el suyo indefinidamente.
+    const { runner, store } = conTope(null, 10);
+    await runner.start();
+
+    for (let i = 0; i < 5; i++) await tickDe(runner);
+
+    expect(store.events).toContain('RISK_GUARD_TRIPPED');
+    await runner.dispose();
+  });
+
+  it('subir el tope deja de pausar, borra el motivo caducado y NO reanuda', async () => {
+    const { runner, store } = conTope(10, 25);
+    await runner.start();
+    expect(store.events).toContain('RISK_GUARD_TRIPPED');
+    const pausas = cuantos(store, 'RISK_GUARD_TRIPPED');
+    // El arranque escribió RUNNING antes de que la guarda lo pausara; lo que se
+    // vigila es que nadie lo ponga a operar DESPUÉS.
+    (store.setStatus as jest.Mock).mockClear();
+
+    for (let i = 0; i < 5; i++) await tickDe(runner);
+
+    // El motivo se borra sin tocar el estado: `setStatus` ata las dos cosas y
+    // aquí el bot tiene que seguir pausado hasta que su dueño lo reanude.
+    expect(store.setLastError).toHaveBeenCalledWith(BOT_ID, null);
+    expect(cuantos(store, 'RISK_GUARD_CLEARED')).toBe(1);
+    expect(cuantos(store, 'RISK_GUARD_TRIPPED')).toBe(pausas);
+    expect(store.setStatus).not.toHaveBeenCalledWith(BOT_ID, 'RUNNING', expect.anything());
+    await runner.dispose();
+  });
+
+  it('el motivo caducado se borra UNA vez, no en cada revisión', async () => {
+    const { runner, store } = conTope(10, 25);
+    await runner.start();
+
+    for (let i = 0; i < 12; i++) await tickDe(runner);
+
+    expect(cuantos(store, 'RISK_GUARD_CLEARED')).toBe(1);
+    await runner.dispose();
+  });
+
+  it('reanudar tras subir el tope no rebota: el RESUME relee los límites', async () => {
+    // El agujero de verdad: RESUME borraba el motivo, y el tick siguiente
+    // volvía a pausar con el tope viejo. El usuario no tenía salida.
+    const { runner, store, riskGuards } = conTope(10, 25);
+    await runner.start();
+
+    await runner.handleCommand('RESUME');
+    await tickDe(runner);
+
+    expect(riskGuards).toHaveBeenCalledWith('u1', { fresco: true });
+    expect(cuantos(store, 'RISK_GUARD_TRIPPED')).toBe(1);
+    expect(store.setStatus).toHaveBeenCalledWith(BOT_ID, 'RUNNING', { clearError: true });
+    await runner.dispose();
+  });
+
+  it('un fallo leyendo los límites conserva los que había: nunca los relaja', async () => {
+    // Lo contrario —quedarse sin guards porque la base no contesta— dejaría a
+    // un bot fuera de límites operando durante la avería.
+    const riskGuards = jest.fn().mockRejectedValue(new Error('base caída'));
+    const { runner, store } = build(
+      { orders: [], immediate: [] },
+      { riskGuards },
+      { leverage: 20 },
+      limites(10) as never,
+    );
+    await runner.start();
+
+    for (let i = 0; i < 5; i++) await tickDe(runner);
+
+    expect(store.setLastError).not.toHaveBeenCalledWith(BOT_ID, null);
+    expect(cuantos(store, 'RISK_GUARD_CLEARED')).toBe(0);
+    await runner.dispose();
+  });
+
+  it('tras un relevo de worker, el bot adoptado en pausa también deja de mentir', async () => {
+    // La marca de «lo pausó una guarda» vive en memoria y un relevo la pierde.
+    // Se recupera de la base: el motivo a la vista y el último aviso de guarda.
+    const { runner, store } = conTope(10, 25, true, {
+      pausadoPorRiesgo: jest
+        .fn()
+        .mockResolvedValue('apalancamiento 20x por encima de tu límite (10x)'),
+    });
+    await runner.start();
+
+    for (let i = 0; i < 5; i++) await tickDe(runner);
+
+    expect(store.pausadoPorRiesgo).toHaveBeenCalledWith(BOT_ID);
+    expect(store.setLastError).toHaveBeenCalledWith(BOT_ID, null);
+    expect(cuantos(store, 'RISK_GUARD_CLEARED')).toBe(1);
+    await runner.dispose();
+  });
+
+  it('sin marca de guarda, un motivo ajeno no se borra', async () => {
+    // Un bot pausado a mano durante una caída del venue tiene su propio motivo
+    // en la tarjeta; una guarda que no saltó no tiene nada que limpiar ahí.
+    const { runner, store } = build(
+      { orders: [], immediate: [] },
+      {
+        riskGuards: jest.fn().mockResolvedValue(limites(25)),
+        pausadoPorRiesgo: jest.fn().mockResolvedValue(null),
+      },
+      { leverage: 20 },
+      limites(25) as never,
+      { startPaused: true },
+    );
+    await runner.start();
+
+    for (let i = 0; i < 5; i++) await tickDe(runner);
+
+    expect(store.setLastError).not.toHaveBeenCalledWith(BOT_ID, null);
+    expect(cuantos(store, 'RISK_GUARD_CLEARED')).toBe(0);
     await runner.dispose();
   });
 });

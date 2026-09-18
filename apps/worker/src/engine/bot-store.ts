@@ -47,6 +47,15 @@ export interface BotRecord {
   total_investment: Decimal | { toString(): string };
 }
 
+/**
+ * Marca del payload de `RISK_GUARD_TRIPPED` que distingue las pausas de las
+ * guardas de LÍMITES del resto de pausas que comparten ese tipo de evento: el
+ * cortacircuitos de ticks fallidos, las colocaciones que no salen y la pausa
+ * que pide la propia estrategia. Solo las primeras caducan cuando el usuario
+ * cambia sus límites, así que solo ellas se pueden retirar solas (spec 063).
+ */
+export const GUARDA_DE_LIMITES = 'LIMITES';
+
 export interface RiskGuards {
   maxNotionalPerBot: string | null;
   maxDailyLoss: string | null;
@@ -78,6 +87,14 @@ export interface RiskGuards {
  */
 /** Cuánto vale la pérdida diaria de un usuario antes de recalcularla. */
 const DAILY_PNL_TTL_MS = 20_000;
+
+/**
+ * Cuánto valen los límites de riesgo de un usuario antes de releerlos.
+ *
+ * Constante propia aunque el valor coincida con el de arriba: son dos cosas
+ * distintas y una podrá moverse sin arrastrar a la otra.
+ */
+const RISK_GUARDS_TTL_MS = 20_000;
 
 const DIA_MS = 86_400_000;
 
@@ -127,6 +144,7 @@ export class BotStore {
   private readonly dailyLoss = new Map<string, { value: Decimal; at: number }>();
   private readonly dailyLossByBot = new Map<string, { value: Decimal; at: number }>();
   private readonly totalNotional = new Map<string, { value: Decimal; at: number }>();
+  private readonly guardsPorUsuario = new Map<string, { value: RiskGuards; at: number }>();
   private readonly historiales = new Map<
     string,
     { value: HistorialOperaciones; at: number; dia: number }
@@ -1210,6 +1228,74 @@ export class BotStore {
    */
   olvidarHistorial(botId: string): void {
     this.historiales.delete(botId);
+  }
+
+  /**
+   * Los límites de riesgo del usuario, con caché corta y compartida.
+   *
+   * Es la ÚNICA puerta por la que el motor los lee: la adopción de un bot y el
+   * refresco periódico del runner pasan los dos por aquí, así que el mapeo de
+   * la fila a `RiskGuards` no puede divergir entre uno y otro.
+   *
+   * La caché es por USUARIO y no por bot a propósito: veinte bots del mismo
+   * dueño refrescando cada minuto son una consulta por minuto, no veinte. Es el
+   * mismo trato que reciben la pérdida diaria y el nocional total, que se leen
+   * en esta misma guarda.
+   *
+   * `fresco` la salta. Lo piden la adopción y el RESUME: arrancar o reanudar un
+   * bot justo después de tocar los límites es exactamente el momento en el que
+   * un dato de hace veinte segundos es el equivocado.
+   *
+   * Sin fila no hay límites, igual que antes: `findUnique` devuelve `null` solo
+   * cuando no existe, y un error de base RECHAZA. Los dos casos no se confunden,
+   * y quien llama decide qué hacer con el fallo.
+   */
+  async riskGuards(userId: string, opts: { fresco?: boolean } = {}): Promise<RiskGuards> {
+    if (!opts.fresco) {
+      const cached = this.guardsPorUsuario.get(userId);
+      if (cached && Date.now() - cached.at < RISK_GUARDS_TTL_MS) return cached.value;
+    }
+    const l = await this.db.riskLimit.findUnique({ where: { user_id: userId } });
+    const value: RiskGuards = {
+      maxNotionalPerBot: l?.max_notional_per_bot?.toString() ?? null,
+      maxDailyLoss: l?.max_daily_loss?.toString() ?? null,
+      killSwitchDrawdownPct: l?.kill_switch_drawdown_pct?.toString() ?? null,
+      liquidationAlertPct: l?.liquidation_alert_pct?.toString() ?? null,
+      maxLeverage: l?.max_leverage ?? null,
+      maxTotalNotional: l?.max_total_notional?.toString() ?? null,
+    };
+    this.guardsPorUsuario.set(userId, { value, at: Date.now() });
+    return value;
+  }
+
+  /**
+   * El motivo que enseña este bot, si lo escribió una guarda de LÍMITES suya.
+   *
+   * La marca de «este motivo lo escribí yo» vive en memoria del runner, y un
+   * relevo de worker la pierde: el bot se readopta en pausa y su tarjeta sigue
+   * enseñando un motivo que ya nadie sabe de quién era. Se reconstruye de la
+   * base cruzando dos cosas, y las dos tienen que cumplirse:
+   *
+   *  - el motivo a la vista es, literalmente, el de un aviso de guarda;
+   *  - ese aviso lo dio la guarda de límites, y no el cortacircuitos de ticks
+   *    fallidos, ni las colocaciones que no salen, ni la pausa de la propia
+   *    estrategia, que comparten tipo de evento y NO se pueden dar por
+   *    caducadas mirando los límites.
+   */
+  async pausadoPorRiesgo(botId: string): Promise<string | null> {
+    const [bot, ultimo] = await Promise.all([
+      this.db.bot.findUnique({ where: { id: botId }, select: { last_error: true } }),
+      this.db.botEvent.findFirst({
+        where: { bot_id: botId, type: 'RISK_GUARD_TRIPPED' },
+        orderBy: { created_at: 'desc' },
+        select: { payload: true },
+      }),
+    ]);
+    const motivo = bot?.last_error;
+    if (motivo == null || ultimo == null) return null;
+    const payload = ultimo.payload as { reason?: string; guarda?: string } | null;
+    const esNuestro = payload?.guarda === GUARDA_DE_LIMITES && payload.reason === motivo;
+    return esNuestro ? motivo : null;
   }
 
   /** Invalida la caché de pérdida diaria: se llama al cerrarse un ciclo. */

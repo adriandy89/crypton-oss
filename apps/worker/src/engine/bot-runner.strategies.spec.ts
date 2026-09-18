@@ -165,6 +165,15 @@ class MemoryStore {
   /** Releer el ciclo es justo lo que hace REPAIR; sin esto no se prueba nada. */
   ensureCycle = async () => this.cycle;
   marketSpec = async () => MARKET;
+  riskGuards = async () => ({
+    maxNotionalPerBot: null,
+    maxDailyLoss: null,
+    killSwitchDrawdownPct: null,
+    liquidationAlertPct: null,
+    maxLeverage: null,
+    maxTotalNotional: null,
+  });
+  pausadoPorRiesgo = async () => null;
   drawdownPct = () => null;
   todayRealizedPnl = async () => D(0);
   syncOrderState = async () => undefined;

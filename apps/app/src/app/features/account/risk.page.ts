@@ -52,7 +52,8 @@ import { errorText } from '../../core/utils';
         <p class="hint">
           Estos límites se comprueban al crear un bot <strong>y en cada ciclo del motor</strong>. Lo
           segundo importa: el mercado se mueve, y un bot que era seguro al arrancar puede dejar de
-          serlo media hora después.
+          serlo media hora después. Lo que cambies aquí llega a los bots que ya están en marcha en
+          menos de dos minutos.
         </p>
 
         <ion-list inset="true">
@@ -135,7 +136,8 @@ import { errorText } from '../../core/utils';
         <ion-note class="foot">
           Al saltar una guarda el bot se <strong>pausa</strong>, no se cierra: cerrar realizaría la
           pérdida al instante y en el peor momento. Pausar detiene el sangrado y deja la decisión
-          final en tus manos.
+          final en tus manos. Un bot pausado por una guarda tampoco se reanuda solo: cuando la
+          condición deja de cumplirse desaparece el aviso de su tarjeta y ya puedes reanudarlo tú.
         </ion-note>
 
         <ion-button expand="block" [disabled]="busy()" (click)="save()">
@@ -211,7 +213,9 @@ export class RiskPage implements OnInit {
         killSwitchDrawdownPct: blank(this.killSwitchDrawdownPct),
         liquidationAlertPct: blank(this.liquidationAlertPct),
       });
-      await this.toast.success('Límites guardados.');
+      await this.toast.success(
+        'Límites guardados. Los bots en marcha los aplican en menos de dos minutos.',
+      );
     } catch (e) {
       await this.toast.error(errorText(e));
     } finally {

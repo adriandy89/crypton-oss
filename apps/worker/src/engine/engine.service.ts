@@ -13,7 +13,7 @@ import { AuditService, BUS_CHANNELS, BusService, DbService } from '../libs';
 import { BotRunner, type EstadoInterruptor, type RunnerCommand } from './bot-runner';
 import { AccountHub } from './account-hub.service';
 import { AiIntentStore } from './ai-intents.store';
-import { BotStore, type RiskGuards } from './bot-store';
+import { BotStore } from './bot-store';
 import { CommandInbox } from './command-inbox.service';
 import { LeaseService } from './lease.service';
 import { evaluarSalud, runnersAtascados } from './health';
@@ -658,14 +658,16 @@ export class EngineService implements OnModuleInit, OnModuleDestroy {
       select: { testnet: true },
     });
 
-    const [revision, market, limits] = await Promise.all([
+    const [revision, market, guards] = await Promise.all([
       this.db.botConfigRevision.findUniqueOrThrow({
         where: {
           bot_id_version: { bot_id: botId, version: bot.config_version },
         },
       }),
       this.store.marketSpec(bot.venue, bot.symbol, testnet),
-      this.db.riskLimit.findUnique({ where: { user_id: bot.user_id } }),
+      // Fresco: arrancar un bot justo después de tocar los límites es el
+      // momento en el que un dato de hace veinte segundos es el equivocado.
+      this.store.riskGuards(bot.user_id, { fresco: true }),
     ]);
 
     const config = revision.config as unknown as BotConfig;
@@ -688,15 +690,6 @@ export class EngineService implements OnModuleInit, OnModuleDestroy {
     );
 
     const spec: MarketSpec = market;
-
-    const guards: RiskGuards = {
-      maxNotionalPerBot: limits?.max_notional_per_bot?.toString() ?? null,
-      maxDailyLoss: limits?.max_daily_loss?.toString() ?? null,
-      killSwitchDrawdownPct: limits?.kill_switch_drawdown_pct?.toString() ?? null,
-      liquidationAlertPct: limits?.liquidation_alert_pct?.toString() ?? null,
-      maxLeverage: limits?.max_leverage ?? null,
-      maxTotalNotional: limits?.max_total_notional?.toString() ?? null,
-    };
 
     const runner = new BotRunner({
       bot: bot,

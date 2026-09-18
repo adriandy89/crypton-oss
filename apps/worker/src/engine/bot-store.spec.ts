@@ -509,3 +509,76 @@ describe('BotStore.applyFillToCycle: el evento del cierre (spec 059)', () => {
     expect(db.botEvent.create).not.toHaveBeenCalled();
   });
 });
+
+/**
+ * Spec 063. Los límites del usuario se leían una sola vez, al adoptar el bot, y
+ * no se releían jamás: subir un tope no liberaba a un bot pausado y bajarlo no
+ * mordía a uno en marcha. Ahora los lee el motor cada minuto, y esta es la
+ * única puerta por la que pasan la adopción y el refresco.
+ */
+describe('BotStore.riskGuards (spec 063)', () => {
+  const fila = {
+    max_notional_per_bot: '5000',
+    max_total_notional: '20000',
+    max_leverage: 25,
+    max_daily_loss: '100',
+    kill_switch_drawdown_pct: '70',
+    liquidation_alert_pct: '10',
+  };
+
+  it('mapea la fila a los guards: decimales a cadena y el apalancamiento a número', async () => {
+    const db = { riskLimit: { findUnique: jest.fn().mockResolvedValue(fila) } };
+    const store = new BotStore(db as never, {} as never);
+
+    expect(await store.riskGuards('u1')).toEqual({
+      maxNotionalPerBot: '5000',
+      maxTotalNotional: '20000',
+      maxLeverage: 25,
+      maxDailyLoss: '100',
+      killSwitchDrawdownPct: '70',
+      liquidationAlertPct: '10',
+    });
+  });
+
+  it('sin fila no hay límites, que es lo que significaba antes al adoptar', async () => {
+    const db = { riskLimit: { findUnique: jest.fn().mockResolvedValue(null) } };
+    const store = new BotStore(db as never, {} as never);
+
+    expect(await store.riskGuards('u1')).toEqual({
+      maxNotionalPerBot: null,
+      maxTotalNotional: null,
+      maxLeverage: null,
+      maxDailyLoss: null,
+      killSwitchDrawdownPct: null,
+      liquidationAlertPct: null,
+    });
+  });
+
+  it('la caché es por usuario: veinte bots de un dueño son una consulta', async () => {
+    const findUnique = jest.fn().mockResolvedValue(fila);
+    const store = new BotStore({ riskLimit: { findUnique } } as never, {} as never);
+
+    await store.riskGuards('u1');
+    await store.riskGuards('u1');
+    await store.riskGuards('u2');
+
+    expect(findUnique).toHaveBeenCalledTimes(2);
+  });
+
+  it('«fresco» la salta: arrancar o reanudar no puede leer el tope de hace un rato', async () => {
+    const findUnique = jest.fn().mockResolvedValue(fila);
+    const store = new BotStore({ riskLimit: { findUnique } } as never, {} as never);
+
+    await store.riskGuards('u1');
+    await store.riskGuards('u1', { fresco: true });
+
+    expect(findUnique).toHaveBeenCalledTimes(2);
+  });
+
+  it('un error de base RECHAZA: no se confunde con «este usuario no tiene límites»', async () => {
+    const db = { riskLimit: { findUnique: jest.fn().mockRejectedValue(new Error('caída')) } };
+    const store = new BotStore(db as never, {} as never);
+
+    await expect(store.riskGuards('u1')).rejects.toThrow('caída');
+  });
+});

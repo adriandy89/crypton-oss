@@ -54,7 +54,7 @@ import {
   type Strategy,
 } from '@crypton/strategy-core';
 import type { AiIntentsLike } from './ai-intents.store';
-import type { BotStore, BotRecord, RiskGuards } from './bot-store';
+import { GUARDA_DE_LIMITES, type BotStore, type BotRecord, type RiskGuards } from './bot-store';
 import { avisoDeEntrada, eventoDeSalida, motivoDeSalida } from './canal-avisos';
 
 export type RunnerCommand =
@@ -246,6 +246,16 @@ const FILL_BACKFILL_MS = 10 * 60_000;
 
 /** Cada cuántos ticks se relee la spec del mercado. */
 const SPEC_REFRESH_EVERY_TICKS = 40;
+
+/**
+ * Cada cuántos ticks se releen los límites de riesgo del usuario.
+ *
+ * Cuatro, un minuto con el latido por defecto, y no los cuarenta de la ficha
+ * de mercado: diez minutos es demasiado para un tope de riesgo. Con la caché
+ * por usuario del store, un dueño con veinte bots paga una consulta por
+ * minuto en total, no veinte.
+ */
+const GUARDS_REFRESH_EVERY_TICKS = 4;
 
 /** A partir de aquí un precio deja de servir para mandar una orden a mercado. */
 const TICKER_MAX_AGE_MS = 10_000;
@@ -565,6 +575,15 @@ export class BotRunner {
   private config: BotConfig;
   private cycle: CycleState;
   private market: MarketSpec;
+  /**
+   * Los límites del usuario, tal y como estaban en la última relectura.
+   *
+   * Mutable y no `deps.guards` porque se releen con el bot vivo: se cargaban
+   * al adoptarlo y no se volvían a mirar nunca, así que subir un tope no
+   * liberaba a un bot pausado y bajarlo no mordía a uno en marcha. Es el mismo
+   * campo mutable que ya tiene `market` y por la misma razón (spec 063).
+   */
+  private guards: RiskGuards;
 
   private timer: NodeJS.Timeout | null = null;
   private startTimer: NodeJS.Timeout | null = null;
@@ -612,6 +631,15 @@ export class BotRunner {
   private caidaAvisoHasta = 0;
   /** ¿Escribió la caída el `last_error` del bot? Solo entonces lo borra al volver. */
   private motivoDeCaidaPuesto = false;
+  /**
+   * El motivo a la vista, si lo escribió una guarda de LÍMITES de este runner.
+   *
+   * `RISK_GUARD_TRIPPED` lo emiten también el cortacircuitos de ticks
+   * fallidos, las colocaciones que no salen y la pausa que pide la propia
+   * estrategia; ninguno de esos motivos caduca porque el usuario cambie sus
+   * límites, así que solo se retira el que sí es de ellos (spec 063).
+   */
+  private motivoDeGuarda: string | null = null;
   /** El temporizador no lanza un tick antes de esto. Ver `latido`. */
   private proximoLatidoEn = 0;
   /** Hay un tick del temporizador en curso o esperando el cerrojo. Ver `latido`. */
@@ -795,6 +823,7 @@ export class BotRunner {
     this.config = deps.config;
     this.cycle = deps.cycle;
     this.market = deps.market;
+    this.guards = deps.guards;
   }
 
   get botId(): string {
@@ -933,6 +962,11 @@ export class BotRunner {
       // después. Escribir RUNNING aquí —que es lo que hace la rama de abajo—
       // habría BORRADO la petición de parada: el bot resucitaba en vez de
       // cerrarse.
+      //
+      // La marca de «este motivo lo escribió mi guarda» vive en memoria, y un
+      // relevo de worker la pierde: sin esto, un bot readoptado en pausa seguiría
+      // enseñando para siempre un motivo que ya no se cumple (spec 063).
+      this.motivoDeGuarda = await this.deps.store.pausadoPorRiesgo(this.botId).catch(() => null);
       await this.event(
         'BOT_ADOPTED',
         'INFO',
@@ -1080,6 +1114,7 @@ export class BotRunner {
       }
 
       await this.refreshMarketSpec();
+      await this.refreshGuards();
 
       // Guardas de riesgo ANTES de planificar: si el bot debe pararse, no tiene
       // sentido calcular una escalera que no se va a tender.
@@ -1104,6 +1139,9 @@ export class BotRunner {
           await this.runCommand('STOP_AND_CLOSE');
           return;
         }
+        // Ninguna guarda salta ya: si el motivo a la vista era de una de
+        // ellas, se retira. El bot sigue pausado (spec 063).
+        if (!breach) await this.limpiarMotivoDeGuarda();
         await this.protegerEnPausa(ticker, position, openOrders, balances[0]?.available ?? '0');
         if (this.persistDue()) await this.snapshot(ticker, position, openOrders.length);
         return;
@@ -1118,7 +1156,7 @@ export class BotRunner {
           });
           await this.runCommand('STOP_AND_CLOSE');
         } else {
-          await this.pauseForRisk(breach.reason);
+          await this.pauseForRisk(breach.reason, true);
           await this.protegerEnPausa(ticker, position, openOrders, balances[0]?.available ?? '0');
         }
         return;
@@ -2025,6 +2063,8 @@ export class BotRunner {
     await this.deps.store.setStatus(this.botId, 'PAUSED', { error: motivo });
     // El motivo de la liquidación ha pisado el de una caída: ya no es suyo.
     this.motivoDeCaidaPuesto = false;
+    // Y con él deja de ser nuestro el motivo de una guarda de límites.
+    this.motivoDeGuarda = null;
 
     await this.event(
       'LIQUIDATED',
@@ -2234,7 +2274,7 @@ export class BotRunner {
     }
     return {
       entradasPermitidas,
-      maxApalancamientoUsuario: this.deps.guards.maxLeverage,
+      maxApalancamientoUsuario: this.guards.maxLeverage,
       venueListo,
       motivo: motivos.length > 0 ? motivos.join('; ') : null,
     };
@@ -2758,6 +2798,13 @@ export class BotRunner {
         // en memoria pero ni actualizaba su estado ni avisaba — la pantalla
         // seguía diciendo RUNNING sobre un bot que ya no operaba.
         this.liquidationAnnounced = false;
+        // Los límites, frescos y antes de arrancar. Si no, el primer tick tras
+        // reanudar volvía a pausar con el tope viejo y el usuario se quedaba sin
+        // salida: reanudar, rebotar, reanudar (spec 063). Es la misma razón por
+        // la que aquí arriba se olvida el historial.
+        await this.refreshGuards(true);
+        // El motivo lo borra el `clearError` de abajo: ya no es de nadie.
+        this.motivoDeGuarda = null;
         await store.setStatus(this.botId, 'RUNNING', { clearError: true });
         // El motivo ya está borrado: una vuelta del venue no tiene nada que limpiar.
         this.motivoDeCaidaPuesto = false;
@@ -2811,6 +2858,7 @@ export class BotRunner {
             error: `No se pudo cerrar la posición (${motivo})`,
           });
           this.motivoDeCaidaPuesto = false;
+          this.motivoDeGuarda = null;
           await this.event(
             'ACTION_FAILED',
             'CRITICAL',
@@ -3234,6 +3282,7 @@ export class BotRunner {
   private async cambiarEstadoSinCaida(status: 'PAUSED' | 'STOPPED'): Promise<void> {
     if (!this.motivoDeCaidaPuesto) return this.deps.store.setStatus(this.botId, status);
     this.motivoDeCaidaPuesto = false;
+    this.motivoDeGuarda = null;
     return this.deps.store.setStatus(this.botId, status, { clearError: true });
   }
 
@@ -3256,7 +3305,7 @@ export class BotRunner {
     position: Position | null,
     ticker: Ticker,
   ): Promise<GuardBreach | null> {
-    const g = this.deps.guards;
+    const g = this.guards;
 
     // El apalancamiento se mira SIEMPRE, haya posición o no: es una propiedad de
     // la configuración, y un bot creado antes de que su dueño bajara el tope
@@ -3425,7 +3474,7 @@ export class BotRunner {
    * de añadir exposición) y deja la decisión final en manos del usuario, que es
    * quien debe tomarla.
    */
-  private async pauseForRisk(reason: string): Promise<void> {
+  private async pauseForRisk(reason: string, deLimites = false): Promise<void> {
     this.paused = true;
     await this.caducarIntenciones();
     // Con `true`: el stop loss NO se cancela. Es la ruta en la que más importa
@@ -3436,11 +3485,14 @@ export class BotRunner {
     // El motivo de la pausa ha pisado el de una caída: al volver el venue no se
     // puede borrar, porque ya no es el suyo.
     this.motivoDeCaidaPuesto = false;
+    // Y con la misma escritura se decide quién es el dueño del motivo nuevo:
+    // solo el de una guarda de límites se retira solo cuando deja de cumplirse.
+    this.motivoDeGuarda = deLimites ? reason : null;
     await this.event(
       'RISK_GUARD_TRIPPED',
       'CRITICAL',
       `Guarda de riesgo disparada: ${reason}. Bot pausado; ${this.notaDePosicion}`,
-      { reason },
+      { reason, ...(deLimites ? { guarda: GUARDA_DE_LIMITES } : {}) },
     );
   }
 
@@ -3841,6 +3893,58 @@ export class BotRunner {
       this.quarantine.clear();
     }
     this.market = fresh;
+  }
+
+  /**
+   * Relee los límites de riesgo del usuario con el bot vivo.
+   *
+   * Se cargaban al adoptar el bot y no se refrescaban jamás, así que un tope
+   * nuevo no llegaba a un bot que ya estaba en marcha: subirlo no liberaba al
+   * que ya estaba pausado —reanudarlo lo volvía a pausar en el tick siguiente—
+   * y bajarlo no mordía al que seguía operando. La pantalla de límites promete
+   * que se comprueban «en cada ciclo del motor»; esto es lo que lo hace cierto.
+   *
+   * Un fallo de lectura CONSERVA los que había. Interpretar una base caída como
+   * «este usuario no tiene límites» sería aflojar un tope por una avería, que es
+   * justo la dirección que no se puede tomar.
+   */
+  private async refreshGuards(fresco = false): Promise<void> {
+    if (!fresco && this.ticks % GUARDS_REFRESH_EVERY_TICKS !== 0) return;
+    try {
+      // El objeto ENTERO, nunca campo a campo: mezclarlos podría dejar un tope
+      // nuevo conviviendo con otro viejo.
+      this.guards = await this.deps.store.riskGuards(this.deps.bot.user_id, { fresco });
+    } catch (e) {
+      this.logger.warn(`No se pudieron releer los límites de riesgo: ${(e as Error).message}`);
+    }
+  }
+
+  /**
+   * Retira el motivo de una guarda que ya no se cumple, SIN reanudar el bot.
+   *
+   * El motor no pone a operar lo que su dueño no pidió, así que el bot sigue
+   * pausado; lo que no puede seguir es la tarjeta enseñando «apalancamiento 25x
+   * por encima de tu límite (10x)» a quien acaba de subir ese límite a 25.
+   *
+   * Solo se retira el motivo propio de una guarda de límites (ver
+   * `motivoDeGuarda`) y solo cuando NINGUNA guarda salta: `checkRiskGuards`
+   * devuelve la primera que encuentra, así que un `null` significa que no queda
+   * ninguna vigente, ni esta ni otra.
+   */
+  private async limpiarMotivoDeGuarda(): Promise<void> {
+    const motivo = this.motivoDeGuarda;
+    if (!motivo) return;
+    this.motivoDeGuarda = null;
+    // Sin tocar el estado: `setStatus` ata las dos cosas y aquí el bot tiene que
+    // seguir exactamente igual de pausado que estaba (spec 050).
+    await this.deps.store.setLastError(this.botId, null).catch(() => undefined);
+    await this.event(
+      'RISK_GUARD_CLEARED',
+      'INFO',
+      `La guarda que pausó el bot ya no se cumple (era: ${motivo}). El bot sigue PAUSADO: ` +
+        'reanúdalo tú cuando quieras que vuelva a operar.',
+      { reason: motivo },
+    ).catch(() => undefined);
   }
 
   /**

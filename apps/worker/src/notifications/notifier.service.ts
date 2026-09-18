@@ -52,6 +52,10 @@ const EVENT_PREF: Record<string, keyof TelegramPrefs> = {
   START_FAILED: 'errors',
   ACTION_FAILED: 'errors',
   RISK_GUARD_TRIPPED: 'risk',
+  // La misma preferencia que la pausa, y por el mismo motivo que la liquidación:
+  // quien quiso enterarse de que su bot se paraba quiere enterarse, sobre todo,
+  // de que ya puede volver a arrancarlo (spec 063).
+  RISK_GUARD_CLEARED: 'risk',
   LIQUIDATION_NEAR: 'liquidation',
   // La misma preferencia que el aviso de cercania: quien quiere enterarse de
   // que se acerca la liquidacion quiere enterarse, sobre todo, de que ha
@@ -125,6 +129,7 @@ const ICON: Record<string, string> = {
   EXIT_PENDING_MIN_SIZE: '⏳',
   INSUFFICIENT_FUNDS: '⚠',
   RISK_GUARD_TRIPPED: '🛑',
+  RISK_GUARD_CLEARED: '🔓',
   LIQUIDATION_NEAR: '🔥',
   LIQUIDATED: '💥',
   AUTH_ERROR: '🔑',

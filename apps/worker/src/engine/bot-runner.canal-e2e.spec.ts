@@ -183,6 +183,15 @@ class Memoria {
   syncOrderState = async () => undefined;
   repairCycleFromVenue = async () => null;
   marketSpec = async () => MARKET;
+  riskGuards = async () => ({
+    maxNotionalPerBot: null,
+    maxDailyLoss: null,
+    killSwitchDrawdownPct: null,
+    liquidationAlertPct: null,
+    maxLeverage: null,
+    maxTotalNotional: null,
+  });
+  pausadoPorRiesgo = async () => null;
   drawdownPct = () => null;
   todayRealizedPnl = async () => D(0);
   todayRealizedPnlForBot = async () => D(0);

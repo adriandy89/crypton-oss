@@ -202,6 +202,15 @@ function fakeStore(orden: string[]) {
       scratches.push(scratch);
     }),
     marketSpec: jest.fn().mockResolvedValue(MARKET),
+    riskGuards: jest.fn().mockResolvedValue({
+      maxNotionalPerBot: null,
+      maxDailyLoss: null,
+      killSwitchDrawdownPct: null,
+      liquidationAlertPct: null,
+      maxLeverage: null,
+      maxTotalNotional: null,
+    }),
+    pausadoPorRiesgo: jest.fn().mockResolvedValue(null),
     drawdownPct: (inversion: string, equity: string) =>
       D(equity).gte(0) ? D(0) : D(equity).abs().div(inversion).mul(100),
     todayRealizedPnl: jest.fn().mockResolvedValue(D(0)),

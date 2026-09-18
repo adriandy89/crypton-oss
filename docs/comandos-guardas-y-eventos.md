@@ -99,7 +99,7 @@ solo la de liquidación puede cerrar, y solo si tú se lo pediste en «Al acerca
 
 | Guarda | Se dispara cuando |
 |---|---|
-| Apalancamiento por encima de tu límite | siempre, haya posición o no |
+| Apalancamiento por encima de tu límite | siempre, haya posición o no; con el tope vigente, releído cada minuto |
 | Notional del bot / total de tus bots por encima del límite | con posición |
 | Liquidación a menos del % de aviso (10 por defecto) | con posición; aviso CRITICAL con enfriamiento; acción según `liquidationAction` |
 | Pérdida acumulada del bot ≥ kill-switch (%) | sobre el capital asignado; es un tope de pérdida, no un drawdown desde máximo |
@@ -107,6 +107,7 @@ solo la de liquidación puede cerrar, y solo si tú se lo pediste en «Al acerca
 | 20 colocaciones fallidas seguidas · 5 revisiones fallidas seguidas **del propio bot** | fallos técnicos persistentes |
 | Venue sin servicio (5xx, timeouts, error de red, 429) | **no** pausa: el bot espera y avisa `VENUE_UNAVAILABLE` / `VENUE_RECOVERED` |
 | Precio externo desfasado (> 15 s) | la estrategia deja de cotizar; el bot **no** se pausa |
+| La guarda que pausó el bot deja de cumplirse | se retira el motivo de la tarjeta y se avisa con `RISK_GUARD_CLEARED`; el bot **sigue pausado** hasta que lo reanudes |
 | **Canal con IA** · liquidación por stop | a dos tercios del camino de la entrada a la liquidación; aviso CRITICAL y «Cerrar todo» por defecto |
 | **Canal con IA** · pérdida diaria | al tope, sin entradas hasta las 00:00 UTC y **sin pausa**; al 1,5× del tope, pausa hasta las 00:00 UTC |
 | **Canal con IA** · caída máxima | lo que ha caído el resultado realizado desde su mejor punto **desde la última reanudación**; pausa |
@@ -170,6 +171,7 @@ a más viejo**. Cada evento tiene una severidad: **INFO** (sin borde), **WARN** 
 | Evento | Qué hacer |
 |---|---|
 | `RISK_GUARD_TRIPPED` (CRITICAL) | Una guarda pausó el bot. El texto dice cuál y si queda stop. **Decide tú**: reanudar tras ajustar, cerrar, o esperar. |
+| `RISK_GUARD_CLEARED` (INFO) | La guarda que lo pausó ya no se cumple —normalmente porque cambiaste ese límite—. El motivo desaparece de la tarjeta y el bot **sigue pausado**: reanúdalo tú. |
 | `LIQUIDATION_NEAR` (CRITICAL) | Liquidación a menos del % de aviso. Aporta margen (si aislado), cierra parte, o cierra todo. No lo pospongas. |
 | `LIQUIDATED` | El exchange cerró la posición. El bot queda `LIQUIDADO`. |
 | `PANIC` | Pánico: todo cancelado y cerrado. Si el cierre no salió, en su lugar verás un `ACTION_FAILED` CRITICAL y el bot pausado con el stop intacto. |

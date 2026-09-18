@@ -178,4 +178,5 @@ ante un 429 se paran sin reintentar. A `findings.md` va solo la evidencia resumi
 | 060 | [Revision de los specs 057 a 059 antes de desplegar](060-revision-057-059/spec.md) | revision | hecho (63 hallazgos; corregidos dentro los 3 Criticos, F-07 —regresion del 057— y F-15; el resto en los seguimientos 061-071; falta CA-4 tras la simulacion) | `spec/060-revision-057-059` |
 | 061 | [El grafico avisa de que esta cargando, y deja encender indicadores](061-grafico-carga-e-indicadores/spec.md) | cambio | hecho (faltan CA-4 y CA-5: las comprobaciones a mano del usuario) | `spec/061-grafico-carga-e-indicadores` |
 | 062 | [El canal con IA, listo para operar](062-canal-listo-para-operar/spec.md) | cambio | hecho (18 hallazgos del 060 cerrados; falta CA-4: la simulacion y la primera sesion real) | `spec/062-canal-listo-para-operar` |
+| 063 | [Los limites de riesgo llegan al motor](063-limites-que-llegan-al-motor/spec.md) | correccion | hecho (faltan CA-3 a CA-5: las comprobaciones a mano del usuario) | `spec/063-limites-que-llegan-al-motor` |
 
