@@ -5,6 +5,7 @@ import {
   ACCION_PAUSAR_CANAL,
   PREFIJO_BOTON_CANAL,
   PULSACION_PAUSA_CANAL,
+  claveValeCanal,
   esValeCanal,
 } from '@crypton/shared';
 import { BUS_CHANNELS, BusService, DbService } from '../libs';
@@ -172,6 +173,19 @@ export class TelegramPollerService implements OnModuleInit, OnApplicationShutdow
     }
 
     if (esPausaCanal) {
+      // El vale se mira ANTES de contestar: se contestaba «Pausando…» a
+      // cualquier pulsación, y un vale ya usado o caducado —el aviso de hace
+      // tres horas, el botón pulsado dos veces— no dejaba ni evento ni mensaje.
+      // El usuario se iba creyendo que su bot estaba pausado (spec 062, F-14).
+      // Un fallo LEYENDO no frena nada: la API lo canjea igual y es ella quien
+      // decide de verdad.
+      const vale = await this.bus
+        .cacheGet<{ botId?: string }>(claveValeCanal(token))
+        .catch(() => ({}));
+      if (vale === null) {
+        await this.client.answerCallbackQuery(cb.id, 'Ese botón ya no vale: pausa desde la app.');
+        return;
+      }
       // Sin `botId`, como la sugerencia: la API sabe de qué bot es por el vale.
       await this.bus
         .publish(BUS_CHANNELS.BOT_EVENTS, {

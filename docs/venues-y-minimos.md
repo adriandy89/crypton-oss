@@ -94,12 +94,9 @@ En la práctica: Hyperliquid y Aster aguantan decenas de bots por IP; **Lighter,
 parte importante del cupo. De ahí la cuenta de servicio `LIGHTER_SERVICE_*` y `WORKER_EGRESS_ID` del
 despliegue.
 
-> ⚠️ **Limitación conocida (F-08, abierta a 2026-09-17).** En Lighter, una orden que el secuenciador
-> descarta sin ejecutar —una a mercado fuera de su tope, una post-only que habría cruzado— deja su
-> fila pendiente para siempre, y ese nivel o esa cotización no se vuelven a colocar en todo el ciclo.
-> **Hasta que se corrija:** si un bot de Lighter deja de reponer un nivel, páralo y vuelve a
-> arrancarlo: el ciclo nuevo estrena identificadores. Estado:
-> `specs/060-revision-057-059/findings.md` § F-08.
+En Lighter, una orden que el secuenciador descarta sin ejecutar —una a mercado fuera de su tope, una
+post-only que habría cruzado— no aparece nunca en el libro ni trae ejecución. Su fila vence a los
+cinco minutos, como cualquier pendiente sin acuse, y el nivel se vuelve a colocar (spec 062, F-08).
 
 ---
 

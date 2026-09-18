@@ -1,5 +1,5 @@
 import { Component, computed, input } from '@angular/core';
-import { LIQ_METER, liqNum, liqTone } from '../../core/utils/risk';
+import { CAMINO_METER, LIQ_METER, caminoTone, liqNum, liqTone } from '../../core/utils/risk';
 import { money } from '../../core/utils/format';
 import { UiMeterComponent } from './ui-meter.component';
 
@@ -21,7 +21,18 @@ import { UiMeterComponent } from './ui-meter.component';
   standalone: true,
   imports: [UiMeterComponent],
   template: `
-    @if (num(); as d) {
+    @if (camino() !== null) {
+      <span class="lab">Hacia la liquidación</span>
+      <ui-meter
+        [segments]="[{ value: camino()!, tone: 'up' }]"
+        [total]="caminoMeter.total"
+        [invert]="caminoMeter.invert"
+        [warnAt]="caminoMeter.warnAt"
+        [dangerAt]="caminoMeter.dangerAt"
+        label="Camino recorrido hacia la liquidación"
+      />
+      <span class="d num" [class]="'d num c-' + caminoTono()">{{ money(camino()!, 0) }} %</span>
+    } @else if (num(); as d) {
       <span class="lab">{{ label() }}</span>
       <ui-meter
         [segments]="[{ value: d, tone: 'up' }]"
@@ -71,8 +82,18 @@ export class UiLiqMeterComponent {
   readonly pct = input.required<string | number | null | undefined>();
   readonly label = input<string>('Liquidación');
 
+  /**
+   * El camino recorrido de la entrada a la liquidación, en % (0-100), para las
+   * estrategias donde la distancia no informa: a 25x la liquidación está
+   * siempre a un 2-4 % y la barra salía siempre en rojo (spec 062, F-44). Con
+   * un número aquí se pinta esto en vez de la distancia.
+   */
+  readonly camino = input<number | null>(null);
+
   readonly meter = LIQ_METER;
+  readonly caminoMeter = CAMINO_METER;
   readonly money = money;
   readonly num = computed(() => liqNum(this.pct()));
   readonly tone = computed(() => liqTone(this.pct()));
+  readonly caminoTono = computed(() => caminoTone(this.camino()));
 }

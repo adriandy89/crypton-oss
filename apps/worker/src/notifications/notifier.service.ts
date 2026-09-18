@@ -90,6 +90,7 @@ const EVENT_PREF: Record<string, keyof TelegramPrefs> = {
   SIN_STOP: 'risk',
   AI_CIERRE_FALLIDO: 'risk',
   AI_POSICION_HUERFANA: 'risk',
+  AI_OPERACION_PERDIDA: 'risk',
   AI_ENTRY_DISCARDED: 'errors',
   // `AI_DECISION` NO está: va solo a la línea de tiempo, y nace en la API sin
   // entrega forzada. `AI_CIERRE` tampoco: es la orden de salir, y el aviso con
@@ -139,6 +140,7 @@ const ICON: Record<string, string> = {
   AI_EXIT: '📤',
   AI_DAY_STOP: '⛔',
   AI_ENTRY_DISCARDED: '↩️',
+  AI_OPERACION_PERDIDA: '🧭',
   BOT_STARTED: '▶',
   BOT_PAUSED: '⏸',
   BOT_STOPPED: '⏹',

@@ -117,7 +117,7 @@ import {
   rotuloDeCiclo,
   ventanasDe,
 } from './bot-timeline';
-import { liqNum } from '../../core/utils/risk';
+import { caminoDeBot, liqNum } from '../../core/utils/risk';
 // El Modo IA (spec 053), por ruta como el resto de lo de administración.
 import { AuthService } from '../../core/auth';
 import { AdminBotsService, type AiSetting } from '../../core/services/admin-bots.service';
@@ -474,6 +474,15 @@ export class BotDetailPage implements OnInit {
    * semáforo lo pinta `ui-liq-meter`; aquí solo se decide si hay tarjeta.
    */
   readonly liqDist = computed(() => liqNum(this.bot()?.liquidationDistancePct));
+  /**
+   * El camino recorrido hacia la liquidacion, solo donde la distancia no
+   * informa: a 25x esta siempre a un 2-4 % y la barra salia siempre en rojo
+   * (spec 062, F-44). Null = se pinta la distancia de siempre.
+   */
+  readonly camino = computed(() => {
+    const b = this.bot();
+    return b ? caminoDeBot({ ...b, markPrice: b.snapshot?.mark_price ?? null }) : null;
+  });
   /** Qué parte de lo capturado se llevan las comisiones, en %. */
   readonly costePct = computed(() => {
     const c = this.ciclos();

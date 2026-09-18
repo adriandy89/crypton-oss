@@ -311,6 +311,28 @@ class Memoria {
 
   olvidarHistorial = (): void => undefined;
 
+  /** Como el store de verdad: cierra el ciclo sin resultado y abre el siguiente. */
+  cerrarCicloSinEjecucion = async (_b: string, cycle: CycleState, cooldownMinutes: number) => {
+    const ahora = Date.now();
+    this.cerrados.push({ pnl: this.totals.realizedPnl.toFixed(), en: ahora });
+    this.totals = Memoria.vacio();
+    const seq = Number(cycle.scratch.cycleSeq) + 1;
+    this.cycle = {
+      ...cycle,
+      cycleId: null,
+      startedAt: ahora,
+      entriesFilled: 0,
+      lastEntryAt: null,
+      filledLevelIndexes: [],
+      cooldownUntil: cooldownMinutes > 0 ? ahora + cooldownMinutes * 60_000 : null,
+      realizedPnl: '0',
+      averageEntry: null,
+      anchorPrice: null,
+      scratch: { cycleSeq: seq, cooldownMinutes },
+    };
+    return this.cycle;
+  };
+
   historialOperaciones = async (): Promise<HistorialOperaciones> => {
     const ahora = Date.now();
     const dia = Math.floor(ahora / 86_400_000) * 86_400_000;
@@ -670,6 +692,149 @@ describe('canal con IA, de principio a fin en el simulador (spec 058)', () => {
     expect(await h.posicion()).toBeNull();
     expect(h.intenciones.filas.size).toBe(1);
 
+    await h.runner.dispose();
+  });
+
+  /**
+   * Spec 062, F-04. El usuario cierra la posición a mano en el exchange: esa
+   * ejecución no es de ninguna orden del bot, así que el ledger la descarta y
+   * nadie cierra el ciclo ni la intención. Con la intención viva, el índice «una
+   * operación por bot» rechazaba TODA entrada nueva: el bot quedaba muerto.
+   */
+  it('una operación cerrada fuera del bot no lo deja muerto (spec 062, F-04)', async () => {
+    const h = montar({ minRewardRisk: 0.5, cooldownMinutes: 0, stopCooldownMinutes: 0 });
+    await h.runner.start();
+    await esperar();
+    const pos = await h.posicion();
+    expect(pos).not.toBeNull();
+    const intencion = [...h.intenciones.filas.values()][0];
+    expect(intencion.estado).toBe('ABIERTA');
+
+    await h.sim.placeOrder({
+      symbol: 'SOL',
+      side: 'SELL',
+      type: 'MARKET',
+      qty: pos!.qty,
+      clientOrderId: 'cierre-a-mano',
+      reduceOnly: true,
+    });
+    await esperar();
+    expect(await h.posicion()).toBeNull();
+    // Nadie se ha enterado: ni el ciclo ni la intención se han cerrado.
+    expect(h.memoria.cerrados).toHaveLength(0);
+    reloj += 10_000;
+    await h.tick();
+    expect(intencion.estado).toBe('ABIERTA');
+
+    // Pasada la gracia, el bot se desatasca solo y lo dice.
+    reloj += 6 * 60_000;
+    await h.tick();
+    expect(intencion.estado).toBe('CERRADA');
+    expect(h.memoria.cycle.scratch['op']).toBeUndefined();
+    expect(h.memoria.cycle.scratch['cycleSeq']).toBe(2);
+    const aviso = h.memoria.eventos.find((e) => e.type === 'AI_OPERACION_PERDIDA');
+    expect(aviso?.severity).toBe('WARN');
+    expect(aviso?.message).toMatch(/no entra en el tope diario/);
+
+    // Y vuelve a poder aceptar una entrada: el veto se ha levantado.
+    const otra = await h.intenciones.anotar(BOT_ID, 2, {
+      intentId: 'otra',
+      estado: 'ACEPTADA',
+      motivo: null,
+      plan: intencion.plan,
+    });
+    expect(otra).toBe(true);
+    await h.runner.dispose();
+  });
+
+  /**
+   * Spec 062, F-04. La ejecución del cierre llega después del comando, y hasta
+   * ahora el runner se soltaba antes de recogerla: el ciclo quedaba abierto y la
+   * intención viva, así que el bot volvía a arrancar vetado. Aquí el stream está
+   * caído —el caso en el que nadie la trae sola— y el barrido de antes de soltar
+   * es lo único que la recoge.
+   */
+  it('parar cerrando barre la ejecución del cierre antes de soltar (spec 062, F-04)', async () => {
+    const h = montar({ minRewardRisk: 0.5 });
+    await h.runner.start();
+    await esperar();
+    const intencion = [...h.intenciones.filas.values()][0];
+    expect(intencion.estado).toBe('ABIERTA');
+
+    const interno = h.runner as unknown as { subs: { unsubscribe(): void }[] };
+    for (const s of interno.subs) s.unsubscribe();
+    interno.subs = [];
+
+    reloj += 60_000;
+    await h.runner.handleCommand('STOP_AND_CLOSE');
+    await esperar();
+
+    expect(await h.posicion()).toBeNull();
+    expect(h.memoria.cerrados).toHaveLength(1);
+    expect(intencion.estado).toBe('CERRADA');
+    await h.runner.dispose();
+  });
+
+  /**
+   * Spec 062, F-04. Las dos escrituras iban en el mismo `try`: un fallo
+   * caducando lo pendiente se llevaba por delante el cierre de la intención, que
+   * es lo que libera al bot para volver a operar.
+   */
+  it('un fallo caducando lo pendiente no impide cerrar la intención (spec 062, F-04)', async () => {
+    const h = montar({ minRewardRisk: 0.5 });
+    await h.runner.start();
+    await esperar();
+    const intencion = [...h.intenciones.filas.values()][0];
+    expect(intencion.estado).toBe('ABIERTA');
+    h.intenciones.caducarPendientes = async () => {
+      throw new Error('base caída');
+    };
+
+    reloj += 60_000;
+    h.fuente.fijar(D(intencion.plan!.stop).minus('0.05').toFixed(2));
+    await esperar();
+    await h.tick();
+
+    expect(await h.posicion()).toBeNull();
+    expect(intencion.estado).toBe('CERRADA');
+    await h.runner.dispose();
+  });
+
+  /**
+   * Spec 062, F-04. El runner olvidaba la operación ANTES de escribir el
+   * rechazo: si la base fallaba, la intención se quedaba viva para siempre —y
+   * con ella el veto a toda entrada— sin nada en el scratch que hiciera volver.
+   */
+  it('si el rechazo no se puede escribir, la operación no se olvida (spec 062, F-04)', async () => {
+    const h = montar();
+    // El venue no acepta el apalancamiento: el runner descarta la entrada.
+    h.sim.setLeverage = async () => {
+      throw new ExchangeError('RULES', 'apalancamiento rechazado', HL);
+    };
+    // Y la base no puede escribir el rechazo, solo la primera vez.
+    const anotar = h.intenciones.anotar;
+    let fallado = false;
+    h.intenciones.anotar = async (b, s, m) => {
+      if (m.estado === 'RECHAZADA' && !fallado) {
+        fallado = true;
+        throw new Error('base caída');
+      }
+      return anotar(b, s, m);
+    };
+
+    await h.runner.start();
+    await esperar();
+    expect(await h.posicion()).toBeNull();
+    const intencion = [...h.intenciones.filas.values()][0];
+    expect(intencion.estado).toBe('ACEPTADA');
+    expect(h.memoria.cycle.scratch['op']).not.toBeNull();
+
+    // El tick siguiente, pasado el plazo de llenado, lo reintenta.
+    reloj += 31_000;
+    await h.tick();
+    expect(fallado).toBe(true);
+    expect(intencion.estado).toBe('RECHAZADA');
+    expect(h.memoria.cycle.scratch['op']).toBeNull();
     await h.runner.dispose();
   });
 

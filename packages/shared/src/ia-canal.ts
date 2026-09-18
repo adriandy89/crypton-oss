@@ -257,6 +257,8 @@ export const EventoCanal = {
   BREAKEVEN: 'AI_BREAKEVEN',
   CIERRE_FALLIDO: 'AI_CIERRE_FALLIDO',
   POSICION_HUERFANA: 'AI_POSICION_HUERFANA',
+  /** La operación se cerró fuera del bot y su ejecución no la vio nadie. */
+  OPERACION_PERDIDA: 'AI_OPERACION_PERDIDA',
   SIN_STOP: 'SIN_STOP',
 } as const;
 export type EventoCanal = (typeof EventoCanal)[keyof typeof EventoCanal];

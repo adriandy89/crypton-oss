@@ -421,6 +421,29 @@ describe('insigniaCanal', () => {
     ).toBe('APAGADA');
   });
 
+  /**
+   * Spec 062, F-46. La pastilla solo miraba los interruptores del SERVIDOR:
+   * decia «IA · canal» en un bot en modo reglas —donde no se consulta a
+   * nadie— y en uno con sus propias entradas apagadas.
+   */
+  it('mira tambien el modo y las entradas del propio bot', () => {
+    const reglas = { modo: 'REGLAS' as const, entradas: true };
+    expect(insigniaCanal(interruptores(), LAZO_VACIO, ahora, reglas)).toBe('REGLAS');
+    // Sus entradas apagadas mandan sobre el modo.
+    expect(insigniaCanal(interruptores(), LAZO_VACIO, ahora, { ...reglas, entradas: false })).toBe(
+      'CORTADA',
+    );
+    // Y lo del servidor sigue mandando sobre lo del bot.
+    expect(insigniaCanal(interruptores({ encendido: false }), LAZO_VACIO, ahora, reglas)).toBe(
+      'APAGADA',
+    );
+    expect(insigniaCanal(interruptores(), pausado, ahora, reglas)).toBe('PAUSADA');
+    // En modo IA, como siempre.
+    expect(insigniaCanal(interruptores(), LAZO_VACIO, ahora, { modo: 'IA', entradas: true })).toBe(
+      'CONSULTA',
+    );
+  });
+
   it('una pausa vencida ya no cuenta', () => {
     const vencida = { ...LAZO_VACIO, pausadoHasta: new Date(ahora - 1).toISOString() };
     expect(insigniaCanal(interruptores(), vencida, ahora)).toBe('CONSULTA');

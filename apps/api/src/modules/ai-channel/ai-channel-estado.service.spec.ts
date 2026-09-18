@@ -40,6 +40,11 @@ function montar(o: { bot?: Record<string, unknown> | null; redisCaido?: boolean 
       findUnique: jest.fn(async () => ({
         config: { ...DEFAULTS_CANAL, totalInvestment: '2000', maxDailyLossPct: '5' },
       })),
+      // El resumen lee la configuracion vigente de cada bot para su pastilla
+      // (spec 062, F-46).
+      findMany: jest.fn(async () => [
+        { bot_id: BOT, version: 2, config: { ...DEFAULTS_CANAL, totalInvestment: '2000' } },
+      ]),
     },
     botCycle: {
       aggregate: jest.fn(async () => ({ _sum: { realized_pnl: '-30' }, _count: { _all: 3 } })),
@@ -236,11 +241,16 @@ describe('AiChannelEstadoService: los bots', () => {
           costeHoy: '0.04',
         },
         ultima: { estado: 'SIN_ENTRADA', motivo: 'NO_OPERAR', creadaEn: new Date(5).toISOString() },
+        // De su configuracion vigente, para que la pastilla no diga «IA» en un
+        // bot de reglas ni «consulta» con sus entradas apagadas (spec 062, F-46).
+        propio: { modo: 'IA', entradas: true },
       },
       expect.objectContaining({
         id: 'otro',
         lazo: { fallos: 0, pausadoHasta: null, ultimoError: null, llamadasHoy: 0, costeHoy: '0' },
         ultima: null,
+        // Sin revision a mano se cae a los valores por defecto, no revienta.
+        propio: { modo: DEFAULTS_CANAL.decisionMode, entradas: DEFAULTS_CANAL.entriesEnabled },
       }),
     ]);
     expect(r.interruptores.entradas).toBe('ABIERTAS');
@@ -282,6 +292,9 @@ describe('AiChannelEstadoService: los bots', () => {
       perdidaPct: 1.5,
       topePct: 5,
       topeOperaciones: DEFAULTS_CANAL.maxTradesPerDay,
+      // El que de verdad aplica el lazo: el presupuesto del bot o el tope del
+      // servidor, el menor de los dos (spec 062, F-45).
+      topeConsultas: DEFAULTS_CANAL.aiDailyCallBudget,
       rachaPerdidas: 2,
     });
     expect(m.db.botCycle.aggregate).toHaveBeenCalledWith(
@@ -309,6 +322,20 @@ describe('AiChannelEstadoService: los bots', () => {
       }),
     );
     expect(e.decisiones).toHaveLength(1);
+  });
+
+  /**
+   * Spec 062, F-45. El panel enseñaba el tope del SERVIDOR, asi que un bot con
+   * presupuesto de 12 consultas decia «3 de 48» y parecia que le quedaban 45.
+   */
+  it('las consultas del dia se cuentan contra el tope que de verdad aplica', async () => {
+    const m = montar();
+    m.db.botConfigRevision.findUnique.mockResolvedValue({
+      config: { ...DEFAULTS_CANAL, totalInvestment: '2000', aiDailyCallBudget: 12 } as never,
+    });
+    const e = await m.servicio.estado(ADMIN, BOT);
+    expect(e.hoy.topeConsultas).toBe(12);
+    expect(e.interruptores.limiteBot).toBe(48);
   });
 
   it('un día en ganancias no es una pérdida', async () => {

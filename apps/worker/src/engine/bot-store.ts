@@ -1299,6 +1299,75 @@ export class BotStore {
   }
 
   /**
+   * Cierra el ciclo abierto SIN una ejecución que lo cierre, y abre el siguiente.
+   *
+   * Lo usa la limpieza de la operación huérfana del canal (spec 062, F-04): el
+   * venue está plano, la operación llegó a existir y su cierre no lo vio nadie
+   * —cerrada a mano en el exchange, ADL, o el stop ejecutado con el worker
+   * caído más de lo que alcanza el barrido—. Sin esto el ciclo se queda abierto
+   * para siempre y con él la intención, que veta toda entrada del bot.
+   *
+   * El resultado realizado de esa salida NO se puede reconstruir: las
+   * ejecuciones que lo componen no las vio nadie. El ciclo se cierra con lo que
+   * tuviera contado y quien llama lo avisa; inventar un resultado sería peor,
+   * porque de ese acumulado dependen el tope diario y la caída máxima.
+   */
+  async cerrarCicloSinEjecucion(
+    botId: string,
+    cycle: CycleState,
+    cooldownMinutes: number,
+  ): Promise<CycleState> {
+    const ahora = Date.now();
+    const seq = await this.db.$transaction(async (tx) => {
+      // Igual que `applyFillToCycle`: el ciclo abierto se bloquea antes de
+      // tocarlo, o una ejecución que llegase a la vez cerraría el mismo dos veces.
+      const locked = await tx.$queryRaw<{ id: bigint }[]>`
+        SELECT id FROM bot_cycles
+        WHERE bot_id = ${botId} AND closed_at IS NULL
+        ORDER BY seq DESC
+        LIMIT 1
+        FOR UPDATE`;
+      if (locked.length === 0) return null;
+      const abierto = await tx.botCycle.findUniqueOrThrow({ where: { id: locked[0].id } });
+      await tx.botCycle.update({
+        where: { id: abierto.id },
+        data: { closed_at: new Date(ahora), qty: '0' },
+      });
+      const siguiente = abierto.seq + 1;
+      await tx.botCycle.create({
+        data: {
+          bot_id: botId,
+          seq: siguiente,
+          filled_level_indexes: [],
+          cooldown_until: cooldownMinutes > 0 ? new Date(ahora + cooldownMinutes * 60_000) : null,
+          scratch: { cycleSeq: siguiente, cooldownMinutes } as never,
+        },
+      });
+      return siguiente;
+    });
+    if (seq === null) return cycle;
+
+    // Hay un cierre más en el histórico: la espera entre operaciones y la caída
+    // del canal se leen de ahí.
+    this.historiales.delete(botId);
+
+    return {
+      cycleId: null,
+      startedAt: ahora,
+      entriesFilled: 0,
+      lastEntryAt: null,
+      filledLevelIndexes: [],
+      cooldownUntil: cooldownMinutes > 0 ? ahora + cooldownMinutes * 60_000 : null,
+      // El acumulado no se mueve: no se ha realizado nada que nadie haya visto.
+      realizedPnl: '0',
+      realizedPnlAcc: cycle.realizedPnlAcc,
+      averageEntry: null,
+      anchorPrice: null,
+      scratch: { cycleSeq: seq, cooldownMinutes },
+    };
+  }
+
+  /**
    * Garantiza que hay un ciclo abierto y lo devuelve como CycleState.
    * Se llama al adoptar un bot: si el worker anterior murió a mitad de ciclo,
    * este lo recoge tal y como estaba.

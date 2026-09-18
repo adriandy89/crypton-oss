@@ -3,6 +3,7 @@ import {
   insigniaCanal,
   type DecisionCanalVista,
   type EleccionOperacion,
+  type EstadoPropioCanal,
   type InsigniaCanal,
   type InterruptoresCanal,
   type LazoCanal,
@@ -193,6 +194,7 @@ const TEXTO_INSIGNIA: Readonly<Record<InsigniaCanal, string>> = {
   PAUSADA: 'IA · en pausa',
   APAGADA: 'IA · apagada',
   CORTADA: 'IA · sin entradas',
+  REGLAS: 'Canal · reglas',
 };
 
 /**
@@ -206,8 +208,9 @@ export function pastillaCanal(
   lazo: LazoCanal,
   bot: { status: string },
   ahora = Date.now(),
+  propio?: EstadoPropioCanal,
 ): PastillaCanal {
-  const insignia = insigniaCanal(interruptores, lazo, ahora);
+  const insignia = insigniaCanal(interruptores, lazo, ahora, propio);
   let porQue: string | null = null;
   switch (insignia) {
     case 'APAGADA':
@@ -215,9 +218,14 @@ export function pastillaCanal(
       break;
     case 'CORTADA':
       porQue =
-        interruptores.entradas === 'CERRADAS'
-          ? 'Las entradas del canal están cortadas para todos los bots.'
-          : 'No se puede leer el interruptor de entradas, y sin él no se abre nada.';
+        propio?.entradas === false
+          ? 'Este bot tiene las entradas apagadas en su configuración: no abrirá nada.'
+          : interruptores.entradas === 'CERRADAS'
+            ? 'Las entradas del canal están cortadas para todos los bots.'
+            : 'No se puede leer el interruptor de entradas, y sin él no se abre nada.';
+      break;
+    case 'REGLAS':
+      porQue = 'Modo reglas: decide el juez del motor, sin consultar a la IA.';
       break;
     case 'PAUSADA':
       porQue = `Consultas en pausa tras varios fallos seguidos del modelo, hasta el ${shortDate(lazo.pausadoHasta)}.`;

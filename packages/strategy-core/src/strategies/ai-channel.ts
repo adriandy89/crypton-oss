@@ -719,6 +719,13 @@ function leerCierre(v: unknown): CierreEnCurso | null {
 
 // ── Con posición ────────────────────────────────────────────────────────────
 
+/**
+ * Lo más lejos que puede quedar el stop de emergencia de una posición huérfana:
+ * dos tercios del camino de la entrada a la liquidación del venue, que es donde
+ * la guarda del motor cierra de todas formas (spec 062, F-24).
+ */
+const RECORRIDO_STOP_HUERFANA = D(2).div(3);
+
 /** Los tramos de salida de la operación para la posición que llegó a haber. */
 export function tramosDeSalida(
   market: MarketSpec,
@@ -884,7 +891,22 @@ function posicionHuerfana(
     ? D(ctx.position?.entryPrice ?? 0)
     : D(ctx.ticker.mark);
   const s = c.maxStopPct.div(100);
-  const stop = px(ctx.market, largo ? entrada.mul(D(1).minus(s)) : entrada.mul(D(1).plus(s)), lado);
+  let nivel = largo ? entrada.mul(D(1).minus(s)) : entrada.mul(D(1).plus(s));
+  // Acotado por la liquidación que declara el venue: a 25x, un 3 o un 5 % de la
+  // entrada cae DETRÁS de la liquidación, así que el «stop de emergencia» no
+  // protegía de nada —la posición se liquidaba antes de tocarlo—. Como mucho,
+  // dos tercios del camino, que es donde la guarda del motor cierra de todas
+  // formas (spec 062, F-24).
+  const liquidacion = D(ctx.position?.liquidationPrice ?? 0);
+  if (liquidacion.gt(0)) {
+    const camino = entrada.minus(liquidacion).abs().mul(RECORRIDO_STOP_HUERFANA);
+    const tope = largo ? entrada.minus(camino) : entrada.plus(camino);
+    nivel = largo ? Decimal.max(nivel, tope) : Decimal.min(nivel, tope);
+  }
+  const stop = px(ctx.market, nivel, lado);
+  // El porcentaje del aviso es el de VERDAD, no el configurado: acotado por la
+  // liquidación, ya no son el mismo número.
+  const distancia = entrada.minus(stop).abs().div(entrada).mul(100).toFixed(2);
   const marca = D(ctx.ticker.mark);
   const pasado = largo ? marca.lte(stop) : marca.gte(stop);
   const avisos: AvisoEstrategia[] = [
@@ -894,7 +916,7 @@ function posicionHuerfana(
       severidad: 'CRITICAL',
       mensaje:
         `Posición ${largo ? 'larga' : 'corta'} sin operación registrada: stop de emergencia en ` +
-        `${stop}, al ${c.maxStopPct.toFixed()} % de la entrada.`,
+        `${stop}, al ${distancia} % de la entrada.`,
     },
   ];
   const previo = leerCierre(ctx.cycle.scratch['cierre']);
@@ -1010,14 +1032,35 @@ function conPosicion(
     };
   }
 
-  // Los objetivos: el primero hasta cobrarlo, el segundo con el resto.
+  // Los objetivos, repartidos DE ABAJO ARRIBA: el último tramo se queda con lo
+  // suyo y el primero con el resto.
+  //
+  // Al revés —que es como estaba— lo que faltaba se le quitaba siempre al
+  // segundo objetivo: con el primero ejecutado a medias, el primero se quedaba
+  // con TODA la posición que quedaba y el segundo se cancelaba, así que la
+  // operación cobraba entera en el objetivo corto y el recorrido bueno se
+  // regalaba. La ejecución parcial es del tramo que se estaba cobrando, no del
+  // que no ha tocado nadie (spec 062, F-22).
   const pendientes = tp1Hecho ? tramos.slice(1) : tramos;
-  let asignado = D(0);
-  pendientes.forEach((t, i) => {
-    const ultimo = i === pendientes.length - 1;
-    const cantidad = ultimo ? abs.minus(asignado) : Decimal.min(t.cantidad, abs.minus(asignado));
+  const reparto = pendientes.map((t) => ({ t, cantidad: D(0) }));
+  let restante = abs;
+  for (let i = reparto.length - 1; i >= 0; i--) {
+    const cantidad = i === 0 ? restante : Decimal.min(reparto[i].t.cantidad, restante);
+    reparto[i].cantidad = cantidad;
+    restante = restante.minus(cantidad);
+  }
+  // Un resto que no llega al mínimo del venue no se puede colocar solo: se suma
+  // al tramo de al lado, o esa parte de la posición se quedaría sin objetivo.
+  if (
+    reparto.length === 2 &&
+    reparto[0].cantidad.gt(0) &&
+    !llegaAlMinimo(ctx.market, reparto[0].cantidad, D(reparto[0].t.precio))
+  ) {
+    reparto[1].cantidad = reparto[1].cantidad.plus(reparto[0].cantidad);
+    reparto[0].cantidad = D(0);
+  }
+  reparto.forEach(({ t, cantidad }) => {
     if (!cantidad.gt(0)) return;
-    asignado = asignado.plus(cantidad);
     const indice = tramos.indexOf(t);
     orders.push({
       clientOrderId: makeCoid(ctx.botId, seq, LevelKind.TAKE_PROFIT, indice),
@@ -1276,6 +1319,14 @@ function enPlano(
     ) {
       return sinEntrada('Entrada enviada: esperando a que el venue la confirme.');
     }
+    // La operación llegó a existir (`maximo` solo se pone con posición a la vista)
+    // y ahora el venue está plano: se cerró fuera del bot, o su ejecución todavía
+    // no se ha barrido. No es una IOC sin llenar, así que ni se descarta la
+    // decisión ni se avisa de un llenado que sí hubo: se espera a que el motor
+    // cierre el ciclo, que es quien tiene las ejecuciones (spec 062 F-21).
+    if (op.maximo !== undefined) {
+      return sinEntrada('La operación ya no está en el venue: esperando su ejecución.');
+    }
     // La IOC no se llenó: la decisión ya se usó y se descarta. Se resuelve en
     // su propio tick: un plan solo marca una intención, y la siguiente entrada
     // necesita la suya.
@@ -1307,11 +1358,6 @@ function enPlano(
   // ── Las puertas ────────────────────────────────────────────────────
   const h = historialDe(ctx);
   if (!h) return sinEntrada('Sin el historial del día no hay entradas.', extra());
-  const dia = puertasDelDia(ctx, c, h);
-  if (dia) {
-    if (dia.aviso) avisos.push(dia.aviso);
-    return sinEntrada(dia.nota, { ...extra(), pausar: dia.pausar });
-  }
 
   const limites = ctx.limites;
   const analisis = analizarMercado({
@@ -1327,7 +1373,19 @@ function enPlano(
     ahora: ctx.now,
   });
   const salidaCompleta = analisis.salida;
+  // La vista se anota ANTES de las puertas del día: si no, durante la espera
+  // entre operaciones, con el tope diario alcanzado o en la racha de pérdidas,
+  // la pantalla decía «Sin análisis todavía» aunque el motor estuviera mirando
+  // el canal en cada vela. El análisis está cacheado por vela, así que mirarlo
+  // aquí no cuesta una cuenta más (spec 062, F-47).
   anotarVista(ctx, c, salidaCompleta, patch);
+
+  const dia = puertasDelDia(ctx, c, h);
+  if (dia) {
+    if (dia.aviso) avisos.push(dia.aviso);
+    return sinEntrada(dia.nota, { ...extra(), pausar: dia.pausar });
+  }
+
   const mercado = puertasDelMercado(ctx, c, salidaCompleta, analisis);
   if (mercado) return sinEntrada(mercado, extra());
 

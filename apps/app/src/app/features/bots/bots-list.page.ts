@@ -62,7 +62,7 @@ import {
   UiStatusPillComponent,
 } from '../../shared/ui';
 import { puntosDeSpark } from '../../shared/chart/bot-series';
-import { LIQ_DANGER_PCT, liqNum } from '../../core/utils/risk';
+import { CAMINO_DANGER_PCT, LIQ_DANGER_PCT, caminoDeBot, liqNum } from '../../core/utils/risk';
 
 /**
  * Las tres primeras son de estado y solo miran bots REALES; `SIM` es de modo.
@@ -392,8 +392,8 @@ const VIVOS = ['STARTING', 'RUNNING', 'PAUSED'];
                 <!-- La distancia a liquidación es LA métrica de riesgo: se muestra
                      en la tarjeta, no escondida en el detalle. -->
                 @if (liqDistance(bot); as dist) {
-                  <ui-liq-meter [pct]="bot.liquidationDistancePct" />
-                  @if (dist < liqPeligro) {
+                  <ui-liq-meter [pct]="bot.liquidationDistancePct" [camino]="camino(bot)" />
+                  @if (aprieta(bot, dist)) {
                     <ui-notice tone="danger" icon="warning-outline">
                       <span class="num">
                         A un {{ money(dist, 1) }} % de la liquidación, en
@@ -659,6 +659,24 @@ export class BotsListPage implements OnInit {
    */
   liqDistance(bot: BotSummary): number | null {
     return liqNum(bot.liquidationDistancePct);
+  }
+
+  /**
+   * El camino recorrido hacia la liquidación, solo donde la distancia no
+   * informa (spec 062, F-44). Null = se pinta la distancia de siempre.
+   */
+  camino(bot: BotSummary): number | null {
+    return caminoDeBot(bot);
+  }
+
+  /**
+   * ¿Avisar en rojo? A 25x la liquidación está siempre a un 2-4 %, así que el
+   * aviso de la distancia salía en CADA operación normal del canal. Ahí manda
+   * el camino recorrido, como en el motor.
+   */
+  aprieta(bot: BotSummary, dist: number): boolean {
+    const c = this.camino(bot);
+    return c === null ? dist < this.liqPeligro : c > CAMINO_DANGER_PCT;
   }
 
   async killSwitch(): Promise<void> {

@@ -220,17 +220,12 @@ que **no** son del venue (un error del propio bot) siguen pausando a los cinco.
   en Lighter), el bot **cierra la posición a mercado** y avisa en CRITICAL (`SIN_STOP`). También con
   el bot pausado: pausado repone su stop si falta, y si no sale, cierra.
 
-> ⚠️ **Limitación conocida (F-05, abierta a 2026-09-17).** Ese cierre a mercado usa un identificador
-> fijo por ciclo, así que si el primero se ejecuta a medias el segundo no sale: el bot avisa «no se
-> pudo cerrar» y repite el CRITICAL cada pocos segundos.
-> **Hasta que se corrija:** ante un `SIN_STOP` repetido, cierra la posición desde el exchange.
-> Estado: `specs/060-revision-057-059/findings.md` § F-05.
-
-> ⚠️ **Limitación conocida (F-12, abierta a 2026-09-17).** Con el bot **pausado**, la guarda de
-> liquidación del canal avisa pero **no cierra**, aunque «Al acercarse la liquidación» diga «Cerrar
-> todo».
-> **Hasta que se corrija:** con un bot pausado y una posición abierta, cierra tú si se acerca la
-> liquidación. Estado: `specs/060-revision-057-059/findings.md` § F-12.
+Cada intento de cierre se lleva su propio identificador, así que uno que se ejecute a medias no
+impide el siguiente, y el aviso `SIN_STOP` se repite como mucho una vez por minuto mientras dure
+(spec 062, F-05). Con el bot **pausado**, la guarda de liquidación de las estrategias con
+apalancamiento por operación —hoy, el canal con IA— **cierra de verdad**, que es lo que promete
+«Al acercarse la liquidación»; en el resto de estrategias sigue avisando y esperándote (spec 062,
+F-12).
 
 > ℹ️ **Semántica fijada (F-11, 2026-09-06).** El kill-switch del bot mide la **pérdida acumulada sobre el
 > capital asignado**, no la caída desde el máximo: es un tope de pérdida absoluta, y así se rotula en la

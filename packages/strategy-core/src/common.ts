@@ -402,6 +402,16 @@ export function validateMeta(
       }
       continue;
     }
+    // Un interruptor tiene que ser un interruptor. La API recibe `config` como
+    // objeto libre y el lector de la configuración convertía lo que no era
+    // `true`/`false` en el valor por defecto: `observeOnly: 1` dejaba operando
+    // de verdad al bot que su dueño creía en «solo observar» (spec 062, F-23).
+    if (f.kind === 'boolean') {
+      if (typeof v !== 'boolean') {
+        issues.push(err(f.key, f.key + ' tiene que ser verdadero o falso.'));
+      }
+      continue;
+    }
     if (!numericos.has(f.kind)) continue;
     const n = typeof v === 'number' || typeof v === 'string' ? D(v) : null;
     if (!n || !n.isFinite()) {

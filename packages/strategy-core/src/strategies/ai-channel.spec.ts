@@ -379,6 +379,45 @@ describe('AI_CHANNEL: con posición', () => {
     stopDe(plan.orders[0], '99.84', '20.000');
   });
 
+  /**
+   * Spec 062, F-22. El reparto era de arriba abajo, asi que lo ejecutado se le
+   * restaba siempre al SEGUNDO objetivo: con el primero cobrado a medias, el
+   * primero se quedaba con toda la posicion y el segundo se cancelaba. La
+   * operacion cobraba entera en el objetivo corto.
+   */
+  it('lo cobrado del primer objetivo no se le quita al segundo', () => {
+    const vivida = operacion({}, { maximo: '31.257' });
+    // Del primer tramo (18,754) se han cobrado 6,257: quedan 25.
+    const plan = s.plan(conPosicion({ op: vivida, qty: '25' }));
+    const tps = plan.orders.filter((o) => o.levelKind === LevelKind.TAKE_PROFIT);
+    expect(tps.map((o) => [o.levelIndex, o.price, o.qty])).toEqual([
+      [0, '101.4', '12.497'],
+      [1, '102.45', '12.503'],
+    ]);
+
+    // Y con el primer tramo casi entero cobrado, el segundo conserva el suyo.
+    const casi = s.plan(conPosicion({ op: vivida, qty: '13' }));
+    expect(
+      casi.orders
+        .filter((o) => o.levelKind === LevelKind.TAKE_PROFIT)
+        .map((o) => [o.levelIndex, o.qty]),
+    ).toEqual([
+      [0, '0.497'],
+      [1, '12.503'],
+    ]);
+  });
+
+  it('un resto que no llega al mínimo del venue se suma al otro objetivo', () => {
+    const vivida = operacion({}, { maximo: '31.257' });
+    // Quedan 12,533: 0,03 al primer objetivo son 3 USDC, por debajo del mínimo.
+    const plan = s.plan(conPosicion({ op: vivida, qty: '12.533' }));
+    expect(
+      plan.orders
+        .filter((o) => o.levelKind === LevelKind.TAKE_PROFIT)
+        .map((o) => [o.levelIndex, o.qty]),
+    ).toEqual([[1, '12.533']]);
+  });
+
   it('un único objetivo lleva toda la posición', () => {
     const op = operacion({
       objetivos: [{ precio: '101.4', cantidad: '31.257' }],
@@ -596,6 +635,25 @@ describe('AI_CHANNEL: con posición', () => {
       expect((plan.scratchPatch?.['cierre'] as CierreEnCurso).motivo).toBe('HUERFANA');
     });
 
+    /**
+     * Spec 062, F-24. A 25x la liquidacion esta a un 2 % de la entrada: un stop
+     * de emergencia al 1,5 —o al 3, o al 5— queda DETRAS, asi que no protegia
+     * de nada. Se acota a dos tercios del camino, que es donde la guarda del
+     * motor cierra.
+     */
+    it('el stop de emergencia no se pone detrás de la liquidación', () => {
+      const plan = s.plan(conPosicion({ op: null, posicion: { liquidationPrice: '98.03' } }));
+      // Camino 100,03 → 98,03; dos tercios: 98,6967 → hacia arriba, 98,70.
+      expect(plan.orders[0]).toMatchObject({ price: '98.70', triggerPrice: '98.70' });
+      expect(plan.avisos?.[0]?.mensaje).toMatch(/al 1.33 % de la entrada/);
+
+      // Un corto, al revés.
+      const corto = s.plan(
+        conPosicion({ op: null, qty: '-31.257', posicion: { liquidationPrice: '102.03' } }),
+      );
+      expect(corto.orders[0]).toMatchObject({ side: 'BUY', price: '101.36' });
+    });
+
     it('una operación del otro lado tampoco vale', () => {
       const plan = s.plan(conPosicion({ qty: '-31.257' }));
       // 100,03 · 1,015 = 101,53045 → hacia abajo, 101,53; el stop de un corto compra.
@@ -755,6 +813,29 @@ describe('AI_CHANNEL: en plano, modo reglas', () => {
     });
     expect(plan.scratchPatch?.['op']).toBeUndefined();
     expect(plan.note).toMatch(/Solo observar/);
+  });
+
+  /**
+   * Spec 062, F-23. La API recibe `config` como objeto libre y el lector
+   * convertia lo que no era `true`/`false` en el valor por defecto:
+   * `observeOnly: 1` dejaba operando de verdad al bot que su dueño creia en
+   * «solo observar».
+   */
+  it('un interruptor que no es booleano se rechaza y se lee al lado seguro', () => {
+    const cfg = config(reglas({ observeOnly: 1 }));
+    expect(
+      s
+        .validate(cfg, makeMarket())
+        .issues.some((i) => i.field === 'observeOnly' && i.severity === 'ERROR'),
+    ).toBe(true);
+    // Y si una configuracion guardada ya lo lleva, no opera.
+    const plan = s.plan(enPlano({ config: reglas({ observeOnly: 1 }) }));
+    expect(plan.orders).toEqual([]);
+    expect(plan.note).toMatch(/Solo observar/);
+
+    // Un `entriesEnabled` ilegible tampoco deja entrar.
+    const sinEntradas = s.plan(enPlano({ config: reglas({ entriesEnabled: 'si' }) }));
+    expect(sinEntradas.orders).toEqual([]);
   });
 
   it('plan() es pura', () => {
@@ -956,6 +1037,25 @@ describe('AI_CHANNEL: la vista del mercado (spec 059)', () => {
     expect(vistaCanalDe(plan.scratchPatch)).toMatchObject({ barT: BAR_T, canal: null });
   });
 
+  /**
+   * Spec 062, F-47. La vista se anotaba DESPUES de las puertas del dia, asi que
+   * durante la espera entre operaciones —quince minutos por defecto—, con el
+   * tope diario alcanzado o en la racha de perdidas, la pantalla decia «Sin
+   * analisis todavia» aunque el motor estuviera mirando el canal en cada vela.
+   */
+  it('las esperas del día no dejan la pantalla sin análisis', () => {
+    const esperando = historialDePrueba({ dia: DIA, ultimoCierreEn: esc.fin - 60_000 });
+    const plan = s.plan(enPlano({ historial: esperando }));
+    expect(plan.note).toMatch(/Espera entre operaciones/);
+    expect(vistaCanalDe(plan.scratchPatch)).toMatchObject({ barT: BAR_T });
+
+    // Y con el tope diario del dia alcanzado, igual.
+    const tope = historialDePrueba({ dia: DIA, realizadoHoy: '-60' });
+    const conTope = s.plan(enPlano({ historial: tope }));
+    expect(conTope.orders).toEqual([]);
+    expect(vistaCanalDe(conTope.scratchPatch)).toMatchObject({ barT: BAR_T });
+  });
+
   it('con velas viejas o sin historial no la toca', () => {
     expect(s.plan(enPlano({ historial: null })).scratchPatch).toBeUndefined();
     expect(s.plan(enPlano({ series: null })).scratchPatch).toBeUndefined();
@@ -1009,6 +1109,18 @@ describe('AI_CHANNEL: la entrada enviada', () => {
     });
     expect(plan.scratchPatch).toEqual({ op: null });
     expect(plan.avisos).toEqual([expect.objectContaining({ tipo: 'AI_ENTRY_DISCARDED' })]);
+  });
+
+  it('una operación que llegó a existir no se confunde con una IOC sin llenar', () => {
+    // Se cerró fuera del bot (o su ejecución aún no se ha barrido): hubo posición,
+    // así que `maximo` está puesto. Descartarla aquí inventa un «no se llenó».
+    const vivida = operacion({}, { enviadaEn: AHORA_PLANO - 30 * 60_000, maximo: '31.257' });
+    const plan = s.plan(enPlano({ config: reglas(), scratch: { op: vivida } }));
+    expect(plan.orders).toEqual([]);
+    expect(plan.decision).toBeUndefined();
+    expect(plan.avisos).toBeUndefined();
+    expect(plan.scratchPatch).toBeUndefined();
+    expect(plan.note).toMatch(/ya no está en el venue/);
   });
 
   it('un cierre a medias de la operación anterior se limpia', () => {

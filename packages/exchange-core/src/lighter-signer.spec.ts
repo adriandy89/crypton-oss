@@ -181,6 +181,24 @@ describe('Lighter — lo que se firma en placeOrder', () => {
     expect(ack.status).not.toBe('FILLED');
   });
 
+  /**
+   * Spec 062, F-08. El acuse guardaba el indice de CLIENTE como id de venue, y
+   * el motor exige que una PENDING no tenga id para darla por huerfana y dejar
+   * que venza: una orden que el secuenciador descarta —una market fuera de su
+   * tope, una post-only que habria cruzado— no aparece nunca en el libro ni
+   * trae ejecucion, asi que vetaba su nivel el resto del ciclo.
+   */
+  it('el acuse PENDING no afirma un id de venue que no tiene', async () => {
+    const { adapter } = crear();
+    const limite = await adapter.placeOrder(limit());
+    expect(limite).toMatchObject({ status: 'PENDING', venueOrderId: '' });
+
+    const mercado = await adapter.placeOrder(
+      limit({ type: 'MARKET', price: '77000', clientOrderId: 'a1b2c3d4e5f60718.1.B1' }),
+    );
+    expect(mercado).toMatchObject({ status: 'PENDING', venueOrderId: '' });
+  });
+
   it('una venta a mercado lleva la holgura hacia abajo', async () => {
     const { adapter, firmante } = crear();
     await adapter.placeOrder(

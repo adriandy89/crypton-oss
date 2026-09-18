@@ -153,12 +153,11 @@ solo tiene sentido durante un incidente concreto y sabiendo esto.
 Si la marca no se pudo escribir, la pantalla lo dice: la cuenta queda deshabilitada, pero su token
 en curso aguanta lo que le quede de vida (`JWT_ACCESS_TTL`, 15 minutos por defecto).
 
-> ⚠️ **Limitación conocida (F-06, abierta a 2026-09-17).** Deshabilitar una cuenta no para sus bots,
-> como dice esta ficha… salvo los del **canal con IA**: al siguiente relevo de worker —un despliegue,
-> un reinicio, un corte de Redis— el bot queda en ERROR con su posición abierta, sin vigilante ni
-> salidas, y en ERROR no admite ni PAUSE ni PANIC.
-> **Hasta que se corrija:** antes de deshabilitar a un administrador con bots del canal, ciérralos con
-> «parar y cerrar». Estado: `specs/060-revision-057-059/findings.md` § F-06.
+Deshabilitar una cuenta no para sus bots. En los del **canal con IA** —que solo puede operar un
+administrador habilitado— hay un matiz: dejan de abrir operaciones nuevas en cuanto se relee el rol
+(un minuto), y al siguiente relevo de worker se adoptan **en pausa**, con su aviso. La posición
+abierta conserva su stop y sus objetivos, y el bot sigue admitiendo pausar, parar y cerrar
+(spec 062, F-06).
 
 ## Modo IA: un supervisor que vigila bots vivos (spec 046)
 

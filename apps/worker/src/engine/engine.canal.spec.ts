@@ -56,6 +56,10 @@ describe('EngineService: el canal con IA al arrancar', () => {
     reservarCanal(botId: string, venue: string, strategy: string): void;
     arrancandoCanal: Map<string, string>;
     leerInterruptorCanal(): Promise<{ permitidas: boolean; motivo: string | null }>;
+    interruptorDelBot(
+      userId: string,
+      strategy: string,
+    ): Promise<{ permitidas: boolean; motivo: string | null }>;
     spawn(botId: string): Promise<void>;
     subscribeToBus(): Promise<void>;
     anotarNocional(botId: string, strategy: string, config: unknown): Promise<void>;
@@ -69,6 +73,9 @@ describe('EngineService: el canal con IA al arrancar', () => {
     venue: 'LIGHTER',
     dry_run: false,
     exchange_account_id: 'acc-1',
+    // Lo que escribe START en la API: un arranque nuevo, que es lo unico que
+    // miran el candado del rol y el tope por venue (spec 062, F-06).
+    status: 'STARTING',
   };
 
   const montar = (
@@ -209,6 +216,27 @@ describe('EngineService: el canal con IA al arrancar', () => {
       await expect(simulado.engine.spawn('nuevo')).rejects.toThrow(/siguió adelante/);
     });
 
+    /**
+     * Spec 062, F-06. El candado y el tope se aplicaban en CUALQUIER estado: un
+     * relevo de worker —un despliegue, un corte de Redis— dejaba en ERROR con la
+     * posicion abierta al bot de un administrador deshabilitado, y en ERROR la
+     * API solo admite START, que exige el rol. Nadie podia ni pausarlo.
+     */
+    it('un bot que ya operaba se readopta aunque su dueño ya no sea administrador', async () => {
+      for (const status of ['RUNNING', 'PAUSED', 'STOPPING']) {
+        const { engine, db } = montar({ role: 'USER', disabled: false }, undefined, { status });
+        await expect(engine.spawn('nuevo')).rejects.toThrow(/siguió adelante/);
+        expect(db.exchangeAccount.findUniqueOrThrow).toHaveBeenCalled();
+      }
+    });
+
+    it('el tope por venue tampoco frena un relevo', async () => {
+      const { engine } = montar(admin, undefined, { status: 'RUNNING' });
+      engine.topesCanal = new Map([['LIGHTER', 1]]);
+      engine.runners.set('a', runner('a', 'LIGHTER'));
+      await expect(engine.spawn('nuevo')).rejects.toThrow(/siguió adelante/);
+    });
+
     it('la reserva se suelta aunque el arranque falle después', async () => {
       const { engine, db } = montar(admin);
       engine.topesCanal = new Map([['LIGHTER', 1]]);
@@ -219,6 +247,36 @@ describe('EngineService: el canal con IA al arrancar', () => {
       db.bot.findUniqueOrThrow.mockResolvedValueOnce({ ...BOT_CANAL, id: 'otro' });
       await expect(engine.spawn('otro')).rejects.toThrow(/siguió adelante/);
     });
+  });
+
+  /**
+   * Spec 062, F-06. En modo REGLAS el bot no pasa por la API, asi que la
+   * barrera de alli no lo frena: un dueño degradado seguia abriendo
+   * operaciones hasta el siguiente relevo.
+   */
+  it('las entradas del canal se cierran si el dueño deja de ser administrador', async () => {
+    const { engine, db } = montar({ role: 'ADMIN', disabled: false });
+    await expect(engine.interruptorDelBot('u1', 'AI_CHANNEL')).resolves.toMatchObject({
+      permitidas: true,
+    });
+
+    const degradado = montar({ role: 'USER', disabled: false });
+    await expect(degradado.engine.interruptorDelBot('u1', 'AI_CHANNEL')).resolves.toMatchObject({
+      permitidas: false,
+      motivo: expect.stringMatching(/administrador/),
+    });
+
+    // El rol se recuerda un rato: no se paga una consulta por tick.
+    await engine.interruptorDelBot('u1', 'AI_CHANNEL');
+    expect(db.user.findUnique).toHaveBeenCalledTimes(1);
+  });
+
+  it('con el interruptor global apagado ni se mira el rol', async () => {
+    const { engine, db } = montar({ role: 'ADMIN', disabled: false }, async () => 'off');
+    await expect(engine.interruptorDelBot('u1', 'AI_CHANNEL')).resolves.toMatchObject({
+      permitidas: false,
+    });
+    expect(db.user.findUnique).not.toHaveBeenCalled();
   });
 
   it('un aviso de intención despierta al bot que la tiene, y a ningún otro', async () => {

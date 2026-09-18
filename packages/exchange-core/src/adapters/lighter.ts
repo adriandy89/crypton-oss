@@ -1306,9 +1306,15 @@ export class LighterAdapter implements ExchangeAdapter {
           // la canceló, la fila vence a los cinco minutos (001/F-37) y el
           // nivel se recoloca. Antes se decía FILLED por decreto y una entrada
           // que no cruzó quedaba «ejecutada» en la base para siempre.
+          //
+          // Y SIN id de venue, como Hyperliquid: el que se guardaba era el
+          // índice de CLIENTE, y con él la fila ya no vencía nunca —el motor
+          // exige no tener id para dar por huérfana una PENDING—, así que el
+          // nivel quedaba vetado para siempre (spec 062, F-08). El índice de
+          // cliente ya está en `venue_client_id`, que es por donde se reconoce.
           return {
             clientOrderId: req.clientOrderId,
-            venueOrderId: String(clientIndex),
+            venueOrderId: '',
             status: OrderStatus.PENDING,
             ts: Date.now(),
           };
@@ -1401,9 +1407,14 @@ export class LighterAdapter implements ExchangeAdapter {
         // al incluir la transacción. El motor identifica la orden por su índice
         // de cliente, que sí es nuestro y determinista, y completa el id de
         // venue en el siguiente barrido de reconciliación.
+        //
+        // Por eso va VACÍO y no con el índice de cliente (spec 062, F-08): un
+        // id de venue inventado impedía que la fila venciera, y una orden que
+        // el secuenciador descarta no aparece nunca en el libro ni trae
+        // ejecución, así que su nivel quedaba muerto el resto del ciclo.
         return {
           clientOrderId: req.clientOrderId,
-          venueOrderId: String(clientIndex),
+          venueOrderId: '',
           status: OrderStatus.PENDING,
           ts: Date.now(),
         };

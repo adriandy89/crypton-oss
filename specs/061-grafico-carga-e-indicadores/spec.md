@@ -90,11 +90,16 @@ excluyentes entre sí.
   `pnpm test:backtest` y el typecheck de la app, en verde.
 - **CA-3** `pnpm --filter app build` dentro de presupuesto (2 MB inicial, 6 kB por hoja de
   componente) y `pnpm --filter app lint` limpio.
-- **CA-4** *(a mano)* En el gráfico de un bot simulado del canal: al entrar sale el esqueleto; al
+- **CA-4** *(a mano)* En el gráfico de **cualquier par**, con bot o sin él: al entrar sale el esqueleto; al
   cambiar de intervalo se atenúa lo anterior con el indicador de carga y no se ven velas viejas; los
   cinco indicadores se encienden y se apagan; RSI y ATR se excluyen; al salir y volver sigue todo
   igual; con el almacén borrado, todo vuelve a los valores de fábrica.
-- **CA-5** *(a mano)* Los tres gráficos del backtest siguen pintando igual.
+- **CA-5** *(a mano)* Los tres gráficos del backtest siguen pintando igual. Un backtest se lanza sin
+  bot, así que esto no necesita ninguno.
+- **CA-6** *(a mano, con un bot vivo)* Con el panel de resultado encendido y un indicador de panel
+  propio, el orden de paneles es precio, volumen, resultado, indicador, y el resultado no se pinta
+  dentro del panel del indicador. Es lo único que necesita un bot, y solo se tocan interruptores de
+  dibujo: no manda ninguna orden.
 
 ## Riesgos
 

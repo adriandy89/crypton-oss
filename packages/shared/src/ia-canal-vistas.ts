@@ -388,6 +388,13 @@ export interface HoyCanal {
   topePct: number;
   topeOperaciones: number;
   rachaPerdidas: number;
+  /**
+   * Las consultas que le caben HOY a este bot: su presupuesto o el tope del
+   * servidor, el que sea menor. Es lo que de verdad aplica el lazo; la pantalla
+   * enseñaba solo el del servidor y decía «3 de 48» cuando el bot tenía 12
+   * (spec 062, F-45).
+   */
+  topeConsultas: number;
 }
 
 export interface EstadoCanalBot {
@@ -396,6 +403,8 @@ export interface EstadoCanalBot {
   lazo: LazoCanal;
   hoy: HoyCanal;
   decisiones: DecisionCanalVista[];
+  /** El modo y las entradas de ESTE bot (spec 062, F-46). */
+  propio: EstadoPropioCanal;
 }
 
 export interface BotCanalResumen {
@@ -407,6 +416,18 @@ export interface BotCanalResumen {
   dryRun: boolean;
   lazo: LazoCanal;
   ultima: { estado: EstadoIntencion; motivo: string | null; creadaEn: string } | null;
+  /** Lo que decide las entradas de ESTE bot, no del servidor (spec 062, F-46). */
+  propio: EstadoPropioCanal;
+}
+
+/**
+ * Lo del bot que la pastilla necesita mirar además de los interruptores del
+ * servidor: en modo reglas no consulta a nadie, y con sus entradas apagadas no
+ * va a abrir nada aunque el interruptor global esté abierto (spec 062, F-46).
+ */
+export interface EstadoPropioCanal {
+  modo: 'IA' | 'REGLAS';
+  entradas: boolean;
 }
 
 export interface ResumenCanalAdmin {
@@ -415,7 +436,7 @@ export interface ResumenCanalAdmin {
 }
 
 /** Lo que dice la pastilla de un bot del canal. */
-export type InsigniaCanal = 'CONSULTA' | 'SOMBRA' | 'PAUSADA' | 'APAGADA' | 'CORTADA';
+export type InsigniaCanal = 'CONSULTA' | 'SOMBRA' | 'PAUSADA' | 'APAGADA' | 'CORTADA' | 'REGLAS';
 
 /**
  * El estado de la IA para un bot, de lo más grave a lo menos:
@@ -429,11 +450,18 @@ export function insigniaCanal(
   interruptores: InterruptoresCanal,
   lazo: LazoCanal,
   ahora: number,
+  propio?: EstadoPropioCanal,
 ): InsigniaCanal {
   if (!interruptores.encendido) return 'APAGADA';
   if (interruptores.entradas !== 'ABIERTAS') return 'CORTADA';
+  // Las entradas de ESTE bot: apagadas en su configuración no abre nada, esté
+  // como esté el interruptor global (spec 062, F-46).
+  if (propio?.entradas === false) return 'CORTADA';
   const pausa = lazo.pausadoHasta ? Date.parse(lazo.pausadoHasta) : Number.NaN;
   if (Number.isFinite(pausa) && pausa > ahora) return 'PAUSADA';
+  // Y en modo reglas no hay IA que consulte: decide el juez del motor. Decir
+  // «IA · canal» ahí era sencillamente falso.
+  if (propio?.modo === 'REGLAS') return 'REGLAS';
   if (interruptores.soloSombra) return 'SOMBRA';
   return 'CONSULTA';
 }

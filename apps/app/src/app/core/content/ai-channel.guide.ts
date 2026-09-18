@@ -296,7 +296,7 @@ export const AI_CHANNEL_GUIDE: StrategyGuide<AiChannelConfig> = {
     maxAdverseFundingBps: {
       what: 'El funding en contra a partir del cual no se abre ese lado.',
       affects: 'Quien paga el funding en cada periodo empieza la operación perdiendo.',
-      tip: '1 bp. En Lighter no hace nada: ese exchange no publica el funding.',
+      tip: '1 bp. Un 0 APAGA el filtro, no lo endurece. En Lighter no hace nada: ese exchange no publica el funding.',
     },
     fundingBlackoutMinutes: {
       what: 'Los minutos sin entradas antes del cobro del funding.',

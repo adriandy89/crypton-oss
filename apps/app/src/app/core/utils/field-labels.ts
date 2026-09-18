@@ -492,7 +492,8 @@ export const FIELD_LABELS: Record<string, string> = {
   'strategy.aiChannel.minAiConfidenceHelp':
     'Por debajo no entra. Con confianza media entra con la mitad del tamaño.',
   'strategy.aiChannel.maxAdverseFundingBps': 'Funding máximo en contra',
-  'strategy.aiChannel.maxAdverseFundingBpsHelp': 'Con un funding en contra mayor, no entra.',
+  'strategy.aiChannel.maxAdverseFundingBpsHelp':
+    'Con un funding en contra mayor, no entra. Un 0 apaga el filtro.',
   'strategy.aiChannel.fundingBlackoutMinutes': 'Sin entradas antes del funding',
   'strategy.aiChannel.fundingBlackoutMinutesHelp':
     'Minutos antes de cada cobro de funding en los que no abre.',

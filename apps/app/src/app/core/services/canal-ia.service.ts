@@ -119,7 +119,7 @@ export class CanalIaService {
     const fila = this.porBot().get(botId);
     const interruptores = this._interruptores();
     if (!fila || !interruptores) return null;
-    return pastillaCanal(interruptores, fila.lazo, bot);
+    return pastillaCanal(interruptores, fila.lazo, bot, Date.now(), fila.propio);
   }
 
   /** Lo que enseña el panel de un bot PROPIO: lazo, día y últimas decisiones. */

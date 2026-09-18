@@ -206,6 +206,7 @@ export const EVENT_LABELS: Record<string, string> = {
   AI_BREAKEVEN: 'Stop llevado a la entrada',
   AI_CIERRE_FALLIDO: 'El cierre a mercado falló',
   AI_POSICION_HUERFANA: 'Posición sin plan',
+  AI_OPERACION_PERDIDA: 'Operación cerrada fuera del bot',
   SIN_STOP: 'Posición sin stop confirmado',
 };
 

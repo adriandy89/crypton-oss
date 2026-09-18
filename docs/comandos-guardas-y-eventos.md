@@ -230,7 +230,8 @@ la misma salida.
 | `AI_DAY_STOP` (WARN) | Tope diario alcanzado | Sin entradas hasta las 00:00 UTC; vuelve solo. |
 | `SIN_STOP` (CRITICAL) | Posición sin stop confirmado | El stop no apareció a tiempo y el bot cerró a mercado. Mira el exchange. |
 | `AI_CIERRE_FALLIDO` (CRITICAL) | El cierre a mercado falló | Doce intentos sin éxito: **cierra a mano**. El stop sigue puesto. |
-| `AI_POSICION_HUERFANA` (CRITICAL) | Posición sin plan | Hay posición y el bot no sabe de qué operación es: pone un stop de emergencia. Revísala. |
+| `AI_POSICION_HUERFANA` (CRITICAL) | Posición sin plan | Hay posición y el bot no sabe de qué operación es: pone un stop de emergencia, nunca detrás de la liquidación. Revísala. |
+| `AI_OPERACION_PERDIDA` (WARN) | Operación cerrada fuera del bot | Su ejecución no la vio nadie —cierre a mano, ADL, worker caído—: el ciclo se da por terminado y el bot vuelve a operar. **Ese resultado no entra en el tope diario ni en la caída máxima**: compruébalo en el exchange. |
 | `AI_FAILED` (WARN) | La IA no pudo actuar | Cinco fallos seguidos del modelo: ese bot deja de consultar seis horas y no abre nada. |
 
 ### La nota del bot

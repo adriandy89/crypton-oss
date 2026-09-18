@@ -179,6 +179,18 @@ export interface UpdateConfigOptions {
  */
 const RAZON_VERSION_RANCIA = 'STALE_VERSION';
 
+/**
+ * Los interruptores cuyo valor SEGURO es apagar: cortar las entradas y pasar a
+ * «solo observar». Un cambio que solo hace eso se aplica aunque el resto de la
+ * configuración ya no valide o se haya salido de los topes (spec 062, F-52):
+ * negarle a alguien que frene su bot porque el mínimo del venue subió es lo
+ * contrario de proteger.
+ */
+const APAGADOS: Readonly<Record<string, unknown>> = { entriesEnabled: false, observeOnly: true };
+
+const apagaSeguridad = (changed: readonly { key: string; to: unknown }[]): boolean =>
+  changed.length > 0 && changed.every((c) => c.key in APAGADOS && c.to === APAGADOS[c.key]);
+
 @Injectable()
 export class BotsService implements OnModuleInit {
   private readonly logger = new Logger(BotsService.name);
@@ -1122,19 +1134,29 @@ export class BotsService implements OnModuleInit {
       });
     }
 
+    // Un cambio que solo APAGA —cortar las entradas, pasar a «solo observar»—
+    // no puede depender de que el resto de la configuración siga siendo válida.
+    // Un mínimo del venue que subió, un tope del usuario que bajó o una palanca
+    // máxima recortada dejaban al bot sin poder cortar sus entradas, que es
+    // justo lo que se hace cuando algo va mal (spec 062, F-52). Se escribe por
+    // este mismo camino, con su revisión y su evento: no hay un segundo.
+    const soloApaga = apagaSeguridad(diff.changed);
+
     const validation = strategy.validate(next, market);
-    if (!validation.ok) {
+    if (!validation.ok && !soloApaga) {
       throw new BadRequestException({
         message: 'La configuración nueva no es válida.',
         issues: validation.issues,
       });
     }
     // Excluyendo al propio bot del agregado: si no, contaba dos veces (001/F-42).
-    await this.risk.assertWithinLimits(userId, next, market, {
-      excludeBotId: id,
-      reglaLiquidacion: strategy.reglaLiquidacion,
-      nocional: strategy.nocionalMaximo?.(next),
-    });
+    if (!soloApaga) {
+      await this.risk.assertWithinLimits(userId, next, market, {
+        excludeBotId: id,
+        reglaLiquidacion: strategy.reglaLiquidacion,
+        nocional: strategy.nocionalMaximo?.(next),
+      });
+    }
 
     const version = bot.config_version + 1;
     await this.db.$transaction(async (tx) => {

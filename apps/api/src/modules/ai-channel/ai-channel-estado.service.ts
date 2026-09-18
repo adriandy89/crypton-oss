@@ -16,6 +16,7 @@ import {
   resumenPlanDe,
   respuestaModeloDe,
   type BotCanalResumen,
+  type EstadoPropioCanal,
   type BotConfig,
   type DecisionCanalDetalle,
   type DecisionCanalVista,
@@ -201,6 +202,7 @@ export class AiChannelEstadoService {
         venue: true,
         status: true,
         dry_run: true,
+        config_version: true,
         ai_loop: true,
         ai_intents: {
           orderBy: { created_at: 'desc' },
@@ -209,6 +211,13 @@ export class AiChannelEstadoService {
         },
       },
     });
+    // La configuración vigente de cada uno: la pastilla tiene que saber si este
+    // bot consulta a la IA y si tiene las entradas encendidas (spec 062, F-46).
+    const revisiones = await this.db.botConfigRevision.findMany({
+      where: { OR: filas.map((b) => ({ bot_id: b.id, version: b.config_version })) },
+      select: { bot_id: true, version: true, config: true },
+    });
+    const porBot = new Map(revisiones.map((r) => [`${r.bot_id}:${r.version}`, r.config]));
     const bots: BotCanalResumen[] = filas.map((b) => {
       const ultima = b.ai_intents[0];
       return {
@@ -219,6 +228,13 @@ export class AiChannelEstadoService {
         status: b.status,
         dryRun: b.dry_run,
         lazo: lazoDe(b.ai_loop, ahora),
+        propio: this.propioSuyo(
+          // Frontera Prisma-JSON: la configuración se guardó validada.
+          leerConfigCanal(
+            (porBot.get(`${b.id}:${b.config_version}`) ?? {}) as unknown as BotConfig,
+            b.venue,
+          ),
+        ),
         ultima: ultima
           ? {
               estado: ultima.estado,
@@ -250,8 +266,9 @@ export class AiChannelEstadoService {
       botId,
       interruptores,
       lazo: lazoDe(lazo, ahora),
-      hoy,
+      hoy: hoy.dia,
       decisiones: decisiones.map(decisionDe),
+      propio: hoy.propio,
     };
   }
 
@@ -303,10 +320,15 @@ export class AiChannelEstadoService {
   }
 
   /** Lo del día UTC: operaciones, resultado, pérdida frente al tope y racha. */
+  /** El modo y las entradas de un bot, leídos de su configuración vigente. */
+  private propioSuyo(cfg: ReturnType<typeof leerConfigCanal>): EstadoPropioCanal {
+    return { modo: cfg.modo === 'IA' ? 'IA' : 'REGLAS', entradas: cfg.entradasActivas };
+  }
+
   private async hoy(
     bot: { id: string; venue: string; config_version: number },
     ahora: number,
-  ): Promise<HoyCanal> {
+  ): Promise<{ dia: HoyCanal; propio: EstadoPropioCanal }> {
     const [revision, delDia, recientes] = await Promise.all([
       this.db.botConfigRevision.findUnique({
         where: { bot_id_version: { bot_id: bot.id, version: bot.config_version } },
@@ -333,12 +355,18 @@ export class AiChannelEstadoService {
     const perdida =
       realizado.lt(0) && cfg.capital.gt(0) ? realizado.neg().div(cfg.capital).mul(100) : D(0);
     return {
-      operaciones: delDia._count._all,
-      realizado: realizado.toFixed(),
-      perdidaPct: perdida.toDecimalPlaces(4).toNumber(),
-      topePct: cfg.topeDiarioPct.toNumber(),
-      topeOperaciones: cfg.maxOperacionesDia,
-      rachaPerdidas: rachaDePerdidas(recientes.map((c) => c.realized_pnl.toString())),
+      dia: {
+        operaciones: delDia._count._all,
+        realizado: realizado.toFixed(),
+        perdidaPct: perdida.toDecimalPlaces(4).toNumber(),
+        topePct: cfg.topeDiarioPct.toNumber(),
+        topeOperaciones: cfg.maxOperacionesDia,
+        // El que de verdad aplica el lazo: `min(presupuesto del bot, tope del
+        // servidor)`. La pantalla enseñaba el del servidor a secas (spec 062, F-45).
+        topeConsultas: Math.min(cfg.presupuestoIaDia, this.canal.limiteBot),
+        rachaPerdidas: rachaDePerdidas(recientes.map((c) => c.realized_pnl.toString())),
+      },
+      propio: this.propioSuyo(cfg),
     };
   }
 }

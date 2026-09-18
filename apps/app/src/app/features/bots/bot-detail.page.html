@@ -257,7 +257,7 @@
              antes esta cifra salia siempre en rojo, al 3 % y al 60 %. -->
         @if (liqDist() !== null) {
           <div class="bd-risk">
-            <ui-liq-meter [pct]="b.liquidationDistancePct" label="Aguanta una caída de" />
+            <ui-liq-meter [pct]="b.liquidationDistancePct" [camino]="camino()" label="Aguanta una caída de" />
             <p class="bd-risk-foot num">
               Liquidación estimada en <b>{{ price(b.liquidationPrice) }}</b>
               @if (b.snapshot?.mark_price) {

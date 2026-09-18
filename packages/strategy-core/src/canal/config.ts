@@ -146,6 +146,23 @@ const entero = (v: unknown, def: number): number => {
 const booleano = (v: unknown, def: boolean): boolean =>
   typeof v === 'boolean' ? v : v === 'true' ? true : v === 'false' ? false : def;
 
+/**
+ * Como `booleano`, pero lo que no se entiende cae al lado SEGURO en vez de al
+ * valor por defecto.
+ *
+ * `validate` ya rechaza lo que no sea un booleano, así que esto es la red por
+ * si una configuración guardada antes lo lleva: un `observeOnly: 1` hacía
+ * operar de verdad al bot que su dueño había dejado en «solo observar», y un
+ * `entriesEnabled: 'si'` lo dejaba abriendo (spec 062, F-23). Ausente sigue
+ * siendo «no dicho» y se queda con su valor por defecto.
+ */
+const booleanoSeguro = (v: unknown, def: boolean, seguro: boolean): boolean => {
+  if (typeof v === 'boolean') return v;
+  if (v === 'true') return true;
+  if (v === 'false') return false;
+  return v === undefined || v === null || v === '' ? def : seguro;
+};
+
 const enumerado = <T extends string>(v: unknown, opciones: readonly T[], def: T): T => {
   const s = texto(v, def);
   return (opciones as readonly string[]).includes(s) ? (s as T) : def;
@@ -213,8 +230,8 @@ export function leerConfig(cfg: BotConfig, venue: Venue): ConfigCanal {
       [PerfilCanal.PRUDENTE, PerfilCanal.EQUILIBRADA, PerfilCanal.AGRESIVA],
       d.aiProfile,
     ),
-    entradasActivas: booleano(c['entriesEnabled'], d.entriesEnabled),
-    soloObservar: booleano(c['observeOnly'], d.observeOnly),
+    entradasActivas: booleanoSeguro(c['entriesEnabled'], d.entriesEnabled, false),
+    soloObservar: booleanoSeguro(c['observeOnly'], d.observeOnly, true),
 
     capital: decimal(c['totalInvestment'], '0'),
     apalancamientoTope: entero(c['leverage'], d.leverage),

@@ -694,7 +694,10 @@ describe('AiChannelService: lo que responde el modelo', () => {
     for (let i = 0; i < 5; i++) m.solicitar(`f${i}`, 60_000, salidaDePrueba(), i);
     for (let i = 0; i < 4; i++) await m.servicio.atender(`f${i}`);
     expect(m.lazos.get(BOT)?.pausado_hasta).toBeNull();
-    m.redis.delete(`ai:fail-canal:${BOT}`);
+    // El limite de un aviso por hora esta puesto desde el primer fallo, y aun
+    // asi el de la pausa tiene que salir: es un cambio de estado del bot y
+    // pasa una sola vez (spec 062, F-13).
+    expect(m.eventosDe('AI_FAILED')).toHaveLength(1);
     const antes = Date.now();
     await m.servicio.atender('f4');
     const lazo = m.lazos.get(BOT);
@@ -702,6 +705,7 @@ describe('AiChannelService: lo que responde el modelo', () => {
     const pausa = lazo?.pausado_hasta?.getTime() ?? 0;
     expect(pausa).toBeGreaterThanOrEqual(antes + PAUSA_FALLOS_MS);
     expect(pausa).toBeLessThanOrEqual(Date.now() + PAUSA_FALLOS_MS);
+    expect(m.eventosDe('AI_FAILED')).toHaveLength(2);
     expect(m.eventosDe('AI_FAILED').at(-1)?.['message']).toMatch(/falla repetidamente/);
   });
 
@@ -977,6 +981,11 @@ describe('AiChannelService: el botón de pausa', () => {
     );
     await expect(m.servicio.canjearPausa(USUARIO, VALE)).resolves.toBe('SIN_VALE');
     expect(m.bots.command).toHaveBeenCalledTimes(1);
+    // Y lo confirma: el `BOT_PAUSED` del motor es INFO y no se entrega, asi que
+    // quien pulsa desde el movil no recibia nada (spec 062, F-14).
+    const aviso = m.eventosDe('BOT_PAUSED').at(-1);
+    expect(aviso).toMatchObject({ severity: 'WARN' });
+    expect(aviso?.['message']).toMatch(/pausado desde el botón/);
   });
 
   it('un vale mal formado ni se busca', async () => {
@@ -995,12 +1004,13 @@ describe('AiChannelService: el botón de pausa', () => {
     expect(m.redis.has(`ic:vale:${VALE}`)).toBe(false);
   });
 
-  it('un dueño que ya no es administrador no pausa por aquí', async () => {
+  it('un dueño que ya no es administrador no pausa por aquí, y se dice', async () => {
     for (const bot of [{ role: 'USER' }, { disabled: true }]) {
       const m = montar({ bot });
       conVale(m);
       await expect(m.servicio.canjearPausa(USUARIO, VALE)).resolves.toBe('DUENO');
       expect(m.bots.command).not.toHaveBeenCalled();
+      expect(m.eventosDe('ACTION_FAILED').at(-1)).toMatchObject({ severity: 'WARN' });
     }
   });
 
@@ -1010,6 +1020,9 @@ describe('AiChannelService: el botón de pausa', () => {
     m.bots.command.mockRejectedValueOnce(new ConflictException('parado'));
     await expect(m.servicio.canjearPausa(USUARIO, VALE)).resolves.toBe('NO_VIVO');
     expect(m.audit.recordNow).not.toHaveBeenCalled();
+    // Sin esto, el boton contestaba «Pausando…» y no quedaba nada en ninguna
+    // parte: ni evento, ni mensaje, ni rastro en la app (spec 062, F-14).
+    expect(m.eventosDe('ACTION_FAILED').at(-1)?.['message']).toMatch(/no ha pausado el bot/);
     conVale(m);
     m.bots.command.mockRejectedValueOnce(new Error('base caída'));
     await expect(m.servicio.canjearPausa(USUARIO, VALE)).rejects.toThrow('base caída');

@@ -1,4 +1,13 @@
-import { ChangeDetectionStrategy, Component, OnInit, inject, signal } from '@angular/core';
+import {
+  ChangeDetectionStrategy,
+  Component,
+  DestroyRef,
+  OnInit,
+  inject,
+  signal,
+} from '@angular/core';
+import { takeUntilDestroyed } from '@angular/core/rxjs-interop';
+import { filter, throttleTime } from 'rxjs';
 import { ActivatedRoute, RouterLink } from '@angular/router';
 import {
   IonBackButton,
@@ -23,10 +32,12 @@ import {
   type AiSetting,
 } from '../../core/services/admin-bots.service';
 import { errorText, money, shortDate, signed, strategyLabel, venueLabel } from '../../core/utils';
+import { caminoDeBot } from '../../core/utils/risk';
 import type { CambioIa } from '../../core/utils/modo-ia';
 import { ModoIaAccionesService } from '../../shared/bot/modo-ia-acciones.service';
 import { ModoIaPanelComponent } from '../../shared/bot/modo-ia-panel.component';
 import { CanalIaPanelComponent } from '../../shared/bot/canal-ia-panel.component';
+import { CanalIaService } from '../../core/services/canal-ia.service';
 import {
   UiBadgeComponent,
   UiCardComponent,
@@ -137,7 +148,7 @@ const CONTENIBLES = ['STARTING', 'RUNNING', 'PAUSED'];
           </div>
 
           @if (b.liquidationDistancePct) {
-            <ui-liq-meter [pct]="b.liquidationDistancePct" />
+            <ui-liq-meter [pct]="b.liquidationDistancePct" [camino]="camino(b)" />
           }
           @if (b.lastError) {
             <ui-notice tone="danger" icon="warning-outline">{{ b.lastError }}</ui-notice>
@@ -272,6 +283,8 @@ export class AdminBotDetailPage implements OnInit {
   private readonly route = inject(ActivatedRoute);
 
   private readonly auth = inject(AuthService);
+  private readonly canal = inject(CanalIaService);
+  private readonly destroyRef = inject(DestroyRef);
   private readonly accionesIa = inject(ModoIaAccionesService);
   private readonly bots = inject(BotsService);
 
@@ -290,6 +303,9 @@ export class AdminBotDetailPage implements OnInit {
   /** Una lectura que llega despues de un guardado traeria el modo viejo. */
   private secuenciaIa = 0;
 
+  /** Lo que se espera a agrupar una ráfaga de eventos antes de releer. */
+  private readonly AGRUPAR_EVENTOS_MS = 2_000;
+
   readonly comandos = ADMIN_BOT_COMMANDS;
   readonly venueLabel = venueLabel;
   readonly strategyLabel = strategyLabel;
@@ -303,6 +319,17 @@ export class AdminBotDetailPage implements OnInit {
   ngOnInit(): void {
     this.id = this.route.snapshot.paramMap.get('id') ?? '';
     void this.cargar();
+    // El detalle del dueño se leía UNA vez: la operación que el panel del canal
+    // pinta seguía ahí después de cerrarse, y un 409 tras una acción no
+    // recargaba nada (spec 062, F-19). Con los eventos del canal de ESTE bot se
+    // relee, agrupados para que una ráfaga no dispare una lectura por evento.
+    this.canal.eventos
+      .pipe(
+        filter((ev) => ev.botId === this.id),
+        throttleTime(this.AGRUPAR_EVENTOS_MS, undefined, { leading: true, trailing: true }),
+        takeUntilDestroyed(this.destroyRef),
+      )
+      .subscribe(() => void this.cargar());
   }
 
   etiqueta(c: AdminBotCommand): string {
@@ -373,6 +400,15 @@ export class AdminBotDetailPage implements OnInit {
     } catch (e) {
       this.propioFallo.set(errorText(e));
     }
+  }
+
+  /**
+   * El camino recorrido hacia la liquidación, solo donde la distancia no
+   * informa: a 25x está siempre a un 2-4 % y la barra salía siempre en rojo
+   * (spec 062, F-44). Null = se pinta la distancia de siempre.
+   */
+  camino(b: AdminBotDetail): number | null {
+    return caminoDeBot(b);
   }
 
   contenible(b: AdminBotDetail): boolean {

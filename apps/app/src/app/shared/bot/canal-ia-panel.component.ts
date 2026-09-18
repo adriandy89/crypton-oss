@@ -160,7 +160,7 @@ const AGRUPAR_EVENTOS_MS = 2_000;
         <dd>{{ e.hoy.rachaPerdidas }}</dd>
         <dt>Consultas</dt>
         <dd>
-          {{ e.lazo.llamadasHoy }} de {{ e.interruptores.limiteBot }} ·
+          {{ e.lazo.llamadasHoy }} de {{ e.hoy.topeConsultas }} ·
           {{ money(e.lazo.costeHoy, 4) }}
           USD
         </dd>
@@ -345,7 +345,7 @@ export class CanalIaPanelComponent implements OnInit {
 
   readonly pastilla = computed(() => {
     const e = this.estado();
-    return e ? pastillaCanal(e.interruptores, e.lazo, this.bot()) : null;
+    return e ? pastillaCanal(e.interruptores, e.lazo, this.bot(), Date.now(), e.propio) : null;
   });
 
   readonly decisiones = computed(() => [

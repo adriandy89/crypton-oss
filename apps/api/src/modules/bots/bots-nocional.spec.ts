@@ -157,6 +157,41 @@ describe('BotsService: el nocional que declara la estrategia (spec 058)', () => 
     expect(escrito.data['max_notional']).toBe('3000');
   });
 
+  /**
+   * Spec 062, F-52. «Cortar las entradas» pasaba por `validate` y por los topes
+   * del usuario, asi que un minimo del venue que subio o una palanca maxima
+   * recortada dejaban al bot sin poder frenar, que es justo lo que se hace
+   * cuando algo va mal. Sigue escribiendose por `updateConfig`: no hay otro
+   * camino.
+   */
+  it('cortar las entradas se aplica aunque la configuración ya no valide', async () => {
+    const { service, db, risk } = build('AI_CHANNEL', CANAL);
+    // El venue sube su minimo: la configuracion guardada ya no pasaria validate.
+    db.botConfigRevision.findUniqueOrThrow.mockResolvedValue({
+      config: { ...CANAL, totalInvestment: '20' },
+    });
+    risk.assertWithinLimits.mockRejectedValue(new Error('fuera de los topes'));
+
+    const res = await service.updateConfig(USER_ID, BOT_ID, {
+      config: { ...CANAL, totalInvestment: '20', entriesEnabled: false },
+    });
+
+    expect(res).toMatchObject({ applied: true });
+    expect(risk.assertWithinLimits).not.toHaveBeenCalled();
+
+    // Pero ABRIRLAS con la configuracion rota sigue rechazandose: la exencion es
+    // solo para lo que apaga.
+    const otro = build('AI_CHANNEL', CANAL);
+    otro.db.botConfigRevision.findUniqueOrThrow.mockResolvedValue({
+      config: { ...CANAL, totalInvestment: '20', entriesEnabled: false },
+    });
+    await expect(
+      otro.service.updateConfig(USER_ID, BOT_ID, {
+        config: { ...CANAL, totalInvestment: '20', entriesEnabled: true },
+      }),
+    ).rejects.toThrow(/no es válida/);
+  });
+
   it('las estrategias de siempre lo dejan nulo', async () => {
     const { service, db } = build('GRID_CLASSIC', REJILLA);
 

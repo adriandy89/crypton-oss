@@ -13,7 +13,7 @@ import {
   type PortfolioEquitySeries,
   type PortfolioRange,
 } from '@crypton/shared';
-import { liqNum, liqTone } from '../../core/utils/risk';
+import { CAMINO_DANGER_PCT, caminoDeBot, liqNum, liqTone } from '../../core/utils/risk';
 import {
   IonContent,
   IonHeader,
@@ -266,7 +266,7 @@ import { puntosDeSpark, ventanaDe } from '../../shared/chart/bot-series';
                     @if (near(b)) {
                       <ion-icon name="warning-outline" />
                     }
-                    <ui-liq-meter [pct]="b.liquidationDistancePct" />
+                    <ui-liq-meter [pct]="b.liquidationDistancePct" [camino]="camino(b)" />
                   </div>
                   <p class="liqp num">Liquidación en {{ price(b.liquidationPrice) }}</p>
                 }
@@ -341,7 +341,7 @@ import { puntosDeSpark, ventanaDe } from '../../shared/chart/bot-series';
                     @if (near(b)) {
                       <ion-icon name="warning-outline" />
                     }
-                    <ui-liq-meter [pct]="b.liquidationDistancePct" />
+                    <ui-liq-meter [pct]="b.liquidationDistancePct" [camino]="camino(b)" />
                   </div>
                   <p class="liqp num">Liquidación en {{ price(b.liquidationPrice) }}</p>
                 }
@@ -570,8 +570,17 @@ export class PortfolioPage implements OnInit {
    * de entrada, que no se mueve con el mercado: un bot con la entrada lejos y el
    * precio pegado a la liquidación no se marcaba nunca (spec 002, F-02).
    */
-  near(b: { liquidationDistancePct: string | null }): boolean {
-    return liqTone(b.liquidationDistancePct) === 'danger';
+  /**
+   * El camino recorrido hacia la liquidacion, solo donde la distancia no
+   * informa: a 25x esta siempre a un 2-4 % (spec 062, F-44).
+   */
+  camino(b: Parameters<typeof caminoDeBot>[0]): number | null {
+    return caminoDeBot(b);
+  }
+
+  near(b: Parameters<typeof caminoDeBot>[0] & { liquidationDistancePct: string | null }): boolean {
+    const c = this.camino(b);
+    return c === null ? liqTone(b.liquidationDistancePct) === 'danger' : c > CAMINO_DANGER_PCT;
   }
 
   async reload(event: CustomEvent): Promise<void> {

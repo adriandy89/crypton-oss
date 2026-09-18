@@ -16,6 +16,7 @@ import {
   type BotConfig,
   type BotContext,
   type CycleState,
+  type DecisionIa,
   type DesiredOrder,
   type DesiredState,
   type Fill,
@@ -160,6 +161,32 @@ const LECTURA_VENUE_FALLO_MS = 60_000;
  */
 const SIN_STOP_MAX_MS: Partial<Record<Venue, number>> = { LIGHTER: 10_000 };
 const SIN_STOP_DEFECTO_MS = 5_000;
+
+/**
+ * Cada cuánto se repite el CRITICAL de la posición sin stop mientras dura. El
+ * cierre se reintenta en cada vigilancia; el aviso, no (spec 062, F-05).
+ */
+const SIN_STOP_AVISO_MS = 60_000;
+
+/**
+ * Los índices que el motor reserva para sus cierres a mercado, del 999 hacia
+ * abajo. Por debajo del 512 están los de la estrategia (`TP#500..511`), así que
+ * ahí se para: un cierre no puede robarle el id a una salida escalonada.
+ */
+const CIERRE_INDICE_ALTO = 999;
+const CIERRE_INDICE_BAJO = 512;
+
+/**
+ * Lo que se espera a que aparezca la ejecución de una salida antes de dar la
+ * operación por perdida (spec 062, F-04).
+ *
+ * Cinco minutos: el barrido por REST corre cada pocos ticks y el stream suele
+ * traerla en segundos, así que si a los cinco minutos no ha llegado no va a
+ * llegar —la cerró el usuario a mano, el venue por ADL, o se ejecutó con el
+ * worker caído más de lo que alcanza el barrido del arranque—. Corto de más
+ * cerraría el ciclo de una salida que sí venía en camino.
+ */
+const GRACIA_HUERFANA_MS = 5 * 60_000;
 
 /**
  * Cada cuánto se revisa un bot del canal con una entrada en curso o una
@@ -751,8 +778,12 @@ export class BotRunner {
   private readonly avisosVivos = new Set<string>();
   /** Desde cuándo hay posición sin stop confirmado. Ver `vigilarStop`. */
   private sinStopDesde: number | null = null;
+  /** Cuándo se avisó por última vez de la posición sin stop. Ver `vigilarStop`. */
+  private sinStopAvisadoEn = 0;
   /** La intención ya marcada como ABIERTA, para no repetir la escritura en cada tick. */
   private abiertaAnotada: string | null = null;
+  /** Desde cuándo se ve una intención viva sin operación que la sostenga. Ver `limpiarOperacionHuerfana`. */
+  private huerfanaDesde: number | null = null;
 
   constructor(private readonly deps: BotRunnerDeps) {
     this.paused = deps.startPaused === true;
@@ -1061,6 +1092,18 @@ export class BotRunner {
         // Un bot pausado que llega hasta aquí está sano: ha hablado con el
         // venue. Sin marcarlo, el chequeo de salud lo daría por atascado.
         this.markTickOk();
+        // Pausado no es desprotegido. En las estrategias con apalancamiento por
+        // operación la guarda de liquidación ACTÚA, que es lo que prometen las
+        // guías: pausar ya no es una acción disponible —el bot ya está
+        // pausado— y lo único que queda por hacer es cerrar (spec 062, F-12).
+        // En el resto de estrategias no cambia nada: siguen avisando.
+        if (breach?.action === 'CLOSE' && this.strategy.apalancamientoPorOperacion === true) {
+          await this.event('RISK_GUARD_TRIPPED', 'CRITICAL', breach.reason, {
+            action: 'CLOSE_ALL',
+          });
+          await this.runCommand('STOP_AND_CLOSE');
+          return;
+        }
         await this.protegerEnPausa(ticker, position, openOrders, balances[0]?.available ?? '0');
         if (this.persistDue()) await this.snapshot(ticker, position, openOrders.length);
         return;
@@ -1085,6 +1128,14 @@ export class BotRunner {
       // intención vigente, los tramos del par y lo que puede cerrar las
       // entradas desde fuera (spec 058).
       const delCanal = this.esCanal ? await this.contextoDelCanal() : undefined;
+      // Antes de planificar: si la operación anterior se cerró fuera del bot, su
+      // ciclo y su intención se cierran aquí y el tick se repite con el ciclo
+      // nuevo, que es el que la estrategia tiene que ver (spec 062, F-04).
+      if (delCanal && (await this.limpiarOperacionHuerfana(delCanal.decisionIa ?? null))) {
+        this.markTickOk();
+        this.requestTick();
+        return;
+      }
       const ctx = this.buildContext(
         ticker,
         position,
@@ -1384,7 +1435,15 @@ export class BotRunner {
       order.levelKind === 'STOP_LOSS' &&
       this.strategy.apalancamientoPorOperacion === true &&
       veredicto.motivo !== 'IMPOSIBLE';
-    if (veredicto.motivo !== 'OK' && !stopExento) {
+    // Y el cierre DEFINITIVO de esa misma posición tampoco se calla por el
+    // mínimo del venue: un resto a 25x sin stop es riesgo vivo, y varios venues
+    // aceptan la reduce-only que cierra del todo. Callarlo dejaba al vigilante
+    // y a la guarda de liquidación sin poder cerrar (spec 062, F-05).
+    const cierreExento =
+      salidaDefinitiva &&
+      this.strategy.apalancamientoPorOperacion === true &&
+      veredicto.motivo === 'RESTO_INCERRABLE';
+    if (veredicto.motivo !== 'OK' && !stopExento && !cierreExento) {
       if (order.levelKind === 'STOP_LOSS') this.stopLossVivo = false;
       // Cuarentena por FORMA, no por id: en cuanto entre otra ejecución la
       // cantidad cambia, la forma cambia y se vuelve a intentar sola. Es lo que
@@ -2293,6 +2352,11 @@ export class BotRunner {
    * La operación guardada se olvida: ya no va a salir, y dejarla haría que el
    * tick siguiente esperase un llenado que no llegará. Una intención que se
    * llegó a aceptar pasa a rechazada con su motivo.
+   *
+   * El rechazo se escribe ANTES de olvidar la operación: al revés, un fallo de
+   * la base dejaba la intención viva para siempre —y con ella el veto a toda
+   * entrada nueva— sin nada en el scratch que hiciera volver por aquí
+   * (spec 062, F-04). Con este orden, el tick siguiente lo reintenta.
    */
   private async descartarEntrada(
     desired: DesiredState,
@@ -2300,19 +2364,26 @@ export class BotRunner {
     motivo: string,
     motivoRechazo: MotivoRechazo = MotivoRechazo.VENUE,
   ): Promise<DesiredState> {
-    if (this.cycle.scratch['op'] != null) {
-      this.cycle = { ...this.cycle, scratch: { ...this.cycle.scratch, op: null } };
-      await this.deps.store.saveCycleScratch(this.botId, this.cycle.scratch);
-    }
+    // Que la base haya CONTESTADO, no que haya movido la fila: un `false` —la
+    // intención ya estaba rechazada o caducada— también deja de vetar.
+    let contestada = true;
     if (aceptada && this.deps.intents) {
-      await this.deps.intents
+      contestada = await this.deps.intents
         .anotar(this.botId, Number(this.cycle.scratch.cycleSeq ?? 0), {
           ...aceptada,
           estado: EstadoIntencion.RECHAZADA,
           motivo: motivoRechazo,
           plan: null,
         })
-        .catch((e: Error) => this.logger.warn(`No se pudo rechazar la intención: ${e.message}`));
+        .then(() => true)
+        .catch((e: Error) => {
+          this.logger.warn(`No se pudo rechazar la intención: ${e.message}`);
+          return false;
+        });
+    }
+    if (contestada && this.cycle.scratch['op'] != null) {
+      this.cycle = { ...this.cycle, scratch: { ...this.cycle.scratch, op: null } };
+      await this.deps.store.saveCycleScratch(this.botId, this.cycle.scratch);
     }
     await this.event('AI_ENTRY_DISCARDED', 'WARN', `Entrada descartada: ${motivo}.`, {
       intentId: aceptada?.intentId ?? desired.decision?.intentId ?? null,
@@ -2393,19 +2464,28 @@ export class BotRunner {
     this.sinStopDesde ??= ahora;
     if (ahora - this.sinStopDesde < maximo) return;
     this.sinStopDesde = null;
-    await this.event(
-      'SIN_STOP',
-      'CRITICAL',
-      `La posición lleva más de ${maximo / 1000} s sin stop confirmado en el exchange: ` +
-        'se cierra a mercado.',
-    ).catch(() => undefined);
+    // Cerrar se reintenta en cada vigilancia; AVISAR, no. Sin el enfriamiento
+    // salía un par de CRITICAL cada seis segundos mientras durase, y un canal
+    // que grita cada seis segundos se silencia entero (spec 062, F-05).
+    const avisar = ahora - this.sinStopAvisadoEn >= SIN_STOP_AVISO_MS;
+    if (avisar) {
+      this.sinStopAvisadoEn = ahora;
+      await this.event(
+        'SIN_STOP',
+        'CRITICAL',
+        `La posición lleva más de ${maximo / 1000} s sin stop confirmado en el exchange: ` +
+          'se cierra a mercado.',
+      ).catch(() => undefined);
+    }
     const cerrada = await this.closePositionAtMarket('posición sin stop');
-    if (!cerrada) {
+    if (!cerrada && avisar) {
+      // Sin culpar al exchange: el cierre puede no haber salido del motor, y el
+      // evento anterior dice cuál de las dos cosas pasó.
       await this.event(
         'ACTION_FAILED',
         'CRITICAL',
-        'No se pudo cerrar la posición sin stop: el exchange no aceptó el cierre. Se reintenta en ' +
-          'la siguiente revisión; ciérrala desde el exchange si no sale.',
+        'No se pudo cerrar la posición sin stop; el motivo está en el evento anterior. Se ' +
+          'reintenta en la siguiente revisión; ciérrala desde el exchange si no sale.',
       ).catch(() => undefined);
     }
   }
@@ -2531,21 +2611,95 @@ export class BotRunner {
   /**
    * Una ejecución deja sin sentido lo pendiente: la posición ya no es la que se
    * consultó. Y si cierra el ciclo, la operación ha terminado.
+   *
+   * Cada escritura con su propio `try`: iban en el mismo, y un fallo caducando
+   * lo pendiente se llevaba por delante el cierre de la intención, que es el
+   * que libera al bot para volver a operar (spec 062, F-04).
    */
   private async anotarEjecucionDelCanal(cicloCerrado: boolean): Promise<void> {
     const { intents } = this.deps;
     if (!intents) return;
-    try {
-      await intents.caducarPendientes(this.botId);
-      if (cicloCerrado) {
-        await intents.cerrar(this.botId);
-        this.abiertaAnotada = null;
-      }
-    } catch (e) {
-      this.logger.warn(
-        `No se pudieron anotar las intenciones tras la ejecución: ${(e as Error).message}`,
+    await intents
+      .caducarPendientes(this.botId)
+      .catch((e: Error) =>
+        this.logger.warn(`No se pudieron caducar las intenciones: ${e.message}`),
       );
+    if (!cicloCerrado) return;
+    try {
+      await intents.cerrar(this.botId);
+      this.abiertaAnotada = null;
+    } catch (e) {
+      // Sin esto la intención se queda viva y veta toda entrada nueva. No se
+      // reintenta aquí: la limpieza de la huérfana lo hace con el bot ya plano.
+      this.logger.warn(`No se pudo cerrar la intención de la operación: ${(e as Error).message}`);
     }
+  }
+
+  /**
+   * La operación que nadie cerró (spec 062, F-04).
+   *
+   * Con el venue plano, una intención `ACEPTADA` o `ABIERTA` y ninguna entrada
+   * en vuelo, no queda nadie que las cierre: la ejecución que lo habría hecho no
+   * la vio nadie —la posición se cerró a mano en el exchange, por ADL, o el stop
+   * saltó con el worker caído más de lo que alcanza el barrido del arranque—. A
+   * partir de ahí el índice «una operación viva por bot» rechaza TODA entrada
+   * nueva: el bot se queda muerto, avisando por vela y, en modo IA, pagando una
+   * llamada al modelo por vela.
+   *
+   * Se espera `GRACIA_HUERFANA_MS` desde la primera vez que se ve así, porque
+   * una salida en camino se ve igual durante unos segundos. Pasada la gracia se
+   * cierran el ciclo y la intención, y se avisa: el resultado de esa salida no
+   * entra en el tope diario ni en la caída máxima, y eso hay que decirlo.
+   *
+   * Devuelve `true` si ha actuado; el ciclo ha cambiado y este tick ya no vale.
+   */
+  private async limpiarOperacionHuerfana(decisionIa: DecisionIa | null): Promise<boolean> {
+    const { intents, store } = this.deps;
+    if (!intents) return false;
+    const viva =
+      decisionIa?.estado === EstadoIntencion.ACEPTADA ||
+      decisionIa?.estado === EstadoIntencion.ABIERTA;
+    // `maximo` solo se pone con posición a la vista: una operación que lo lleva
+    // llegó a existir. Sin él es una entrada que aún no se ha llenado, y de esa
+    // se ocupa la estrategia descartándola con su motivo.
+    const op = this.cycle.scratch['op'] as { maximo?: string } | null | undefined;
+    const enVuelo = op != null && op.maximo === undefined;
+    const sinCerrar = viva || (op != null && op.maximo !== undefined);
+    if (this.posicionAbierta !== false || !sinCerrar || enVuelo) {
+      this.huerfanaDesde = null;
+      return false;
+    }
+
+    const ahora = Date.now();
+    if (this.huerfanaDesde === null) {
+      this.huerfanaDesde = ahora;
+      return false;
+    }
+    if (ahora - this.huerfanaDesde < GRACIA_HUERFANA_MS) return false;
+
+    // El ciclo primero: al cerrarlo, el scratch —y con él la operación— queda
+    // vacío. Si fallara lo que viene detrás, la vuelta siguiente lo reintenta
+    // sin volver a cerrar un ciclo.
+    const seq = Number(this.cycle.scratch.cycleSeq ?? 0);
+    this.cycle = await store.cerrarCicloSinEjecucion(
+      this.botId,
+      this.cycle,
+      Number(this.config.cooldownMinutes ?? 0),
+    );
+    this.huerfanaDesde = null;
+    await intents
+      .cerrar(this.botId)
+      .catch((e: Error) => this.logger.warn(`No se pudo cerrar la intención: ${e.message}`));
+    this.abiertaAnotada = null;
+    await this.event(
+      EventoCanal.OPERACION_PERDIDA,
+      'WARN',
+      `La operación se cerró fuera del bot: el ciclo #${seq} se da por terminado sin su ` +
+        'resultado, que no entra en el tope diario ni en la caída máxima. Compruébalo en el ' +
+        'exchange. El bot vuelve a operar.',
+      { intentId: decisionIa?.intentId ?? null, seq },
+    ).catch(() => undefined);
+    return true;
   }
 
   /** Caduca lo que aún podía acabar en entrada. Sin tumbar a quien lo pide. */
@@ -2660,8 +2814,8 @@ export class BotRunner {
           await this.event(
             'ACTION_FAILED',
             'CRITICAL',
-            `No se pudo cerrar la posición a mercado (${motivo}): el exchange no aceptó el ` +
-              `cierre. El bot queda PAUSADO con la posición abierta; repite la orden o ` +
+            `No se pudo cerrar la posición a mercado (${motivo}); el motivo está en el evento ` +
+              `anterior. El bot queda PAUSADO con la posición abierta; repite la orden o ` +
               `ciérrala desde el exchange.` +
               this.protectionNote,
           );
@@ -2812,6 +2966,13 @@ export class BotRunner {
     }
 
     if (soltar) {
+      // La ejecución del cierre llega DESPUÉS del comando, y con el runner ya
+      // soltado no la recoge nadie: el ciclo se queda abierto y la intención del
+      // canal viva, que veta toda entrada cuando el bot vuelva a arrancar
+      // (spec 062, F-04). Esta es la última oportunidad de barrerla.
+      if (this.esCanal && (command === 'STOP_AND_CLOSE' || command === 'PANIC')) {
+        await this.sweepFills(true);
+      }
       // El bot ha dejado de operar: que el motor lo suelte. Sin esto el runner
       // se quedaba con su temporizador, su WebSocket y su lease para siempre.
       this.deps.onDetach(this.botId, `comando ${command}`);
@@ -3707,22 +3868,33 @@ export class BotRunner {
     // órdenes de como mucho ese tamaño; solo se llega aquí con posiciones de
     // millones de dólares.
     const tope = D(this.market.maxMarketQty ?? this.market.maxQty ?? 0);
+    const trozos = tope.gt(0) ? Number(qty.abs().div(tope).ceil()) : 1;
+    const base = await this.baseDeCierre(seq, trozos);
+    if (base === null) {
+      await this.event(
+        'ACTION_FAILED',
+        'CRITICAL',
+        `No queda ningún identificador libre para otro cierre en el ciclo #${seq} (${motivo}): ` +
+          'ciérrala desde el exchange.',
+      ).catch(() => undefined);
+      return false;
+    }
     let restante = qty.abs();
     let todo = true;
     for (let i = 0; restante.gt(0); i++) {
       const parte = tope.gt(0) && restante.gt(tope) ? tope : restante;
       const ack = await this.place(
         {
-          // Índice 999 y hacia abajo, uno por trozo: no compiten con ningún
-          // nivel de la escalera, así que un cierre manual nunca choca con el id
-          // de una orden de la estrategia.
+          // Del 999 hacia abajo, uno por trozo y por INTENTO: no compiten con
+          // ningún nivel de la escalera, así que un cierre manual nunca choca
+          // con el id de una orden de la estrategia.
           //
           // Con `makeCoid` y no a mano: aquí había una cuarta copia del prefijo
           // del bot con su `slice(0, 8)`, que al ampliarse el prefijo habría
           // generado ids de un formato distinto al del resto de órdenes.
-          clientOrderId: makeCoid(this.botId, seq, 'TAKE_PROFIT', 999 - i),
+          clientOrderId: makeCoid(this.botId, seq, 'TAKE_PROFIT', base - i),
           levelKind: 'TAKE_PROFIT',
-          levelIndex: 999 - i,
+          levelIndex: base - i,
           side: qty.gt(0) ? 'SELL' : 'BUY',
           type: 'MARKET',
           price: mark,
@@ -3739,6 +3911,33 @@ export class BotRunner {
     }
     // `false` si algún trozo no salió: la posición, o parte de ella, sigue abierta.
     return todo;
+  }
+
+  /**
+   * El primer bloque de índices libre para un cierre del motor (spec 062, F-05).
+   *
+   * El id era siempre `TAKE_PROFIT#999`, y `place()` veta un id que ya tiene
+   * fila: el SEGUNDO cierre del mismo ciclo —el del vigilante tras uno ejecutado
+   * a medias, el de la guarda de liquidación— no salía nunca, y el aviso decía
+   * que lo había rechazado el exchange sin haberle mandado nada. Ahora cada
+   * intento se lleva su bloque, como los `TP#500..511` de la estrategia.
+   *
+   * Se pregunta a la base y no a la memoria: un worker que releva a otro no sabe
+   * lo que aquel mandó. Cualquier fila ocupa, viva o muerta: un cierre que el
+   * venue rechazó no se repite con su mismo id, se manda con otro.
+   */
+  private async baseDeCierre(seq: number, trozos: number): Promise<number | null> {
+    for (let base = CIERRE_INDICE_ALTO; base - trozos + 1 >= CIERRE_INDICE_BAJO; base--) {
+      let libre = true;
+      for (let i = 0; i < trozos && libre; i++) {
+        const fila = await this.deps.store.findOrderByCoid(
+          makeCoid(this.botId, seq, 'TAKE_PROFIT', base - i),
+        );
+        if (fila) libre = false;
+      }
+      if (libre) return base;
+    }
+    return null;
   }
 
   private async snapshot(

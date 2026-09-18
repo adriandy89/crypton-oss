@@ -1008,6 +1008,97 @@ describe('canal con IA en el runner (spec 058)', () => {
       }
     });
 
+    /**
+     * Spec 062, F-05. El id del cierre era siempre `TAKE_PROFIT#999` y `place()`
+     * veta un id con fila: el segundo cierre del ciclo —el del vigilante tras
+     * uno ejecutado a medias— no salía nunca.
+     */
+    it('un segundo cierre del ciclo no choca con el id del primero (spec 062, F-05)', async () => {
+      const { h, pasan } = conPosicionSinStop();
+      h.store.findOrderByCoid.mockImplementation(async (coid: string) =>
+        coid === cierre
+          ? { status: 'FILLED', venue_order_id: 'v-9', updated_at: new Date() }
+          : null,
+      );
+
+      await h.runner.start();
+      pasan(6_000);
+      await h.tick();
+
+      expect(h.orden).not.toContain('place:' + cierre);
+      expect(h.orden).toContain('place:' + makeCoid(BOT_ID, SEQ, 'TAKE_PROFIT', 998));
+      await h.runner.dispose();
+    });
+
+    /**
+     * Spec 062, F-05. `RESTO_INCERRABLE` callaba el cierre definitivo de una
+     * posición apalancada por operación: un resto a 25x sin stop es riesgo vivo.
+     */
+    it('el cierre definitivo del canal sale aunque el resto no llegue al mínimo (spec 062, F-05)', async () => {
+      // 0,05 × 100 = 5 de nocional, con un mínimo de 10.
+      const h = montar();
+      h.adapter.position = largo('0.05');
+      await h.runner.start();
+      await h.runner.handleCommand('STOP_AND_CLOSE');
+
+      expect(h.orden).toContain('place:' + cierre);
+      expect(h.eventos('POSITION_BELOW_MINIMUM')).toEqual([]);
+      await h.runner.dispose();
+
+      // Otra estrategia sigue avisando del resto y no manda nada.
+      const otra = montar({ flags: { apalancamientoPorOperacion: undefined } });
+      otra.adapter.position = largo('0.05');
+      await otra.runner.start();
+      await otra.runner.handleCommand('STOP_AND_CLOSE');
+
+      expect(otra.orden).not.toContain('place:' + cierre);
+      expect(otra.eventos('POSITION_BELOW_MINIMUM')).toHaveLength(1);
+      await otra.runner.dispose();
+    });
+
+    /**
+     * Spec 062, F-05. Salían pares de CRITICAL cada seis segundos, y decían que
+     * el exchange no había aceptado un cierre que nunca se mandó.
+     */
+    it('el aviso de la posición sin stop se enfría y no culpa al exchange (spec 062, F-05)', async () => {
+      const { h, pasan } = conPosicionSinStop();
+      // Ni el stop ni el cierre entran.
+      h.adapter.fallaAl = () => new ExchangeError('RULES', 'rechazado', HL);
+      const cierres = () => h.orden.filter((o) => o.startsWith('place:' + cierre.slice(0, -3)));
+
+      // Cada cierre necesita dos revisiones: una rearma el reloj y la siguiente,
+      // pasados los 5 s, cierra.
+      const vigilar = async () => {
+        pasan(6_000);
+        await h.tick();
+        pasan(6_000);
+        await h.tick();
+      };
+
+      await h.runner.start();
+      pasan(6_000);
+      await h.tick();
+      expect(cierres()).toHaveLength(1);
+      expect(h.eventos('SIN_STOP')).toHaveLength(1);
+      const fallo = h.eventos('ACTION_FAILED');
+      expect(fallo).toHaveLength(1);
+      expect(fallo[0].message).toMatch(/el motivo está en el evento anterior/);
+
+      // La vigilancia siguiente vuelve a cerrar, pero no repite el CRITICAL.
+      await vigilar();
+      expect(cierres()).toHaveLength(2);
+      expect(h.eventos('SIN_STOP')).toHaveLength(1);
+      expect(h.eventos('ACTION_FAILED')).toHaveLength(1);
+
+      // Pasado el minuto, vuelve a avisar.
+      pasan(60_000);
+      await vigilar();
+      expect(cierres()).toHaveLength(3);
+      expect(h.eventos('SIN_STOP')).toHaveLength(2);
+      expect(h.eventos('ACTION_FAILED')).toHaveLength(2);
+      await h.runner.dispose();
+    });
+
     it('un stop imposible (cantidad cero) no sale ni en el canal', async () => {
       const h = montar({ plan: { orders: [{ ...STOP, qty: '0.000' }], immediate: [] } });
       h.adapter.position = largo('0.0001');
@@ -1065,6 +1156,40 @@ describe('canal con IA en el runner (spec 058)', () => {
       await h.runner.start();
 
       expect(h.eventos('RISK_GUARD_TRIPPED')).toHaveLength(1);
+      await h.runner.dispose();
+    });
+
+    /**
+     * Spec 062, F-12. Las guardas se evaluaban tambien en pausa y el aviso
+     * salia, pero la rama del bot pausado se iba antes de actuar: la guia
+     * prometia «Cerrar todo» y la posicion a 25x se quedaba mirando.
+     */
+    it('pausado, la guarda de liquidacion del canal cierra igual (spec 062, F-12)', async () => {
+      const h = montar({ deps: { startPaused: true } });
+      h.adapter.position = largo('1', '100', '96');
+      h.adapter.ticker = { ...h.adapter.ticker, mark: '97.2', bid: '97.2', ask: '97.3' };
+
+      await h.runner.start();
+
+      expect(h.eventos('LIQUIDATION_NEAR')[0].severity).toBe('CRITICAL');
+      expect(h.eventos('RISK_GUARD_TRIPPED')).toHaveLength(1);
+      expect(h.orden).toContain('place:' + makeCoid(BOT_ID, SEQ, 'TAKE_PROFIT', 999));
+      await h.runner.dispose();
+    });
+
+    it('pausado, el resto de estrategias sigue solo avisando (spec 062, F-12)', async () => {
+      const h = montar({
+        deps: { startPaused: true },
+        flags: { apalancamientoPorOperacion: undefined },
+      });
+      h.adapter.position = largo('1', '100', '96');
+      h.adapter.ticker = { ...h.adapter.ticker, mark: '97.2', bid: '97.2', ask: '97.3' };
+
+      await h.runner.start();
+
+      expect(h.eventos('LIQUIDATION_NEAR')).toHaveLength(1);
+      expect(h.eventos('RISK_GUARD_TRIPPED')).toEqual([]);
+      expect(h.orden).not.toContain('place:' + makeCoid(BOT_ID, SEQ, 'TAKE_PROFIT', 999));
       await h.runner.dispose();
     });
 

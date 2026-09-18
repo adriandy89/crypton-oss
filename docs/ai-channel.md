@@ -157,13 +157,12 @@ Al cerrarse la operación se cierra el ciclo, se apunta el resultado en USDC y e
 esperas: la de entre operaciones (15 min), la de después de un stop (30 min) y la de después de una
 racha de pérdidas (120 min tras tres seguidas).
 
-> ⚠️ **Limitación conocida (F-04, abierta a 2026-09-17).** Si la posición se cierra **fuera del bot**
-> —a mano desde el exchange, por un deleveraging del venue, o con el worker caído más de diez
-> minutos—, su operación se queda marcada como viva y el bot **no vuelve a entrar**: cada vela con
-> setup acaba en «Entrada descartada… otra operación sigue viva», y en modo IA cada una cuesta una
-> consulta.
-> **Hasta que se corrija:** cierra desde los botones del bot, no desde el exchange; si ya ha pasado,
-> el bot hay que rehacerlo. Estado: `specs/060-revision-057-059/findings.md` § F-04.
+Si la posición se cierra **fuera del bot** —a mano desde el exchange, por un deleveraging del venue,
+o con el worker caído más de lo que alcanza el barrido—, el motor lo nota: pasados cinco minutos sin
+que aparezca esa ejecución, cierra el ciclo y la operación por su cuenta y avisa con
+`AI_OPERACION_PERDIDA`. El bot vuelve a operar solo. Lo que **no** se puede reconstruir es el
+resultado de esa salida: no entra en el tope diario ni en la caída máxima, y el aviso lo dice
+(spec 062, F-04).
 
 ---
 
@@ -510,7 +509,9 @@ Con la regla por stop, el aviso salta a dos tercios del camino hasta la liquidac
 #### Consultas a la IA al día · `aiDailyCallBudget` · 🔥 · 1–200 · por defecto **48** · avanzado
 El servidor tiene su propio techo, y manda el menor.
 #### Funding máximo en contra · `maxAdverseFundingBps` · 🔥 · 0–100 bps · por defecto **1** · avanzado
-Quita solo el lado que paga. En Lighter no hace nada: no publica el funding.
+Quita solo el lado que paga. **Un 0 apaga el filtro** —igual que en los market
+makers—, así que no es «ningún funding en contra»: es «me da igual el funding».
+En Lighter no hace nada: no publica el funding.
 #### Sin entradas antes del funding · `fundingBlackoutMinutes` · 🔥 · 0–60 · por defecto **10** · avanzado
 En Hyperliquid no aplica: no publica la hora del cobro.
 #### Horas sin entradas · `noEntryWindowsUtc` · 🔥 · avanzado

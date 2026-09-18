@@ -36,6 +36,13 @@ const LIVE = ['STARTING', 'RUNNING', 'PAUSED', 'STOPPING'] as const;
 /** Cuántos bots se arrancan a la vez. Más no acelera: la red es el cuello. */
 const SPAWN_CONCURRENCY = 8;
 
+/**
+ * Lo que dura en memoria el rol del dueño de un bot del canal. Se relee para
+ * cerrar las entradas de un dueño degradado (spec 062, F-06) y no hace falta
+ * pagar una consulta por tick: un minuto es lo que tarda en enterarse.
+ */
+const ROL_TTL_MS = 60_000;
+
 /** Un comando reclamado y no ejecutado en este tiempo se devuelve a la cola. */
 const COMMAND_STALE_MS = 120_000;
 
@@ -511,18 +518,49 @@ export class EngineService implements OnModuleInit, OnModuleDestroy {
    */
   private readonly arrancandoCanal = new Map<string, string>();
 
-  /** El dueño de una estrategia solo para administradores lo es, y está habilitado. */
-  private async comprobarDuenoAdmin(userId: string, strategy: string): Promise<void> {
+  /** Por qué el dueño no puede operar esta estrategia, o null si sí puede. */
+  private async motivoNoAdmin(userId: string, strategy: string): Promise<string | null> {
     const dueno = await this.db.user.findUnique({
       where: { id: userId },
       select: { role: true, disabled: true },
     });
-    if (!dueno || dueno.role !== 'ADMIN' || dueno.disabled) {
-      throw new Error(
-        `La estrategia ${strategy} solo la puede operar un administrador habilitado, y el dueño de ` +
-          'este bot no lo es.',
-      );
+    if (dueno && dueno.role === 'ADMIN' && !dueno.disabled) return null;
+    return (
+      `La estrategia ${strategy} solo la puede operar un administrador habilitado, y el dueño de ` +
+      'este bot no lo es.'
+    );
+  }
+
+  /** El dueño de una estrategia solo para administradores lo es, y está habilitado. */
+  private async comprobarDuenoAdmin(userId: string, strategy: string): Promise<void> {
+    const motivo = await this.motivoNoAdmin(userId, strategy);
+    if (motivo) throw new Error(motivo);
+  }
+
+  /** Lo último que se supo del rol del dueño de cada bot del canal. */
+  private readonly rolDelDueno = new Map<string, { at: number; motivo: string | null }>();
+
+  /**
+   * El interruptor de entradas de UN bot del canal: el global, y además que su
+   * dueño siga siendo un administrador habilitado (spec 062, F-06).
+   *
+   * En modo REGLAS el bot no pasa por la API, así que la barrera de allí no lo
+   * frena: un dueño degradado —o deshabilitado— seguía abriendo operaciones
+   * hasta el siguiente relevo de worker. Cerrar las ENTRADAS y no el bot es a
+   * propósito: la posición abierta conserva su stop, sus objetivos y su
+   * vigilante.
+   */
+  private async interruptorDelBot(userId: string, strategy: string): Promise<EstadoInterruptor> {
+    const global = await this.leerInterruptorCanal();
+    if (!global.permitidas) return global;
+    const previo = this.rolDelDueno.get(userId);
+    const ahora = Date.now();
+    let motivo = previo && ahora - previo.at < ROL_TTL_MS ? previo.motivo : undefined;
+    if (motivo === undefined) {
+      motivo = await this.motivoNoAdmin(userId, strategy);
+      this.rolDelDueno.set(userId, { at: ahora, motivo });
     }
+    return motivo ? { permitidas: false, motivo } : global;
   }
 
   /** Reserva un hueco del tope de bots reales del canal con IA en ese venue. */
@@ -591,10 +629,23 @@ export class EngineService implements OnModuleInit, OnModuleDestroy {
     // El canal con IA: solo un administrador, con el rol leído de la base, y
     // como mucho los bots reales por venue que el cupo aguanta (spec 058). Un
     // bot que no cumple queda en ERROR con el motivo (`trySpawn`).
+    //
+    // Pero eso decide ARRANQUES (`STARTING`), no relevos: un bot que YA estaba
+    // operando se readopta pase lo que pase. Dejarlo en ERROR lo dejaba además
+    // sin comandos —la API en ERROR solo admite START, y START exige el rol—,
+    // con la posición abierta, sin salidas, sin vigilante y sin que nadie
+    // pudiera ni pausarlo ni cerrarlo (spec 062, F-06). Si el dueño ya no puede
+    // operarlo, se adopta EN PAUSA y se dice.
+    const arranque = bot.status === 'STARTING';
+    let enPausaPorRol: string | null = null;
     if (esEstrategiaSoloAdmin(bot.strategy)) {
-      await this.comprobarDuenoAdmin(bot.user_id, bot.strategy);
+      const motivo = await this.motivoNoAdmin(bot.user_id, bot.strategy);
+      if (motivo && arranque) throw new Error(motivo);
+      enPausaPorRol = motivo;
     }
-    if (bot.strategy === 'AI_CHANNEL' && !bot.dry_run) {
+    // El tope por venue es igual: un relevo readopta lo que ya estaba dentro del
+    // tope, y un bot en STOPPING solo viene a terminar de cerrar.
+    if (bot.strategy === 'AI_CHANNEL' && !bot.dry_run && arranque) {
       this.reservarCanal(bot.id, bot.venue, bot.strategy);
     }
 
@@ -660,12 +711,12 @@ export class EngineService implements OnModuleInit, OnModuleDestroy {
       priceSource: this.priceSource,
       candleSource: this.marketData,
       intents: this.intents,
-      interruptorCanal: () => this.leerInterruptorCanal(),
+      interruptorCanal: () => this.interruptorDelBot(bot.user_id, bot.strategy),
       // Se adopta tal y como estaba: un bot pausado sigue pausado tras un
       // relevo de worker —arrancarlo sin más lo pondría a operar sin que nadie
       // se lo pidiera— y uno en STOPPING no debe colocar NADA: su siguiente
       // paso es el cierre, que aplica quien lo adoptó.
-      startPaused: bot.status === 'PAUSED' || bot.status === 'STOPPING',
+      startPaused: bot.status === 'PAUSED' || bot.status === 'STOPPING' || enPausaPorRol !== null,
       onDetach: (id, reason) => {
         this.pendingDetach.set(id, reason);
         void this.applyDetachments().catch((e: Error) =>
@@ -682,6 +733,18 @@ export class EngineService implements OnModuleInit, OnModuleDestroy {
       this.runners.delete(botId);
       await runner.dispose().catch(() => undefined);
       throw e;
+    }
+    if (enPausaPorRol) {
+      await this.store.setStatus(botId, 'PAUSED', { error: enPausaPorRol }).catch(() => undefined);
+      await this.store
+        .event(
+          { id: botId, user_id: bot.user_id },
+          'BOT_PAUSED',
+          'WARN',
+          `Bot adoptado EN PAUSA: ${enPausaPorRol} No abrirá nada; su posición conserva el stop ` +
+            'y los objetivos en el exchange, y sigue admitiendo pausar, parar y cerrar.',
+        )
+        .catch(() => undefined);
     }
     this.logger.log(`Bot ${botId.slice(0, 8)} adoptado (${bot.strategy} / ${bot.symbol})`);
   }

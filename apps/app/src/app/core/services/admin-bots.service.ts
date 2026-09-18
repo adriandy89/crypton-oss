@@ -183,6 +183,9 @@ export interface AdminBotDetail extends AdminBotRow {
   unrealizedPnl?: string;
   roiPct?: string;
   positionQty?: string | null;
+  /** Los dos siguientes son para el semáforo del canal (spec 062, F-44). */
+  averageEntry?: string | null;
+  positionValue?: string | null;
   marginUsed?: string | null;
   liquidationPrice?: string | null;
   liquidationDistancePct?: string | null;

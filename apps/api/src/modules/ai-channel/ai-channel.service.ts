@@ -380,11 +380,20 @@ export class AiChannelService {
     await this.anotarDecision(bot, id, res, null, null, fallo.fallo);
     // Uno por bot y hora: un fallo que avisa en cada vela enseña a silenciar el
     // canal justo antes del aviso que sí había que leer (spec 029).
-    if (await this.cache.setnx(`ai:fail-canal:${bot.id}`, 1, 3600).catch(() => false)) {
+    //
+    // Salvo el que anuncia la PAUSA de 6 h, que se salta el límite: es un
+    // cambio de estado del bot, pasa una sola vez y con el límite se lo comía
+    // el aviso del primer fallo de esa hora — el usuario veía «esa vela no abre
+    // operación» y nunca se enteraba de que el bot dejaba de consultar durante
+    // seis horas (spec 062, F-13).
+    const pausa = fallos >= TOPE_FALLOS;
+    const toca =
+      pausa || (await this.cache.setnx(`ai:fail-canal:${bot.id}`, 1, 3600).catch(() => false));
+    if (toca) {
       await this.avisar(
         bot,
         'AI_FAILED',
-        fallos >= TOPE_FALLOS
+        pausa
           ? 'La IA del canal falla repetidamente: sin consultas durante 6 h. El bot no abre ' +
               'operaciones mientras tanto; las abiertas siguen con su stop.'
           : 'La IA del canal no ha dado una respuesta válida: esa vela no abre operación.',
@@ -628,14 +637,49 @@ export class AiChannelService {
       where: { id: userId },
       select: { role: true, disabled: true },
     });
-    if (!dueno || dueno.role !== DUENO_CON_CANAL.role || dueno.disabled) return 'DUENO';
+    // A partir de aquí el vale era bueno y es de quien lo pulsa: pase lo que
+    // pase, se le dice. El botón contestaba «Pausando…» y, si no se podía
+    // pausar, no quedaba nada en ninguna parte: ni evento, ni mensaje, ni rastro
+    // en la app. El usuario se quedaba creyendo que su bot estaba pausado
+    // (spec 062, F-14).
+    const bot = { id: v.botId, user_id: userId };
+    if (!dueno || dueno.role !== DUENO_CON_CANAL.role || dueno.disabled) {
+      await this.avisar(
+        bot,
+        'ACTION_FAILED',
+        'El botón «⏸ Pausar» no ha pausado el bot: su dueño ya no puede operar el canal con IA. ' +
+          'Párralo desde la app.',
+        EventSeverity.WARN,
+        true,
+      );
+      return 'DUENO';
+    }
     try {
       await this.bots.command(userId, v.botId, { command: 'PAUSE' });
     } catch (e) {
       // Ya no está vivo, o ya no es suyo: no hay nada que pausar.
-      if (e instanceof HttpException) return 'NO_VIVO';
+      if (e instanceof HttpException) {
+        await this.avisar(
+          bot,
+          'ACTION_FAILED',
+          `El botón «⏸ Pausar» no ha pausado el bot: ${e.message}. Míralo en la app.`,
+          EventSeverity.WARN,
+          true,
+        );
+        return 'NO_VIVO';
+      }
       throw e;
     }
+    // Y la confirmación de que sí: el `BOT_PAUSED` del motor es INFO y no se
+    // entrega, así que quien pulsa desde el móvil no recibía nada.
+    await this.avisar(
+      bot,
+      'BOT_PAUSED',
+      'Bot pausado desde el botón del aviso: no abrirá más operaciones. La que esté abierta ' +
+        'conserva su stop y sus objetivos.',
+      EventSeverity.WARN,
+      true,
+    );
     await this.audit.recordNow({
       actor: ActorKind.USER,
       actorId: userId,
