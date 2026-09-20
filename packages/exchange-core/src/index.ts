@@ -1,6 +1,7 @@
 export * from './types';
 export * from './endpoints';
 export * from './errors';
+export * from './caudal-metricas';
 export * from './rate-limit';
 export * from './venue-budget';
 export * from './cooldown';

@@ -284,7 +284,7 @@ export const AI_CHANNEL_GUIDE: StrategyGuide<AiChannelConfig> = {
     requireEvidence: {
       what: 'Cuánto historial favorable se exige a un setup antes de ofrecerlo.',
       affects:
-        'Mira cómo le fue a ese tipo de toque en los últimos días del par. Débil pide al menos 20 casos; moderada, más de 60.',
+        'Mira cómo le fue a ese tipo de toque en los últimos siete días del par —cinco en Lighter, que sirve menos velas por petición—. Débil pide al menos 20 casos; moderada, más de 60.',
       tip: 'No, al empezar: con pocos días de historia casi nunca hay evidencia.',
     },
     minAiConfidence: {

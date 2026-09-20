@@ -10,6 +10,7 @@ import {
   type Candle,
   type Ticker,
 } from '@crypton/shared';
+import { aiChannel } from '../strategies/ai-channel';
 import { makeMarket } from '../testing';
 import {
   CAPACIDAD_CACHE,
@@ -21,6 +22,7 @@ import {
 } from './analisis';
 import type { CanalEvaluado } from './canales';
 import { leerConfig } from './config';
+import { PASO_TASAS } from './tasas-base';
 import { nivelesDecimalesEn } from './herramienta';
 import {
   CINCO_MIN,
@@ -302,5 +304,91 @@ describe('analizarMercado: rendimiento', () => {
     expect(nuevo).toBeLessThan(60);
     analizarMercado(e);
     expect(mejorTiempo(() => analizarMercado(e), 50)).toBeLessThan(5);
+  });
+});
+
+/**
+ * La serie de estructura pasó de mil velas a `ventanaCanal + 8 × 70` (spec 065):
+ * mil pesaban 37 en Hyperliquid contra un depósito que valía 34, así que una
+ * lectura legítima exigía el depósito lleno y lo dejaba en deuda.
+ *
+ * Lo que este bloque fija es que el recorte NO cambia el análisis, y que lo que
+ * ata el número es el tamaño de muestra de las tasas base.
+ */
+describe('la serie corta de estructura no cambia el análisis (spec 065)', () => {
+  const esc = escenarioCanal({ toque: true, velas15: 1000 });
+
+  /** Las velas que pide la estrategia, LEÍDAS de ella y no copiadas aquí. */
+  const barras15 = (cfg: Record<string, unknown> = {}): number => {
+    const serie = aiChannel
+      .series?.({ totalInvestment: '1000', ...cfg } as BotConfig)
+      ?.find((s) => s.interval === '15m');
+    if (!serie) throw new Error('la estrategia no declara serie de 15m');
+    return serie.bars;
+  };
+
+  it('régimen, canal y candidatos salen iguales con la serie larga y con la corta', () => {
+    const largo = analizarMercado(entrada(esc));
+    vaciarCacheAnalisis();
+    const corto = analizarMercado(
+      entrada(esc, { series: { ...esc.series, '15m': esc.series['15m'].slice(-barras15()) } }),
+    );
+
+    expect(corto.regimen).toEqual(largo.regimen);
+    expect(corto.motivosCanal).toEqual(largo.motivosCanal);
+    expect(corto.invalidado).toBe(largo.invalidado);
+    expect(corto.salida.mercado).toEqual(largo.salida.mercado);
+
+    // El canal, campo a campo. Los tres diagnósticos en coma flotante se
+    // comparan con tolerancia: el orden de acumulación de `atrSerie` depende de
+    // dónde empieza la serie y mueve el dígito quince. Ninguno de ellos acaba
+    // en una orden — los niveles pasan por `nivelTexto`, y esos sí son
+    // idénticos byte a byte.
+    const {
+      anchuraAtr: aC,
+      mediaVidaVelas: mC,
+      contencion: cC,
+      ...canalCorto
+    } = corto.salida.canal!;
+    const {
+      anchuraAtr: aL,
+      mediaVidaVelas: mL,
+      contencion: cL,
+      ...canalLargo
+    } = largo.salida.canal!;
+    expect(canalCorto).toEqual(canalLargo);
+    const cercano = (x: number | null, y: number | null) => {
+      if (x === null || y === null) expect(x).toBe(y);
+      else expect(x).toBeCloseTo(y, 9);
+    };
+    cercano(aC, aL);
+    cercano(mC, mL);
+    cercano(cC, cL);
+
+    // Los candidatos, todo menos las tasas: esas sí cambian, es el precio del
+    // recorte y por eso se exige abajo que sigan siendo MODERADAS.
+    expect(corto.salida.candidatos.map(({ tasas: _t, ...resto }) => resto)).toEqual(
+      largo.salida.candidatos.map(({ tasas: _t, ...resto }) => resto),
+    );
+  });
+
+  it('y la evidencia sigue siendo MODERADA: la puerta de la esperanza negativa no se apaga', () => {
+    vaciarCacheAnalisis();
+    const corto = analizarMercado(
+      entrada(esc, { series: { ...esc.series, '15m': esc.series['15m'].slice(-barras15()) } }),
+    );
+    const tasas = corto.salida.candidatos[0]?.tasas;
+    expect(tasas?.n).toBeGreaterThan(60);
+    expect(tasas?.evidencia).toBe(Evidencia.MODERADA);
+  });
+
+  it('para toda la banda de `channelWindowBars`, las muestras pasan de 60', () => {
+    // El motivo de que la ventana sea una fórmula y no un número plano: con 656
+    // fijo, quien pusiera la ventana en su máximo se quedaría en 57 muestras y
+    // perdería la banda MODERADA sin enterarse.
+    for (const ventana of [48, 96, 150, 200]) {
+      const techo = Math.floor((barras15({ channelWindowBars: ventana }) - ventana) / PASO_TASAS);
+      expect(techo).toBeGreaterThan(60);
+    }
   });
 });

@@ -54,6 +54,7 @@ import {
   type VistaCanal,
 } from '@crypton/shared';
 import { analizarMercado, seriesNecesarias, type ResultadoAnalisis } from '../canal/analisis';
+import { PASO_TASAS } from '../canal/tasas-base';
 import { nivelesEn } from '../canal/canales';
 import {
   DEFAULTS_CANAL,
@@ -658,9 +659,47 @@ const META = {
   fields: [...commonFieldsWith(COMUNES), ...PROPIOS],
 };
 
-/** Velas por serie: la estructura y el disparo, topadas por el venue en el motor. */
+/**
+ * Ventanas de muestreo que se quieren para las tasas base.
+ *
+ * `etiquetasHistoricas` recorre el histórico de estructura con `PASO_TASAS`, y
+ * como mucho sale una etiqueta por ventana y por par (setup, lado): el no
+ * solapamiento de `libreDesde` lo impide. La evidencia MODERADA empieza en 61
+ * muestras (`evidenciaDe`), que es la única que dispara la puerta automática
+ * «esperanza negativa» de la herramienta.
+ *
+ * Se piden 70 y no 61 porque 70 es el TECHO teórico: en la práctica alguna
+ * ventana no da toque. Medido sobre `escenarioCanal`, 640 velas —68 ventanas
+ * teóricas— dieron 67 muestras (spec 065).
+ */
+const VENTANAS_TASAS = 70;
+
+/**
+ * Velas por serie: la estructura y el disparo, topadas por el venue en el motor.
+ *
+ * La estructura pedía mil velas, que en Hyperliquid pesan 37 contra un depósito
+ * que valía 34: exigía el depósito lleno y lo dejaba en deuda. Lo que de verdad
+ * ata el número no es el canal —`detectarCanal` solo mira `ventanaCanal`, 200
+ * como mucho— sino el tamaño de muestra de las tasas base, así que la ventana
+ * se DERIVA de ahí en vez de ser un número plano. Con la ventana por defecto
+ * son 656 velas, peso 31; con la ventana en su máximo, 760, peso 33.
+ *
+ * El 5 min y el 1 h se quedan como estaban, y no por prudencia:
+ *
+ * - el RSI(14) de Wilder es recursivo y necesita ~110 velas para converger, y
+ *   bajar de 144 a 120 ni siquiera cambia el peso (`20 + ceil(barras/60)` da 23
+ *   en los dos casos);
+ * - los percentiles del régimen se calculan sobre TODA la serie de 1 h, así que
+ *   su longitud no es margen: es la ventana de referencia. Medido, a 336 velas
+ *   el escenario de prueba pasa de RANGO a INDEFINIDO.
+ */
 function seriesDe(cfg: ConfigCanal): { interval: '5m' | '15m' | '1h'; bars: number }[] {
-  const barras = { '5m': cfg.intervaloEstructura === '5m' ? 1000 : 144, '15m': 1000, '1h': 480 };
+  const estructura = cfg.ventanaCanal + PASO_TASAS * VENTANAS_TASAS;
+  const barras = {
+    '5m': cfg.intervaloEstructura === '5m' ? estructura : 144,
+    '15m': estructura,
+    '1h': 480,
+  };
   return seriesNecesarias(cfg.intervaloEstructura).map((iv) => ({
     interval: iv as '5m' | '15m' | '1h',
     bars: barras[iv as '5m' | '15m' | '1h'],

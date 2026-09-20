@@ -45,6 +45,23 @@ import type { AcuseApalancamiento, CandleQuery, ExchangeAdapter, StreamHealth } 
  */
 const PRECIO_TOLERADO_MS = 20_000;
 
+/**
+ * Cuánto vale un precio que acaba de traer el WebSocket.
+ *
+ * Un segundo, el mismo `REST_TTL_MS` con el que el feed compartido sirve a los
+ * bots REALES (`MarketDataService.ticker` en el worker). Un simulado pedía el
+ * precio por REST en CADA tick aunque el flujo se lo estuviera entregando
+ * varias veces por segundo: en Hyperliquid son dos peticiones —`l2Book` y
+ * `metaAndAssetCtxs`, peso 22— por bot y por latido, y todos los simuladores de
+ * un venue comparten una sola fuente, o sea una sola cola en serie. Cuatro bots
+ * simulados llegaron a revisiones de 107 s contra un intervalo de 15 (spec 065).
+ *
+ * El atajo NO vuelve a casar las órdenes en reposo: ese precio ya se casó
+ * cuando llegó por `streamTicker`, y re-anotarlo alargaría artificialmente la
+ * tolerancia de veinte segundos del spec 050.
+ */
+const PRECIO_DEL_FLUJO_MS = 1_000;
+
 export interface DryRunOptions {
   /** Saldo inicial simulado, en la quote del mercado. */
   startingBalance?: string;
@@ -222,6 +239,16 @@ export class DryRunAdapter implements ExchangeAdapter {
    * simulación es otro. Lo que importa es cuánto hace que ESTE simulador lo vio.
    */
   private readonly tickerRecibidoEn = new Map<string, number>();
+  /**
+   * De dónde vino cada `lastTicker`: del flujo o de una lectura REST.
+   *
+   * Se guarda la PROCEDENCIA y no solo la antigüedad porque un TTL ciego
+   * rompería el backtest en silencio: `ReplaySourceAdapter.streamTicker`
+   * devuelve `EMPTY`, y los ticks sintéticos del replay comparten la marca de
+   * tiempo de su vela, así que allí lo único que mueve la simulación es que
+   * cada `getTicker` baje de verdad a la fuente y case (spec 065).
+   */
+  private readonly tickerOrigen = new Map<string, 'flujo' | 'rest'>();
   private readonly tickerSubs = new Map<string, Subscription>();
 
   private readonly orders$ = new Subject<OrderUpdate>();
@@ -412,6 +439,22 @@ export class DryRunAdapter implements ExchangeAdapter {
   }
 
   async getTicker(symbol: string): Promise<Ticker> {
+    // El flujo manda mientras esté fresco. Con el WebSocket entregando precios,
+    // bajar a la fuente en cada tick era pagar dos veces por el mismo dato, y
+    // pagarlo en la cola compartida de todos los simuladores del venue
+    // (spec 065). Se devuelve SIN casar: `streamTicker` ya casó con ese mismo
+    // precio cuando llegó.
+    const delFlujo = this.lastTicker.get(symbol);
+    const llegadaDelFlujo = this.tickerRecibidoEn.get(symbol);
+    if (
+      delFlujo &&
+      llegadaDelFlujo !== undefined &&
+      this.tickerOrigen.get(symbol) === 'flujo' &&
+      this.clock() - llegadaDelFlujo < PRECIO_DEL_FLUJO_MS
+    ) {
+      return delFlujo;
+    }
+
     let ticker: Ticker;
     try {
       ticker = await this.source.getTicker(symbol);
@@ -433,13 +476,14 @@ export class DryRunAdapter implements ExchangeAdapter {
       }
       throw e;
     }
-    this.anotarTicker(symbol, ticker);
+    this.anotarTicker(symbol, ticker, 'rest');
     this.matchRestingOrders(symbol, ticker);
     return ticker;
   }
 
   /** Guarda el último precio y cuándo llegó. Ver `tickerRecibidoEn`. */
-  private anotarTicker(symbol: string, ticker: Ticker): void {
+  private anotarTicker(symbol: string, ticker: Ticker, origen: 'flujo' | 'rest'): void {
+    this.tickerOrigen.set(symbol, origen);
     this.lastTicker.set(symbol, ticker);
     this.tickerRecibidoEn.set(symbol, this.clock());
   }
@@ -449,7 +493,7 @@ export class DryRunAdapter implements ExchangeAdapter {
     // oportunidad de comprobar si alguna orden en reposo se ha tocado.
     if (!this.tickerSubs.has(symbol)) {
       const sub = this.source.streamTicker(symbol).subscribe((t) => {
-        this.anotarTicker(symbol, t);
+        this.anotarTicker(symbol, t, 'flujo');
         this.matchRestingOrders(symbol, t);
       });
       this.tickerSubs.set(symbol, sub);

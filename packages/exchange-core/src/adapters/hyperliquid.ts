@@ -347,7 +347,12 @@ export class HyperliquidAdapter implements ExchangeAdapter {
     this.httpTransport = new (hl().HttpTransport)({ isTestnet: this.isTestnet });
     this.info = new (hl().InfoClient)({ transport: this.httpTransport });
 
-    this.limiter = new RateLimiter(opts.rateLimitPerSecond ?? 10);
+    // Cuatro lecturas en vuelo: las peticiones de `info` de Hyperliquid no
+    // firman ni llevan nonce, y el cupo lo sigue guardando el presupuesto, que
+    // se pide ANTES del limitador (spec 065).
+    this.limiter = new RateLimiter(opts.rateLimitPerSecond ?? 10, {
+      maxEnVuelo: opts.maxConcurrentReads ?? 4,
+    });
     this.budget = opts.budget ?? NO_BUDGET;
     this.markets = new MarketSpecCache(() => this.loadMarkets());
   }
@@ -1462,7 +1467,7 @@ export class HyperliquidAdapter implements ExchangeAdapter {
         // Era el único adaptador sin esto (001/F-28).
         this.cooldown.comprobar();
         await this.budget.take(this.venue, weight, priority, this.isTestnet);
-        return this.limiter.run(fn).catch((e) => {
+        return this.porCarril(priority, fn).catch((e) => {
           this.cooldown.registrar(e);
           throw e;
         });
@@ -1479,10 +1484,23 @@ export class HyperliquidAdapter implements ExchangeAdapter {
   private async callWrite<T>(fn: () => Promise<T>, priority: BudgetPriority = 'write'): Promise<T> {
     this.cooldown.comprobar();
     await this.budget.take(this.venue, 1, priority, this.isTestnet);
-    return this.limiter.run(fn).catch((e) => {
+    return this.porCarril(priority, fn).catch((e) => {
       this.cooldown.registrar(e);
       throw e;
     });
+  }
+
+  /**
+   * El carril lo elige la PRIORIDAD, no el método.
+   *
+   * Y no es un matiz: en Lighter, cancelar una orden va por el mismo `call()`
+   * que las lecturas pero con prioridad de escritura. Si el carril se eligiera
+   * por método, esa cancelación firmada se volvería concurrente y rompería el
+   * nonce. Aquí se hace igual para que la regla sea la misma en los tres
+   * adaptadores (spec 065).
+   */
+  private porCarril<T>(priority: BudgetPriority, fn: () => Promise<T>): Promise<T> {
+    return priority === 'read' ? this.limiter.runLibre(fn) : this.limiter.run(fn);
   }
 
   /**

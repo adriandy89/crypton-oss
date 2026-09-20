@@ -89,15 +89,26 @@ describe('AI_CHANNEL: el contrato', () => {
   });
 
   it('pide 5 min, 15 min y 1 h; con estructura de 5 min, sin la de 15', () => {
+    // La estructura se DERIVA: `ventanaCanal + 8 × 70`, las ventanas de
+    // muestreo que necesitan las tasas base para llegar a evidencia MODERADA.
+    // Antes eran mil velas planas, que en Hyperliquid pesan 37 contra un
+    // depósito que valía 34 (spec 065).
     expect(s.series?.(config())).toEqual([
       { interval: '5m', bars: 144 },
-      { interval: '15m', bars: 1000 },
+      { interval: '15m', bars: 656 },
       { interval: '1h', bars: 480 },
     ]);
     expect(s.series?.(config({ structureInterval: '5m' }))).toEqual([
-      { interval: '5m', bars: 1000 },
+      { interval: '5m', bars: 656 },
       { interval: '1h', bars: 480 },
     ]);
+  });
+
+  it('y la ventana del canal la arrastra: con la ventana al máximo, más velas', () => {
+    // Con un número plano, quien pusiera la ventana en 200 se quedaría en 57
+    // muestras y perdería la banda MODERADA sin enterarse.
+    const serie = s.series?.(config({ channelWindowBars: 200 }))?.find((x) => x.interval === '15m');
+    expect(serie?.bars).toBe(760);
   });
 
   it('el nocional máximo: capital por múltiplo, por el tope de palanca y por el tope fijo', () => {

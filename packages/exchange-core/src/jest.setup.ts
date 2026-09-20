@@ -1,3 +1,4 @@
+import { reiniciarCaudal } from './caudal-metricas';
 import { VenueCooldown } from './cooldown';
 
 /**
@@ -8,3 +9,6 @@ import { VenueCooldown } from './cooldown';
  * un test nuevo no herede la trampa sin saberlo.
  */
 beforeEach(() => VenueCooldown.reset());
+
+/** Los contadores de caudal también son de proceso, y por el mismo motivo. */
+beforeEach(() => reiniciarCaudal());

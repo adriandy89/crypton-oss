@@ -1026,3 +1026,59 @@ describe('candleHistory() — la vela cerrada es la que ya lo estaba al pedirla 
     });
   });
 });
+
+/**
+ * Spec 065. El refresco de una serie pasó a ser el de su propio intervalo: el
+ * techo de quince minutos bajaba la serie de 1 h cuatro veces por hora para
+ * traer las mismas velas cerradas. A cambio, fallar la persecución del cierre
+ * de una vela larga ahora deja la serie vieja una hora entera y el bot deja de
+ * abrir, así que en los intervalos largos se insiste más.
+ */
+describe('candleHistory() — en los intervalos largos se persigue el cierre más veces', () => {
+  const MIN = 60_000;
+  const HORA = 60 * MIN;
+  const DIEZ = Date.UTC(2026, 8, 17, 10, 0, 0);
+  const esperar = () => new Promise((r) => setTimeout(r, 0));
+  let reloj = 0;
+
+  beforeEach(() => {
+    jest.spyOn(Date, 'now').mockImplementation(() => reloj);
+  });
+  afterEach(() => {
+    jest.restoreAllMocks();
+  });
+
+  const serie = (ultima: number) => {
+    const velas = [];
+    for (let t = DIEZ - 5 * HORA; t <= ultima; t += HORA) {
+      velas.push({ t, o: '1', h: '3', l: '0.5', c: '1', v: '1' });
+    }
+    return velas;
+  };
+
+  it('seis intentos en una serie de 1 h, no dos', async () => {
+    const h = build();
+    const pedidas: number[] = [];
+    // El venue va con retraso: su última vela es la de las 09:00.
+    (h.fake.adapter as { getCandles: unknown }).getCandles = () => {
+      pedidas.push(reloj);
+      return Promise.resolve(serie(DIEZ - HORA));
+    };
+
+    const pedir = () => h.service.candleHistory(HL, 'BTC', '1h', 3, false, { ttlMs: HORA });
+    reloj = DIEZ + 59 * MIN;
+    pedir();
+    await esperar();
+    const primera = pedidas.length;
+
+    // A partir del cierre de las 11:00, un intento cada cinco segundos.
+    for (let i = 0; i < 10; i++) {
+      reloj = DIEZ + HORA + 5_000 + i * 6_000;
+      pedir();
+      await esperar();
+    }
+
+    expect(pedidas.length - primera).toBe(6);
+    await h.service.onModuleDestroy();
+  });
+});

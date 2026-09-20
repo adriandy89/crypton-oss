@@ -1,5 +1,6 @@
 import { Venue, venueKey, type OrderType } from '@crypton/shared';
 import { sleep } from './rate-limit';
+import { anotarCola, anotarConcesion, claveCaudal } from './caudal-metricas';
 import { ASTER_ORDER_QUOTA, QUOTA_HEADROOM, VENUE_QUOTA_PER_MINUTE } from './venue-weights';
 
 /**
@@ -107,12 +108,28 @@ export interface VenueBudget {
 export interface VenueBudgetOptions {
   /** Peso por segundo que se puede gastar en cada venue. */
   ratePerSecond?: Partial<Record<Venue, number>>;
-  /** Ráfaga máxima acumulable, en múltiplos del caudal por segundo. */
+  /**
+   * Ráfaga máxima acumulable, en múltiplos del caudal por segundo.
+   *
+   * La fija `capacidadDe`, que la topa en lo que el cupo del venue permite. NO
+   * es variable de entorno a propósito: la API y el worker comparten depósito
+   * en Redis, y el script recorta el saldo a la capacidad de QUIEN pregunta, así
+   * que un proceso con la ráfaga vieja limitaría a los demás en silencio y para
+   * siempre. El número viaja con la versión del paquete (spec 065).
+   */
   burstSeconds?: number;
   /** Fracción del presupuesto reservada a escrituras (0 a 1). */
   writeReserve?: number;
   /** Parte del depósito que solo pueden gastar las peticiones críticas. */
   criticalReserve?: number;
+  /**
+   * Cuánto tiene que esperar una petición para subir una clase en la cola.
+   *
+   * Sin esto, un goteo continuo de escrituras —un market maker de muchas
+   * capas— dejaría a las lecturas al final para siempre. Sube el ORDEN, nunca
+   * el suelo: el suelo es una reserva de seguridad y no se presta (spec 065).
+   */
+  envejecimientoMs?: number;
 }
 
 /**
@@ -147,6 +164,38 @@ function perSecond(venue: Venue): number {
 }
 
 /**
+ * La capacidad del depósito, con su techo demostrable.
+ *
+ * Un depósito de fichas con caudal `r` y capacidad `C` puede gastar como mucho
+ * `C + r·T` en cualquier ventana `T`. Con `T` = 60 s y `r = cupo·HEADROOM/60`,
+ * no pasarse del cupo publicado exige:
+ *
+ *     C + cupo·HEADROOM <= cupo   <=>   C <= (1 - HEADROOM)·cupo
+ *
+ * Por eso la ráfaga se topa ahí y no se deja al capricho de `burstSeconds`: el
+ * tope es lo que hace que subirla siga siendo seguro, y lo que impide que una
+ * configuración distraída se lleve por delante la garantía.
+ */
+/**
+ * Segundos de caudal que el depósito puede acumular.
+ *
+ * Seis, y no los dos del spec 020: aquel número se eligió cuando la lectura más
+ * cara pesaba 2, y el canal con IA (spec 058) trajo ventanas de mil velas que
+ * pesan 37. Con capacidad 34 y suelo de lectura 6,8, `need` se recortaba a la
+ * capacidad entera: la lectura de velas exigía el depósito LLENO y lo dejaba en
+ * −3 de deuda que pagaban durmiendo todas las demás. Con 6 ocupa el 36 %.
+ *
+ * El techo teórico es `60·(1/HEADROOM − 1)` = 10,6 s; se elige 6 para dejar
+ * margen sobre el cupo real además del que ya da `QUOTA_HEADROOM`.
+ */
+const RAFAGA_POR_DEFECTO = 6;
+
+export function capacidadDe(rate: number, burstSeconds: number, venue: Venue): number {
+  const techo = (1 - QUOTA_HEADROOM) * VENUE_QUOTA_PER_MINUTE[venue];
+  return Math.min(rate * burstSeconds, techo);
+}
+
+/**
  * Depósito de órdenes de Aster, derivado de sus DOS límites con el margen de
  * seguridad: el caudal es el del minuto (1200 × 0,85 / 60 = 17 por segundo) y
  * la capacidad la que garantiza que ninguna ventana de diez segundos pase de
@@ -170,6 +219,72 @@ interface Bucket {
   at: number;
 }
 
+/** Orden entre clases: primero las críticas, luego las escrituras, luego las lecturas. */
+const CLASE: Record<BudgetPriority, number> = { critical: 0, write: 1, read: 2 };
+
+/** Lo mínimo que hace falta para ponerse en la cola, y lo único que decide el orden. */
+interface EnCola {
+  clase: number;
+  llegada: number;
+}
+
+/** Lo que espera su turno en el depósito de memoria. */
+interface Espera extends EnCola {
+  /** El peso que se descuenta al conceder. */
+  weight: number;
+  /** Las fichas que hacen falta para concederla: peso más el suelo de su clase. */
+  need: number;
+  conceder: () => void;
+}
+
+/** Lo que espera su turno en el depósito de Redis. */
+interface EsperaRedis extends EnCola {
+  weight: number;
+  floor: number;
+  conceder: () => void;
+  /** Qué hacer si Redis no responde: caer al depósito de memoria. */
+  aMemoria: () => void;
+}
+
+/** Cada cuánto, como mucho, se vuelve a mirar el depósito. */
+const ESPERA_MAX_MS = 5_000;
+/** Y cada cuánto, como poco: sin suelo, un `setTimeout(0)` se comería la CPU. */
+const ESPERA_MIN_MS = 20;
+
+/** Cuánto tiene que esperar una petición para subir una clase en la cola. */
+const ENVEJECIMIENTO_MS = 10_000;
+
+/**
+ * Ordena a los que esperan.
+ *
+ * Las **críticas van siempre delante**, sin excepción: un PANIC no puede
+ * depender de cuánto lleve esperando nadie. Entre escrituras y lecturas manda
+ * un PLAZO: la llegada más una penalización de `envejecimientoMs` si es lectura.
+ *
+ * El plazo, y no «subir de clase al envejecer», porque envejecer a todos a la
+ * vez no cambia el orden relativo — las escrituras envejecían igual que las
+ * lecturas y seguían pasando delante; medido, la lectura salía la última de
+ * once. Con el plazo, una escritura solo adelanta a una lectura si llega dentro
+ * de esa ventana; pasada la ventana, la lectura va primero. Así un goteo
+ * continuo de escrituras —un market maker de muchas capas— no puede matar de
+ * hambre a las lecturas, y lo que una lectura paga está ACOTADO (spec 065).
+ *
+ * Es ORDEN, no suelo: el suelo se calculó al encolar, con la prioridad de
+ * verdad, y una reserva de seguridad no se presta.
+ *
+ * Se reordena en cada pasada y no al insertar porque el plazo se compara con el
+ * reloj: lo que ahora va detrás, dentro de unos segundos va delante.
+ */
+function ordenarEsperas(cola: EnCola[], envejecimientoMs: number): void {
+  const plazo = (e: EnCola): number =>
+    e.llegada + Math.max(0, e.clase - CLASE.write) * envejecimientoMs;
+  cola.sort((a, b) => {
+    const criticaA = a.clase === CLASE.critical ? 0 : 1;
+    const criticaB = b.clase === CLASE.critical ? 0 : 1;
+    return criticaA - criticaB || plazo(a) - plazo(b) || a.llegada - b.llegada;
+  });
+}
+
 /**
  * Presupuesto en memoria: correcto cuando cada worker tiene su propia IP.
  *
@@ -183,12 +298,18 @@ export class MemoryVenueBudget implements VenueBudget {
   private readonly burstSeconds: number;
   private readonly writeReserve: number;
   private readonly criticalReserve: number;
+  private readonly envejecimientoMs: number;
+  /** Los que esperan, por clave de depósito. Solo existe mientras haya alguien. */
+  private readonly colas = new Map<string, Espera[]>();
+  /** El despertador de cada cola: uno, no uno por durmiente. */
+  private readonly relojes = new Map<string, ReturnType<typeof setTimeout>>();
 
   constructor(opts: VenueBudgetOptions = {}) {
     this.rate = { ...DEFAULT_RATE, ...(opts.ratePerSecond ?? {}) };
-    this.burstSeconds = opts.burstSeconds ?? 2;
+    this.burstSeconds = opts.burstSeconds ?? RAFAGA_POR_DEFECTO;
     this.writeReserve = opts.writeReserve ?? 0.2;
     this.criticalReserve = opts.criticalReserve ?? 0.1;
+    this.envejecimientoMs = opts.envejecimientoMs ?? ENVEJECIMIENTO_MS;
   }
 
   async take(
@@ -198,7 +319,7 @@ export class MemoryVenueBudget implements VenueBudget {
     testnet: boolean,
   ): Promise<void> {
     const rate = this.rate[venue] ?? 10;
-    const capacity = rate * this.burstSeconds;
+    const capacity = capacidadDe(rate, this.burstSeconds, venue);
     // Una lectura no puede vaciar el depósito: se le corta antes, en el borde
     // de la reserva. Una escritura sí puede llegar hasta el fondo.
     // Cada prioridad se corta en un borde distinto: la lectura, la primera;
@@ -219,18 +340,73 @@ export class MemoryVenueBudget implements VenueBudget {
     // que es exactamente cobrar su coste real sin sacrificar la vivacidad.
     const need = Math.min(weight + floor, capacity);
 
-    // Sin tope de intentos: si el presupuesto está agotado hay que esperar, y
-    // rendirse aquí solo convertiría una espera en un error que el motor
-    // trataría como fallo del venue.
-    for (;;) {
+    const clave = claveCaudal(venue, testnet, priority);
+
+    // Camino rápido: sin nadie esperando y con fichas de sobra, no se construye
+    // ni un objeto. Es el 95 % de las llamadas y no debe pagar por la cola.
+    if (!this.colas.has(bucketKey)) {
       const bucket = this.refill(bucketKey, rate, capacity);
       if (bucket.tokens >= need) {
         bucket.tokens -= weight;
+        anotarConcesion(clave, 0);
         return;
       }
-      const falta = need - bucket.tokens;
-      await sleep(Math.max(20, Math.ceil((falta / rate) * 1000)));
     }
+
+    // Y si no hay fichas, se hace COLA, no carrera. Antes cada uno dormía por su
+    // cuenta y competía al despertar, así que el que necesitaba más fichas
+    // perdía siempre: la lectura de mil velas del canal con IA no llegaba nunca
+    // mientras cuatro bots pedían precios baratos (spec 065).
+    //
+    // Sin tope de intentos: si el presupuesto está agotado hay que esperar, y
+    // rendirse aquí solo convertiría una espera en un error que el motor
+    // trataría como fallo del venue (specs 020/031).
+    const empezado = Date.now();
+    await new Promise<void>((conceder) => {
+      const cola = this.colas.get(bucketKey) ?? [];
+      cola.push({ weight, need, clase: CLASE[priority], llegada: empezado, conceder });
+      this.colas.set(bucketKey, cola);
+      anotarCola(clave, cola.length);
+      this.servir(bucketKey, rate, capacity);
+    });
+    anotarConcesion(clave, Date.now() - empezado);
+  }
+
+  /**
+   * El único servidor de una cola: concede lo que quepa y se vuelve a citar.
+   *
+   * Uno por clave de depósito, no uno por durmiente. Con la versión de Redis
+   * esto es además lo que convierte treinta consultas por ciclo en una.
+   */
+  private servir(bucketKey: string, rate: number, capacity: number): void {
+    const reloj = this.relojes.get(bucketKey);
+    if (reloj !== undefined) clearTimeout(reloj);
+    this.relojes.delete(bucketKey);
+
+    const cola = this.colas.get(bucketKey);
+    if (!cola || cola.length === 0) {
+      this.colas.delete(bucketKey);
+      return;
+    }
+
+    const bucket = this.refill(bucketKey, rate, capacity);
+    ordenarEsperas(cola, this.envejecimientoMs);
+    while (cola.length > 0 && bucket.tokens >= cola[0].need) {
+      const espera = cola.shift()!;
+      bucket.tokens -= espera.weight;
+      espera.conceder();
+    }
+
+    if (cola.length === 0) {
+      this.colas.delete(bucketKey);
+      return;
+    }
+
+    const falta = cola[0].need - bucket.tokens;
+    const ms = Math.min(ESPERA_MAX_MS, Math.max(ESPERA_MIN_MS, Math.ceil((falta / rate) * 1000)));
+    const timer = setTimeout(() => this.servir(bucketKey, rate, capacity), ms);
+    timer.unref?.();
+    this.relojes.set(bucketKey, timer);
   }
 
   async takeOrders(venue: Venue, n: number, testnet: boolean): Promise<void> {
@@ -250,7 +426,7 @@ export class MemoryVenueBudget implements VenueBudget {
 
   observe(venue: Venue, testnet: boolean, lectura: BudgetObservation): void {
     const rate = this.rate[venue] ?? 10;
-    const capacity = rate * this.burstSeconds;
+    const capacity = capacidadDe(rate, this.burstSeconds, venue);
     this.recortar(
       venueKey(venue, testnet),
       rate,
@@ -369,7 +545,14 @@ export class RedisVenueBudget implements VenueBudget {
   private readonly burstSeconds: number;
   private readonly writeReserve: number;
   private readonly criticalReserve: number;
+  private readonly envejecimientoMs: number;
   private readonly fallback: MemoryVenueBudget;
+  /** Los que esperan, por clave de depósito. */
+  private readonly colas = new Map<string, EsperaRedis[]>();
+  /** Las claves que ya tienen servidor en marcha. */
+  private readonly sirviendo = new Set<string>();
+  /** Cómo interrumpir el descanso del servidor de cada clave. */
+  private readonly despertadores = new Map<string, () => void>();
 
   constructor(
     private readonly redis: BudgetRedis,
@@ -381,9 +564,10 @@ export class RedisVenueBudget implements VenueBudget {
     opts: VenueBudgetOptions = {},
   ) {
     this.rate = { ...DEFAULT_RATE, ...(opts.ratePerSecond ?? {}) };
-    this.burstSeconds = opts.burstSeconds ?? 2;
+    this.burstSeconds = opts.burstSeconds ?? RAFAGA_POR_DEFECTO;
     this.writeReserve = opts.writeReserve ?? 0.2;
     this.criticalReserve = opts.criticalReserve ?? 0.1;
+    this.envejecimientoMs = opts.envejecimientoMs ?? ENVEJECIMIENTO_MS;
     this.fallback = new MemoryVenueBudget(opts);
   }
 
@@ -394,7 +578,7 @@ export class RedisVenueBudget implements VenueBudget {
     testnet: boolean,
   ): Promise<void> {
     const rate = this.rate[venue] ?? 10;
-    const capacity = rate * this.burstSeconds;
+    const capacity = capacidadDe(rate, this.burstSeconds, venue);
     // Cada prioridad se corta en un borde distinto: la lectura, la primera;
     // la escritura corriente, dejando intacta la reserva de las críticas; y la
     // crítica llega hasta el fondo del depósito.
@@ -409,30 +593,107 @@ export class RedisVenueBudget implements VenueBudget {
     // abre una ventana en la que nadie está limitando.
     const key = `crypton:budget:${this.egressId}:${venueKey(venue, testnet)}`;
 
-    for (;;) {
-      let waitMs: number;
-      try {
-        waitMs = Number(
-          await this.redis.eval(TAKE_SCRIPT, {
-            keys: [key],
-            arguments: [
-              String(rate),
-              String(capacity),
-              String(weight),
-              String(floor),
-              String(Date.now()),
-            ],
-          }),
-        );
-      } catch {
-        // Redis caído: se limita en memoria. Limitar de más en un proceso es
-        // recuperable; dejar de limitar acaba en un veto del venue por IP.
-        return this.fallback.take(venue, weight, priority, testnet);
+    // Igual que en memoria: COLA, no carrera. Y aquí hay una razón más, propia
+    // de Redis: antes cada durmiente evaluaba el script por su cuenta cada
+    // veinte milisegundos, así que treinta esperas eran hasta mil quinientos
+    // EVAL por segundo contra el mismo Redis que sostiene los leases del motor
+    // (invariante 10). Ahora solo habla con Redis la CABEZA (spec 065).
+    const clave = claveCaudal(venue, testnet, priority);
+    const empezado = Date.now();
+    // Si Redis cae, la concesión la anota el depósito de memoria al servirla:
+    // contarla aquí también la duplicaría.
+    let delegado = false;
+    await new Promise<void>((conceder, fallar) => {
+      const cola = this.colas.get(key) ?? [];
+      cola.push({
+        weight,
+        floor,
+        clase: CLASE[priority],
+        llegada: empezado,
+        conceder,
+        aMemoria: () => {
+          delegado = true;
+          this.fallback.take(venue, weight, priority, testnet).then(() => conceder(), fallar);
+        },
+      });
+      this.colas.set(key, cola);
+      anotarCola(clave, cola.length);
+      // Quien llega con más prioridad que la cabeza no espera a que venza el
+      // descanso del servidor. Sin esto, una cancelación que aparece mientras
+      // el servidor duerme —hasta cinco segundos— esperaría detrás de las
+      // lecturas que ya estaban, y eso es el camino de un PANIC.
+      if (cola.length > 1 && CLASE[priority] < Math.min(...cola.slice(0, -1).map((e) => e.clase))) {
+        this.despertadores.get(key)?.();
       }
+      void this.servir(key, rate, capacity);
+    });
+    if (!delegado) anotarConcesion(clave, Date.now() - empezado);
+  }
 
-      if (waitMs <= 0) return;
-      await sleep(Math.max(20, Math.min(waitMs, 5000)));
+  /** El único que habla con Redis por clave de depósito. */
+  private async servir(key: string, rate: number, capacity: number): Promise<void> {
+    if (this.sirviendo.has(key)) return;
+    this.sirviendo.add(key);
+    try {
+      for (;;) {
+        const cola = this.colas.get(key);
+        if (!cola || cola.length === 0) {
+          this.colas.delete(key);
+          return;
+        }
+        ordenarEsperas(cola, this.envejecimientoMs);
+        const cabeza = cola[0];
+
+        let waitMs: number;
+        try {
+          waitMs = Number(
+            await this.redis.eval(TAKE_SCRIPT, {
+              keys: [key],
+              arguments: [
+                String(rate),
+                String(capacity),
+                String(cabeza.weight),
+                String(cabeza.floor),
+                String(Date.now()),
+              ],
+            }),
+          );
+        } catch {
+          // Redis caído: se limita en memoria. Limitar de más en un proceso es
+          // recuperable; dejar de limitar acaba en un veto del venue por IP.
+          // Pasan TODOS los que esperaban, no solo la cabeza.
+          const pendientes = cola.splice(0);
+          this.colas.delete(key);
+          for (const espera of pendientes) espera.aMemoria();
+          return;
+        }
+
+        if (waitMs <= 0) {
+          cola.shift();
+          cabeza.conceder();
+          continue;
+        }
+        await this.descansar(key, Math.min(ESPERA_MAX_MS, Math.max(ESPERA_MIN_MS, waitMs)));
+      }
+    } finally {
+      this.sirviendo.delete(key);
     }
+  }
+
+  /** Un descanso que una crítica puede interrumpir. */
+  private descansar(key: string, ms: number): Promise<void> {
+    return new Promise<void>((seguir) => {
+      const timer = setTimeout(() => {
+        this.despertadores.delete(key);
+        seguir();
+      }, ms);
+      timer.unref?.();
+      this.despertadores.set(key, () => {
+        clearTimeout(timer);
+        this.despertadores.delete(key);
+        seguir();
+      });
+    });
   }
 
   async takeOrders(venue: Venue, n: number, testnet: boolean): Promise<void> {
@@ -467,7 +728,7 @@ export class RedisVenueBudget implements VenueBudget {
     // responde, recorta el de memoria, que es el que se usa cuando Redis falla.
     this.fallback.observe(venue, testnet, lectura);
     const rate = this.rate[venue] ?? 10;
-    const capacity = rate * this.burstSeconds;
+    const capacity = capacidadDe(rate, this.burstSeconds, venue);
     const base = `crypton:budget:${this.egressId}:${venueKey(venue, testnet)}`;
     const recortes: [string, number | null, number][] = [
       [

@@ -61,8 +61,13 @@ El reparto de papeles es lo importante:
 ### Paso 1 — Al cerrar cada vela de 5 minutos
 
 El bot se despierta **6 segundos después de cada cierre de 5 minutos** (más un desfase propio de
-hasta 2 s) y trae tres series de velas cerradas: 5 min, 15 min y 1 h. Nunca mira una vela a medio
-formar.
+hasta 2 s) y trae tres series de velas cerradas: 12 horas de 5 min, unos 7 días de 15 min y 20 días
+de 1 h. Nunca mira una vela a medio formar.
+
+Cada serie pide lo que necesita y ni una vela más, porque el cupo de peticiones de los venues se
+cuenta por IP y lo comparten todos tus bots: la de 15 min la fija el número de casos que hacen falta
+para que el histórico del par tenga peso, y la de 1 h es la referencia con la que se decide si el
+mercado está tranquilo.
 
 ### Paso 2 — El análisis
 
@@ -102,8 +107,9 @@ Para cada setup listo, el motor calcula:
 - **Tres bandas de apalancamiento** —baja, media y alta—, con el margen, la liquidación y la pérdida
   en un hueco de cada una.
 - **El R neto** de cada objetivo, el coste en R y el **acierto que haría falta** para empatar.
-- **El histórico del par**: cómo le fue a ese mismo toque en los días cargados (casos, aciertos, R
-  medio y el límite de Wilson). Con muchos casos y resultado negativo, la operación no se ofrece.
+- **El histórico del par**: cómo le fue a ese mismo toque en los **últimos siete días** (casos,
+  aciertos, R medio y el límite de Wilson). Con muchos casos y resultado negativo, la operación no
+  se ofrece. En Lighter son unos cinco días: sirve 500 velas por petición y no da para más.
 
 ### Paso 4 — Quién elige
 
@@ -590,7 +596,8 @@ tú fijas; esta busca el rango sola, solo entra en el borde y se va si el rango 
 - **Pausar deja solo el stop.** Mientras dure la pausa no hay salidas por tiempo ni objetivos.
 - **Lighter.** El apalancamiento que se fija no se confirma hasta ver la posición, y el stop tarda en
   verse en el libro: el vigilante le da 10 segundos. Como mucho **dos bots de esta estrategia por
-  IP** (`AI_CHANNEL_MAX_BOTS_PER_VENUE`).
+  IP** (`AI_CHANNEL_MAX_BOTS_PER_VENUE`), y los simulados cuentan: gastan el mismo cupo. Un bot
+  real, en cambio, nunca se queda fuera por culpa de uno simulado.
 - **Aster.** Sin los tramos de apalancamiento firmados de la cuenta, o con la cuenta en modo
   cobertura, no hay entradas. En simulación se usa un solo tramo, la estimación optimista.
 - **Funding.** Hyperliquid no publica la hora del cobro y Lighter no publica el funding: la

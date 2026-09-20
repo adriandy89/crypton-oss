@@ -4,6 +4,7 @@ import type { Venue } from '@crypton/shared';
 import {
   createAdapter,
   createPublicAdapter,
+  lecturasEnVuelo,
   serviceCredentials,
   type ExchangeAdapter,
   type VenueCredentials,
@@ -93,6 +94,7 @@ export class CredentialsService {
       // bots mandaban ochenta peticiones por segundo con el límite puesto a
       // ocho.
       rateLimitPerSecond: Number(this.config.get('VENUE_RATE_LIMIT_PER_SECOND', 8)),
+      ...lecturasEnVuelo(this.config.get('VENUE_MAX_CONCURRENT_READS')),
       // Y este, lo que manda todo lo que sale por esta IP — incluido el feed
       // público de precios, que usa el mismo objeto.
       budget: this.budget.budget,
@@ -132,6 +134,7 @@ export class CredentialsService {
       // camino existe precisamente para no descifrar la clave de nadie.
       service: credentials,
       rateLimitPerSecond: Number(this.config.get('VENUE_RATE_LIMIT_PER_SECOND', 8)),
+      ...lecturasEnVuelo(this.config.get('VENUE_MAX_CONCURRENT_READS')),
       budget: this.budget.budget,
     });
   }

@@ -733,6 +733,13 @@ class AccountHandle implements ExchangeAdapter {
   // reposo CUANDO le pasan precios por getTicker/streamTicker. Servirle el
   // precio desde el feed lo dejaba ciego — ninguna orden simulada se ejecutaba
   // jamás, con la simulación siendo la puerta de entrada de todo usuario.
+  //
+  // Ojo con lo que ese párrafo NO dice: el desvío existe para que el simulador
+  // VEA los precios, no para que los pida por REST. Desde el spec 065 los ve
+  // por el flujo —`DryRunAdapter.streamTicker` casa en cada tick del
+  // WebSocket— y `getTicker` reutiliza ese precio mientras tenga menos de un
+  // segundo. Antes eran dos peticiones de `info` por bot y por latido contra la
+  // cola compartida de todos los simuladores del venue.
   getTicker(symbol: string): Promise<Ticker> {
     if (this.entry.dryRun) return this.entry.adapter.getTicker(symbol);
     return this.marketData.ticker(this.venue, symbol, this.testnet);

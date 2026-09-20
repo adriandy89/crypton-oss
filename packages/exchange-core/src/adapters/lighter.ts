@@ -505,13 +505,21 @@ export class LighterAdapter implements ExchangeAdapter {
     this.sdkHeaders = (config.baseOptions as { headers: Record<string, string> }).headers;
     this.orderApi = new OrderApi(config);
     this.accountApi = new AccountApi(config);
-    this.limiter = new RateLimiter(opts.rateLimitPerSecond ?? 8);
+    // Dos lecturas en vuelo. Las de Lighter firman con `authHeaderToken()`, un
+    // token POR LLAMADA y sin nonce, así que se pueden solapar; las escrituras
+    // no, y van siempre por el carril ordenado (spec 065).
+    this.limiter = new RateLimiter(opts.rateLimitPerSecond ?? 8, {
+      maxEnVuelo: opts.maxConcurrentReads ?? 2,
+    });
     this.budget = opts.budget ?? NO_BUDGET;
     this.httpTimeoutMs = opts.httpTimeoutMs ?? HTTP_TIMEOUT_MS;
     // Limitador APARTE para el sondeo. Compartirlo con la ejecución hacía que
     // una orden —o peor, una cancelación de pánico— esperase en la cola detrás
     // de un barrido de estado que no tiene ninguna urgencia.
-    this.pollLimiter = new RateLimiter(Math.max(1, Math.floor((opts.rateLimitPerSecond ?? 8) / 2)));
+    this.pollLimiter = new RateLimiter(
+      Math.max(1, Math.floor((opts.rateLimitPerSecond ?? 8) / 2)),
+      { maxEnVuelo: opts.maxConcurrentReads ?? 2 },
+    );
     this.markets = new MarketSpecCache(() => this.loadMarkets());
   }
 
@@ -675,10 +683,16 @@ export class LighterAdapter implements ExchangeAdapter {
         // SDK lee `baseOptions.headers` en cada petición: basta renovarla aquí.
         this.authHeaderToken();
         await this.budget.take(this.venue, weight, priority, this.testnet);
-        return this.limiter.run(fn).catch((e) => {
-          this.cooldown.registrar(e);
-          throw e;
-        });
+        // El carril lo elige la PRIORIDAD, no el método, y aquí está el porqué:
+        // `cancelOrder` viene por este mismo `call()` con prioridad de
+        // escritura. Elegirlo por método volvería concurrente una cancelación
+        // FIRMADA y rompería el `nonce_manager` del SDK (spec 065).
+        return (priority === 'read' ? this.limiter.runLibre(fn) : this.limiter.run(fn)).catch(
+          (e) => {
+            this.cooldown.registrar(e);
+            throw e;
+          },
+        );
       },
       { venue: this.venue },
     );
@@ -697,7 +711,8 @@ export class LighterAdapter implements ExchangeAdapter {
         this.cooldown.comprobar();
         this.authHeaderToken(); // Ver `call()` (001/F-49).
         await this.budget.take(this.venue, weight, 'read', this.testnet);
-        return this.pollLimiter.run(fn).catch((e) => {
+        // Sondeo: siempre lectura, siempre carril libre.
+        return this.pollLimiter.runLibre(fn).catch((e) => {
           this.cooldown.registrar(e);
           throw e;
         });

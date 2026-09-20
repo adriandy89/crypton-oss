@@ -19,6 +19,7 @@ import {
 import {
   VENUE_CAPABILITIES,
   createPublicAdapter,
+  lecturasEnVuelo,
   serviceCredentials,
   shortMessage,
   type ExchangeAdapter,
@@ -407,6 +408,14 @@ export class MarketDataService implements OnModuleDestroy {
         budget: this.budget.budget,
         service: credentials,
         testnet,
+        // La API comparte el depósito por IP con el worker, pero iba SIN tope
+        // propio: se quedaba con el defecto del adaptador y con la cola de
+        // concurrencia uno. Una carga de histórico del gráfico son nueve
+        // páginas de trescientas velas —225 de peso— contra el mismo depósito
+        // del que comen los bots, y encima serializadas con la latencia
+        // (spec 065).
+        rateLimitPerSecond: Number(this.config.get('MARKETDATA_RATE_LIMIT_PER_SECOND', 6)),
+        ...lecturasEnVuelo(this.config.get('VENUE_MAX_CONCURRENT_READS')),
       });
       this.adapters.set(clave, adapter);
     }

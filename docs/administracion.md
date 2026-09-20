@@ -529,7 +529,7 @@ Pausar cancela los objetivos y deja **solo el stop** en el exchange.
 | `AI_CHANNEL_PROMPT_CACHE` | `1h` | Caché de la parte fija del prompt: `1h`, `5m` u `off` |
 | `AI_CHANNEL_SHADOW_ONLY` | `false` | Modo sombra: decide y registra, y nunca ejecuta |
 | `AI_CHANNEL_CONCURRENCY` | `4` | Consultas a la vez por réplica de la API |
-| `AI_CHANNEL_MAX_BOTS_PER_VENUE` (worker) | `LIGHTER=2` | Bots reales del canal por venue. El que no cabe queda en error |
+| `AI_CHANNEL_MAX_BOTS_PER_VENUE` (worker) | `LIGHTER=2` | Bots del canal por venue. Los simulados cuentan —gastan el mismo cupo de IP—, pero nunca le quitan el hueco a uno real. El que no cabe queda en error |
 
 Los contadores del día van por día UTC. El gasto de cada consulta queda en su fila, y el del día en
 el panel.

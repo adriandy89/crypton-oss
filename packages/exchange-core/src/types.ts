@@ -79,6 +79,19 @@ export interface AdapterOptions {
   /** Peticiones por segundo permitidas hacia el venue. */
   rateLimitPerSecond?: number;
   /**
+   * Cuántas LECTURAS puede tener este adaptador en vuelo a la vez.
+   *
+   * Solo afecta al carril libre del limitador: las escrituras van siempre de
+   * una en una porque son las que firman. Subirlo no puede pasarse del cupo del
+   * venue —toda llamada pasa antes por `VenueBudget.take()`—, solo evita que
+   * una petición lenta retenga a las de detrás (spec 065).
+   *
+   * Es estado por PROCESO, sin nada compartido, así que puede venir de una
+   * variable de entorno; la ráfaga del presupuesto no, porque esa se comparte
+   * en Redis.
+   */
+  maxConcurrentReads?: number;
+  /**
    * Presupuesto compartido por venue e IP.
    *
    * `rateLimitPerSecond` acota lo que manda ESTE adaptador; esto acota lo que

@@ -5,6 +5,7 @@ import { candleSpanMs, venueKey } from '@crypton/shared';
 import type { Candle, CandleInterval, Ticker, Venue } from '@crypton/shared';
 import {
   createPublicAdapter,
+  lecturasEnVuelo,
   serviceCredentials,
   type ExchangeAdapter,
 } from '@crypton/exchange-core';
@@ -60,6 +61,20 @@ const REINTENTO_CIERRE_MS = 5_000;
 
 /** Intentos por cierre antes de volver al ritmo del TTL. */
 const INTENTOS_CIERRE = 2;
+
+/**
+ * Y los que se hacen en un intervalo largo, donde rendirse sale caro.
+ *
+ * Con el refresco de una serie atado a su propio intervalo (spec 065), fallar
+ * la persecución del cierre de una vela de 1 h deja la serie vieja UNA HORA, y
+ * una serie vieja pone `frescas` en false: el bot deja de abrir. Dirección
+ * segura, pero deja de operar. Treinta segundos de insistencia cuestan seis
+ * peticiones en el peor caso y se lo ahorran.
+ */
+const INTENTOS_CIERRE_LARGO = 6;
+
+/** A partir de aquí se insiste más: una hora. */
+const SPAN_LARGO_MS = 3_600_000;
 
 /**
  * El intervalo más largo con cierres alineados a la época. Las semanas empiezan
@@ -482,7 +497,8 @@ export class MarketDataService implements OnModuleDestroy {
       hist.cierreBuscado = esperada;
       hist.intentosCierre = 0;
     }
-    if (hist.intentosCierre >= INTENTOS_CIERRE) return false;
+    if (hist.intentosCierre >= (span >= SPAN_LARGO_MS ? INTENTOS_CIERRE_LARGO : INTENTOS_CIERRE))
+      return false;
     if (hist.intentosCierre > 0 && now - hist.ultimoIntentoEn < REINTENTO_CIERRE_MS) return false;
 
     hist.intentosCierre++;
@@ -611,6 +627,7 @@ export class MarketDataService implements OnModuleDestroy {
       adapter = createPublicAdapter(venue, {
         testnet,
         rateLimitPerSecond: Number(this.config.get('MARKETDATA_RATE_LIMIT_PER_SECOND', 6)),
+        ...lecturasEnVuelo(this.config.get('VENUE_MAX_CONCURRENT_READS')),
         // El MISMO presupuesto que los adaptadores de cuenta: los precios
         // públicos y las órdenes salen por la misma IP y el venue los cuenta
         // juntos, así que un feed goloso no puede dejar sin caudal a una orden.

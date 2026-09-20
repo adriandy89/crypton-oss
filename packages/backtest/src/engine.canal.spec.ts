@@ -377,7 +377,10 @@ describe('el canal con IA en el replay, como en el motor', () => {
     const primera = new Map(vistas[0].series);
     expect(primera.get('1h')?.length).toBe(310);
     expect(primera.get('5m')).toHaveLength(144);
-    expect(primera.get('15m')).toHaveLength(1000);
+    // 96 de ventana de canal más 8 × 70 ventanas de muestreo de las tasas: la
+    // serie de estructura se DERIVA de lo que necesitan las tasas base, no es
+    // un número plano (spec 065).
+    expect(primera.get('15m')).toHaveLength(656);
   });
 
   it('cada serie, topada en lo que el venue sirve de una vez', async () => {

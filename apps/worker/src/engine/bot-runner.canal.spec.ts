@@ -861,6 +861,8 @@ describe('canal con IA en el runner (spec 058)', () => {
           ttlMs: 900_000,
         },
       );
+      // El refresco de la de 1 h es el de SU intervalo: el techo de quince
+      // minutos la bajaba cuatro veces por hora para traer lo mismo (spec 065).
       expect(candleSource.candleHistory).toHaveBeenCalledWith(
         Venue.LIGHTER,
         'BTC',
@@ -868,7 +870,7 @@ describe('canal con IA en el runner (spec 058)', () => {
         480,
         false,
         {
-          ttlMs: 900_000,
+          ttlMs: 3_600_000,
         },
       );
       // La que no llega entera no viene.

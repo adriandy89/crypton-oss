@@ -516,7 +516,7 @@ export class EngineService implements OnModuleInit, OnModuleDestroy {
    * Arranques del canal con IA en curso, por venue: el tope se cuenta con ellos
    * para que dos adopciones simultáneas no lo pasen las dos.
    */
-  private readonly arrancandoCanal = new Map<string, string>();
+  private readonly arrancandoCanal = new Map<string, { venue: string; dryRun: boolean }>();
 
   /** Por qué el dueño no puede operar esta estrategia, o null si sí puede. */
   private async motivoNoAdmin(userId: string, strategy: string): Promise<string | null> {
@@ -563,26 +563,41 @@ export class EngineService implements OnModuleInit, OnModuleDestroy {
     return motivo ? { permitidas: false, motivo } : global;
   }
 
-  /** Reserva un hueco del tope de bots reales del canal con IA en ese venue. */
-  private reservarCanal(botId: string, venue: Venue, strategy: StrategyKind): void {
+  /**
+   * Reserva un hueco del tope de bots del canal con IA en ese venue.
+   *
+   * El recuento es ASIMÉTRICO, y ahí está todo:
+   *
+   * - si el que llega es **simulado**, cuentan todos los bots del canal de ese
+   *   venue, reales y simulados. Gastan el mismo cupo de IP, y el tope existe
+   *   justamente porque ese cupo no da para más;
+   * - si el que llega es **real**, se cuentan solo los reales.
+   *
+   * Lo segundo no es una concesión, es el punto: un bot simulado no puede
+   * dejar fuera a uno con dinero. Antes los simulados ni contaban ni
+   * reservaban, así que se saltaban el tope entero (spec 065).
+   */
+  private reservarCanal(botId: string, venue: Venue, strategy: StrategyKind, dryRun = false): void {
     const tope = this.topesCanal.get(venue);
     if (tope === undefined) return;
+    const cuenta = (esSimulado: boolean): boolean => dryRun || !esSimulado;
     const vivos = [...this.runners.values()].filter((r) => {
       const p = r.perfil;
-      return p.strategy === strategy && p.venue === venue && !p.dryRun && r.botId !== botId;
+      return p.strategy === strategy && p.venue === venue && cuenta(p.dryRun) && r.botId !== botId;
     }).length;
     // Sin los que ya tienen runner: esos ya se han contado arriba.
     const arrancando = [...this.arrancandoCanal].filter(
-      ([id, v]) => id !== botId && v === venue && !this.runners.has(id),
+      ([id, quien]) =>
+        id !== botId && quien.venue === venue && cuenta(quien.dryRun) && !this.runners.has(id),
     ).length;
     if (vivos + arrancando >= tope) {
       throw new Error(
-        `Este worker ya opera ${vivos + arrancando} bot(s) reales del canal con IA en ${venue}, el ` +
+        `Este worker ya opera ${vivos + arrancando} bot(s) del canal con IA en ${venue}, el ` +
           'tope configurado (AI_CHANNEL_MAX_BOTS_PER_VENUE): el cupo de peticiones del venue no ' +
           'da para más.',
       );
     }
-    this.arrancandoCanal.set(botId, venue);
+    this.arrancandoCanal.set(botId, { venue, dryRun });
   }
 
   /**
@@ -645,8 +660,8 @@ export class EngineService implements OnModuleInit, OnModuleDestroy {
     }
     // El tope por venue es igual: un relevo readopta lo que ya estaba dentro del
     // tope, y un bot en STOPPING solo viene a terminar de cerrar.
-    if (bot.strategy === 'AI_CHANNEL' && !bot.dry_run && arranque) {
-      this.reservarCanal(bot.id, bot.venue, bot.strategy);
+    if (bot.strategy === 'AI_CHANNEL' && arranque) {
+      this.reservarCanal(bot.id, bot.venue, bot.strategy, bot.dry_run);
     }
 
     // La red antes que nada: decide qué ficha de mercado es la buena, y con la

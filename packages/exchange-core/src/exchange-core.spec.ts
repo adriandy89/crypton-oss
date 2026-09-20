@@ -542,6 +542,77 @@ describe('DryRunAdapter', () => {
     });
   });
 
+  describe('el precio del flujo se reutiliza (spec 065)', () => {
+    /** Cuenta las veces que el simulador baja de verdad a la fuente. */
+    const contando = (source: StubSource) => {
+      const marcador = { veces: 0 };
+      const original = source.getTicker.bind(source);
+      source.getTicker = async () => {
+        marcador.veces++;
+        return original();
+      };
+      return marcador;
+    };
+
+    it('con el flujo vivo, el tick no vuelve a pedirle el precio a la fuente', async () => {
+      let ahora = 1_000_000;
+      const source = new StubSource();
+      const sim = new DryRunAdapter(source, { now: () => ahora });
+      sim.streamTicker('BTC').subscribe();
+      const marcador = contando(source);
+      source.move('101', '101.2');
+
+      await expect(sim.getTicker('BTC')).resolves.toMatchObject({ mark: '101' });
+      ahora += 500;
+      await expect(sim.getTicker('BTC')).resolves.toMatchObject({ mark: '101' });
+
+      expect(marcador.veces).toBe(0);
+    });
+
+    it('un flujo callado más de un segundo vuelve a preguntar', async () => {
+      let ahora = 1_000_000;
+      const source = new StubSource();
+      const sim = new DryRunAdapter(source, { now: () => ahora });
+      sim.streamTicker('BTC').subscribe();
+      const marcador = contando(source);
+      source.move('101', '101.2');
+      ahora += 1_500;
+
+      await sim.getTicker('BTC');
+      expect(marcador.veces).toBe(1);
+    });
+
+    it('el flujo casa las órdenes en reposo, así que no hace falta repetirlo por REST', async () => {
+      // Es la razón de que el atajo sea seguro: el casado NO depende de
+      // `getTicker`, lo hace `streamTicker` en cada tick del WebSocket.
+      const source = new StubSource();
+      const sim = new DryRunAdapter(source);
+      sim.streamTicker('BTC').subscribe();
+      await sim.placeOrder(order());
+
+      source.move('89', '90');
+
+      expect(await sim.getRecentFills('BTC', 0)).toHaveLength(1);
+    });
+
+    it('sin flujo, cada precio sigue yendo a la fuente y casando', async () => {
+      // La red del backtest: `ReplaySourceAdapter.streamTicker` devuelve EMPTY,
+      // así que allí nunca hay precio venido del flujo y lo único que mueve la
+      // simulación es que cada `getTicker` baje a la fuente y case.
+      const source = new StubSource();
+      const sim = new DryRunAdapter(source);
+      const marcador = contando(source);
+      await sim.getTicker('BTC');
+      await sim.placeOrder(order());
+
+      source.current = { ...source.current, bid: '89', ask: '90', mark: '89', last: '89' };
+      await sim.getTicker('BTC');
+
+      expect(marcador.veces).toBe(2);
+      expect(await sim.getRecentFills('BTC', 0)).toHaveLength(1);
+    });
+  });
+
   describe('reloj y semilla inyectables', () => {
     it('sin opciones, el comportamiento es el de siempre', async () => {
       // La red que protege al modo simulación de verdad: los dos parámetros son

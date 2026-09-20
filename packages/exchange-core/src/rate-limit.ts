@@ -2,10 +2,7 @@ import { isRetryable, messageOf, toExchangeError } from './errors';
 import { ExchangeError, type Venue } from '@crypton/shared';
 
 /**
- * Limitador de caudal.
- *
- * Es una cola FIFO con ventana deslizante: suficiente para el caudal de un
- * motor de bots y sin dependencias.
+ * Limitador de caudal, con dos carriles.
  *
  * El ÁMBITO importa y no lo decide este fichero. Los límites de los venues son
  * por cuenta y por IP, nunca por bot, así que un limitador por bot —que es lo
@@ -13,32 +10,124 @@ import { ExchangeError, type Venue } from '@crypton/shared';
  * una misma cuenta a 8/s mandaban 80/s contra un límite de 8/s. Quien crea el
  * limitador es responsable de compartirlo entre los bots que compartan cuenta;
  * ver `AccountHub` en el worker.
+ *
+ * **Los dos carriles** (spec 065). El limitador era una cadena de promesas que
+ * esperaba a que `fn` TERMINASE antes de soltar la cola: concurrencia uno. Dos
+ * consecuencias medidas:
+ *
+ * - el caudal real era `1/max(intervalo, latencia)`, no el configurado — con
+ *   seis por segundo y velas de medio segundo, dos por segundo;
+ * - una llamada que agotaba el plazo del SDK retenía diez segundos a todas las
+ *   de detrás, y como los bots simulados de un venue comparten una sola fuente,
+ *   eso eran todos los bots del venue.
+ *
+ * Ahora:
+ *
+ * - `run()` es el carril **ORDENADO**: concurrencia uno y orden de llamada. Por
+ *   aquí va todo lo que FIRMA. No es una preferencia: el `nonce_manager` del SDK
+ *   de Lighter asigna un contador secuencial dentro de la llamada, y dos
+ *   transacciones invertidas dan `21104 invalid nonce`, tras el cual el SDK
+ *   decrementa su contador y el adaptador se queda sin poder colocar nada.
+ * - `runLibre()` es el carril **LIBRE**: hasta `maxEnVuelo` a la vez. Por aquí
+ *   van las lecturas, que ni firman ni llevan nonce.
+ *
+ * El carril se elige **por prioridad, no por método**, y ese detalle no es
+ * cosmético: en Lighter, cancelar una orden va por el mismo método que las
+ * lecturas pero con prioridad de escritura.
+ *
+ * El marcapasos es común a los dos y **reserva el turno en la llamada**, no al
+ * terminar: así el espaciado deja de depender de la latencia. Y subir la
+ * concurrencia no puede pasarse del cupo del venue, porque toda llamada pasa
+ * antes por `VenueBudget.take()`.
  */
 export class RateLimiter {
   private readonly intervalMs: number;
-  private queue: Promise<void> = Promise.resolve();
-  private lastRun = 0;
+  private readonly maxEnVuelo: number;
+  /** El carril ordenado: una cadena de promesas. */
+  private cola: Promise<void> = Promise.resolve();
+  /** Cuándo puede salir el próximo turno, ya reservado. */
+  private proximaSalida = 0;
+  private enVuelo = 0;
+  private readonly enEspera: (() => void)[] = [];
 
-  constructor(perSecond: number) {
+  constructor(perSecond: number, opts: { maxEnVuelo?: number } = {}) {
     this.intervalMs = perSecond > 0 ? 1000 / perSecond : 0;
+    this.maxEnVuelo = Math.max(1, Math.floor(opts.maxEnVuelo ?? 1));
   }
 
-  /** Encola `fn` respetando el caudal. Preserva el orden de llamada. */
+  /** Carril ORDENADO: una detrás de otra, en el orden de llamada. */
   run<T>(fn: () => Promise<T>): Promise<T> {
-    const result = this.queue.then(async () => {
-      const wait = this.lastRun + this.intervalMs - Date.now();
-      if (wait > 0) await sleep(wait);
-      this.lastRun = Date.now();
+    const result = this.cola.then(async () => {
+      await this.turno();
       return fn();
     });
     // La cola avanza pase lo que pase: si un fallo la rompiera, el adaptador
     // dejaría de mandar órdenes para siempre sin ningún error visible.
-    this.queue = result.then(
+    this.cola = result.then(
       () => undefined,
       () => undefined,
     );
     return result;
   }
+
+  /** Carril LIBRE: hasta `maxEnVuelo` a la vez, con el mismo espaciado. */
+  async runLibre<T>(fn: () => Promise<T>): Promise<T> {
+    // El hueco primero y el turno después. Al revés, una llamada parada en el
+    // semáforo desperdiciaría su ranura de caudal y el marcapasos mentiría.
+    await this.adquirir();
+    try {
+      await this.turno();
+      return await fn();
+    } finally {
+      this.liberar();
+    }
+  }
+
+  /**
+   * Reserva la próxima ranura de caudal y espera a que llegue.
+   *
+   * La reserva es SÍNCRONA, así que el orden de reserva es el orden de llamada
+   * y dos llamadas nunca se quedan con la misma ranura. El `max` con el reloj
+   * impide que el marcapasos derive hacia el futuro tras un rato en reposo.
+   */
+  private async turno(): Promise<void> {
+    const ahora = Date.now();
+    const salida = Math.max(ahora, this.proximaSalida);
+    this.proximaSalida = salida + this.intervalMs;
+    if (salida > ahora) await sleep(salida - ahora);
+  }
+
+  private async adquirir(): Promise<void> {
+    if (this.enVuelo < this.maxEnVuelo) {
+      this.enVuelo++;
+      return;
+    }
+    await new Promise<void>((paso) => this.enEspera.push(paso));
+    // El hueco viene TRASPASADO por `liberar`: `enVuelo` ya lo cuenta. Si aquí
+    // se volviera a incrementar, dos llamadas ocuparían la misma ranura.
+  }
+
+  private liberar(): void {
+    const siguiente = this.enEspera.shift();
+    if (siguiente) {
+      siguiente();
+      return;
+    }
+    this.enVuelo--;
+  }
+}
+
+/**
+ * Traduce `VENUE_MAX_CONCURRENT_READS` a la opción del adaptador.
+ *
+ * Una variable vacía da `Number('') === 0`, que como concurrencia es absurdo y
+ * el limitador subiría a uno de todas formas; aquí se devuelve el objeto vacío
+ * para que mande el valor por defecto de cada adaptador, que es distinto por
+ * venue (spec 060, F-34 avisaba de esta misma trampa).
+ */
+export function lecturasEnVuelo(valor: unknown): { maxConcurrentReads?: number } {
+  const n = Number(valor);
+  return Number.isFinite(n) && n >= 1 ? { maxConcurrentReads: Math.floor(n) } : {};
 }
 
 export const sleep = (ms: number): Promise<void> =>

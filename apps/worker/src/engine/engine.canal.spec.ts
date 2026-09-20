@@ -161,6 +161,41 @@ describe('EngineService: el canal con IA al arrancar', () => {
     engine.reservarCanal('h', 'HYPERLIQUID', 'AI_CHANNEL');
   });
 
+  /**
+   * Los simulados gastaban el MISMO cupo de IP que los reales y no contaban
+   * para nada: el tope existe porque «el cupo de peticiones del venue no da
+   * para más», y eso no distingue si el bot arriesga dinero (spec 065).
+   *
+   * La asimetría es lo importante: un simulado nunca puede quitarle el hueco a
+   * un bot con dinero, así que cuando el que llega es real se cuentan solo los
+   * reales, exactamente como antes.
+   */
+  it('los simulados cuentan para el tope, pero no le quitan el hueco a uno real', () => {
+    const { engine } = montar(null);
+    engine.topesCanal = new Map([['HYPERLIQUID', 2]]);
+    engine.runners.set('a', runner('a', 'HYPERLIQUID', true));
+    engine.runners.set('b', runner('b', 'HYPERLIQUID', true));
+
+    // Un tercer SIMULADO ya no entra.
+    expect(() => engine.reservarCanal('c', 'HYPERLIQUID', 'AI_CHANNEL', true)).toThrow(
+      /AI_CHANNEL_MAX_BOTS_PER_VENUE/,
+    );
+    // Pero un REAL sí: los simulados no le quitan el sitio.
+    expect(() => engine.reservarCanal('d', 'HYPERLIQUID', 'AI_CHANNEL', false)).not.toThrow();
+  });
+
+  it('y los que arrancan se cuentan con la misma asimetría', () => {
+    const { engine } = montar(null);
+    engine.topesCanal = new Map([['HYPERLIQUID', 2]]);
+    engine.reservarCanal('a', 'HYPERLIQUID', 'AI_CHANNEL', true);
+    engine.reservarCanal('b', 'HYPERLIQUID', 'AI_CHANNEL', true);
+
+    expect(() => engine.reservarCanal('c', 'HYPERLIQUID', 'AI_CHANNEL', true)).toThrow(
+      /AI_CHANNEL_MAX_BOTS_PER_VENUE/,
+    );
+    expect(() => engine.reservarCanal('d', 'HYPERLIQUID', 'AI_CHANNEL', false)).not.toThrow();
+  });
+
   it('un bot que ya tiene runner no cuenta dos veces', () => {
     const { engine } = montar(null);
     engine.topesCanal = new Map([['LIGHTER', 2]]);
@@ -203,17 +238,31 @@ describe('EngineService: el canal con IA al arrancar', () => {
       expect(db.user.findUnique).not.toHaveBeenCalled();
     });
 
-    it('el tope por venue se aplica al adoptar; un simulado no lo gasta', async () => {
+    /**
+     * El tope se aplica al adoptar, y desde el spec 065 también a los
+     * simulados: gastan el mismo cupo de IP. Lo que NO puede pasar es que un
+     * simulado le quite el hueco a un bot con dinero.
+     */
+    it('el tope por venue se aplica al adoptar, también a un simulado', async () => {
       const real = montar(admin);
       real.engine.topesCanal = new Map([['LIGHTER', 1]]);
       real.engine.runners.set('a', runner('a', 'LIGHTER'));
       await expect(real.engine.spawn('nuevo')).rejects.toThrow(/AI_CHANNEL_MAX_BOTS_PER_VENUE/);
       expect(real.db.exchangeAccount.findUniqueOrThrow).not.toHaveBeenCalled();
 
+      // Antes este simulado pasaba: ni contaba ni reservaba, así que el tope no
+      // existía para él aunque consumiera el mismo cupo.
       const simulado = montar(admin, undefined, { dry_run: true });
       simulado.engine.topesCanal = new Map([['LIGHTER', 1]]);
       simulado.engine.runners.set('a', runner('a', 'LIGHTER'));
-      await expect(simulado.engine.spawn('nuevo')).rejects.toThrow(/siguió adelante/);
+      await expect(simulado.engine.spawn('nuevo')).rejects.toThrow(/AI_CHANNEL_MAX_BOTS_PER_VENUE/);
+    });
+
+    it('pero un bot real entra aunque el tope lo ocupen simulados', async () => {
+      const { engine } = montar(admin);
+      engine.topesCanal = new Map([['LIGHTER', 1]]);
+      engine.runners.set('a', runner('a', 'LIGHTER', true));
+      await expect(engine.spawn('nuevo')).rejects.toThrow(/siguió adelante/);
     });
 
     /**

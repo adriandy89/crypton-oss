@@ -80,6 +80,11 @@ services:
       # parte, y entre ella y el worker agotaron el de Lighter.
       WORKER_EGRESS_ID: ${WORKER_EGRESS_ID:-shared}
 
+      # Caudal del adaptador publico con el que la API pide velas y precios, y
+      # cuantas lecturas puede tener en vuelo. Ver docker/.env.example.
+      MARKETDATA_RATE_LIMIT_PER_SECOND: ${MARKETDATA_RATE_LIMIT_PER_SECOND:-6}
+      VENUE_MAX_CONCURRENT_READS: ${VENUE_MAX_CONCURRENT_READS:-}
+
       # Cuenta de servicio de Lighter. Ver docker/.env.example.
       LIGHTER_SERVICE_ACCOUNT_INDEX: ${LIGHTER_SERVICE_ACCOUNT_INDEX:-}
       LIGHTER_SERVICE_API_KEY_INDEX: ${LIGHTER_SERVICE_API_KEY_INDEX:-4}
@@ -245,7 +250,8 @@ services:
       # leases, y los bots que sobren esperan a que haya otra réplica. Sin tope,
       # la primera que arrancaba se los llevaba todos.
       WORKER_MAX_BOTS: ${WORKER_MAX_BOTS:-250}
-      # Canal con IA: tope de bots reales por venue en cada replica (spec 058).
+      # Canal con IA: tope de bots por venue en cada replica (spec 058). Los
+      # simulados cuentan, pero nunca le quitan el hueco a uno real (spec 065).
       AI_CHANNEL_MAX_BOTS_PER_VENUE: ${AI_CHANNEL_MAX_BOTS_PER_VENUE:-LIGHTER=2}
 
       # Puerto de salud. No se publica al host: lo consulta el healthcheck desde
@@ -264,6 +270,9 @@ services:
       # el valor debe ser el MISMO en todas. Pon `memory` solo si cada réplica
       # sale por su propia IP.
       VENUE_RATE_LIMIT_PER_SECOND: ${VENUE_RATE_LIMIT_PER_SECOND:-8}
+      # Lecturas en vuelo por adaptador. Solo el carril libre: lo que firma va
+      # de una en una. Vacio = el defecto de cada venue (HL 4, Lighter 2, Aster 1).
+      VENUE_MAX_CONCURRENT_READS: ${VENUE_MAX_CONCURRENT_READS:-}
       WORKER_EGRESS_ID: ${WORKER_EGRESS_ID:-shared}
 
       # Cuánto vale una lectura de estado de cuenta antes de repetirla. Es lo

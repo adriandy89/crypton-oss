@@ -277,6 +277,14 @@ export class AsterAdapter implements ExchangeAdapter {
     const endpoints = endpointsFor(Venue.ASTER, this.testnet);
     this.rest = creds.baseUrl ?? endpoints.rest;
     this.ws = opts.wsUrl ?? endpoints.ws;
+    // Aster se queda SIN carril libre, a propósito, y por eso NO se le pasa
+    // `maxConcurrentReads`: sus lecturas también van firmadas y el nonce nace
+    // dentro de la cola para no salirse de la ventana de diez segundos del
+    // venue. Que acepte desorden dentro de esa ventana es plausible pero no
+    // está confirmado, y confirmarlo exige credenciales, que no se usan para
+    // sondear. Pasarle la opción sin usarla sería peor que no pasarla: dejaría
+    // armada una concurrencia que el día que alguien añadiera `runLibre` aquí
+    // se activaría sola sobre un camino con nonce (spec 065).
     this.limiter = new RateLimiter(opts.rateLimitPerSecond ?? 8);
     this.budget = opts.budget ?? NO_BUDGET;
     this.httpTimeoutMs = opts.httpTimeoutMs ?? HTTP_TIMEOUT_MS;

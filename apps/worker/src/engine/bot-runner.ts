@@ -37,11 +37,13 @@ import {
 } from '@crypton/shared';
 import {
   VENUE_CAPABILITIES,
+  caudalDeVenue,
   codecFor,
   isVenueUnavailable,
   shortMessage,
   type AcuseApalancamiento,
   type ExchangeAdapter,
+  type MuestraCaudal,
 } from '@crypton/exchange-core';
 import {
   getStrategy,
@@ -135,14 +137,32 @@ const DESFASE_CIERRE_MAX_MS = 2_000;
 /** Lo más que se espera, FUERA del cerrojo, a que llegue la vela recién cerrada. */
 const ESPERA_VELAS_MS = 8_000;
 
-/** Refresco de una serie aunque no cierre nada: el de su intervalo, sin pasar de 15 min. */
+/**
+ * Techo de refresco para los intervalos SIN cierre alineado.
+ *
+ * Por encima del día, las semanas empiezan en lunes y los meses no duran lo
+ * mismo, así que `faltaElCierre` no calcula el cierre esperado y no hay nada
+ * que perseguir: ahí manda el techo.
+ */
 const TTL_SERIE_MAX_MS = 15 * 60_000;
+
+/** El intervalo más largo con cierres alineados a la época (`MAX_SPAN_ALINEADO_MS`). */
+const SPAN_ALINEADO_MAX_MS = 86_400_000;
 
 /**
  * El TTL de una serie del canal. La vela que cierra la trae el propio feed en
  * cuanto cierra; esto es solo la red por si ese intento falló.
  */
-const ttlDeSerie = (iv: CandleInterval): number => Math.min(candleSpanMs(iv), TTL_SERIE_MAX_MS);
+export const ttlDeSerie = (iv: CandleInterval): number => {
+  const span = candleSpanMs(iv);
+  // Mientras haya un cierre que perseguir, el refresco es el del intervalo y ya
+  // está. El techo de quince minutos hacía que la serie de 1 h se bajara CUATRO
+  // veces por hora para traer las mismas velas cerradas: 87 de peso por hora y
+  // símbolo tirados, contra un cupo que se cuenta por IP y que comparten todos
+  // los bots del usuario. Las tres descargas de más no traían nada: la vela que
+  // cierra la trae `faltaElCierre` (spec 065).
+  return span > SPAN_ALINEADO_MAX_MS ? TTL_SERIE_MAX_MS : span;
+};
 
 /** Vida de los tramos y del modo de posición leídos del venue. */
 const LECTURA_VENUE_TTL_MS = 10 * 60_000;
@@ -1045,6 +1065,9 @@ export class BotRunner {
     if (this.stopped) return;
     this.ticks++;
     const empezado = Date.now();
+    // Lo que el presupuesto de caudal llevaba acumulado ANTES de este tick: la
+    // diferencia al acabar es lo que este tick esperó durmiendo (spec 065).
+    const caudalAlEmpezar = caudalDeVenue(this.deps.bot.venue, this.deps.testnet);
     let caidaDelVenue = false;
 
     try {
@@ -1251,7 +1274,8 @@ export class BotRunner {
       // Un tick que muere porque el venue no responde no está «lento»: la caída
       // ya se cuenta aparte, y el aviso culpaba al cupo de peticiones, que no
       // tenía nada que ver (spec 050).
-      if (!caidaDelVenue) await this.avisarSiElLatidoSeEstira(Date.now() - empezado);
+      if (!caidaDelVenue)
+        await this.avisarSiElLatidoSeEstira(Date.now() - empezado, caudalAlEmpezar);
     }
   }
 
@@ -1264,19 +1288,48 @@ export class BotRunner {
    * un error, así que hasta ahora no se veía en ninguna parte (spec 031).
    *
    * Se mide el tick entero y no solo la espera del presupuesto a propósito: al
-   * usuario le importa que su bot llegue tarde, no por cuál de las razones.
+   * usuario le importa que su bot llegue tarde, no por cuál de las razones. Pero
+   * SÍ se dice cuánto fue del presupuesto, que antes se afirmaba a ciegas: el
+   * aviso culpaba al cupo del venue incluso cuando el cupo no tenía nada que ver
+   * (spec 050), y ahora o lo demuestra o no lo dice (spec 065).
+   *
+   * La espera es del VENUE en ese intervalo, no de este bot: el depósito lo
+   * comparten todos los que salen por la misma IP, y atribuírsela a uno sería
+   * mentir. El texto lo dice así.
    */
-  private async avisarSiElLatidoSeEstira(duracionMs: number): Promise<void> {
+  private async avisarSiElLatidoSeEstira(
+    duracionMs: number,
+    caudalAlEmpezar: MuestraCaudal,
+  ): Promise<void> {
     if (this.stopped || duracionMs <= this.deps.reconcileIntervalMs) return;
     const ahora = Date.now();
     if (ahora < this.slowTickAlertUntil) return;
     this.slowTickAlertUntil = ahora + SLOW_TICK_ALERT_COOLDOWN_MS;
+
+    const { venue } = this.deps.bot;
+    const fin = caudalDeVenue(venue, this.deps.testnet);
+    // La espera es de TODO lo que sale por esta IP hacia ese venue, no de este
+    // bot: el depósito se comparte, y con varios bots la suma puede pasar de lo
+    // que duró el tick. Se acota ahí y se dice de quién es, en vez de
+    // atribuirle a uno solo lo que esperaron todos.
+    const acumulada = Math.max(0, fin.esperaTotalMs - caudalAlEmpezar.esperaTotalMs);
+    const esperaMs = Math.min(acumulada, duracionMs);
+    const segundos = (ms: number) => (ms / 1000).toFixed(1).replace('.', ',');
+
+    const delCupo =
+      esperaMs >= 1000
+        ? ` Durante esa revisión, tus bots de ${venue} acumularon ${segundos(acumulada)} s ` +
+          'esperando al cupo de peticiones del venue, que hace esperar en vez de fallar. El cupo ' +
+          'se cuenta por IP, así que esa espera la comparten todos.'
+        : ' El cupo de peticiones del venue no fue el motivo: apenas hubo espera por ese lado.';
+
     await this.event(
       'TICK_SLOW',
       'WARN',
       `La revisión ha tardado ${Math.round(duracionMs / 1000)} s, más que el intervalo de ` +
-        `${Math.round(this.deps.reconcileIntervalMs / 1000)} s: el bot no está manteniendo su ritmo. ` +
-        'Suele ser el cupo de peticiones del venue, que hace esperar en vez de fallar.',
+        `${Math.round(this.deps.reconcileIntervalMs / 1000)} s: el bot no está manteniendo su ` +
+        `ritmo.${delCupo}`,
+      { duracionMs, esperaPresupuestoMs: acumulada },
     ).catch(() => undefined);
   }
 

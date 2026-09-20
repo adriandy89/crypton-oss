@@ -87,7 +87,18 @@ Cuatro detalles de diseño que te afectan:
   **realimenta** con las cabeceras `X-MBX-USED-WEIGHT` y `X-MBX-ORDER-COUNT` de cada respuesta: si otro
   cliente de la misma IP gasta cupo, el motor lo ve y frena.
 - Testnet y mainnet **no comparten** presupuesto.
-- El simulador y el backtest **no consumen cupo**.
+- El **backtest** no consume cupo: lee de velas ya descargadas. Un bot **simulado** sí, y conviene
+  saberlo: no firma ni manda órdenes, pero necesita precios y velas reales, y esos salen del mismo
+  depósito que los de tus bots reales. Desde el spec 065 reutiliza el precio que ya le entregó el
+  flujo en vez de pedirlo otra vez en cada revisión, y cuenta para el tope de bots del canal con IA
+  por venue — aunque nunca le quita el hueco a un bot real.
+- El depósito admite una **ráfaga de seis segundos** de caudal, topada en lo que el cupo del venue
+  permite (102 de peso en Hyperliquid, 5,1 en Lighter, 204 en Aster). Es lo que hace que una lectura
+  cara —las velas del canal con IA pesan 31— quepa sin dejar el depósito a cero.
+- Cuando no hay fichas **se hace cola, no carrera**: primero las críticas, luego las escrituras,
+  luego las lecturas, y dentro de cada grupo por orden de llegada. Una lectura que lleva esperando
+  pasa por delante de las escrituras que llegan después, para que un goteo continuo no la deje fuera
+  para siempre.
 
 En la práctica: Hyperliquid y Aster aguantan decenas de bots por IP; **Lighter, muy pocos**. Con
 0,85 peticiones por segundo, un market maker que recotice cada 30 s con 3 capas por lado ya se lleva una

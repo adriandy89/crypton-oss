@@ -22,7 +22,14 @@ import {
 } from '@crypton/shared';
 import { hyperliquidCodec, type ExchangeAdapter, type StreamHealth } from '@crypton/exchange-core';
 import { makeCoid } from '@crypton/strategy-core';
-import { BotRunner, type BotRunnerDeps } from './bot-runner';
+import {
+  anotarConcesion,
+  caudalDeVenue,
+  claveCaudal,
+  reiniciarCaudal,
+  type MuestraCaudal,
+} from '@crypton/exchange-core';
+import { BotRunner, ttlDeSerie, type BotRunnerDeps } from './bot-runner';
 import type { BotRecord, BotStore } from './bot-store';
 
 const BOT_ID = '1a2b3c4d-0000-0000-0000-000000000000';
@@ -181,9 +188,12 @@ function fakeStore(over: Partial<BotStore> = {}) {
    * liquidacion de antes y de despues que van dentro.
    */
   const payloads: { type: string; payload?: Record<string, unknown> }[] = [];
+  /** El TEXTO de cada evento: lo que de verdad lee el usuario en Telegram. */
+  const mensajes: string[] = [];
   const store = {
     events,
     payloads,
+    mensajes,
     cycleCalls,
     setStatus: jest.fn().mockResolvedValue(undefined),
     setLastError: jest.fn().mockResolvedValue(undefined),
@@ -198,6 +208,7 @@ function fakeStore(over: Partial<BotStore> = {}) {
       ) => {
         events.push(type);
         payloads.push({ type, payload });
+        mensajes.push(_message ?? '');
       },
     ),
     findOrderByCoid: jest.fn().mockResolvedValue(null),
@@ -593,10 +604,12 @@ describe('BotRunner', () => {
      * falla, el cortacircuitos no salta y el bot aparece «operando» con el
      * latido estirado. Antes eso no se veía en ninguna parte.
      */
-    const avisar = (runner: BotRunner, ms: number) =>
+    const avisar = (runner: BotRunner, ms: number, antes = caudalDeVenue(Venue.HYPERLIQUID)) =>
       (
-        runner as unknown as { avisarSiElLatidoSeEstira(ms: number): Promise<void> }
-      ).avisarSiElLatidoSeEstira(ms);
+        runner as unknown as {
+          avisarSiElLatidoSeEstira(ms: number, antes: MuestraCaudal): Promise<void>;
+        }
+      ).avisarSiElLatidoSeEstira(ms, antes);
 
     it('avisa cuando la revisión tarda más que el intervalo, y solo una vez', async () => {
       const { runner, store } = build({ orders: [], immediate: [] });
@@ -611,6 +624,36 @@ describe('BotRunner', () => {
       expect(store.events.filter((e) => e === 'TICK_SLOW')).toHaveLength(1);
 
       await runner.dispose();
+    });
+
+    /**
+     * El aviso culpaba al cupo del venue SIEMPRE, incluso cuando el cupo no
+     * tenía nada que ver: fue uno de los siete defectos del incidente del spec
+     * 050. Ahora o lo demuestra con la espera medida, o no lo dice (spec 065).
+     */
+    it('dice cuánto de la espera fue del presupuesto, y solo si lo fue', async () => {
+      const { runner, store } = build({ orders: [], immediate: [] });
+      await runner.start();
+
+      reiniciarCaudal();
+      const antes = caudalDeVenue(Venue.HYPERLIQUID);
+      await avisar(runner, 700_000, antes);
+      expect(store.mensajes.at(-1)).toMatch(/no fue el motivo/);
+
+      // Ahora con espera de verdad anotada en el depósito.
+      const runner2 = build({ orders: [], immediate: [] });
+      await runner2.runner.start();
+      reiniciarCaudal();
+      const base = caudalDeVenue(Venue.HYPERLIQUID);
+      anotarConcesion(claveCaudal(Venue.HYPERLIQUID, false, 'read'), 51_000);
+      await avisar(runner2.runner, 700_000, base);
+      expect(runner2.store.mensajes.at(-1)).toMatch(
+        /tus bots de HYPERLIQUID acumularon 51,0 s esperando al cupo/,
+      );
+      expect(runner2.store.mensajes.at(-1)).toMatch(/se cuenta por IP/);
+
+      await runner.dispose();
+      await runner2.runner.dispose();
     });
   });
 
@@ -3341,5 +3384,26 @@ describe('los límites de riesgo se releen con el bot vivo (spec 063)', () => {
     expect(store.setLastError).not.toHaveBeenCalledWith(BOT_ID, null);
     expect(cuantos(store, 'RISK_GUARD_CLEARED')).toBe(0);
     await runner.dispose();
+  });
+});
+
+/**
+ * Spec 065. El techo de quince minutos hacía que la serie de 1 h se bajara
+ * CUATRO veces por hora para traer las mismas velas cerradas: la que cierra ya
+ * la trae `faltaElCierre`, así que tres de cada cuatro descargas no aportaban
+ * nada y gastaban cupo de una IP que comparten todos los bots del usuario.
+ */
+describe('ttlDeSerie: el refresco de una serie es el de su intervalo', () => {
+  it('mientras haya un cierre que perseguir, manda el intervalo', () => {
+    expect(ttlDeSerie('5m')).toBe(5 * 60_000);
+    expect(ttlDeSerie('15m')).toBe(15 * 60_000);
+    expect(ttlDeSerie('1h')).toBe(3_600_000);
+    expect(ttlDeSerie('1d')).toBe(86_400_000);
+  });
+
+  it('por encima del día no hay cierre alineado, así que vuelve el techo', () => {
+    // Las semanas empiezan en lunes y los meses no duran lo mismo:
+    // `faltaElCierre` no calcula ahí el cierre esperado y nadie traería la vela.
+    expect(ttlDeSerie('1w')).toBe(15 * 60_000);
   });
 });
