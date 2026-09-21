@@ -35,6 +35,8 @@ export const DEFAULTS_CANAL = {
   maxNotionalMultiple: '5',
   liqBufferStops: 3,
   maxStopPct: '1.5',
+  maxCostPerTradeR: '0.2',
+  minTargetCostMultiple: 15,
   minRewardRisk: '1.2',
   maxEntrySlippageR: '0.2',
   maxSpreadFraction: '0.1',
@@ -58,7 +60,21 @@ export const DEFAULTS_CANAL = {
   slopedWithTrendOnly: true,
   channelWindowBars: 96,
   minChannelQuality: 'B',
-  minConfirmations: 2,
+  /**
+   * Eran 2 (spec 058). Medido sobre doce pares y ciento noventa días con el
+   * motor de backtest, exigir dos en vez de una **reduce las operaciones a la
+   * mitad y empeora el resultado**, en los tres tipos de canal a la vez:
+   *
+   * - solo banda: 12 → 26 operaciones, R medio +0,280 → +0,310, ventanas
+   *   positivas 2/6 → **6/6**;
+   * - los tres tipos: 17 → 38, R medio +0,038 → +0,205, ventanas 2/6 → 5/6.
+   *
+   * Las cuatro confirmaciones —mecha, RSI extremo, divergencia y volumen
+   * tranquilo— se diseñaron para el toque de un nivel que alguien defendió.
+   * Pedir dos filtra sin discriminar: se lleva por delante tantas buenas como
+   * malas (spec 067).
+   */
+  minConfirmations: 1,
   requireEvidence: 'NO',
   minAiConfidence: 'MEDIA',
   maxAdverseFundingBps: '1',
@@ -89,6 +105,27 @@ export interface ConfigCanal {
   topeNocional: Decimal | null;
   colchonStops: number;
   maxStopPct: Decimal;
+  /**
+   * Lo más que pueden llevarse comisiones y deslizamiento del presupuesto de
+   * riesgo, en tanto por uno (spec 066).
+   *
+   * Es el mando que faltaba. En las 28 operaciones que el walk-forward pudo
+   * medir, la distancia mediana al stop era 0,300 % contra un coste de ida y
+   * vuelta de 0,200 %: el coste se llevaba el 67 % del riesgo, y en 8 de ellas
+   * se lo llevaba entero. Una operación así no puede ganar: para sacar 1R neto
+   * necesita 2R brutos.
+   */
+  maxCosteR: Decimal;
+  /**
+   * Lo menos que tiene que recorrer el precio hasta el primer objetivo, medido
+   * en costes de ida y vuelta (spec 066).
+   *
+   * `minRR` compara el objetivo con el STOP, así que un stop diminuto lo pasa
+   * con un objetivo diminuto. Esto lo compara con lo que cuesta operar, que es
+   * lo que de verdad decide si merece la pena: medido sobre 12 pares y 7 meses,
+   * con la puerta en 15× el R medio pasa de −0,2295 a +0,1043.
+   */
+  minObjetivoCoste: number;
   minRR: number;
   maxDeslizamientoR: Decimal;
   maxSpreadFraccion: number;
@@ -217,7 +254,7 @@ export function leerConfig(cfg: BotConfig, venue: Venue): ConfigCanal {
   );
   const canal = enumerado(
     c['allowedChannels'],
-    ['TODOS', 'HORIZONTAL', 'INCLINADO'],
+    ['TODOS', 'HORIZONTAL', 'INCLINADO', 'BANDA'],
     d.allowedChannels,
   );
   const tope = decimal(c['maxNotionalCap'], '0');
@@ -241,6 +278,8 @@ export function leerConfig(cfg: BotConfig, venue: Venue): ConfigCanal {
     topeNocional: tope.gt(0) ? tope : null,
     colchonStops: Math.max(3, entero(c['liqBufferStops'], d.liqBufferStops)),
     maxStopPct: decimal(c['maxStopPct'], d.maxStopPct),
+    maxCosteR: decimal(c['maxCostPerTradeR'], d.maxCostPerTradeR),
+    minObjetivoCoste: entero(c['minTargetCostMultiple'], d.minTargetCostMultiple),
     minRR: decimal(c['minRewardRisk'], d.minRewardRisk).toNumber(),
     maxDeslizamientoR: decimal(c['maxEntrySlippageR'], d.maxEntrySlippageR),
     maxSpreadFraccion: decimal(c['maxSpreadFraction'], d.maxSpreadFraction).toNumber(),
@@ -266,7 +305,8 @@ export function leerConfig(cfg: BotConfig, venue: Venue): ConfigCanal {
     invalidacionAtr: decimal(c['invalidationAtr'], d.invalidationAtr).toNumber(),
 
     setups: setup === 'TODOS' ? [TipoSetup.REBOTE, TipoSetup.FALSO_QUIEBRE] : [setup],
-    canales: canal === 'TODOS' ? [TipoCanal.HORIZONTAL, TipoCanal.INCLINADO] : [canal],
+    canales:
+      canal === 'TODOS' ? [TipoCanal.HORIZONTAL, TipoCanal.INCLINADO, TipoCanal.BANDA] : [canal],
     inclinadoSoloAFavor: booleano(c['slopedWithTrendOnly'], d.slopedWithTrendOnly),
     ventanaCanal: entero(c['channelWindowBars'], d.channelWindowBars),
     calidadMinima: enumerado(

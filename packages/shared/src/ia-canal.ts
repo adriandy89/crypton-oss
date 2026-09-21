@@ -1,4 +1,9 @@
 import type { PositionSide } from './enums';
+// Import de SOLO TIPOS, y por eso el ciclo con `ia-trader.ts` es inocuo:
+// TypeScript los borra al compilar y no queda dependencia en tiempo de
+// ejecución. Las dos uniones de abajo viven aquí porque es aquí donde están
+// `SolicitudIa` y `MarcaDecision`, que es lo que de verdad se amplía.
+import type { EspacioTrader, PlanTrader } from './ia-trader';
 
 /**
  * El vocabulario del canal con IA (`AI_CHANNEL`, specs 058-059).
@@ -32,7 +37,19 @@ export type RegimenMercado = (typeof RegimenMercado)[keyof typeof RegimenMercado
 export const SentidoTendencia = { ALCISTA: 'ALCISTA', BAJISTA: 'BAJISTA' } as const;
 export type SentidoTendencia = (typeof SentidoTendencia)[keyof typeof SentidoTendencia];
 
-export const TipoCanal = { HORIZONTAL: 'HORIZONTAL', INCLINADO: 'INCLINADO' } as const;
+/**
+ * Cómo se trazaron las dos líneas del canal.
+ *
+ * `HORIZONTAL` e `INCLINADO` salen de unir giros del precio: son niveles que el
+ * mercado defendió de verdad. `BANDA` (spec 067) son las bandas de Bollinger,
+ * que no son un nivel defendido sino una frontera estadística; de ahí que su
+ * stop vaya más lejos y que no se le pidan las comprobaciones de pivotes.
+ */
+export const TipoCanal = {
+  HORIZONTAL: 'HORIZONTAL',
+  INCLINADO: 'INCLINADO',
+  BANDA: 'BANDA',
+} as const;
 export type TipoCanal = (typeof TipoCanal)[keyof typeof TipoCanal];
 
 export const CalidadCanal = { A: 'A', B: 'B', C: 'C' } as const;
@@ -594,11 +611,59 @@ export interface DecisionIa {
 }
 
 /** Lo que el worker escribe como `SOLICITADA` y la API consulta (059). */
+/**
+ * Lo que una estrategia le ofrece a quien decide.
+ *
+ * Cada una tiene su forma: el canal ofrece candidatos con opciones, el «Bot de
+ * IA» ofrece una matriz de nueve celdas (spec 068). El lazo de intenciones no
+ * mira dentro — lo guarda como JSON y se lo devuelve a su estrategia—, así que
+ * la unión es aquí y no hay que tocarlo a él para añadir la siguiente.
+ */
+export type OfertaDecision = SalidaHerramienta | EspacioTrader;
+
+/** El plan que sale de una decisión. También uno por estrategia. */
+export type PlanDecision = PlanOperacion | PlanTrader;
+
+/**
+ * ¿La oferta es la del canal?
+ *
+ * Las dos estrategias guardan la suya en la misma columna, así que quien la
+ * lee tiene que estrecharla. Se distingue por una clave que solo tiene una de
+ * las dos, no por el nombre de la estrategia: así un cambio de estrategia con
+ * una intención viva no lee una forma por otra.
+ */
+export const esOfertaCanal = (o: OfertaDecision): o is SalidaHerramienta =>
+  typeof o === 'object' && o !== null && 'candidatos' in o;
+
+/**
+ * Ídem para el plan.
+ *
+ * Mira **las dos** claves que solo tiene el canal, no una. Con una sola, un
+ * plan del canal al que le faltara justo esa se leía como del «Bot de IA» y
+ * reventaba al buscarle un veredicto que no tiene. Es barato ser generoso aquí.
+ */
+export const esPlanCanal = (p: PlanDecision): p is PlanOperacion =>
+  typeof p === 'object' && p !== null && ('eleccion' in p || 'setup' in p);
+
+/**
+ * El identificador de lo elegido, sea cual sea la estrategia.
+ *
+ * El lazo de intenciones lo guarda en `bot_ai_intents.candidato_id` para poder
+ * comparar decisiones entre modelos sin tener que saber de qué estrategia son.
+ * El canal tiene candidatos con id; el «Bot de IA» tiene una celda de su
+ * matriz, que se nombra por sus dos enumeraciones.
+ */
+export const candidatoDe = (p: PlanDecision): string =>
+  esPlanCanal(p) ? p.candidatoId : `${p.veredicto.stop}|${p.veredicto.objetivo}`;
+
+/** Lo que se guarda como «decisión»: la elección del canal o el veredicto. */
+export const decisionDe = (p: PlanDecision): unknown => (esPlanCanal(p) ? p.eleccion : p.veredicto);
+
 export interface SolicitudIa {
   barT: number;
   huella: string;
   expiresAt: number;
-  snapshot: SalidaHerramienta;
+  snapshot: OfertaDecision;
 }
 
 /** Un objetivo de beneficio de la operación. */
@@ -652,7 +717,7 @@ export interface MarcaDecision {
   intentId: string;
   estado: typeof EstadoIntencion.ACEPTADA | typeof EstadoIntencion.RECHAZADA;
   motivo: MotivoRechazo | null;
-  plan: PlanOperacion | null;
+  plan: PlanDecision | null;
 }
 
 /**

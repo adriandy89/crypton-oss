@@ -44,6 +44,13 @@ export const StrategyKind = {
    * administradores.
    */
   AI_CHANNEL: 'AI_CHANNEL',
+  /**
+   * El «Bot de IA» (spec 068): toques del borde de una banda de Bollinger, con
+   * motor propio y el apalancamiento que permite el stop. El motor calcula una
+   * matriz de nueve operaciones y quien decide elige entre ellas. Solo para
+   * administradores.
+   */
+  AI_TRADER: 'AI_TRADER',
 } as const;
 export type StrategyKind = (typeof StrategyKind)[keyof typeof StrategyKind];
 
@@ -55,7 +62,25 @@ export type StrategyKind = (typeof StrategyKind)[keyof typeof StrategyKind];
  * suyo si su dueno no es administrador. Una sola lista para todos esos sitios:
  * una copia en cada uno es un sitio mas donde olvidarse de la siguiente.
  */
-export const ESTRATEGIAS_SOLO_ADMIN: readonly StrategyKind[] = [StrategyKind.AI_CHANNEL];
+export const ESTRATEGIAS_SOLO_ADMIN: readonly StrategyKind[] = [
+  StrategyKind.AI_CHANNEL,
+  StrategyKind.AI_TRADER,
+];
+
+/**
+ * Las estrategias que deciden por el lazo de intenciones (`bot_ai_intents`).
+ *
+ * Comparten el tope de bots por venue, porque lo escaso es el cupo de
+ * peticiones por IP y no la estrategia: repartirlo por estrategia sería volver
+ * al incidente de caudal del spec 065 por otro camino.
+ */
+export const ESTRATEGIAS_CON_INTENCIONES: readonly StrategyKind[] = [
+  StrategyKind.AI_CHANNEL,
+  StrategyKind.AI_TRADER,
+];
+
+export const esEstrategiaConIntenciones = (kind: string): boolean =>
+  (ESTRATEGIAS_CON_INTENCIONES as readonly string[]).includes(kind);
 
 export const esEstrategiaSoloAdmin = (kind: string): boolean =>
   (ESTRATEGIAS_SOLO_ADMIN as readonly string[]).includes(kind);

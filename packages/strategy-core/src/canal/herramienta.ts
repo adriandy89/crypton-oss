@@ -25,11 +25,11 @@ import {
   TamanoOperacion,
   TipoStop,
   Veredicto,
-  apalancamientoPorStop,
   candleSpanMs,
   maintenanceMarginRateOf,
   precioLiquidacionAislada,
   type BandaCalculada,
+  TipoCanal,
   type CanalDetectado,
   type CandidatoOperacion,
   type ContextoMercado,
@@ -46,16 +46,54 @@ import {
   type UsoDelDia,
 } from '@crypton/shared';
 import { px, qy } from '../common';
+import { dimensionar, llegaAlMinimo, tramosOrdenados } from '../dimension';
+
+// Se mudaron a `../dimension.ts` (spec 068). Se reexportan para no arrastrar a
+// sus importadores en el mismo commit que el traslado.
+export { llegaAlMinimo, tramosOrdenados };
 import { nivelTexto } from './canales';
 import type { ConfigCanal, EvidenciaMinima } from './config';
+import { costeIdaVuelta } from './costes';
 import { aDecimal } from './numeros';
 import type { CandidatoBase } from './setups';
 
-/** A cuántos ATR(15m) más allá del extremo va cada stop, antes del medio spread. */
-export const ATR_POR_STOP: Readonly<Record<TipoStop, number>> = {
-  [TipoStop.AJUSTADO]: 0.25,
-  [TipoStop.NORMAL]: 0.5,
-  [TipoStop.AMPLIO]: 1,
+/**
+ * A cuántos ATR(15m) más allá del extremo va cada stop, antes del medio spread.
+ *
+ * Con esta escalera, el coste de ida y vuelta —fijo en porcentaje— se llevaba
+ * el 67 % del riesgo en la operación mediana y el riesgo ENTERO en ocho de cada
+ * veintiocho: aritmética imposible antes de mirar el mercado.
+ *
+ * Se probó a ensancharla a 1 / 1,5 / 2,5 (spec 066), con el razonamiento de que
+ * para dejar el coste por debajo del quinto del riesgo hace falta un stop de
+ * unas cinco veces el coste, y en velas de 15 minutos eso es un par de ATR. No
+ * funcionó: el stop se iba por encima de `maxStopPct` y las opciones pasaban de
+ * morir por COSTE a morir por STOP_ANCHO, sin ninguna operación de más.
+ *
+ * La escalera se queda donde estaba y quien descarta la aritmética imposible es
+ * `maxCosteR`, que mide justo eso y además es del usuario.
+ */
+export const ATR_POR_STOP: Readonly<Record<TipoCanal, Readonly<Record<TipoStop, number>>>> = {
+  [TipoCanal.HORIZONTAL]: {
+    [TipoStop.AJUSTADO]: 0.25,
+    [TipoStop.NORMAL]: 0.5,
+    [TipoStop.AMPLIO]: 1,
+  },
+  [TipoCanal.INCLINADO]: {
+    [TipoStop.AJUSTADO]: 0.25,
+    [TipoStop.NORMAL]: 0.5,
+    [TipoStop.AMPLIO]: 1,
+  },
+  // Una banda de Bollinger no es un precio que nadie haya defendido: es la
+  // desviación típica de los últimos veinte cierres, y el precio la atraviesa
+  // sin que pase nada. Un stop pegado al borde salta por ruido. La medición que
+  // trajo este tipo de canal usaba **2 ATR**, y con un cuarto de ATR ni se
+  // parece: por eso aquí la escalera es otra (spec 067).
+  [TipoCanal.BANDA]: {
+    [TipoStop.AJUSTADO]: 1,
+    [TipoStop.NORMAL]: 1.5,
+    [TipoStop.AMPLIO]: 2.5,
+  },
 };
 
 export const TIPOS_STOP: readonly TipoStop[] = [
@@ -165,10 +203,11 @@ export function precioDeStop(
   e: Pick<EntradaHerramienta, 'market' | 'ticker' | 'mercado'>,
   cand: Pick<CandidatoBase, 'lado' | 'extremo'>,
   tipo: TipoStop,
+  tipoCanal: TipoCanal,
 ): Decimal | null {
   const largo = cand.lado === 'LONG';
   const medioSpread = D(e.ticker.ask).minus(e.ticker.bid).abs().div(2);
-  const distancia = D(e.mercado.atr15m).mul(ATR_POR_STOP[tipo]).plus(medioSpread);
+  const distancia = D(e.mercado.atr15m).mul(ATR_POR_STOP[tipoCanal][tipo]).plus(medioSpread);
   const extremo = aDecimal(cand.extremo);
   const bruto = largo ? extremo.minus(distancia) : extremo.plus(distancia);
   if (!bruto.gt(0)) return null;
@@ -215,21 +254,6 @@ export function preciosDeEntrada(
  * Los tramos del par de menor a mayor nocional. Sin tramos, o si el primero no
  * empieza en cero, rige el del mercado entero, como en `tramoDeApalancamiento`.
  */
-export function tramosOrdenados(
-  niveles: readonly NivelApalancamiento[],
-  maxMercado: number,
-  mantenimientoMercado: number,
-): NivelApalancamiento[] {
-  const orden = [...niveles].sort((a, b) => D(a.desdeNocional).comparedTo(b.desdeNocional));
-  if (orden.length === 0 || D(orden[0].desdeNocional).gt(0)) {
-    orden.unshift({
-      desdeNocional: '0',
-      maxApalancamiento: maxMercado,
-      mantenimiento: mantenimientoMercado,
-    });
-  }
-  return orden;
-}
 
 const inviable = (tipo: TipoStop, precio: string, motivo: string): OpcionStop => ({
   tipo,
@@ -262,20 +286,6 @@ const inviable = (tipo: TipoStop, precio: string, motivo: string): OpcionStop =>
  */
 export const medioLlegaAlMinimo = (market: MarketSpec, cantidad: Decimal, tope: Decimal): boolean =>
   llegaAlMinimo(market, D(qy(market, cantidad.div(2))), tope);
-
-interface Dimension {
-  cantidad: Decimal;
-  nocional: Decimal;
-  lMin: number;
-  lMax: number;
-  mantenimiento: number;
-}
-
-/** ¿Llega la orden a los mínimos del venue? */
-export const llegaAlMinimo = (market: MarketSpec, cantidad: Decimal, precio: Decimal): boolean =>
-  cantidad.gt(0) &&
-  !(market.minQty && cantidad.lt(market.minQty)) &&
-  !(market.minNotional && cantidad.mul(precio).lt(market.minNotional));
 
 /**
  * Una opción de stop con todos sus números.
@@ -313,74 +323,60 @@ export function opcionDeStop(
   // entrada (la IOC es taker) y la salida a mercado con su deslizamiento.
   const porUnidad = distancia.plus(tope.mul(taker)).plus(stop.mul(taker.plus(deslizamiento)));
 
+  // ── Que la aritmética cierre ANTES de dimensionar nada (spec 066) ──
+  //
+  // `costeR` es la parte del riesgo que se van comisiones y deslizamiento. Se
+  // calculaba ya, al final, y solo se le enseñaba a la IA: era información, no
+  // una puerta. Con 0,67 de coste por R —la mediana medida— una operación
+  // necesita 2R brutos para sacar 1R neto, y eso no lo arregla ningún acierto.
+  const costeR = porUnidad.minus(distancia).div(distancia);
+  if (costeR.gt(cfg.maxCosteR)) return inviable(tipo, precioStop, 'COSTE');
+
+  // Y el objetivo se mide en COSTES, no solo en múltiplos del stop: `minRR`
+  // compara con el stop, así que uno diminuto pasa con un objetivo diminuto.
+  //
+  // Se mide contra el objetivo MÁS CERCANO que algún esquema admitido vaya a
+  // usar de verdad. `tp1` es la media del canal y `tp2` el borde opuesto, al
+  // doble de distancia: a quien solo admite `OPUESTO` no se le puede negar la
+  // entrada por lo corto que le quedaría un objetivo que nunca va a poner.
+  const soloOpuesto = cfg.esquemas.every((x) => x === EsquemaObjetivo.OPUESTO);
+  const objetivo = soloOpuesto ? tp2 : tp1;
+  const idaYVuelta = D(costeIdaVuelta(tope.toNumber(), cfg.costes, 0));
+  if (objetivo.minus(tope).abs().lt(idaYVuelta.mul(cfg.minObjetivoCoste))) {
+    return inviable(tipo, precioStop, 'OBJETIVO_CORTO');
+  }
+
   const maxMargen = Decimal.min(
     cfg.capital.mul(cfg.maxMargenPct).div(100),
     D(e.saldoLibre).mul(PARTE_DEL_SALDO),
   );
   if (!maxMargen.gt(0)) return inviable(tipo, precioStop, 'SIN_MARGEN');
 
-  // El stop de mercado tiene que cerrar la posición entera de una vez.
-  const topesCantidad = [market.maxQty, market.maxMarketQty]
-    .filter((q): q is string => !!q && D(q).gt(0))
-    .map((q) => D(q));
-
-  const atr1hRelativo = D(e.mercado.atr1h).div(tope);
-  const tramos = tramosOrdenados(e.niveles, market.maxLeverage, maintenanceMarginRateOf(market));
-  let mejor: Dimension | null = null;
-  let motivo = 'APALANCAMIENTO';
-  // El tramo depende del nocional, y el nocional del apalancamiento que permite
-  // el tramo. Se calcula en cada tramo con SUS reglas y el nocional acotado a
-  // él, y se queda el mayor. Iterar hasta que casen puede oscilar entre dos.
-  for (let i = 0; i < tramos.length; i++) {
-    const tramo = tramos[i];
-    const hasta = i + 1 < tramos.length ? D(tramos[i + 1].desdeNocional) : null;
-    const lev = apalancamientoPorStop({
-      distanciaStop: s,
-      atr1hRelativo,
-      liqBufferStops: cfg.colchonStops,
-      mantenimiento: tramo.mantenimiento,
-      topes: [
-        APALANCAMIENTO_MAXIMO,
-        cfg.apalancamientoTope,
-        tramo.maxApalancamiento,
-        market.maxLeverage,
-        e.maxApalancamientoUsuario ?? APALANCAMIENTO_MAXIMO,
-      ],
-    });
-    if (lev.maximo < 1) continue;
-
-    const topes = [
-      riesgo.div(porUnidad).mul(tope),
-      cfg.capital.mul(cfg.multiploNocional),
-      cfg.capital.mul(lev.maximo),
-    ];
-    if (cfg.topeNocional) topes.push(cfg.topeNocional);
-    if (hasta) topes.push(hasta);
-    let objetivo = Decimal.min(...topes);
-    let lMin = objetivo.div(maxMargen).toDecimalPlaces(0, Decimal.ROUND_CEIL).toNumber();
-    if (lMin > lev.maximo) {
-      // Ni al máximo cabe el margen: se reduce el nocional, no se sube la palanca.
-      objetivo = maxMargen.mul(lev.maximo);
-      lMin = lev.maximo;
-    }
-    lMin = Math.max(1, lMin);
-    if (objetivo.lt(tramo.desdeNocional)) continue;
-
-    let cantidad = D(qy(market, objetivo.div(tope)));
-    for (const q of topesCantidad) if (cantidad.gt(q)) cantidad = D(qy(market, q));
-    if (hasta && cantidad.mul(tope).gte(hasta)) cantidad = cantidad.minus(market.stepSize);
-    if (!cantidad.gt(0)) {
-      motivo = 'MINIMO';
-      continue;
-    }
-    const nocional = cantidad.mul(tope);
-    if (!mejor || nocional.gt(mejor.nocional)) {
-      mejor = { cantidad, nocional, lMin, lMax: lev.maximo, mantenimiento: tramo.mantenimiento };
-    }
-  }
+  // El dimensionado por tramos vive en `../dimension.ts` desde el spec 068: lo
+  // comparten esta herramienta y el motor del «Bot de IA», y una copia en cada
+  // sitio sería un sitio más donde olvidarse del siguiente arreglo.
+  const { dim: mejor, motivo } = dimensionar({
+    market,
+    niveles: e.niveles,
+    tope,
+    distanciaStop: s,
+    atr1hRelativo: D(e.mercado.atr1h).div(tope),
+    riesgo,
+    perdidaPorUnidad: porUnidad,
+    capital: cfg.capital,
+    multiploNocional: cfg.multiploNocional,
+    topeNocional: cfg.topeNocional,
+    maxMargen,
+    colchonStops: cfg.colchonStops,
+    topesApalancamiento: [
+      APALANCAMIENTO_MAXIMO,
+      cfg.apalancamientoTope,
+      e.maxApalancamientoUsuario ?? APALANCAMIENTO_MAXIMO,
+    ],
+    mantenimientoMercado: maintenanceMarginRateOf(market),
+  });
   if (!mejor) return inviable(tipo, precioStop, motivo);
   const { cantidad, nocional } = mejor;
-  if (!llegaAlMinimo(market, cantidad, tope)) return inviable(tipo, precioStop, 'MINIMO');
 
   const perdidaAlStop = porUnidad.mul(cantidad);
   const bandas: BandaCalculada[] = [];
@@ -420,8 +416,18 @@ export function opcionDeStop(
   const r2 = rNeto(tp2);
   const esquemasViables: EsquemaObjetivo[] = [];
   if (r1 >= cfg.minRR) esquemasViables.push(EsquemaObjetivo.MEDIA, EsquemaObjetivo.ESCALONADO);
-  if (r2 >= cfg.minRR) esquemasViables.push(EsquemaObjetivo.OPUESTO);
-  const permitidos = esquemasViables.filter((x) => cfg.esquemas.includes(x));
+  // En un canal de banda, el borde opuesto está a CUATRO sigmas: apuntar ahí no
+  // es revertir a la media, es pedir la travesía entera del canal. Medido sobre
+  // doce pares y siete meses, dejar que el juez eligiera el borde opuesto —o el
+  // escalonado, que cobra la mitad ahí— hundía el R medio de +0,28 a −0,21 y el
+  // acierto del 42 % al 21 %: más de la mitad de las operaciones no llegaban a
+  // ninguna barrera y morían por tiempo. En un canal de giros el borde opuesto
+  // es un precio que el mercado ya defendió, y ahí sigue teniendo sentido.
+  const travesiaEntera = e.canal?.tipo === TipoCanal.BANDA;
+  if (r2 >= cfg.minRR && !travesiaEntera) esquemasViables.push(EsquemaObjetivo.OPUESTO);
+  const permitidos = esquemasViables
+    .filter((x) => cfg.esquemas.includes(x))
+    .filter((x) => !(travesiaEntera && x === EsquemaObjetivo.ESCALONADO));
   const equilibrio = (r: number): number | null => (r > 0 ? 1 / (1 + r) : null);
 
   return {
@@ -441,7 +447,7 @@ export function opcionDeStop(
     apalancamientoMaximo: mejor.lMax,
     rNetoTp1: r1,
     rNetoTp2: r2,
-    costeR: porUnidad.minus(distancia).div(distancia).toNumber(),
+    costeR: costeR.toNumber(),
     aciertoEquilibrioTp1: equilibrio(r1),
     aciertoEquilibrioTp2: equilibrio(r2),
     riesgoPctCapital: perdidaAlStop.div(cfg.capital).mul(100).toNumber(),
@@ -470,7 +476,7 @@ export function herramientaCanal(e: EntradaHerramienta): SalidaHerramienta {
     : e.candidatos.map((cand) => {
         const largo = cand.lado === 'LONG';
         const { tp1, tp2 } = objetivosDelCanal(e.market, canal, largo, e.ahora);
-        const precios = TIPOS_STOP.map((tipo) => precioDeStop(e, cand, tipo));
+        const precios = TIPOS_STOP.map((tipo) => precioDeStop(e, cand, tipo, canal.tipo));
         const { referencia, tope } = preciosDeEntrada(
           e.market,
           e.ticker,

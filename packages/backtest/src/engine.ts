@@ -18,7 +18,11 @@ import {
   type LimitesExternos,
   type MarketSpec,
   type NivelApalancamiento,
+  candidatoDe,
+  esPlanCanal,
+  type PlanDecision,
   type PlanOperacion,
+  type PlanTrader,
   type Position,
   type SalidaOperacion,
   type StrategyKind,
@@ -151,14 +155,35 @@ export interface ReplayOutput {
 }
 
 /** El plan que la estrategia guardó en el scratch al entrar (`scratch.op`). */
-function planGuardado(scratch: Record<string, unknown>): PlanOperacion | null {
+/**
+ * El plan que la estrategia dejó en el scratch antes de colocar su entrada.
+ *
+ * Las dos estrategias con contrato de intenciones lo guardan en la misma clave
+ * y cada una tiene su forma. Exigir `setup` —que solo tiene la del canal— hacía
+ * que las operaciones del «Bot de IA» no se registraran nunca: el replay las
+ * ejecutaba y movía el PnL, pero salían **cero operaciones**, que es la peor
+ * clase de fallo porque parece un resultado en vez de un agujero (spec 068).
+ */
+function planGuardado(scratch: Record<string, unknown>): PlanDecision | null {
   const op = scratch['op'];
   if (!op || typeof op !== 'object') return null;
   const plan = (op as { plan?: unknown }).plan;
   if (!plan || typeof plan !== 'object') return null;
-  const p = plan as Partial<PlanOperacion>;
-  return typeof p.riesgo === 'string' && typeof p.setup === 'string' ? (p as PlanOperacion) : null;
+  const p = plan as Partial<PlanOperacion & PlanTrader>;
+  if (typeof p.riesgo !== 'string') return null;
+  // Del canal si trae `setup`; del «Bot de IA» si trae su veredicto.
+  if (typeof p.setup === 'string') return p as PlanOperacion;
+  return p.veredicto ? (p as PlanTrader) : null;
 }
+
+/** El «setup» de una operación, para el histórico. Cada estrategia el suyo. */
+const setupDe = (p: PlanDecision): string =>
+  esPlanCanal(p) ? p.setup : `BANDA_${p.veredicto.stop}`;
+
+// Expuestas solo para su test: es el agujero que hizo que el «Bot de IA»
+// midiera cero operaciones con el PnL moviéndose (spec 068).
+export const planGuardadoParaTest = planGuardado;
+export const setupDeParaTest = setupDe;
 
 /** Por qué terminó una operación, según la orden que la cerró. */
 function salidaDe(
@@ -434,7 +459,7 @@ export async function runReplay(opts: ReplayOptions): Promise<ReplayOutput> {
 
   // ── El registro por operación (spec 058) ──
   const operaciones: BacktestOperacionView[] = [];
-  let abierta: { plan: PlanOperacion; entradaEn: number; precio: string } | null = null;
+  let abierta: { plan: PlanDecision; entradaEn: number; precio: string } | null = null;
   /** Avisos de la estrategia vivos, y cuántas veces saltó cada tipo. */
   const avisosVivos = new Set<string>();
   const avisosPorTipo = new Map<string, number>();
@@ -539,9 +564,9 @@ export async function runReplay(opts: ReplayOptions): Promise<ReplayOutput> {
         if (abierta) {
           const riesgo = D(abierta.plan.riesgo);
           operaciones.push({
-            setup: abierta.plan.setup,
+            setup: setupDe(abierta.plan),
             lado: abierta.plan.lado,
-            candidatoId: abierta.plan.candidatoId,
+            candidatoId: candidatoDe(abierta.plan),
             entradaEn: abierta.entradaEn,
             salidaEn: raw.ts,
             precioEntrada: abierta.precio,

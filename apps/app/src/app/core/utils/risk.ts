@@ -58,7 +58,7 @@ export function liqTone(
  * es lo que se pinta, con esos mismos umbrales.
  */
 export const liqPorCamino = (strategy: string | null | undefined): boolean =>
-  strategy === 'AI_CHANNEL';
+  strategy === 'AI_CHANNEL' || strategy === 'AI_TRADER';
 
 export const CAMINO_WARN_PCT = 100 / 3;
 export const CAMINO_DANGER_PCT = 200 / 3;

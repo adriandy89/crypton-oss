@@ -186,3 +186,37 @@ describe('lados y divergencia', () => {
     expect(hayDivergencia(s, rsi, [giro], 98.9, 'LONG')).toBe(false);
   });
 });
+
+/**
+ * El canal de banda (spec 067). Aquí el borde no es un precio que nadie haya
+ * defendido, así que las dos distancias que deciden si hay toque se miden en
+ * fracción de la anchura y no en ATR: la regla que se midió entraba con
+ * %B ≤ 0,1, o sea dentro del décimo exterior.
+ */
+describe('detectarSetups — el borde de una banda (spec 067)', () => {
+  const BANDA: CanalDetectado = { ...CANAL, id: 'B1', tipo: TipoCanal.BANDA };
+  // Anchura 2,10: el décimo es 0,21 y el tercio, 0,70.
+  const DECIMO = 98.95 + 0.21;
+  const TERCIO = 98.95 + 0.7;
+
+  /** Un toque cuyo cierre queda a `cierre`, con mecha de rechazo. */
+  const toque = (cierre: number): [number, number, number, number][] => [
+    [cierre, cierre + 0.02, 98.98, cierre],
+    [cierre, cierre + 0.12, 98.92, cierre],
+  ];
+
+  it('con el cierre dentro del décimo, hay rebote', () => {
+    const [c] = detectar(cinco(toque(DECIMO - 0.05), 100.5, DECIMO - 0.05), {}, BANDA);
+    expect(c?.setup).toBe(TipoSetup.REBOTE);
+    expect(c?.lado).toBe('LONG');
+  });
+
+  it('con el cierre en el tercio, que el canal de giros aceptaría, no lo hay', () => {
+    const velas = cinco(toque(TERCIO - 0.05), 100.5, TERCIO - 0.05);
+
+    expect(detectar(velas, {}, BANDA)).toHaveLength(0);
+    // Y la prueba de que la diferencia es del tipo de canal y no del fixture:
+    // el mismo toque sobre un canal de giros sí se acepta.
+    expect(detectar(velas, {}, CANAL)[0]?.setup).toBe(TipoSetup.REBOTE);
+  });
+});

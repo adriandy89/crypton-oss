@@ -174,3 +174,77 @@ describe('puntuación y niveles', () => {
     expect(nivelTexto(0.000123456789012345)).toBe('0.000123456789012');
   });
 });
+
+/**
+ * El canal de banda (spec 067). Aquí las líneas no salen de unir giros sino de
+ * Bollinger(20, 2) sobre los cierres, así que lo que hay que comprobar es justo
+ * lo contrario que arriba: que se detecta **sin** pedirle pivotes, y que sigue
+ * sin detectarse donde no hay nada que revertir.
+ */
+describe('detectarCanal: el canal de banda (spec 067)', () => {
+  const soloBanda = { tiposPermitidos: [TipoCanal.BANDA] };
+
+  /**
+   * La mecha de 0,2 no es decorado. La banda a dos sigmas de un seno de
+   * amplitud 1 queda en ±1,41, y su décimo exterior empieza en 1,13: con la
+   * mecha por defecto (0,05) el precio se queda en 1,05 y no llega nunca. En el
+   * mercado de verdad sí llega, porque la volatilidad se contrae y se expande;
+   * en un seno perfecto, no.
+   */
+  it('un rango es un canal de banda, con sus líneas en la desviación típica', () => {
+    const r = detectar(senoidal({ n: 200, periodo: 12, mecha: 0.2 }), soloBanda);
+
+    expect(r.canal?.tipo).toBe(TipoCanal.BANDA);
+    // Un seno de amplitud 1 tiene desviación típica 1/√2 ≈ 0,707; dos sigmas
+    // son 1,41 a cada lado de la media, o sea una banda de unos 2,8 de ancho.
+    const ancho = Number(r.canal!.resistencia) - Number(r.canal!.soporte);
+    expect(ancho).toBeGreaterThan(2.5);
+    expect(ancho).toBeLessThan(3.1);
+    expect(Number(r.canal!.media)).toBeCloseTo(100, 0);
+  });
+
+  it('una tendencia limpia no es un canal de banda', () => {
+    // La banda acompaña al precio, así que nunca la toca por abajo: sin toques
+    // de soporte no hay canal, y además la contención no llega.
+    expect(detectar(recta(200, 0.05), soloBanda).canal).toBeNull();
+  });
+
+  it('encuentra rango donde las rectas sobre giros se quedan cortas', () => {
+    // Un seno de periodo 8: los giros van tan seguidos que las dos rectas
+    // ajustadas a ellos no pasan ni su R² ni su pendiente mínima. La banda no
+    // ajusta ninguna recta, así que ahí sí ve el rango que hay.
+    const velas = senoidal({ n: 200, periodo: 8, mecha: 0.2 });
+    const porGiros = detectar(velas, {
+      tiposPermitidos: [TipoCanal.HORIZONTAL, TipoCanal.INCLINADO],
+    });
+
+    expect(porGiros.canal).toBeNull();
+    expect(porGiros.motivos).toEqual(expect.arrayContaining(['R2', 'PENDIENTE_PLANA']));
+    expect(detectar(velas, soloBanda).canal?.tipo).toBe(TipoCanal.BANDA);
+  });
+
+  it('las tres puertas de rectas no le llegan, porque no hay rectas que medir', () => {
+    const r = detectar(senoidal({ n: 200, periodo: 12, mecha: 0.2 }), soloBanda);
+    expect(r.motivos).not.toContain('PARALELAS');
+    expect(r.motivos).not.toContain('PENDIENTE_PLANA');
+    expect(r.motivos).not.toContain('R2');
+    expect(r.canal!.r2).toBeNull();
+  });
+
+  it('pero las demás sí: un rango demasiado estrecho para sus costes no pasa', () => {
+    const r = detectar(senoidal({ n: 200, periodo: 12, mecha: 0.2 }), {
+      ...soloBanda,
+      costeIdaVuelta: 10,
+    });
+    expect(r.canal).toBeNull();
+    expect(r.motivos).toContain('ANCHURA_COSTE');
+  });
+
+  it('compite con los otros dos por puntuación, no los sustituye', () => {
+    const r = detectar(senoidal({ n: 200, periodo: 12 }), {
+      tiposPermitidos: [TipoCanal.HORIZONTAL, TipoCanal.INCLINADO, TipoCanal.BANDA],
+    });
+    // El horizontal de este seno es de calidad A: gana él.
+    expect(r.canal?.tipo).toBe(TipoCanal.HORIZONTAL);
+  });
+});

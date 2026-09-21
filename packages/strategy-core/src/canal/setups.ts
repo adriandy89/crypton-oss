@@ -17,7 +17,7 @@ import {
   TipoSetup,
   type CanalDetectado,
 } from '@crypton/shared';
-import { nivelesEn, type FalsoQuiebre } from './canales';
+import { DECIMO_BANDA, nivelesEn, type FalsoQuiebre } from './canales';
 import { rsi, sma } from './estadistica';
 import type { SerieNumerica } from './numeros';
 import type { Giro } from './swings';
@@ -129,9 +129,23 @@ export function detectarSetups(
   const r14 = rsi(s5.c, 14)[b];
   const r2 = rsi(s5.c, 2)[b];
   const rsi15 = rsi(s15.c, 14);
-  const eps = EPS_ATR * atr15;
   const { soporte, resistencia } = nivelesEn(canal, s5.t[b]);
   const anchura = resistencia - soporte;
+  // Cuánto se acepta que falte para «estar en el borde». Un borde trazado desde
+  // giros es un precio que el mercado defendió, y ahí un cuarto de ATR es
+  // mucho. Una banda de Bollinger no la defiende nadie: el precio se le ACERCA
+  // y se da la vuelta antes de llegar, y la regla que se midió entraba en su
+  // décimo exterior (%B ≤ 0,1), que suele ser medio ATR (spec 067).
+  const eps =
+    canal.tipo === TipoCanal.BANDA
+      ? Math.max(EPS_ATR * atr15, DECIMO_BANDA * anchura)
+      : EPS_ATR * atr15;
+  // Y hasta dónde puede haberse alejado el CIERRE del borde y seguir contando.
+  // En un canal de giros es el tercio, que viene del spec 058. En una banda, el
+  // décimo: la regla que se midió entraba con %B ≤ 0,1, y admitir el tercio es
+  // dejar entrar tres veces más lejos del borde del que se midió, que es justo
+  // donde la ventaja se diluye (spec 067).
+  const cerca = canal.tipo === TipoCanal.BANDA ? DECIMO_BANDA * anchura : anchura / 3;
   const lados = ladosPermitidos(canal, p);
   const out: CandidatoBase[] = [];
 
@@ -156,7 +170,7 @@ export function detectarSetups(
       const extremo = s5.l[k];
       const toca = extremo <= soporte + eps;
       const noRoto = s5.c[b] >= soporte - NO_ROTO_ATR * atr15;
-      const abajo = s5.c[b] <= soporte + anchura / 3;
+      const abajo = s5.c[b] <= soporte + cerca;
       if (toca && noRoto && abajo) {
         const c: Confirmacion[] = [];
         if (mecha(s5, k, 'LONG')) c.push(Confirmacion.MECHA);
@@ -171,7 +185,7 @@ export function detectarSetups(
       const extremo = s5.h[k];
       const toca = extremo >= resistencia - eps;
       const noRoto = s5.c[b] <= resistencia + NO_ROTO_ATR * atr15;
-      const arriba = s5.c[b] >= resistencia - anchura / 3;
+      const arriba = s5.c[b] >= resistencia - cerca;
       if (toca && noRoto && arriba) {
         const c: Confirmacion[] = [];
         if (mecha(s5, k, 'SHORT')) c.push(Confirmacion.MECHA);

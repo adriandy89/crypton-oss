@@ -128,6 +128,14 @@ export function configCanal(extra: Record<string, unknown> = {}): BotConfig {
     makerFeeBps: String(COSTES_CANAL.makerBps),
     takerFeeBps: String(COSTES_CANAL.takerBps),
     slippageBps: String(COSTES_CANAL.deslizamientoBps),
+    // Las dos puertas de coste del spec 066 van al mínimo que admite el campo,
+    // porque estos tests miden el MOTOR —stops nativos, huecos, liquidación,
+    // objetivos— sobre operaciones escritas a mano, no la selección de
+    // entradas. Con los defectos de producción (0,2 y 15x) los fixtures no
+    // llegarían a abrir y el test dejaría de medir lo que dice medir. Las
+    // puertas tienen sus propios tests en `canal/herramienta.spec.ts`.
+    maxCostPerTradeR: '0.6',
+    minTargetCostMultiple: 3,
     ...extra,
   };
 }

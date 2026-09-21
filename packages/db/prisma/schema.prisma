@@ -302,6 +302,8 @@ enum StrategyKind {
   TRAILING_PROFIT
   // Canal con IA (spec 058): solo administradores.
   AI_CHANNEL
+  // Bot de IA (spec 068): motor propio de banda, solo administradores.
+  AI_TRADER
 }
 
 enum BotStatus {

@@ -37,6 +37,7 @@ export type { MarketMakerV2Config } from './strategies/market-maker-v2';
 export type { TrendFollowConfig } from './strategies/trend-follow';
 export type { TrailingProfitConfig } from './strategies/trailing-profit';
 export type { AiChannelConfig } from './strategies/ai-channel';
+export type { AiTraderConfig } from './strategies/ai-trader';
 // El primer índice de los cierres a mercado de la operación: el motor lo lee
 // para contar por qué terminó (spec 059).
 export { INDICE_CIERRE } from './strategies/ai-channel';
@@ -103,3 +104,25 @@ export {
   type PanelIndicador,
   type PuntoIndicador,
 } from './indicadores-vista';
+
+// ── El «Bot de IA» (spec 068) ──
+export {
+  DEFAULTS_TRADER,
+  RespaldoMedio,
+  leerConfigTrader,
+  type ConfigTrader,
+} from './trader/config';
+export { senalTrader, type Banda, type EntradaSenal, type ParametrosSenal } from './trader/senal';
+export {
+  ATR_POR_BUCKET,
+  BUCKETS_OBJETIVO,
+  BUCKETS_STOP,
+  FRACCION_POR_BUCKET,
+  celdaDe,
+  espacioTrader,
+  type EntradaEspacio,
+} from './trader/esqueletos';
+export { construirOperacionTrader, cuantiza, type ResultadoConstruir } from './trader/construir';
+export { juezTrader } from './trader/juez';
+export { estadoTrader, type EstadoTrader } from './trader/estado';
+export { dimensionar, tramosOrdenados, type Dimension } from './dimension';

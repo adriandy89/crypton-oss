@@ -600,6 +600,12 @@ revisarlo.
 
 ## Specs de seguimiento propuestos
 
+> **Los números de esta tabla son una propuesta de 2026-09-18 y ya no valen como reserva.** El
+> orden real lo marcó lo que fue urgiendo: el 061 se usó para el gráfico, el 062 para dejar el canal
+> listo para operar, el 063 para los límites de riesgo, el 065 para el ritmo y el caudal y el 066
+> para la aritmética del canal. Los hallazgos siguen abiertos; quien los recoja pide número nuevo
+> en `specs/README.md`, que es el índice que manda.
+
 | Nº propuesto | Slug | Hallazgos | Prioridad |
 |---|---|---|---|
 | 061 | `lighter-ids-y-pendientes` | F-08; F-01 en el acuse; CA-8 del 036 | alta |

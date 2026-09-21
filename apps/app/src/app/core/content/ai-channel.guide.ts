@@ -154,6 +154,18 @@ export const AI_CHANNEL_GUIDE: StrategyGuide<AiChannelConfig> = {
         'Las opciones con el stop más lejos se descartan. Un stop ancho da menos apalancamiento.',
       tip: '1,5 % encaja con canales de 15 min en pares líquidos.',
     },
+    maxCostPerTradeR: {
+      what: 'Cuánto del riesgo pueden comerse las comisiones y el deslizamiento, en fracción.',
+      affects:
+        'Una entrada cuyo coste de ida y vuelta pase de ahí no se ofrece, por estrecha que sea la puerta.',
+      tip: '0,2. Medido sobre siete meses, el bot venía operando con el coste en el 67 % del riesgo: con eso hay que acertar dos de cada tres veces solo para empatar.',
+    },
+    minTargetCostMultiple: {
+      what: 'A cuántas veces el coste de ida y vuelta tiene que estar el primer objetivo.',
+      affects:
+        'Un objetivo más cerca no se ofrece. Sube mucho y casi no opera; baja y opera a pérdida.',
+      tip: '15. Es la puerta que le da la vuelta al signo: con objetivos por debajo de 10 veces el coste, la medición sale negativa en los doce pares.',
+    },
     minRewardRisk: {
       what: 'Lo mínimo que tiene que pagar un objetivo, en veces lo arriesgado y ya con comisiones.',
       affects: 'Un objetivo por debajo no se ofrece. Más alto es menos operaciones, y mejores.',
@@ -257,8 +269,9 @@ export const AI_CHANNEL_GUIDE: StrategyGuide<AiChannelConfig> = {
     },
     allowedChannels: {
       what: 'Qué canales valen.',
-      affects: 'Horizontal: un rango plano. Inclinado: dos rectas paralelas con pendiente.',
-      tip: 'Todos.',
+      affects:
+        'Horizontal: un rango plano. Inclinado: dos rectas paralelas con pendiente. De banda: las de Bollinger, que no hace falta que nadie haya defendido y por eso aparecen mucho más a menudo, con el stop más lejos.',
+      tip: 'Todos. El de banda es el que encuentra sitio: sobre doce pares y siete meses, 416 oportunidades frente a 18. Su objetivo es siempre la media, porque el borde opuesto de una banda está a cuatro sigmas y apuntar allí es pedir la travesía entera.',
     },
     slopedWithTrendOnly: {
       what: 'Operar un canal inclinado solo a favor de su pendiente.',
@@ -278,8 +291,8 @@ export const AI_CHANNEL_GUIDE: StrategyGuide<AiChannelConfig> = {
     minConfirmations: {
       what: 'Cuántas confirmaciones necesita un toque para estar listo.',
       affects:
-        'Son cuatro posibles: mecha de rechazo, RSI extremo, divergencia y volumen tranquilo. Con menos, más entradas y peores.',
-      tip: '2.',
+        'Son cuatro posibles: mecha de rechazo, RSI extremo, divergencia y volumen tranquilo. Más confirmaciones son menos entradas, pero no mejores: filtran sin distinguir.',
+      tip: '1. Aquí decía 2 y decía también que con menos las entradas serían peores. Está medido y es al revés: sobre doce pares y siete meses, pedir dos se llevaba por delante la mitad de las operaciones y empeoraba el resultado.',
     },
     requireEvidence: {
       what: 'Cuánto historial favorable se exige a un setup antes de ofrecerlo.',

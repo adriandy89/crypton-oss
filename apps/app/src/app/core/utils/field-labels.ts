@@ -365,7 +365,114 @@ export const FIELD_LABELS: Record<string, string> = {
 
   // Canal con IA (specs 058-059). Las ayudas dicen lo que hace el motor
   // (`canal/config.ts` y `ai-channel.ts`), no lo que sugiere el nombre.
-  'strategy.aiChannel.label': 'Canal con IA',
+  'strategy.aiChannel.label': 'Canal',
+  // ── Bot de IA (AI_TRADER, spec 068) ──
+  'strategy.aiTrader.label': 'Bot de IA',
+  'strategy.aiTrader.description':
+    'Toques del borde de una banda: el motor calcula nueve operaciones y la IA elige.',
+  'strategy.aiTrader.decisionMode': 'Quién decide',
+  'strategy.aiTrader.decisionModeHelp':
+    'Con «reglas» decide una tabla determinista y no se gasta ninguna consulta. Con «IA» decide el modelo.',
+  'strategy.aiTrader.observeOnly': 'Solo observar',
+  'strategy.aiTrader.observeOnlyHelp': 'Apunta lo que haria, sin mandar ninguna orden.',
+  'strategy.aiTrader.entriesEnabled': 'Entradas activas',
+  'strategy.aiTrader.entriesEnabledHelp':
+    'Apagado, lo abierto se gestiona hasta el final pero no entra nada mas.',
+  'strategy.aiTrader.riskPerTradePct': 'Riesgo por operación',
+  'strategy.aiTrader.riskPerTradePctHelp':
+    'Del capital, lo que se pierde si salta el stop. Es lo que fija el tamano.',
+  'strategy.aiTrader.maxMarginPct': 'Margen máximo',
+  'strategy.aiTrader.maxMarginPctHelp': 'Lo mas que puede quedar inmovilizado a la vez.',
+  'strategy.aiTrader.maxNotionalMultiple': 'Tamaño máximo',
+  'strategy.aiTrader.maxNotionalMultipleHelp': 'En veces tu capital.',
+  'strategy.aiTrader.liqBufferStops': 'Distancia a la liquidación',
+  'strategy.aiTrader.liqBufferStopsHelp':
+    'En distancias de stop. Subirlo baja el apalancamiento; nunca menos de 3.',
+  'strategy.aiTrader.maxStopPct': 'Stop más ancho',
+  'strategy.aiTrader.maxStopPctHelp': 'Una operacion que pida un stop mas lejano no se ofrece.',
+  'strategy.aiTrader.maxCostPerTradeR': 'Coste máximo por operación',
+  'strategy.aiTrader.maxCostPerTradeRHelp':
+    'En fraccion de lo arriesgado: comisiones mas deslizamiento.',
+  'strategy.aiTrader.minTargetCostMultiple': 'Objetivo mínimo sobre el coste',
+  'strategy.aiTrader.minTargetCostMultipleHelp':
+    'En veces el coste de ida y vuelta. Por debajo de 15 esta medido que se pierde.',
+  'strategy.aiTrader.minRewardRisk': 'Beneficio mínimo',
+  'strategy.aiTrader.minRewardRiskHelp':
+    'Lo que tiene que pagar el objetivo, en veces lo arriesgado.',
+  'strategy.aiTrader.maxEntrySlippageR': 'Deslizamiento máximo de la entrada',
+  'strategy.aiTrader.maxEntrySlippageRHelp':
+    'Cuanto peor que la referencia puede llenarse la entrada.',
+  'strategy.aiTrader.maxSpreadFraction': 'Spread máximo',
+  'strategy.aiTrader.maxSpreadFractionHelp':
+    'En fraccion del ATR. Con un spread mas ancho no entra.',
+  'strategy.aiTrader.maxDrawdownPct': 'Caída máxima',
+  'strategy.aiTrader.maxDrawdownPctHelp': 'Al llegar, pausa. Reanudar es cosa tuya.',
+  'strategy.aiTrader.dailyProfitTargetPct': 'Objetivo de ganancia del día',
+  'strategy.aiTrader.dailyProfitTargetPctHelp': 'Al llegar deja de entrar. Cero lo apaga.',
+  'strategy.aiTrader.bandPeriod': 'Velas de la banda',
+  'strategy.aiTrader.bandPeriodHelp': 'Cuantos cierres entran en su media.',
+  'strategy.aiTrader.bandSigma': 'Anchura de la banda',
+  'strategy.aiTrader.bandSigmaHelp': 'En desviaciones tipicas.',
+  'strategy.aiTrader.bandWindowBars': 'Ventana de medición',
+  'strategy.aiTrader.bandWindowBarsHelp':
+    'Velas hacia atras para medir si esto revierte de verdad.',
+  'strategy.aiTrader.touchPercentB': 'Qué cuenta como borde',
+  'strategy.aiTrader.touchPercentBHelp':
+    'En fraccion de la anchura. Cero exige tocar la banda exacta.',
+  'strategy.aiTrader.maxAdx1h': 'ADX máximo',
+  'strategy.aiTrader.maxAdx1hHelp':
+    'Por encima no se opera. Es el filtro mas valioso que tiene el bot.',
+  'strategy.aiTrader.minBandWidthAtr': 'Anchura mínima',
+  'strategy.aiTrader.minBandWidthAtrHelp':
+    'En veces el ATR. Una banda estrecha no deja sitio al objetivo.',
+  'strategy.aiTrader.maxHalfLifeBars': 'Vuelta a la media',
+  'strategy.aiTrader.maxHalfLifeBarsHelp':
+    'Lo que puede tardar el precio en volver para que cuente como reversion.',
+  'strategy.aiTrader.maxHoldBars': 'Velas por operación',
+  'strategy.aiTrader.maxHoldBarsHelp': 'Pasadas, se cierra a mercado.',
+  'strategy.aiTrader.invalidationAtr': 'Invalidación',
+  'strategy.aiTrader.invalidationAtrHelp':
+    'Cuanto tiene que alejarse el precio para dar el montaje por roto.',
+  'strategy.aiTrader.minRouteConfidence': 'Confianza mínima',
+  'strategy.aiTrader.minRouteConfidenceHelp':
+    'Por debajo, esa vela no se opera aunque la IA diga que si.',
+  'strategy.aiTrader.fullSizeConfidence': 'Confianza para entrar entero',
+  'strategy.aiTrader.fullSizeConfidenceHelp': 'Por debajo se entra con la mitad.',
+  'strategy.aiTrader.requireAgreement': 'Exigir acuerdo',
+  'strategy.aiTrader.requireAgreementHelp':
+    'Las tres preguntas de contexto tienen que acompanar a la decision.',
+  'strategy.aiTrader.minRegimeProb': 'Certeza de rango',
+  'strategy.aiTrader.minRegimeProbHelp': 'Cuanto tiene que creer la IA que el mercado da vueltas.',
+  'strategy.aiTrader.minExhaustionProb': 'Certeza de agotamiento',
+  'strategy.aiTrader.minExhaustionProbHelp':
+    'Cuanto tiene que creer que quien empujo se quedo sin fuerza.',
+  'strategy.aiTrader.minEvidenceProb': 'Certeza del histórico',
+  'strategy.aiTrader.minEvidenceProbHelp':
+    'Cuanto tiene que creer que los toques parecidos acompanan.',
+  'strategy.aiTrader.statedThreshold': 'Umbral para hacerle caso',
+  'strategy.aiTrader.statedThresholdHelp':
+    'Cuanta razon tiene que tener la IA para mandar sobre el stop y el objetivo.',
+  'strategy.aiTrader.defaultStopBucket': 'Stop por defecto',
+  'strategy.aiTrader.defaultStopBucketHelp':
+    'El que se usa cuando la IA no tiene razon clara para preferir otro.',
+  'strategy.aiTrader.defaultTargetBucket': 'Objetivo por defecto',
+  'strategy.aiTrader.defaultTargetBucketHelp': 'Igual que el stop.',
+  'strategy.aiTrader.halfSizeFallback': 'Si no cabe media posición',
+  'strategy.aiTrader.halfSizeFallbackHelp': 'O no se opera, o se entra entera.',
+  'strategy.aiTrader.wrongEnvironmentCooldownBars': 'Espera por entorno equivocado',
+  'strategy.aiTrader.wrongEnvironmentCooldownBarsHelp':
+    'Velas sin mirar cuando la IA dice que el mercado no acompana.',
+  'strategy.aiTrader.aiDailyCallBudget': 'Consultas al día',
+  'strategy.aiTrader.aiDailyCallBudgetHelp': 'Cuantas veces puede preguntarle al modelo este bot.',
+  'strategy.aiTrader.maxTradesPerDay': 'Operaciones al día',
+  'strategy.aiTrader.maxConsecutiveLosses': 'Pérdidas seguidas',
+  'strategy.aiTrader.maxConsecutiveLossesHelp': 'Al llegar, se toma un descanso.',
+  'strategy.aiTrader.lossStreakCooldownMinutes': 'Espera tras la racha',
+  'strategy.aiTrader.stopCooldownMinutes': 'Espera tras un stop',
+  'strategy.aiTrader.makerFeeBps': 'Comisión maker',
+  'strategy.aiTrader.takerFeeBps': 'Comisión taker',
+  'strategy.aiTrader.slippageBps': 'Deslizamiento',
+
   'strategy.aiChannel.description':
     'Rebotes en el borde de un rango o canal, con el apalancamiento que permite el stop.',
   'strategy.aiChannel.direction': 'Lados que opera',
@@ -413,6 +520,14 @@ export const FIELD_LABELS: Record<string, string> = {
     'apalancamiento; nunca menos de 3.',
   'strategy.aiChannel.maxStopPct': 'Stop más ancho',
   'strategy.aiChannel.maxStopPctHelp': 'Una operación que pida un stop más lejano no se ofrece.',
+  'strategy.aiChannel.maxCostPerTradeR': 'Coste máximo por operación',
+  'strategy.aiChannel.maxCostPerTradeRHelp':
+    'En fracción de lo arriesgado: comisiones mas deslizamiento. Si la ida y vuelta se come mas ' +
+    'que eso del riesgo, la entrada no se ofrece.',
+  'strategy.aiChannel.minTargetCostMultiple': 'Objetivo mínimo sobre el coste',
+  'strategy.aiChannel.minTargetCostMultipleHelp':
+    'En veces el coste de ida y vuelta: el primer objetivo tiene que estar al menos asi de lejos. ' +
+    'Subirlo deja menos operaciones y mejores.',
   'strategy.aiChannel.minRewardRisk': 'Beneficio mínimo',
   'strategy.aiChannel.minRewardRiskHelp':
     'Lo que tiene que pagar el objetivo, neto de costes, en veces lo arriesgado. Por debajo, la ' +
@@ -472,7 +587,10 @@ export const FIELD_LABELS: Record<string, string> = {
     'El rebote en el borde es lo de por defecto. La ruptura fallida entra contra un movimiento que ' +
     'acaba de romper el canal: tiene más riesgo.',
   'strategy.aiChannel.allowedChannels': 'Canales',
-  'strategy.aiChannel.allowedChannelsHelp': 'Horizontales (un rango), inclinados o los dos.',
+  'strategy.aiChannel.allowedChannelsHelp':
+    'Horizontales (un rango plano), inclinados (dos rectas paralelas) o de banda (las bandas de ' +
+    'Bollinger). Los de banda aparecen unas veinte veces mas a menudo que los otros dos, con el ' +
+    'stop mas lejos y el objetivo siempre en la media.',
   'strategy.aiChannel.slopedWithTrendOnly': 'Inclinados solo a favor',
   'strategy.aiChannel.slopedWithTrendOnlyHelp':
     'En un canal inclinado solo entra en el sentido de su pendiente.',
@@ -483,7 +601,7 @@ export const FIELD_LABELS: Record<string, string> = {
   'strategy.aiChannel.minConfirmations': 'Confirmaciones mínimas',
   'strategy.aiChannel.minConfirmationsHelp':
     'Mecha de rechazo, RSI extremo, divergencia o volumen tranquilo: cuántas hacen falta para dar ' +
-    'el rebote por listo.',
+    'el rebote por listo. Pedir mas deja menos entradas, pero no mejores.',
   'strategy.aiChannel.requireEvidence': 'Histórico exigido',
   'strategy.aiChannel.requireEvidenceHelp':
     'Cuántos casos parecidos tiene que haber en el histórico del par para ofrecer la operación: ' +
@@ -610,10 +728,23 @@ const OPTION_LABELS_BY_FIELD: Record<string, Record<string, string>> = {
     TODOS: 'Los dos',
   },
   'strategy.aiChannel.allowedChannels': {
-    TODOS: 'Los dos',
+    TODOS: 'Todos',
     HORIZONTAL: 'Horizontales',
     INCLINADO: 'Inclinados',
+    BANDA: 'De banda',
   },
+  'strategy.aiTrader.decisionMode': { REGLAS: 'Reglas', IA: 'IA' },
+  'strategy.aiTrader.defaultStopBucket': {
+    CENIDO: 'Ceñido',
+    MEDIDO: 'Medido',
+    HOLGADO: 'Holgado',
+  },
+  'strategy.aiTrader.defaultTargetBucket': {
+    CORTO: 'Corto',
+    EN_LA_MEDIA: 'En la media',
+    LARGO: 'Largo',
+  },
+  'strategy.aiTrader.halfSizeFallback': { NO_OPERAR: 'No operar', COMPLETO: 'Entrar entera' },
   'strategy.aiChannel.requireEvidence': { NO: 'No exigir', DEBIL: 'Débil', MODERADA: 'Moderada' },
   'strategy.aiChannel.minAiConfidence': { MEDIA: 'Media', ALTA: 'Alta' },
 };

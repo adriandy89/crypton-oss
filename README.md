@@ -284,13 +284,14 @@ se mandará al exchange.
 | **Market Maker V2** | Igual, pero el diferencial se calcula (volatilidad, libro, coste) y puede anclarse a un precio externo. | Medio |
 | **Tendencia** | Entra al romper un rango y sale con un stop por ATR que sigue al precio. La única que gana en línea recta. | **Alto** |
 | **Seguimiento de beneficio** | Una operación que deja correr el beneficio: al llegar a tu objetivo sigue al máximo y cierra al retroceder. | **Alto** |
-| **Canal con IA** · solo administradores | Rebotes en el borde de un rango o canal de 15 min, con el apalancamiento que permite el stop (hasta 25×). El motor calcula cada operación posible y una IA elige entre ellas con palabras de una lista; sin respuesta válida no entra. | **Alto** |
+| **Canal** · solo administradores | Rebotes en el borde de un rango o canal de 15 min, con el apalancamiento que permite el stop (hasta 25×). El motor calcula cada operación posible y una IA elige entre ellas con palabras de una lista; sin respuesta válida no entra. | **Alto** |
+| **Bot de IA** · solo administradores | Toques del borde de una banda de Bollinger en 15 min, con el apalancamiento que permite el stop (hasta 25×). El motor calcula nueve operaciones ya validadas y quien decide elige entre ellas con enumeraciones; arranca en «solo observar» y su ventaja no está demostrada. | **Alto** |
 
-El **Canal con IA** es la única que solo ve y usa un `ADMIN` (el rol se lee de la base al listar,
-crear, editar y arrancar), y la única que consulta a un modelo al operar. Su guía,
-[`docs/ai-channel.md`](docs/ai-channel.md), cuenta el reparto entre el motor y la IA, la regla del
-apalancamiento por stop y los límites diarios; su interruptor global y sus variables están en
-[`docs/administracion.md`](docs/administracion.md).
+El **Canal** y el **Bot de IA** son las únicas que solo ve y usa un `ADMIN` (el rol se lee de la base
+al listar, crear, editar y arrancar), y las únicas que consultan a un modelo al operar. Sus guías,
+[`docs/ai-channel.md`](docs/ai-channel.md) y [`docs/ai-trader.md`](docs/ai-trader.md), cuentan el
+reparto entre el motor y la IA, la regla del apalancamiento por stop y los límites diarios; su
+interruptor global y sus variables están en [`docs/administracion.md`](docs/administracion.md).
 
 Cada estrategia tiene su **guía de uso** en [`docs/README.md`](docs/README.md), con
 configuraciones de ejemplo verificadas contra el código, lo que cada bot no mira

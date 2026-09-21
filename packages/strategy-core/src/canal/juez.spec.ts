@@ -58,8 +58,11 @@ describe('juezDeReglas: las preferencias de cada perfil', () => {
   });
 
   it('si el stop preferido no está, prueba el contiguo hacia lo prudente', () => {
-    // El ajustado (99,84) queda por encima del ask.
+    // El ajustado (99,84) queda por encima del ask. Con un ATR mayor los tres
+    // stops quedan a una distancia sana del coste: este caso mide la
+    // PREFERENCIA del juez, no la aritmética (spec 066).
     const { eleccion } = decidir(PerfilCanal.AGRESIVA, {
+      mercado: mercadoDePrueba({ atr15m: '1' }),
       ticker: { ...entradaDePrueba().ticker, bid: '99.80', ask: '99.82' },
     });
     expect(eleccion).toMatchObject({ veredicto: Veredicto.OPERAR, stop: TipoStop.NORMAL });
@@ -117,17 +120,24 @@ describe('juezDeReglas: las preferencias de cada perfil', () => {
     });
     const { eleccion, salida } = decidir(
       PerfilCanal.AGRESIVA,
-      { candidatos: [fq, candidatoDePrueba()] },
+      { candidatos: [fq, candidatoDePrueba()], mercado: mercadoDePrueba({ atr15m: '1' }) },
       { allowedSetups: 'TODOS' },
     );
     // El falso quiebre se giró más cerca de la entrada: su stop también lo
     // está, y con la misma media su R es mayor.
+    //
+    // Ojo con la trampa que este caso tenía: con el ATR por defecto, el giro a
+    // 99,98 dejaba el stop a 0,14 % del tope contra un coste de ida y vuelta de
+    // 0,13 %. El R nominal salía mayor y la operación era imposible de ganar —
+    // justo la ilusión que la puerta de coste existe para matar (spec 066). Con
+    // el ATR subido, los dos candidatos están a distancia sana y la comparación
+    // mide lo que dice medir.
     const r = (i: number) => salida.candidatos[i].stops[0].rNetoTp1 ?? 0;
     expect(r(0)).toBeGreaterThan(r(1));
     expect(eleccion.opcion).toBe(`FQ-L-H${T0_CANAL}`);
     const alReves = decidir(
       PerfilCanal.AGRESIVA,
-      { candidatos: [candidatoDePrueba(), fq] },
+      { candidatos: [candidatoDePrueba(), fq], mercado: mercadoDePrueba({ atr15m: '1' }) },
       { allowedSetups: 'TODOS' },
     );
     expect(alReves.eleccion.opcion).toBe(`FQ-L-H${T0_CANAL}`);

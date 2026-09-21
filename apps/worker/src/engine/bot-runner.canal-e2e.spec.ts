@@ -525,6 +525,14 @@ describe('canal con IA, de principio a fin en el simulador (spec 058)', () => {
         ...s.defaults(),
         totalInvestment: '1000',
         decisionMode: 'REGLAS',
+        // Las dos puertas de coste del spec 066 van al mínimo que admite el
+        // campo: este e2e mide el RECORRIDO del motor —coid, stop nativo,
+        // tramos, breakeven, intenciones, pausas— sobre un mercado de juguete,
+        // no la selección de entradas. Con los defectos de produccion (0,2 y
+        // 15x) el candidato del fixture no se ofreceria y no habria recorrido
+        // que medir. Las puertas se prueban en `canal/herramienta.spec.ts`.
+        maxCostPerTradeR: '0.6',
+        minTargetCostMultiple: 3,
         ...ajustes,
       } as never,
       cycle: {

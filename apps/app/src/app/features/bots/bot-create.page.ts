@@ -152,6 +152,10 @@ const CONSENTIMIENTOS: Partial<Record<StrategyKind, string>> = {
   AI_CHANNEL:
     'Entiendo que este bot puede operar con dinero real y apalancamiento de hasta 25x, y que ' +
     'una IA decide cada entrada dentro de los límites que he puesto.',
+  AI_TRADER:
+    'Entiendo que este bot puede operar con dinero real y apalancamiento de hasta 25x, que una ' +
+    'IA elige cada operación dentro de los límites que he puesto, y que su ventaja no está ' +
+    'demostrada: arranca en «solo observar» a propósito.',
 };
 
 /**
@@ -374,7 +378,9 @@ export class BotCreatePage implements OnInit, OnDestroy {
 
   /** Los rótulos del cálculo previo de la estrategia elegida. */
   readonly textos = computed(() =>
-    this.strategyKind() === 'AI_CHANNEL' ? TEXTOS_CANAL : TEXTOS_ESCALERA,
+    this.strategyKind() === 'AI_CHANNEL' || this.strategyKind() === 'AI_TRADER'
+      ? TEXTOS_CANAL
+      : TEXTOS_ESCALERA,
   );
 
   /** Por qué el Modo IA elegido no se puede mandar todavía, o vacío. */
@@ -1514,7 +1520,9 @@ export class BotCreatePage implements OnInit, OnDestroy {
   readonly strategyBlurb = strategyBlurb;
 
   isRisky(kind: string): boolean {
-    return kind === 'MARTINGALE' || kind === 'GRIDMART' || kind === 'AI_CHANNEL';
+    return (
+      kind === 'MARTINGALE' || kind === 'GRIDMART' || kind === 'AI_CHANNEL' || kind === 'AI_TRADER'
+    );
   }
 
   /** Las que solo ve un administrador; el servidor ya las filtra de la lista. */

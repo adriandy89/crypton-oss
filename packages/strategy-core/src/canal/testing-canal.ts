@@ -121,7 +121,19 @@ export function entradaDePrueba(
       maintenanceMarginRate: 0.01,
     });
   return {
-    cfg: leerConfig({ totalInvestment: '1000', ...cfg } as BotConfig, Venue.HYPERLIQUID),
+    // Las puertas de coste del spec 066 van DESACTIVADAS en el fixture salvo que
+    // el caso las pida: el canal de prueba es estrecho y las activaría todas, y
+    // estos casos están para medir precios, cantidades y apalancamiento, no la
+    // rentabilidad. Los tests de las puertas las ponen a mano.
+    cfg: leerConfig(
+      {
+        totalInvestment: '1000',
+        maxCostPerTradeR: '0.6',
+        minTargetCostMultiple: 3,
+        ...cfg,
+      } as Record<string, unknown> as unknown as BotConfig,
+      Venue.HYPERLIQUID,
+    ),
     market,
     ticker: {
       venue: Venue.HYPERLIQUID,

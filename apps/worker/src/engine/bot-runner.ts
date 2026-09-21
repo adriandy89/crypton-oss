@@ -117,6 +117,8 @@ const REANCHOR_NO_APLICA: Partial<Record<StrategyKind, string>> = {
     'el seguimiento de beneficio abre una sola posición y la sigue desde el objetivo; no cuelga de un ancla.',
   AI_CHANNEL:
     'el canal con IA opera cada vez en el canal que ve en ese momento, con su stop y sus objetivos; no cuelga de un ancla.',
+  AI_TRADER:
+    'el bot de IA opera cada toque de la banda que ve en ese momento, con su stop y su objetivo; no cuelga de un ancla.',
 };
 
 // ── Canal con IA (spec 058) ────────────────────────────────────────────────

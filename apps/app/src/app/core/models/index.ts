@@ -59,7 +59,8 @@ export type StrategyKind =
   | 'MARKET_MAKER_V2'
   | 'TREND_FOLLOW'
   | 'TRAILING_PROFIT'
-  | 'AI_CHANNEL';
+  | 'AI_CHANNEL'
+  | 'AI_TRADER';
 
 export interface SessionUser {
   id: string;

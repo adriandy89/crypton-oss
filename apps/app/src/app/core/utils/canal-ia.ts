@@ -115,6 +115,7 @@ export const SETUP: Readonly<Record<string, string>> = {
 export const TIPO_CANAL: Readonly<Record<string, string>> = {
   HORIZONTAL: 'horizontal',
   INCLINADO: 'inclinado',
+  BANDA: 'de banda',
 };
 
 const STOP: Readonly<Record<string, string>> = {

@@ -180,4 +180,7 @@ ante un 429 se paran sin reintentar. A `findings.md` va solo la evidencia resumi
 | 062 | [El canal con IA, listo para operar](062-canal-listo-para-operar/spec.md) | cambio | hecho (18 hallazgos del 060 cerrados; falta CA-4: la simulacion y la primera sesion real) | `spec/062-canal-listo-para-operar` |
 | 063 | [Los limites de riesgo llegan al motor](063-limites-que-llegan-al-motor/spec.md) | correccion | hecho (faltan CA-3 a CA-5: las comprobaciones a mano del usuario) | `spec/063-limites-que-llegan-al-motor` |
 | 065 | [El canal con IA no mantiene su ritmo](065-ritmo-y-caudal-del-canal/spec.md) | cambio | hecho (falta CA-13, la comprobacion del usuario tras desplegar) | `spec/065-ritmo-y-caudal-del-canal` |
+| 066 | [El canal con IA: que la aritmetica cierre](066-canal-aritmetica/spec.md) | cambio | cerrado sin desplegar (las dos puertas de coste se quedan; CA-6 no se cumple y se disparo el criterio de parada - ver `findings.md`) | `spec/066-canal-aritmetica` |
+| 067 | [El canal de banda: que el bot de IA encuentre donde operar](067-canal-de-banda/spec.md) | cambio | hecho, sin desplegar (el bot pasa de 18 oportunidades a 416 y el R medio a +0,31 con 6/6 ventanas positivas, pero CA-5 solo cumple 1 de 3) | `spec/067-canal-de-banda` |
+| 068 | [El «Bot de IA»: el motor, medible sin gastar una llamada](068-bot-de-ia-motor/spec.md) | cambio | cerrado sin desplegar (mejor resultado de toda la linea - R medio +1,36 con t = 2,46 y 5/6 ventanas - pero 0,51 operaciones al mes y par contra las 2 que pedia CA-4) | `spec/068-bot-de-ia-motor` |
 

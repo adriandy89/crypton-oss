@@ -75,9 +75,11 @@ mercado está tranquilo.
    de choppiness alto, eficiencia baja y un ancho de Bollinger normal. Además, la vela de 15 min
    tiene que estar «picada». Para cambiar de régimen hacen falta **tres velas de 15 min seguidas**
    que digan lo mismo: un solo tirón no lo cambia.
-2. **El canal, en velas de 15 min.** Se buscan giros confirmados —un giro solo cuenta cuando el
-   precio se ha dado la vuelta 1,25 ATR, así que nunca se redibuja hacia atrás— y con ellos un canal
-   horizontal o uno inclinado. Tiene que pasar todas estas pruebas:
+2. **El canal, en velas de 15 min.** Hay **tres** maneras de trazarlo, y compiten por puntuación:
+   las dos primeras buscan giros confirmados —un giro solo cuenta cuando el precio se ha dado la
+   vuelta 1,25 ATR, así que nunca se redibuja hacia atrás— y trazan con ellos un canal
+   **horizontal** o uno **inclinado**; la tercera es el canal **de banda**, cuyas líneas son las
+   bandas de Bollinger(20, 2) sobre los cierres. Tiene que pasar todas estas pruebas:
    - dos toques o más por lado, alternados;
    - el 90 % de los cierres dentro;
    - una anchura de 3 a 10 ATR, y de al menos diez veces el coste de ida y vuelta;
@@ -86,10 +88,33 @@ mercado está tranquilo.
    - un precio que vuelve a la media deprisa.
 
    Sale con una nota: **A**, **B** o **C**.
+
+   **El canal de banda** (spec 067) se salta tres de esas pruebas —paralelismo, pendiente mínima y
+   R² de las rectas— y no por ser más flojo: esas tres comprueban que dos **rectas ajustadas a
+   giros** son de verdad un canal, y una banda no es una recta ajustada a nada. Las otras nueve se
+   le aplican igual. Dos cosas más que sí cambian, y conviene saberlas:
+
+   - **Un «toque» es entrar en el décimo exterior de la banda**, no llegar a ella. Una banda a dos
+     sigmas es, por construcción, más ancha que el recorrido de cualquier oscilación acotada, así
+     que tocarla de verdad casi no pasa.
+   - **El stop va más lejos**: 1 / 1,5 / 2,5 ATR en vez de 0,25 / 0,5 / 1. Un borde de giros es un
+     precio que el mercado defendió; una banda no la defiende nadie, y un stop pegado a ella salta
+     por ruido.
+
+   Y una tercera, que es la que de verdad decide: **su objetivo es siempre la media**. El borde
+   opuesto de una banda está a cuatro sigmas, así que apuntar ahí no es revertir a la media, es
+   pedir la travesía entera del canal. Medido: dejar que el juez eligiera el borde opuesto —o el
+   escalonado, que cobra la mitad allí— hundía el R medio de **+0,28 a −0,21** y el acierto del
+   **42 % al 21 %**, con más de la mitad de las operaciones muriendo por tiempo sin tocar ninguna
+   barrera. En un canal de giros el borde opuesto es un precio que el mercado ya defendió, y allí
+   sigue teniendo sentido.
+
+   Para qué está: sobre doce pares y ciento noventa días, el canal de giros dio **18 oportunidades**
+   y el de banda **416**.
 3. **El toque, en velas de 5 min.** La última vela toca la zona del borde y cierra dentro. Cuenta
    las confirmaciones: **mecha de rechazo**, **RSI extremo**, **divergencia** con el toque anterior
-   y **volumen tranquilo** (un toque sin clímax de volumen no suele ser una ruptura). Con dos o más,
-   el rebote está **listo**.
+   y **volumen tranquilo** (un toque sin clímax de volumen no suele ser una ruptura). Con las que
+   pida `minConfirmations` —una, de serie—, el rebote está **listo**.
 
 Un canal horizontal exige régimen de rango. Uno inclinado también se acepta con tendencia, si es a
 favor de su pendiente y el ADX no pasa de 40.
@@ -485,6 +510,26 @@ Subirlo baja el apalancamiento posible.
 
 #### Stop más ancho · `maxStopPct` · 🔥 · 0,1–5 % · por defecto **1,5**
 
+#### Coste máximo por operación · `maxCostPerTradeR` · 🔥 · 0,05–0,6 · por defecto **0,2** · ⚠️
+La fracción del riesgo que pueden comerse las comisiones y el deslizamiento. Si la ida y vuelta
+pasa de ahí, la entrada no se ofrece, por muy bonito que sea el canal.
+
+Sale de una medición, no de una intuición: en un *walk-forward* sobre doce pares y siete meses, el
+bot venía entrando con el stop a un 0,300 % y un coste de ida y vuelta de 0,200 %, o sea el **67 %
+del riesgo**; ocho de veintiocho operaciones tenían el coste por encima del 100 % del riesgo —
+imposibles de ganar por aritmética, no por mala suerte. Con el tope en 0,2 hace falta acertar una de
+cada tres veces para empatar, en vez de dos de cada tres.
+
+#### Objetivo mínimo sobre el coste · `minTargetCostMultiple` · 🔥 · 3–60 × · por defecto **15** · ⚠️
+A cuántas veces el coste de ida y vuelta tiene que estar el primer objetivo. `minRewardRisk` compara
+el objetivo con el **stop**, así que un stop diminuto pasa la puerta con un objetivo diminuto; esta
+la compara con lo que cuesta entrar y salir, que es lo que de verdad hay que superar.
+
+Es la puerta que le da la vuelta al signo. Midiendo la reversión en banda sobre los mismos doce
+pares: sin puerta, R medio **−0,2295**; con el objetivo a ≥ 10× el coste, −0,0065; a **≥ 15×**,
+**+0,1043**. Dicho con la misma honestidad: con t = 1,61 y solo dos meses positivos de ocho, eso
+quita una pérdida segura, no fabrica una ganancia.
+
 #### Beneficio mínimo · `minRewardRisk` · 🔥 · 0,5–5 R · por defecto **1,2**
 Por debajo de 1 habría que acertar más de la mitad de las veces solo para empatar.
 
@@ -536,11 +581,22 @@ Línea media, borde opuesto, escalonado, o que elija quien decide.
 
 #### Operaciones · `allowedSetups` · 🔥 · por defecto **Rebote**
 La ruptura fallida entra contra un movimiento que acaba de romper: más riesgo.
-#### Canales · `allowedChannels` · 🔥 · por defecto **Los dos**
+#### Canales · `allowedChannels` · 🔥 · por defecto **Todos**
+Horizontales, inclinados o de banda. Los de banda aparecen unas veinte veces más a menudo que los
+otros dos —416 oportunidades frente a 18 sobre doce pares y siete meses—, con el stop más lejos y
+el objetivo **siempre en la media**.
 #### Inclinados solo a favor · `slopedWithTrendOnly` · 🔥 · por defecto **sí**
 #### Velas para buscar el canal · `channelWindowBars` · 🔥 · 48–200 · por defecto **96** · avanzado
 #### Nota mínima del canal · `minChannelQuality` · 🔥 · A, **B** o C
-#### Confirmaciones mínimas · `minConfirmations` · 🔥 · 1–4 · por defecto **2**
+#### Confirmaciones mínimas · `minConfirmations` · 🔥 · 1–4 · por defecto **1**
+Era 2, y la guía decía además que con menos las entradas serían peores. Está medido y es al revés:
+sobre doce pares y ciento noventa días, pedir dos en vez de una **reduce las operaciones a la mitad
+y empeora el resultado**, en los tres tipos de canal. Solo banda: 12 → 26 operaciones, R medio
++0,280 → +0,310 y ventanas positivas 2/6 → **6/6**. Los tres tipos: 17 → 38, R medio +0,038 →
++0,205, ventanas 2/6 → 5/6.
+
+Las cuatro confirmaciones se diseñaron para el toque de un nivel que alguien defendió. Pedir dos
+filtra sin discriminar: se lleva por delante tantas buenas como malas.
 #### Histórico exigido · `requireEvidence` · 🔥 · **No**, débil (20 casos o más) o moderada (más de 60)
 #### Confianza mínima de la IA · `minAiConfidence` · 🔥 · **Media** o alta
 

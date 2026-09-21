@@ -103,6 +103,8 @@ export interface AiChannelConfig extends CommonBotConfig {
   maxNotionalMultiple?: string | number;
   liqBufferStops?: number;
   maxStopPct?: string | number;
+  maxCostPerTradeR?: string | number;
+  minTargetCostMultiple?: string | number;
   minRewardRisk?: string | number;
   maxEntrySlippageR?: string | number;
   maxSpreadFraction?: string | number;
@@ -122,7 +124,7 @@ export interface AiChannelConfig extends CommonBotConfig {
   maxHoldBars?: number;
   invalidationAtr?: string | number;
   allowedSetups?: 'REBOTE' | 'FALSO_QUIEBRE' | 'TODOS';
-  allowedChannels?: 'TODOS' | 'HORIZONTAL' | 'INCLINADO';
+  allowedChannels?: 'TODOS' | 'HORIZONTAL' | 'INCLINADO' | 'BANDA';
   slopedWithTrendOnly?: boolean;
   channelWindowBars?: number;
   minChannelQuality?: 'A' | 'B' | 'C';
@@ -319,6 +321,30 @@ const PROPIOS: FieldMeta[] = [
     default: Number(d.maxStopPct),
     group: 'risk',
     unit: '%',
+  }),
+  campo({
+    key: 'maxCostPerTradeR',
+    kind: 'number',
+    labelKey: 'strategy.aiChannel.maxCostPerTradeR',
+    helpKey: 'strategy.aiChannel.maxCostPerTradeRHelp',
+    min: 0.05,
+    max: 0.6,
+    step: 0.05,
+    default: Number(d.maxCostPerTradeR),
+    group: 'risk',
+    risky: true,
+  }),
+  campo({
+    key: 'minTargetCostMultiple',
+    kind: 'integer',
+    labelKey: 'strategy.aiChannel.minTargetCostMultiple',
+    helpKey: 'strategy.aiChannel.minTargetCostMultipleHelp',
+    min: 3,
+    max: 60,
+    step: 1,
+    default: d.minTargetCostMultiple,
+    group: 'risk',
+    risky: true,
   }),
   campo({
     key: 'minRewardRisk',
@@ -548,10 +574,12 @@ const PROPIOS: FieldMeta[] = [
     kind: 'enum',
     labelKey: 'strategy.aiChannel.allowedChannels',
     helpKey: 'strategy.aiChannel.allowedChannelsHelp',
-    options: ['TODOS', 'HORIZONTAL', 'INCLINADO'],
+    options: ['TODOS', 'HORIZONTAL', 'INCLINADO', 'BANDA'],
     default: d.allowedChannels,
     group: 'intelligence',
-    control: 'segment',
+    // Desplegable y no fila de botones: con `BANDA` (spec 067) son cuatro
+    // opciones, y cuatro no caben en una fila en un móvil.
+    control: 'select',
   }),
   campo({
     key: 'slopedWithTrendOnly',

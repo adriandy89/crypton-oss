@@ -1450,11 +1450,17 @@ describe('registro de estrategias', () => {
     expect(conVelas).toEqual([StrategyKind.TREND_FOLLOW]);
   });
 
-  it('solo el canal pide series, y solo él lleva el contrato del canal (spec 058)', () => {
+  it('solo los dos bots de IA piden series y llevan su contrato (specs 058 y 068)', () => {
     // `series` es `candles` en plural: cada serie declarada es un sondeo más
     // contra el cupo del venue. Los demás flags cambian cómo el motor fija el
     // apalancamiento, mide la liquidación y lleva el tope diario: ninguna otra
     // estrategia puede verse afectada por ellos.
+    //
+    // El «Bot de IA» del spec 068 entra en la lista a propósito y con su coste
+    // dicho en alto: pide tres series (5 min, 15 min y 1 h) y compite por el
+    // mismo depósito por IP que el canal. Por eso comparte con él la reserva de
+    // cupo por venue que construyó el spec 065; sin eso se repite el incidente
+    // de `TICK_SLOW`. Ampliar esta lista es una decisión, no un trámite.
     const con = (flag: keyof ReturnType<typeof getStrategy>) =>
       listStrategies()
         .filter((s) => s[flag] !== undefined)
@@ -1467,7 +1473,10 @@ describe('registro de estrategias', () => {
       'consumeDecisionesIa',
       'nocionalMaximo',
     ] as const) {
-      expect({ flag, kinds: con(flag) }).toEqual({ flag, kinds: [StrategyKind.AI_CHANNEL] });
+      expect({ flag, kinds: con(flag) }).toEqual({
+        flag,
+        kinds: [StrategyKind.AI_CHANNEL, StrategyKind.AI_TRADER],
+      });
     }
   });
 

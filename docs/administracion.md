@@ -447,13 +447,13 @@ que reescribe la configuración de un bot ajeno la rompería. Al limitarlo a bot
 administrador operando el bot de otro: es el dueño operando el suyo con una herramienta, y lo que se
 puede hacer sobre bots de terceros sigue siendo exactamente lo de antes — pausar y sacar del motor.
 
-## Canal con IA (spec 059)
+## Las estrategias de solo administradores (specs 059 y 068)
 
-La estrategia **Canal con IA** (`AI_CHANNEL`) es la única que **solo puede usar un
+Las estrategias **Canal** (`AI_CHANNEL`) y **Bot de IA** (`AI_TRADER`) **solo puede usarlas un
 administrador**, y para todos los demás no existe: no sale en la lista de estrategias, y crearla,
 previsualizarla, editarla o arrancarla responde `403`. El rol se lee de la base en cada uno de esos
 caminos, así que a quien le retiran el rol deja de poder arrancar su bot en la petición siguiente.
-Tampoco la cubren los planes, el ranking, el asesor ni el Modo IA. La guía de la estrategia está en
+Tampoco las cubren los planes, el ranking, el asesor ni el Modo IA. Sus guías están en
 [ai-channel.md](./ai-channel.md).
 
 El reparto es el del Modo IA: **el worker calcula y ejecuta; la API solo pregunta**. El modelo elige

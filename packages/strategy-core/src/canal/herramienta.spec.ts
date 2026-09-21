@@ -26,6 +26,7 @@ import {
   nivelesDecimalesEn,
   objetivosDeEsquema,
   perdidaHoyPct,
+  precioDeStop,
   tramosOrdenados,
 } from './herramienta';
 import {
@@ -213,6 +214,140 @@ describe('herramientaCanal: el ejemplo trabajado', () => {
   });
 });
 
+describe('herramientaCanal: la aritmética tiene que cerrar (spec 066)', () => {
+  /**
+   * El defecto que mató al canal, medido: en 28 operaciones reales la distancia
+   * mediana al stop era 0,300 % y el coste de ida y vuelta 0,200 %, o sea que
+   * las comisiones y el deslizamiento se llevaban el 67 % del riesgo. En 8 de
+   * las 28 se lo llevaban ENTERO: para sacar 1R neto hacía falta 2R brutos.
+   *
+   * `costeR` ya se calculaba y solo se le enseñaba a la IA. Ahora frena.
+   */
+  it('un stop tan corto que el coste se come el riesgo no se ofrece', () => {
+    // ATR diminuto: el stop ajustado queda a un suspiro de la entrada y el
+    // coste, que es fijo en porcentaje, pasa a ser casi todo el riesgo.
+    const e = entradaDePrueba({ mercado: mercadoDePrueba({ atr15m: '0.02', atr1h: '0.04' }) });
+    const o = opcion(herramientaCanal(e), TipoStop.AJUSTADO);
+
+    expect(o.viable).toBe(false);
+    expect(o.motivo).toBe('COSTE');
+  });
+
+  it('con el stop a una distancia sana, el coste deja de ser la puerta', () => {
+    // Con el ATR del fixture el amplio se queda en 0,215 de coste por R: por
+    // encima del quinto que pide el defecto. Con el ATR al doble, el stop se
+    // aleja y el coste cae a su sitio.
+    const e = entradaDePrueba({ mercado: mercadoDePrueba({ atr15m: '0.8' }) });
+    const o = opcion(herramientaCanal(e), TipoStop.AMPLIO);
+
+    expect(o.costeR).not.toBeNull();
+    expect(o.costeR!).toBeLessThanOrEqual(0.2);
+    expect(o.motivo).not.toBe('COSTE');
+  });
+
+  it('el tope del coste es del usuario, no una constante escondida', () => {
+    const apretado = entradaDePrueba({}, { maxCostPerTradeR: '0.01' });
+    expect(opcion(herramientaCanal(apretado), TipoStop.AMPLIO).motivo).toBe('COSTE');
+
+    const suelto = entradaDePrueba({}, { maxCostPerTradeR: '0.9' });
+    expect(opcion(herramientaCanal(suelto), TipoStop.AMPLIO).motivo).not.toBe('COSTE');
+  });
+
+  /**
+   * `minRewardRisk` compara el objetivo con el STOP, así que un stop diminuto
+   * lo pasa con un objetivo diminuto. Lo que decide si una operación merece la
+   * pena es el objetivo medido en COSTES: medido sobre 12 pares y 7 meses, con
+   * la puerta en 15× el R medio pasa de −0,2295 a +0,1043.
+   */
+  it('un objetivo que no llega a los costes pedidos no se ofrece', () => {
+    const e = entradaDePrueba({}, { minTargetCostMultiple: 400 });
+    const o = opcion(herramientaCanal(e), TipoStop.AMPLIO);
+
+    expect(o.viable).toBe(false);
+    expect(o.motivo).toBe('OBJETIVO_CORTO');
+  });
+
+  it('y con un objetivo holgado, pasa', () => {
+    const e = entradaDePrueba({}, { minTargetCostMultiple: 1 });
+    expect(opcion(herramientaCanal(e), TipoStop.AMPLIO).motivo).not.toBe('OBJETIVO_CORTO');
+  });
+
+  /**
+   * La puerta mide contra el objetivo que el bot va a poner de verdad. `tp1` es
+   * la media del canal y `tp2` el borde opuesto, al doble de distancia: a quien
+   * solo admite `OPUESTO` no se le puede negar la entrada por lo corto que le
+   * quedaría un objetivo que nunca va a usar.
+   */
+  it('quien solo apunta al borde opuesto se mide contra ese objetivo, no contra la media', () => {
+    // En el fixture, la media queda a 10,4 costes y el borde opuesto a 18,5:
+    // el defecto de producción, 15, cae justo entre los dos.
+    const exigencia = { minTargetCostMultiple: 15 };
+    const media = entradaDePrueba({}, exigencia);
+    const opuesto = entradaDePrueba({}, { ...exigencia, takeProfitSchemes: 'OPUESTO' });
+
+    expect(opcion(herramientaCanal(media), TipoStop.AMPLIO).motivo).toBe('OBJETIVO_CORTO');
+    expect(opcion(herramientaCanal(opuesto), TipoStop.AMPLIO).motivo).not.toBe('OBJETIVO_CORTO');
+  });
+});
+
+/**
+ * Un borde trazado desde giros es un precio que el mercado defendió; una banda
+ * de Bollinger no la defiende nadie. Por eso el stop de una banda va fuera, y
+ * la escalera de cada tipo de canal es distinta (spec 067).
+ */
+describe('herramientaCanal: la escalera de stops depende del canal (spec 067)', () => {
+  /** A cuántos ATR del extremo del candidato queda el stop, sin el medio spread. */
+  const stopDe = (tipoCanal: TipoCanal, tipo: TipoStop): number => {
+    const e = entradaDePrueba({ canal: canalDePrueba({ tipo: tipoCanal }) });
+    const cand = candidatoDePrueba();
+    const medioSpread = D(e.ticker.ask).minus(e.ticker.bid).abs().div(2);
+    const stop = precioDeStop(e, cand, tipo, tipoCanal);
+    return Number(
+      D(String(cand.extremo)).minus(stop!).minus(medioSpread).div(e.mercado.atr15m).toFixed(4),
+    );
+  };
+
+  it('el canal de giros mantiene su cuarto, su medio y su ATR', () => {
+    expect(stopDe(TipoCanal.HORIZONTAL, TipoStop.AJUSTADO)).toBeCloseTo(0.25, 2);
+    expect(stopDe(TipoCanal.HORIZONTAL, TipoStop.NORMAL)).toBeCloseTo(0.5, 2);
+    expect(stopDe(TipoCanal.HORIZONTAL, TipoStop.AMPLIO)).toBeCloseTo(1, 2);
+    expect(stopDe(TipoCanal.INCLINADO, TipoStop.NORMAL)).toBeCloseTo(0.5, 2);
+  });
+
+  it('el de banda pone el stop fuera: 1, 1,5 y 2,5 ATR', () => {
+    expect(stopDe(TipoCanal.BANDA, TipoStop.AJUSTADO)).toBeCloseTo(1, 2);
+    expect(stopDe(TipoCanal.BANDA, TipoStop.NORMAL)).toBeCloseTo(1.5, 2);
+    // 2,5 ATR es lo que usaba la medición que trajo este tipo de canal.
+    expect(stopDe(TipoCanal.BANDA, TipoStop.AMPLIO)).toBeCloseTo(2.5, 2);
+  });
+});
+
+/**
+ * En un canal de banda el borde opuesto está a cuatro sigmas: apuntar ahí no es
+ * revertir a la media, es pedir la travesía entera. Medido sobre doce pares y
+ * siete meses, dejarlo elegir hundía el R medio de +0,28 a −0,21 (spec 067).
+ */
+describe('herramientaCanal: en una banda el objetivo es la media (spec 067)', () => {
+  // El amplio no sirve de sonda: en una banda son 2,5 ATR, y con ese stop la
+  // relación beneficio/riesgo del fixture ya no llega a `minRewardRisk`.
+  const esquemasDe = (tipo: TipoCanal): EsquemaObjetivo[] =>
+    opcion(herramientaCanal(entradaDePrueba({ canal: canalDePrueba({ tipo }) })), TipoStop.NORMAL)
+      .esquemasViables;
+
+  it('el canal de giros sigue pudiendo apuntar al borde opuesto', () => {
+    expect(esquemasDe(TipoCanal.HORIZONTAL)).toContain(EsquemaObjetivo.OPUESTO);
+    expect(esquemasDe(TipoCanal.HORIZONTAL)).toContain(EsquemaObjetivo.ESCALONADO);
+  });
+
+  it('el de banda, no: ni el opuesto ni el escalonado, que cobra la mitad allí', () => {
+    const esquemas = esquemasDe(TipoCanal.BANDA);
+
+    expect(esquemas).toContain(EsquemaObjetivo.MEDIA);
+    expect(esquemas).not.toContain(EsquemaObjetivo.OPUESTO);
+    expect(esquemas).not.toContain(EsquemaObjetivo.ESCALONADO);
+  });
+});
+
 describe('herramientaCanal: los límites', () => {
   it('lo perdido hoy recorta el riesgo al 90 % de lo que queda del tope', () => {
     const e = entradaDePrueba({ historial: historialDePrueba({ realizadoHoy: '-55' }) });
@@ -245,7 +380,12 @@ describe('herramientaCanal: los límites', () => {
     // El ajustado (99,84) queda por encima del ask; el tope sale del normal.
     expect(c.stops[0].motivo).toBe('STOP_INVALIDO');
     expect(c.entradaTope).toBe('99.83');
-    expect(c.stops[1].viable).toBe(true);
+    // Y el normal, con el precio ya tan encima del giro, deja el stop a 0,06 %
+    // contra un coste de ida y vuelta de 0,11 %: el coste es el DOBLE del
+    // riesgo. Antes se ofrecía; desde el spec 066 no, y es el caso de libro de
+    // por qué la puerta existe.
+    expect(c.stops[1].motivo).toBe('COSTE');
+    expect(c.stops[2].viable).toBe(true);
   });
 
   it('un stop más ancho que maxStopPct no se ofrece', () => {

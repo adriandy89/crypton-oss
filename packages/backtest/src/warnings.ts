@@ -117,6 +117,19 @@ export function fidelityWarnings(opts: {
     );
   }
 
+  if (opts.strategy === StrategyKind.AI_TRADER) {
+    avisos.push(
+      'Bot de IA: el modelo NO se consulta en el backtest. Decide el juez de reglas, con los ' +
+        'mismos límites y los mismos defectos de stop y objetivo. Esto mide el motor y las ' +
+        'reglas, no al modelo: para medir al modelo hace falta el modo sombra con bots ' +
+        'simulados, que es otra cosa.',
+      'Bot de IA: un solo tramo de apalancamiento, con el mantenimiento del simulador, y sin ' +
+        'funding. Los objetivos se llenan solo si el precio los pasa; con posición abierta, cada ' +
+        'vela va primero hacia el stop; y un hueco que salta el stop sale a la apertura. De las ' +
+        'guardas, las de la estrategia sí se reproducen; las del motor, no.',
+    );
+  }
+
   const esMarketMaker =
     opts.strategy === StrategyKind.MARKET_MAKER || opts.strategy === StrategyKind.MARKET_MAKER_V2;
   if (esMarketMaker) {

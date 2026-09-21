@@ -15,7 +15,7 @@
  * qué no opera.
  */
 import { CalidadCanal, TipoCanal, type CanalDetectado } from '@crypton/shared';
-import { cambiosDeSigno, mediaVidaOU, olsParalelas } from './estadistica';
+import { bollinger, cambiosDeSigno, mediaVidaOU, olsParalelas } from './estadistica';
 import type { SerieNumerica } from './numeros';
 import type { Giro } from './swings';
 
@@ -65,6 +65,16 @@ const MIN_ALTERNANCIAS = 2;
 const MIN_CONTENCION = 0.9;
 const MIN_ANCHURA_ATR = 3;
 const MAX_ANCHURA_ATR = 10;
+/**
+ * Anchura mínima del canal, en costes de ida y vuelta.
+ *
+ * Se probó a subirla a 30 (spec 066), con el razonamiento de que el objetivo es
+ * la MEDIA del canal y por tanto la mitad de la anchura. Medido sobre datos
+ * reales, ese 30 rechazaba **27.166 de 27.360 ticks**: la puerta se comía el
+ * 99,3 % de los canales antes de que ninguna otra opinara. Se queda en 10 y la
+ * selección la hace `minObjetivoCoste`, sobre el objetivo de la operación de
+ * verdad, que es donde se midió que cambia el signo.
+ */
 const MIN_ANCHURA_COSTES = 10;
 const MIN_DURACION = 30;
 const MIN_CRUCES = 3;
@@ -77,6 +87,29 @@ const MIN_GIROS_INCLINADO = 3;
 const PENDIENTE_MINIMA_ATR = 0.5;
 /** Una ruptura de más de esto (en ATR) no es falsa: el canal se acabó. */
 const MAX_FALSO_QUIEBRE_ATR = 1;
+
+/**
+ * Periodo y desviaciones de la banda de Bollinger del canal `BANDA` (spec 067).
+ *
+ * 20 y 2 son los de toda la vida, y son los que se midieron: sobre 12 pares y
+ * 190 días, el toque de banda con ADX < 20, stop a 2 ATR y objetivo en la media
+ * dio n = 1.804 y t = 2,12. No se tocan sin volver a medir.
+ */
+const PERIODO_BANDA = 20;
+const SIGMAS_BANDA = 2;
+/**
+ * Fracción de la anchura de la banda que cuenta como «estar en el borde».
+ *
+ * Una banda a dos sigmas es, por construcción, más ancha que el recorrido de
+ * cualquier oscilación acotada: un seno de amplitud A tiene sigma 0,71·A, o sea
+ * bandas a 1,41·A, que el precio **nunca** alcanza. Tocarla de verdad solo pasa
+ * cuando la volatilidad se contrae y luego el precio da un salto raro.
+ *
+ * Por eso la regla que se midió no entraba EN la banda sino en el décimo
+ * exterior de su anchura —%B ≤ 0,1 para el largo, ≥ 0,9 para el corto—, y eso
+ * es lo que cuenta aquí como toque.
+ */
+export const DECIMO_BANDA = 0.1;
 
 const media = (xs: readonly number[]): number => xs.reduce((a, b) => a + b, 0) / xs.length;
 
@@ -167,7 +200,76 @@ function lineasInclinadas(
   };
 }
 
+/**
+ * Las líneas de un canal de banda: Bollinger sobre los cierres (spec 067).
+ *
+ * La diferencia con las otras dos no es cosmética. Un borde trazado desde giros
+ * es un precio que el mercado defendió de verdad; una banda es una frontera
+ * estadística, que existe aunque nadie la haya respetado nunca. Por eso aquí un
+ * «toque» no es un pivote confirmado sino una vela cuyo extremo llegó a la
+ * banda, y por eso el stop de este tipo va más lejos (`ATR_POR_STOP`).
+ *
+ * Las tres puertas que NO le llegan —`PARALELAS`, `PENDIENTE_PLANA` y `R2`— son
+ * las que comprueban que dos RECTAS ajustadas a giros son de verdad un canal.
+ * Una banda no es una recta ajustada a nada, así que no hay nada que comprobar:
+ * no se están aflojando, es que no se le pueden aplicar. Todas las demás
+ * —contención, anchura en ATR, anchura en costes, toques, alternancia, cruces,
+ * media vida, duración y recencia— se le aplican igual que a las otras.
+ */
+function lineasDeBanda(s: SerieNumerica, ventana: number): Lineas | null {
+  if (s.n < PERIODO_BANDA + 2) return null;
+  const bb = bollinger(s.c, PERIODO_BANDA, SIGMAS_BANDA);
+  const ultima = s.n - 1;
+  if (!Number.isFinite(bb.superior[ultima]) || !(bb.superior[ultima] > bb.inferior[ultima])) {
+    return null;
+  }
+  // Fuera de la ventana con banda, se prolonga el valor del extremo más cercano:
+  // `evaluar` mira desde el primer toque y `nivelesEn` proyecta hacia delante.
+  const en = (v: Float64Array, i: number): number =>
+    v[Math.max(PERIODO_BANDA - 1, Math.min(ultima, i))];
+  const soporteEn = (i: number) => en(bb.inferior, i);
+  const resistenciaEn = (i: number) => en(bb.superior, i);
+
+  // Un toque es una vela cuyo extremo llegó a la banda. Se cuentan dentro de la
+  // ventana pedida, igual que los giros de los otros dos tipos.
+  const desde = Math.max(PERIODO_BANDA - 1, s.n - ventana);
+  const toquesSoporte: Giro[] = [];
+  const toquesResistencia: Giro[] = [];
+  for (let i = desde; i <= ultima; i++) {
+    const borde = DECIMO_BANDA * (resistenciaEn(i) - soporteEn(i));
+    if (s.l[i] <= soporteEn(i) + borde) {
+      toquesSoporte.push({ tipo: 'BAJO', indice: i, precio: s.l[i], confirmadoEn: i });
+    }
+    if (s.h[i] >= resistenciaEn(i) - borde) {
+      toquesResistencia.push({ tipo: 'ALTO', indice: i, precio: s.h[i], confirmadoEn: i });
+    }
+  }
+
+  // La pendiente es la de la media móvil en las últimas velas: es lo que
+  // `nivelesEn` usa para proyectar los niveles más allá de `refT`.
+  const atras = Math.min(PERIODO_BANDA, ultima - (PERIODO_BANDA - 1));
+  const pendiente = atras > 0 ? (bb.media[ultima] - bb.media[ultima - atras]) / atras : 0;
+
+  return {
+    tipo: TipoCanal.BANDA,
+    soporteEn,
+    resistenciaEn,
+    pendiente: Number.isFinite(pendiente) ? pendiente : 0,
+    toquesSoporte,
+    toquesResistencia,
+    r2: null,
+    motivos: [],
+  };
+}
+
 /** Las puertas y la puntuación de unas líneas. */
+/** La inicial del tipo abre el id del canal, que tiene que ser estable y corto. */
+const INICIAL: Readonly<Record<TipoCanal, string>> = {
+  [TipoCanal.HORIZONTAL]: 'H',
+  [TipoCanal.INCLINADO]: 'I',
+  [TipoCanal.BANDA]: 'B',
+};
+
 function evaluar(
   lineas: Lineas,
   s: SerieNumerica,
@@ -238,7 +340,7 @@ function evaluar(
 
   return {
     canal: {
-      id: (lineas.tipo === TipoCanal.HORIZONTAL ? 'H' : 'I') + String(s.t[primero]),
+      id: INICIAL[lineas.tipo] + String(s.t[primero]),
       tipo: lineas.tipo,
       calidad,
       puntuacion,
@@ -340,6 +442,10 @@ export function detectarCanal(
   }
   if (p.tiposPermitidos.includes(TipoCanal.INCLINADO)) {
     const l = lineasInclinadas(altos, bajos, eps, atr, p.ventana);
+    if (l) candidatos.push({ ...evaluar(l, s, atr, eps, p.costeIdaVuelta), lineas: l });
+  }
+  if (p.tiposPermitidos.includes(TipoCanal.BANDA)) {
+    const l = lineasDeBanda(s, p.ventana);
     if (l) candidatos.push({ ...evaluar(l, s, atr, eps, p.costeIdaVuelta), lineas: l });
   }
   const validos = candidatos.filter((c) => c.canal !== null);

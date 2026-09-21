@@ -54,8 +54,18 @@ const ticker = (precio: number, t: number): Ticker => ({
   ts: t,
 });
 
+// Las puertas de coste del spec 066 se prueban aparte: aquí estorban, porque
+// el canal de estos fixtures es estrecho y las activaría todas.
 const config = (cfg: Record<string, unknown> = {}) =>
-  leerConfig({ totalInvestment: '1000', ...cfg } as BotConfig, Venue.HYPERLIQUID);
+  leerConfig(
+    {
+      totalInvestment: '1000',
+      maxCostPerTradeR: '0.6',
+      minTargetCostMultiple: 3,
+      ...cfg,
+    } as Record<string, unknown> as unknown as BotConfig,
+    Venue.HYPERLIQUID,
+  );
 
 function entrada(
   esc: ReturnType<typeof escenarioCanal>,
