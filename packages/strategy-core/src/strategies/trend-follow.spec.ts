@@ -5,6 +5,7 @@ import {
   type Candle,
   type DesiredState,
 } from '@crypton/shared';
+import { eficienciaKaufman } from '@crypton/shared';
 import { getStrategy } from '../registry';
 import { BASE_CONFIG, makeContext, makeMarket, makePosition } from '../testing';
 
@@ -432,5 +433,47 @@ describe('trendFollow — lo que la revision encontro (spec 041)', () => {
   it('en un mercado normal el tope no muerde y no se dice nada', () => {
     const r = plan({ entryEfficiency: '0' }, { candles: conRuptura(130) });
     expect(r.note).not.toContain('recortado');
+  });
+});
+
+/**
+ * La ventana del filtro de eficiencia esta ACOPLADA a `breakoutPeriod` (spec 071).
+ *
+ * `senal()` calcula la eficiencia de Kaufman sobre TODAS las velas que el motor
+ * le sirve, y esas son `max(breakoutPeriod, atrPeriod) + 5`. O sea que subir el
+ * periodo de ruptura alarga tambien la ventana del filtro de tendencia, aunque
+ * el usuario crea que esta tocando dos mandos independientes.
+ *
+ * No es intencionado —`barsNecesarias` es un calculo de suficiencia— pero NO se
+ * corrige, porque hacerlo moveria la conducta de los bots que ya corren con un
+ * periodo distinto del de fabrica. Se fija aqui para que el dia que se decida
+ * desacoplarlo sea una decision y no un descuido.
+ */
+describe('TREND_FOLLOW: la ventana de la eficiencia (spec 071)', () => {
+  const velas = (n: number) =>
+    Array.from({ length: n }, (_, i) => ({
+      t: i * 14_400_000,
+      o: '100',
+      h: '101',
+      l: '99',
+      c: String(100 + i * 0.1),
+      v: '10',
+    }));
+
+  it('el motor sirve mas velas cuando sube breakoutPeriod', () => {
+    const tf = getStrategy(StrategyKind.TREND_FOLLOW);
+    const pedido = (breakoutPeriod: number) =>
+      tf.candles!({ breakoutPeriod, atrPeriod: 14 } as never).bars;
+
+    expect(pedido(20)).toBe(25);
+    expect(pedido(50)).toBe(55);
+    // Y esas son EXACTAMENTE las velas sobre las que se mide la eficiencia.
+    expect(pedido(50)).toBeGreaterThan(pedido(20));
+  });
+
+  it('la eficiencia de una recta es 1 sea cual sea la ventana', () => {
+    // Una serie perfectamente lineal: la eficiencia no depende del tamano.
+    expect(Number(eficienciaKaufman(velas(25).map((v) => v.c)).toFixed(4))).toBeCloseTo(1, 3);
+    expect(Number(eficienciaKaufman(velas(55).map((v) => v.c)).toFixed(4))).toBeCloseTo(1, 3);
   });
 });

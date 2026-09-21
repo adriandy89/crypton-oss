@@ -81,7 +81,12 @@ function bandBlock(s: SenalTrader): Record<string, string> {
   return {
     definition:
       'a band drawn two standard deviations either side of a moving average of recent closes',
-    width: `${num(s.anchuraAtr)} times the average true range, which is ${pct(s.anchuraPct)} of price`,
+    // Solo en ATR, NUNCA en por ciento del precio. Una banda del 0,4 % es BTC y
+    // una del 4 % es un alt pequeno: la volatilidad absoluta identifica el
+    // instrumento igual que el simbolo, y este fichero se quita el simbolo
+    // justamente para que dos montajes iguales en dos pares reciban el MISMO
+    // estado. Decia las dos cosas y se contradecia a si mismo (spec 071).
+    width: `${num(s.anchuraAtr)} times the average true range`,
     centre_drift: deriva
       ? 'the centre line is essentially flat'
       : `the centre line is drifting ${s.derivaMediaAtr > 0 ? 'upward' : 'downward'} by ${num(
@@ -209,6 +214,25 @@ function historyBlock(s: SenalTrader): Record<string, string> {
     mean_result: `${t.rMedio >= 0 ? 'plus' : 'minus'} ${Math.abs(t.rMedio).toFixed(
       2,
     )} times the risk per trade, on average`,
+    // La evidencia CONDICIONADA al estiramiento de este toque (spec 070).
+    //
+    // Se añade porque midiendo 498 decisiones reales salió que el estiramiento
+    // es el rasgo que mejor predice el resultado —y en la dirección contraria a
+    // la intuición: cuanto más estirado, peor— y que el modelo lo ignoraba por
+    // completo. Decírselo seria meterle nuestro prior; darle la tasa medida de
+    // los toques parecidos le deja verlo por su cuenta.
+    ...(t.similares
+      ? {
+          at_this_stretch: `restricting to the touches that were stretched about as far as this one, ${
+            t.similares.n
+          } resolved cases: ${pct((t.similares.aciertos / t.similares.n) * 100, 0)} ended in profit, ${
+            t.similares.rMedio >= 0 ? 'plus' : 'minus'
+          } ${Math.abs(t.similares.rMedio).toFixed(2)} times the risk on average`,
+        }
+      : {
+          at_this_stretch:
+            'there are too few comparable touches at a similar stretch to say anything about this one',
+        }),
   };
 }
 

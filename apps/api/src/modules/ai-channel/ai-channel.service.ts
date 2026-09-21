@@ -231,6 +231,15 @@ export class AiChannelService {
     if (bot.user.role !== DUENO_CON_CANAL.role || bot.user.disabled) {
       return cerrar(EstadoIntencion.SIN_ENTRADA, MotivoConsulta.DUENO);
     }
+    // Desde el spec 069 hay dos lazos mirando esta misma tabla. Una solicitud
+    // que es del OTRO no se cierra: se SUELTA, y su lazo la recoge en el sondeo
+    // siguiente. Cerrarla la mataba —el «Bot de IA» no operaba nunca y el motivo
+    // parecia un problema suyo—, y no reclamarla no es posible: el filtro tendria
+    // que ir en la actualizacion condicional, y ahi no caben relaciones.
+    //
+    // Solo se suelta lo que es de alguien. Una solicitud de una estrategia que no
+    // tiene lazo no la va a recoger nadie, asi que esa si se cierra.
+    if (bot.strategy === StrategyKind.AI_TRADER) return this.soltar(id);
     if (bot.status !== BotStatus.RUNNING || bot.strategy !== StrategyKind.AI_CHANNEL) {
       return cerrar(EstadoIntencion.SIN_ENTRADA, MotivoConsulta.ESTADO_BOT);
     }
@@ -402,6 +411,21 @@ export class AiChannelService {
       );
     }
     return res;
+  }
+
+  /**
+   * Devuelve la solicitud a `SOLICITADA`: no era de este lazo (spec 069).
+   *
+   * No cuenta como consulta, no gasta cupo y no escribe evento: aquí no ha
+   * pasado nada. El lazo del «Bot de IA» la encontrará en su sondeo, como
+   * mucho diez segundos después, y su plazo es de media hora.
+   */
+  private async soltar(id: string): Promise<ResultadoConsulta> {
+    const r = await this.db.botAiIntent.updateMany({
+      where: { id, estado: EstadoIntencion.CONSULTANDO },
+      data: { estado: EstadoIntencion.SOLICITADA },
+    });
+    return { estado: EstadoIntencion.SOLICITADA, motivo: null, escrita: r.count === 1 };
   }
 
   /**
@@ -594,7 +618,15 @@ export class AiChannelService {
   async pendientes(limite: number): Promise<string[]> {
     if (limite <= 0) return [];
     const filas = await this.db.botAiIntent.findMany({
-      where: { estado: EstadoIntencion.SOLICITADA, expires_at: { gt: new Date() } },
+      where: {
+        estado: EstadoIntencion.SOLICITADA,
+        expires_at: { gt: new Date() },
+        // Solo lo propio (spec 069). Sin esto, el sondeo reclamaba cada diez
+        // segundos las solicitudes del «Bot de IA» para soltarlas acto seguido:
+        // correcto, pero un ir y venir constante contra la base y diez segundos
+        // de retraso en cada decision ajena.
+        bot: { strategy: StrategyKind.AI_CHANNEL },
+      },
       orderBy: { created_at: 'asc' },
       take: limite,
       select: { id: true },
@@ -610,6 +642,7 @@ export class AiChannelService {
         bar_t: new Date(barT),
         kind: 'ENTRADA',
         estado: EstadoIntencion.SOLICITADA,
+        bot: { strategy: StrategyKind.AI_CHANNEL },
       },
       select: { id: true },
     });

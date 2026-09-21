@@ -131,18 +131,18 @@ export const MARKET_MAKER_V2_GUIDE: StrategyGuide<MarketMakerV2Config> = {
       what: 'Desplaza el centro de la cotización en contra del inventario para deshacerlo antes.',
       affects:
         'Con posición larga el centro baja: la venta queda más cerca y la compra más lejos, así que el bot tiende solo a volver a cero. Sin esto, lo único que reacciona al inventario son los modos de riesgo.',
-      tip: 'La V1 lo tiene encendido desde siempre; aquí llega apagado para no cambiar la conducta de los bots que ya existen. Enciéndelo: es lo que hace que un market maker no se quede atrapado del lado equivocado.',
+      tip: 'Enciéndelo con factor 1. La V1 lo tiene así desde siempre; aquí llega apagado solo para no mover la conducta de los bots que ya existen, no porque sea mejor. Sin él, la venta se calcula desde el precio de mercado y no desde tu coste, así que cuando el precio se va el bot cierra POR DEBAJO de lo que compró: medido sobre ocho pares y veinte días, el 48 % de los cierres cae ahí y cada uno pesa 1,7 veces lo que pesa uno bueno. Encendiéndolo, la pérdida realizada baja un 44 %; con el sesgo de tamaño también, un 54 %.',
     },
     inventorySkewFactor: {
       what: 'Con cuánta fuerza empuja ese desplazamiento.',
       affects: 'Con 0 no hay. Con 2, el doble que con 1.',
       tip: 'Empieza en 1. Subirlo hace que el bot corra más por deshacer inventario, a costa de vender antes de tiempo en un movimiento que le venía bien.',
     },
-    trendGuardEfficiency: {
-      what: 'Eficiencia de la tendencia a partir de la cual el bot deja de ABRIR contra ella.',
+    regimeGuard: {
+      what: 'Deja de abrir contra el mercado cuando el régimen dice que no es tu terreno.',
       affects:
-        'Mide cuánto del recorrido del precio es avance y cuánto es ir y venir: 1 es una línea recta y 0 es puro vaivén. Por encima del umbral, el lado que pelea contra la dirección del mercado deja de cotizar; el que reduce sigue vivo.',
-      tip: '0,6–0,7. Es la respuesta al único riesgo de verdad de esta estrategia: que el precio no vaya y venga, sino que se vaya en línea recta. Con 0 está apagado.',
+        'Con «evita tendencia», si el mercado está en tendencia el bot deja de ABRIR del lado que acumula contra ella; el lado que reduce sigue vivo, así que el inventario nunca se queda sin salida. Con «solo rango» solo abre en mercado lateral o comprimido, que es mucho más estricto. Apagándola no cambia nada y ni siquiera pide velas.',
+      tip: 'Viene en «evita tendencia», que es donde conviene dejarla: medido con el motor real sobre ocho pares y 120 días, ella y el ajuste por inventario llevan juntas el resultado de −19,9 % a −11,4 %, mejor en 7 de 8 pares. Sustituye a un filtro anterior que medía lo mismo sobre los últimos segundos —la escala equivocada, porque el inventario se envenena a lo largo de horas— y que discriminaba diez veces peor; ese se quitó. «Solo rango» deja al bot abriendo un 9 % del tiempo: mucho menos riesgo y mucho menos negocio.',
     },
     volEstimator: {
       what: 'Cómo se convierte en un número el recorrido del precio de la ventana.',

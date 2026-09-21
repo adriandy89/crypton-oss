@@ -33,6 +33,7 @@ import {
   agregarVelas,
   apalancamientoPorStop,
   eleccionEfectiva,
+  esEleccionCanal,
   maintenanceMarginRateOf,
   vistaCanalDe,
   type AvisoEstrategia,
@@ -1518,13 +1519,20 @@ function enPlano(
     if (dIa.huella !== salida.huella) {
       return rechazar(MotivoRechazo.HUELLA, 'La oferta cambió desde que se consultó a la IA.');
     }
+    // Desde el spec 069 hay dos estrategias escribiendo en la misma columna, y
+    // la elección se estrecha por su forma. Una que no sea de esta no se
+    // interpreta «como se pueda»: se rechaza.
+    if (!esEleccionCanal(dIa.eleccion)) {
+      return rechazar(MotivoRechazo.OFERTA, 'La decisión guardada no es de esta estrategia.');
+    }
+    const eleccion = dIa.eleccion;
     if (
-      dIa.eleccion.veredicto === Veredicto.OPERAR &&
-      ORDEN_CONFIANZA[dIa.eleccion.confianza] < ORDEN_CONFIANZA[c.confianzaMinima]
+      eleccion.veredicto === Veredicto.OPERAR &&
+      ORDEN_CONFIANZA[eleccion.confianza] < ORDEN_CONFIANZA[c.confianzaMinima]
     ) {
       return rechazar(MotivoRechazo.OFERTA, 'La IA decidió con menos confianza de la pedida.');
     }
-    if (dIa.eleccion.veredicto !== Veredicto.OPERAR) {
+    if (eleccion.veredicto !== Veredicto.OPERAR) {
       return rechazar(MotivoRechazo.OFERTA, 'La IA no quiere operar esta vela.');
     }
     // La API ya la guarda reducida; se vuelve a aplicar por si no (spec 059).
@@ -1534,7 +1542,7 @@ function enPlano(
       seq,
       intento,
       salida,
-      eleccionEfectiva(dIa.eleccion),
+      eleccionEfectiva(eleccion),
       dIa.intentId,
       patch,
       avisos,

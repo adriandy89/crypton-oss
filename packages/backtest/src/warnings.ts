@@ -30,8 +30,10 @@ export function fidelityWarnings(opts: {
     // 2. Favorece al market maker, así que hay que decirlo.
     'Sin profundidad de libro: una orden en reposo se ejecuta ENTERA en cuanto el ' +
       'precio la toca, a su propio precio. No hay ejecuciones parciales ni cola de ' +
-      'prioridad para las post-only, así que un market maker sale mejor parado aquí ' +
-      'que en el venue.',
+      'prioridad para las post-only, y en eso un market maker sale mejor parado aquí ' +
+      'que en el venue. Pero ojo con la dirección del sesgo: la falta de flujo pesa ' +
+      'mucho más que la falta de cola, y esa va en contra (ver los avisos propios de ' +
+      'market maker).',
 
     // 3. Y esta hace el resultado OPTIMISTA, que es la dirección peligrosa.
     'Margen de mantenimiento plano (≈0,5 %) en lugar de la escala por tramos que ' +
@@ -133,11 +135,56 @@ export function fidelityWarnings(opts: {
   const esMarketMaker =
     opts.strategy === StrategyKind.MARKET_MAKER || opts.strategy === StrategyKind.MARKET_MAKER_V2;
   if (esMarketMaker) {
+    // Las DOS formas de tenerlo apagado. `Number` y no `Decimal` porque esto no
+    // es dinero: es «¿está este mando en cero?» para decidir si se avisa.
+    const sesgoActivo =
+      opts.config?.['inventoryPriceAdjustment'] !== false &&
+      Number(opts.config?.['inventorySkewFactor'] ?? 0) > 0;
     avisos.push(
+      // EL AVISO QUE FALTABA, y va el primero porque es el que decide si las
+      // cifras significan algo (spec 071).
+      //
+      // El replay solo conoce PRECIOS. Una orden en reposo se ejecuta si, y solo
+      // si, el precio llega hasta ella — o sea que TODA ejecución del replay es,
+      // por construcción, una en la que el mercado vino a por ti. Y un market
+      // maker no vive de esas: vive del flujo que cruza su cotización SIN mover
+      // el precio —alguien cerrando posición, un arbitrajista, una liquidación—,
+      // y ese flujo el replay no puede inventarlo porque no está en las velas.
+      //
+      // El código ya decía en un comentario que «los market makers son los que
+      // más pierden con un plan() por vela», y luego no se lo decía a nadie: se
+      // añadían avisos propios para tendencia, seguimiento, canal y bot de IA, y
+      // no para los dos que el propio comentario señalaba como los peor
+      // reproducidos. Quien veía números rojos concluía que la estrategia no
+      // funciona, que es justo lo que este aviso existe para impedir.
+      'Market maker: ESTE BACKTEST NO PUEDE DECIR SI UN MARKET MAKER GANA O PIERDE. El replay ' +
+        'solo tiene precios, así que una cotización se ejecuta únicamente cuando el precio llega ' +
+        'hasta ella: todas las ejecuciones que verás son de las que el mercado vino a por ti. ' +
+        'Un market maker vive de lo contrario —del flujo que cruza su precio sin moverlo—, y eso ' +
+        'no está en una vela. Un resultado negativo aquí NO es prueba de que la estrategia ' +
+        'pierda; es lo que sale de medir solo la mitad mala.',
+      // Lo que el replay SI puede medir de un market maker es la FORMA del
+      // resultado, y esa no depende del flujo que falta: donde pone el bot su
+      // salida es donde la pone tambien en vivo (spec 071).
+      ...(sesgoActivo
+        ? []
+        : [
+            'Market maker: tienes APAGADO el ajuste de precio por inventario, y eso sí se ve en ' +
+              'estas cifras. Sin él la venta se calcula desde el precio de mercado y no desde tu ' +
+              'coste, así que cuando el precio se va el bot cierra por debajo de lo que compró. ' +
+              'Medido sobre ocho pares y veinte días: el 48 % de los cierres cae por debajo del ' +
+              'coste medio y cada uno pesa 1,7 veces lo que pesa uno bueno. Encendiéndolo con ' +
+              'factor 1, la pérdida realizada baja un 44 %.',
+          ]),
       'Market maker: se recotiza UNA vez por vela, no cada quince segundos. El intervalo de ' +
         'actualización, la espera tras ejecución y la ventana de volatilidad no se reproducen, ' +
-        'y el precio de referencia externo es la propia serie de velas. Recotizar menos de la ' +
-        'cuenta hace que el replay ejecute MÁS que el motor, no menos.',
+        'y el precio de referencia externo es la propia serie de velas. Eso tira en las dos ' +
+        'direcciones: recotizar menos hace que el replay ejecute MÁS que el motor, y a la vez ' +
+        'deja al bot con la cotización vieja mientras el precio se va.',
+      'Market maker: para saber si gana, lo que sirve es un bot SIMULADO en el venue, que sí ve ' +
+        'flujo real. El backtest sirve para lo otro: ver si la configuración hace lo que crees ' +
+        '—dónde cotiza, cuánto inventario acumula, cuándo se pone defensivo— y para comparar dos ' +
+        'configuraciones entre sí sobre el mismo periodo.',
     );
     const maxAge = Number(opts.config?.['orderMaxAgeSeconds'] ?? 0);
     const velaSeg = candleSpanMs(opts.interval) / 1000;

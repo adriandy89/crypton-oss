@@ -4,6 +4,7 @@ import {
   type BotConfig,
   type BotContext,
   type Candle,
+  type CandleInterval,
   type CycleState,
   type MarketSpec,
   type OrderSide,
@@ -135,6 +136,8 @@ export interface MakeContextOptions {
   ticker?: Partial<Ticker>;
   /** Velas cerradas, para la estrategia que las declara (specs 038 y 040). */
   candles?: Candle[];
+  /** Varias series por intervalo, para las estrategias que declaran `series`. */
+  series?: Partial<Record<CandleInterval, Candle[]>>;
   /** Extremos vistos por el stream desde la última planificación (spec 042). */
   extremos?: { alto: string; bajo: string };
 }
@@ -155,6 +158,7 @@ export function makeContext(opts: MakeContextOptions): BotContext {
     now: opts.now ?? 1_000_000,
     fairPrice: opts.fairPrice ?? null,
     ...(opts.candles ? { candles: opts.candles } : {}),
+    ...(opts.series ? { series: opts.series } : {}),
     ...(opts.extremos ? { extremos: opts.extremos } : {}),
   };
 }

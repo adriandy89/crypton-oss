@@ -403,7 +403,7 @@ Ensancha **el lado que añade** a medida que crece el inventario: `× (1 + ocupa
 
 Desplaza el **centro** de la cotización en contra del inventario. Con posición larga baja el centro: la venta queda más cerca y la compra más lejos.
 
-**Consejo**: activado. Es lo que hace que el bot tienda a volver solo a posición cero.
+**Consejo**: activado, que es como viene. **No lo apagues.** Ningún market maker lee el precio de entrada de la posición: las dos cotizaciones salen del precio de mercado, así que sin este ajuste la venta se planta por debajo de tu coste medio en cuanto el precio se va. Medido sobre la V2 —que lo trae apagado— con ocho pares y veinte días: el **48 %** de los cierres cae por debajo del coste y cada uno pesa **1,7 veces** lo que pesa uno bueno; encendiéndolo, la pérdida realizada baja un **44 %**.
 
 #### Sesgo por inventario · `inventorySkewFactor` · 🔥 en caliente · 0–3 · por defecto **1**
 
@@ -630,7 +630,16 @@ Es **en tibio** y no en caliente porque el venue puede rechazar el cambio con po
 
 #### Conexión de exchange · `exchangeAccountId` · ❄️ en frío
 
-La cuenta con la que opera (real, pruebas o simulación). El simulador es algo optimista para un market maker: todo se ejecuta entero y sin cola ([simulación y backtest](./simulacion-y-backtest.md#qué-hace-el-simulador-exactamente)).
+La cuenta con la que opera (real, pruebas o simulación). El simulador es algo optimista para un market maker en un solo sentido —todo se ejecuta entero y sin cola— pero enfrenta las cotizaciones al libro de verdad, y por eso **es la herramienta con la que se mide un market maker** ([simulación y backtest](./simulacion-y-backtest.md#qué-hace-el-simulador-exactamente)).
+
+> ⛔ **El backtest no puede decirte si este bot gana.** El replay solo tiene velas, así que una cotización
+> se ejecuta cuando el precio llega hasta ella y **nunca** cuando el flujo cruza tu precio sin moverlo —
+> que es justo de lo que vive un market maker. Medido: los valores de fábrica sobre ocho pares y 120 días
+> dan **−19,9 %** en el replay, y eso no prueba nada sobre la estrategia; es lo que sale de medir solo la
+> mitad mala. **Para saber si gana, un bot simulado en el venue.** El backtest sí sirve para ver dónde
+> cotiza, cuánto inventario acumula y para comparar dos configuraciones entre sí
+> ([simulación y backtest](./simulacion-y-backtest.md#lo-que-el-backtest-no-reproduce)).
+
 
 #### Par · `symbol` · ❄️ en frío
 
@@ -673,9 +682,9 @@ Solo avisar / Pausar el bot / Cerrar todo cuando la distancia a la liquidación 
 | Caducidad de órdenes por edad  | ❌ Solo las de salida                             | ✅ Todas (`orderMaxAgeSeconds`)                     |
 | Recorta la última capa al tope | ❌ Todo o nada                                    | ✅ Configurable                                     |
 | Condición de activación        | ❌                                                | ✅ Espera a que el precio cruce un disparador       |
-| Sesgo de precio por inventario | ✅ Sí (desplaza el centro)                        | ✅ Desde el spec 039, apagado de fábrica            |
+| Sesgo de precio por inventario | ✅ Sí (desplaza el centro)                        | ✅ Desde el spec 039; encendido de fábrica desde el 071 |
 | Microprecio y desequilibrio    | ✅ Desde el spec 039                              | ✅ Desde el spec 039                                |
-| Filtro de tendencia            | ❌ (no guarda muestras)                           | ✅ Desde el spec 039                                |
+| Puerta de régimen              | ❌                                                | ✅ Desde el spec 071, encendida de fábrica          |
 | Nº de parámetros               | Menos                                             | Bastante más                                        |
 | Capas por defecto              | 3                                                 | 1                                                   |
 | Apalancamiento por defecto     | 2x                                                | 1x                                                  |

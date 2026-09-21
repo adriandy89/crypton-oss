@@ -3,7 +3,7 @@ import type { PositionSide } from './enums';
 // TypeScript los borra al compilar y no queda dependencia en tiempo de
 // ejecución. Las dos uniones de abajo viven aquí porque es aquí donde están
 // `SolicitudIa` y `MarcaDecision`, que es lo que de verdad se amplía.
-import type { EspacioTrader, PlanTrader } from './ia-trader';
+import type { EspacioTrader, PlanTrader, VeredictoTrader } from './ia-trader';
 
 /**
  * El vocabulario del canal con IA (`AI_CHANNEL`, specs 058-059).
@@ -208,6 +208,15 @@ export const MotivoConsulta = {
   OFERTA: 'OFERTA',
   /** Menos confianza de la que pide el bot. */
   CONFIANZA: 'CONFIANZA',
+  /**
+   * El enrutado dice que sí pero una puerta de contexto lo veta (spec 069).
+   *
+   * Es propio del «Bot de IA»: sus tres preguntas de contexto se hacen en
+   * aislamiento justamente para poder discrepar del enrutado. No es un fallo
+   * —es la estadística de calibración que dice si las preguntas sirven de algo—
+   * y por eso tiene su propia línea en vez de contarse como «oferta».
+   */
+  DESACUERDO: 'DESACUERDO',
   /** Modo sombra: la decisión se registra y no se ejecuta. */
   SOMBRA: 'SOMBRA',
   /** El modelo no contestó: error, tiempo agotado, negativa o respuesta cortada. */
@@ -445,13 +454,32 @@ export interface CanalDetectado {
   r2: number | null;
 }
 
-export interface TasasBase {
+export interface ResumenTasas {
   n: number;
   aciertos: number;
   rMedio: number;
   /** Límite inferior de Wilson al 95 % del acierto. */
   wilsonInferior: number;
   evidencia: Evidencia;
+}
+
+export interface TasasBase extends ResumenTasas {
+  /**
+   * Las mismas tasas, pero solo de los toques con un **estiramiento parecido**
+   * al de ahora (spec 070).
+   *
+   * Existe por una medición incómoda: sobre 498 decisiones reales, el rasgo que
+   * mejor predecía el resultado era el estiramiento —y en dirección
+   * contraintuitiva, cuanto más estirado peor—, y el modelo lo ignoraba por
+   * completo. Decírselo seria meterle nuestro prior; darle la evidencia
+   * condicionada le deja descubrirlo a él, que es lo que corresponde.
+   *
+   * `null` cuando no hay muestra suficiente: una tasa de cuatro casos no es una
+   * tasa, es una anécdota con decimales.
+   */
+  similares: ResumenTasas | null;
+  /** El estiramiento con el que se filtraron, en ATR. */
+  estiramientoRef: number;
 }
 
 /** Una banda de apalancamiento con lo que supone. */
@@ -515,7 +543,7 @@ export interface CandidatoOperacion {
   tp1: string;
   tp2: string;
   stops: OpcionStop[];
-  tasas: TasasBase | null;
+  tasas: ResumenTasas | null;
   /** Por qué no es elegible, si no lo es. */
   descartes: string[];
 }
@@ -597,6 +625,30 @@ export function eleccionEfectiva(e: EleccionOperacion): EleccionOperacion {
     : { ...e, tamano: TamanoOperacion.MEDIO };
 }
 
+/**
+ * Lo que eligió quien decide, sea cual sea la estrategia.
+ *
+ * El canal elige un candidato con sus parámetros; el «Bot de IA» emite un
+ * veredicto sobre un único montaje (spec 069). Las dos formas viven en la misma
+ * columna, así que quien las lee tiene que estrecharlas.
+ */
+export type EleccionDecision = EleccionOperacion | VeredictoTrader;
+
+/**
+ * ¿La elección es la del canal?
+ *
+ * Generoso hacia el canal a propósito, por el mismo incidente que `esPlanCanal`:
+ * las dos formas comparten `stop`, `objetivo`, `tamano` y `confianza`, y leer
+ * una del canal como si fuera del «Bot de IA» revienta al buscarle una `accion`
+ * que no tiene. Se mira por las claves, nunca por el nombre de la estrategia:
+ * así una intención viva de un bot al que le cambiaron la estrategia no se lee
+ * de una forma por otra.
+ */
+export const esEleccionCanal = (e: EleccionDecision): e is EleccionOperacion =>
+  typeof e === 'object' &&
+  e !== null &&
+  ('opcion' in e || 'apalancamiento' in e || 'veredicto' in e);
+
 /** La intención vigente del bot, tal y como la ve la estrategia. */
 export interface DecisionIa {
   intentId: string;
@@ -604,7 +656,7 @@ export interface DecisionIa {
   origen: OrigenDecision;
   barT: number;
   huella: string;
-  eleccion: EleccionOperacion | null;
+  eleccion: EleccionDecision | null;
   motivo: string | null;
   expiresAt: number;
   cycleSeq: number;

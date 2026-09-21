@@ -21,9 +21,10 @@ sitio web, ni infraestructura de nadie: todo lo que hace está disponible para q
 |---|---|
 | `apps/api` | NestJS 11. REST + SSE: cuentas, credenciales cifradas, CRUD de bots, preview, riesgo, backtest, bitácora. **No ejecuta nada**: escribe el comando en `bot_commands` y avisa por Redis. |
 | `apps/api` → `modules/admin` | La consola de administración (spec 033). **Mirar y contener**: lee cuentas y bots de todos, y sobre un bot ajeno solo puede `PAUSE` y `STOP_KEEP_POSITION`. Nunca importa `ExchangeAccountsModule`: es la puerta a descifrar la clave de firma. |
-| `apps/api` → `modules/advisor` | El asesor: propone tres configuraciones al **crear** un bot. El modelo emite **perillas**, nunca parámetros. `openrouter.client.ts` es el único fichero que habla con un LLM, y sirve también al supervisor y al canal con IA, cada uno con su interruptor y su clave por llamada. |
+| `apps/api` → `modules/advisor` | El asesor: propone tres configuraciones al **crear** un bot. El modelo emite **perillas**, nunca parámetros. `openrouter.client.ts` es **uno de los dos** ficheros que hablan con un modelo —el otro es `modules/ai-trader/typesafe.client.ts`— y sirve al asesor, al supervisor y al canal con IA, cada uno con su interruptor y su clave por llamada. Los dos no se importan entre sí ni comparten transporte: un proveedor caído no arrastra al otro. La lista es de dos y **añadir un tercero es cambiar esta línea**. |
 | `apps/api` → `modules/supervisor` | El **Modo IA** (spec 046): vigila bots que **ya operan**. El modelo emite **desplazamientos** sobre las perillas guardadas, y `apply.ts` los traduce aplicando solo el **delta**. Solo bots propios de un `ADMIN`; no manda comandos; aplica por `BotsService.updateConfig`, que es el único camino de escritura. |
 | `apps/api` → `modules/ai-channel` | La IA del **canal con IA** (`AI_CHANNEL`, specs 058-059): atiende las solicitudes que escribe el worker en `bot_ai_intents`, con barreras y cupos contados **antes** de llamar. El modelo ve la herramienta en unidades relativas y **elige entre las operaciones que ya calculó el worker**, con enums; la API escribe la decisión y avisa al worker. No manda órdenes ni toca configuración; solo bots de un `ADMIN`. También la consola del canal y la pausa por botón de Telegram. |
+| `apps/api` → `modules/ai-trader` | La IA del **«Bot de IA»** (`AI_TRADER`, spec 069): atiende las solicitudes que el worker escribe para esos bots. Habla con **TypeSafe**, no con OpenRouter, y tiene su propio cliente, sus cupos y su interruptor. El modelo contesta **ocho preguntas** —una elección de qué hacer, tres de contexto y dos parejas para stop y objetivo— y `cuantiza()` traduce sus probabilidades a enumeraciones antes de que nada aguas abajo las vea. Es hermano del lazo del canal y no comparte código con él; lo que comparten es el vocabulario del resultado. Los dos miran `bot_ai_intents`: **lo que no es de uno se suelta**, no se cierra, o el otro bot no operaría nunca. |
 | `apps/worker` | NestJS 11 sin HTTP. **El motor**: lease en Redis → un `BotRunner` por bot → tick. Único proceso que descifra claves y firma. También escribe la curva de la cartera (`portfolio_snapshots`) y purga las series. |
 | `apps/app` | Ionic 8 + Angular 21 + Capacitor. Ejecuta `strategy-core` **también en cliente** (`features/bots/bot-create.page.ts`, `fullConfig`). |
 | `packages/shared` | Tipos, enums (calcan Prisma), `money.ts` (Decimal), `precision.ts` (redondeo), `liquidation.ts`, `series.ts` (la aritmética de las series y la analítica que pintan las pantallas: la app no suma dinero, lo pide aquí con test). |
@@ -71,6 +72,7 @@ pnpm test:backtest
 pnpm test               # todo (sin e2e)
 pnpm lint               # eslint con tipos, paquete a paquete
 pnpm check:env          # cruza codigo, .env.example y compose
+pnpm check:labels       # cada campo de estrategia, con nombre y ayuda en la app
 pnpm prisma:migrate | prisma:deploy
 ```
 

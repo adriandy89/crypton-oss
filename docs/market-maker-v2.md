@@ -747,7 +747,7 @@ mercado cuando te va bien es la otra forma conocida de perder dinero haciendo de
 mercado.
 
 
-#### Ajuste de precio por inventario · `inventoryPriceAdjustment` · 🔥 en caliente · por defecto **No**
+#### Ajuste de precio por inventario · `inventoryPriceAdjustment` · 🔥 en caliente · por defecto **Sí**
 
 **Lo que la V2 no tenía y la V1 sí.** Desplaza el centro en contra del inventario: con posición
 larga baja, así que la venta queda más cerca y la compra más lejos, y el bot tiende solo a volver
@@ -757,34 +757,66 @@ Hasta el spec 039, lo único que reaccionaba al inventario en esta versión eran
 riesgo, y **de fábrica entran al 90 %** — es decir, casi nunca. Por eso esta guía recomendaba
 bajarlos a mano.
 
-**Llega apagado** para no cambiar la conducta de los bots V2 que ya existen. **Enciéndelo.**
+**Viene encendido desde el spec 071**, con factor 1, igual que la V1. Llegó apagado en el 039 por
+prudencia con los bots que ya corrían, y esa prudencia costaba dinero. **No lo apagues.**
 
-#### Sesgo por inventario · `inventorySkewFactor` · 🔥 en caliente · 0–3 · por defecto **0**
+> ⚠️ **Lo que cuesta no encenderlo, medido.** Ningún market maker lee el precio de entrada de la
+> posición: las dos cotizaciones salen del precio de mercado. Sin este ajuste, en cuanto el precio se
+> va, **la venta se planta por debajo de tu coste medio** y realiza una pérdida que la estrategia
+> nunca quiso hacer — el beneficio está acotado por el diferencial, y la pérdida no.
+>
+> Con el motor real sobre ocho pares y veinte días de velas de 5 minutos, con los valores de fábrica:
+>
+> | | cierres | media |
+> |---|---|---|
+> | por **encima** del coste medio | 52 % | +0,455 |
+> | por **debajo** del coste medio | **48 %** | **−0,777** |
+>
+> Un cierre malo pesa **1,71 veces** lo que pesa uno bueno. Y las comisiones fueron 63 USDC de una
+> pérdida de 520: **no se pierde por lo que se paga, sino por dónde se pone la salida.**
+>
+> Encendiendo este ajuste con factor 1, la pérdida realizada baja un **44 %**; con el sesgo de tamaño
+> también, un **54 %**. Sigue siendo negativa, pero eso ya es el replay, que no tiene flujo
+> ([por qué](./simulacion-y-backtest.md#lo-que-el-backtest-no-reproduce)).
 
-Con cuánta fuerza. Empieza en **1**, que es el valor con el que la V1 lleva funcionando desde
-siempre. Subirlo hace que el bot corra más por deshacerse del inventario, a costa de vender antes
+#### Sesgo por inventario · `inventorySkewFactor` · 🔥 en caliente · 0–3 · por defecto **1**
+
+Con cuánta fuerza. **1** es el valor con el que la V1 lleva funcionando desde siempre, y el que esta
+versión trae desde el spec 071. Subirlo hace que el bot corra más por deshacerse del inventario, a costa de vender antes
 de tiempo en un movimiento que le venía bien.
 
-#### Filtro de tendencia · `trendGuardEfficiency` · 🔥 en caliente · 0–1 · por defecto **0**
+#### Puerta de régimen · `regimeGuard` · ❄️ al arrancar · por defecto **evita tendencia**
 
 **La respuesta al único riesgo de verdad de esta estrategia**: que el precio no vaya y venga, sino
 que se vaya en línea recta.
 
-Sobre las mismas muestras con las que ya se mide la volatilidad, calcula la **eficiencia de
-Kaufman**:
+Mira el régimen del mercado sobre velas de **15 minutos y 1 hora** —el mismo clasificador que usan
+los bots de IA— y tiene tres posiciones:
 
-```
-eficiencia = |recorrido neto| / suma de |movimientos|
-```
+| valor | qué hace | tiempo abriendo |
+|---|---|---|
+| apagada | nada, y ni siquiera pide velas | 100 % |
+| **evita tendencia** (de fábrica) | en tendencia deja de ABRIR del lado que acumula contra ella | ~62 % |
+| **solo rango** | solo abre en mercado lateral o comprimido | ~9 % |
 
-- **1** = línea recta. El mercado va a un sitio.
-- **0** = ir y venir sin avanzar. El terreno del market maker.
+**Nunca para el bot.** El lado que reduce inventario sigue cotizando siempre, igual que con las
+bandas de precio: retirarlo dejaría a la posición sin salida, que es lo contrario de lo que se
+busca.
 
-Por encima del umbral, **el lado que pelea contra la dirección deja de abrir**. En un mercado que
-cae, el que pelea es la compra —coger un cuchillo que cae—, así que se corta la compra y la venta
-sigue viva. El lado que reduce inventario nunca se corta.
+Viene en **evita tendencia** y cambiarla es `COLD` —hay que parar el bot— porque decide si el motor
+pide velas. Apagándola no pide ninguna: un market maker suele correr en muchos bots a la vez y cada
+sondeo cuenta contra el cupo de peticiones del venue. Ese coste se paga a propósito.
 
-**0,6–0,7** es un umbral razonable. Con 0 está apagado.
+**Lo que aporta, medido.** Con el motor real sobre ocho pares y 120 días de velas de 5 minutos,
+ella y el ajuste de precio por inventario llevan juntas el resultado del replay de **−19,9 % a
+−11,4 %**, mejor en **7 de 8 pares**. (Sigue negativo, y eso es el replay, que no tiene flujo.)
+
+**Por qué esta y no el filtro que había.** Hasta el spec 071 existía un segundo mando que medía la
+eficiencia de Kaufman sobre las muestras de los últimos **segundos**. Se quitó: medido sobre 26
+pares y 400 días discriminaba **+0,015 puntos** —dentro del ruido— contra los **+0,156** de esta
+puerta con el mismo tiempo activo. La razón es de escala de tiempo, y el inventario de un market
+maker se envenena a lo largo de **horas**. Dos mandos para la misma pregunta, uno de ellos que no
+funciona, es peor que uno solo.
 
 #### Estimador de volatilidad · `volEstimator` · 🔥 en caliente · por defecto **Recorrido**
 
@@ -838,7 +870,16 @@ Es **en tibio** porque el venue puede rechazar el cambio con posición abierta y
 
 #### Conexión de exchange · `exchangeAccountId` · ❄️ en frío
 
-La cuenta con la que opera (real, pruebas o simulación). El simulador es algo optimista para un market maker ([simulación y backtest](./simulacion-y-backtest.md#qué-hace-el-simulador-exactamente)); el backtest no reproduce refresco, espera ni volatilidad (F-65).
+La cuenta con la que opera (real, pruebas o simulación). El simulador es algo optimista para un market maker en un solo sentido —todo se ejecuta entero y sin cola— pero enfrenta las cotizaciones al libro de verdad, y por eso **es la herramienta con la que se mide un market maker** ([simulación y backtest](./simulacion-y-backtest.md#qué-hace-el-simulador-exactamente)). El backtest no: además de no reproducir refresco, espera ni volatilidad (F-65), no tiene flujo.
+
+> ⛔ **El backtest no puede decirte si este bot gana.** El replay solo tiene velas, así que una cotización
+> se ejecuta cuando el precio llega hasta ella y **nunca** cuando el flujo cruza tu precio sin moverlo —
+> que es justo de lo que vive un market maker. Medido: los valores de fábrica sobre ocho pares y 120 días
+> dan **−19,9 %** en el replay, y eso no prueba nada sobre la estrategia; es lo que sale de medir solo la
+> mitad mala. **Para saber si gana, un bot simulado en el venue.** El backtest sí sirve para ver dónde
+> cotiza, cuánto inventario acumula y para comparar dos configuraciones entre sí
+> ([simulación y backtest](./simulacion-y-backtest.md#lo-que-el-backtest-no-reproduce)).
+
 
 #### Par · `symbol` · ❄️ en frío
 
@@ -902,11 +943,10 @@ Solo avisar / Pausar el bot / Cerrar todo cuando la distancia a la liquidación 
 | Fuente de precio                   | Datos del exchange | Solo Binance si operas en DEX           |
 | Condición de activación            | Sin condición      | Solo si quieres esperar a un precio     |
 | **Precio justo**                   | Punto medio        | 🟡 Microprecio, donde el venue lo permita |
-| **Ajuste de precio por inventario** | No                | 🟡 **Enciéndelo**: es lo que le faltaba |
+| **Ajuste de precio por inventario** | **Sí** (factor 1)  | Déjalo. Sin él, el 48 % de los cierres cae bajo tu coste |
 | Sesgo por desequilibrio            | 0                  | 0,3–0,5 cuando hayas visto el resto     |
-| Sesgo de tamaño por inventario     | 0                  | 0,3–0,5                                 |
+| Sesgo de tamaño por inventario     | 0                  | 0,3–0,5. Medido, suma sobre el de precio |
 | Sesgo por funding                  | 0                  | Mídelo antes                            |
-| Filtro de tendencia                | 0                  | 🟡 0,6–0,7                              |
 | Horizonte de markout               | 0                  | 🟡 45 s, con sensibilidad 0 para mirarlo |
 | Estimador de volatilidad           | Recorrido          | Solo si reajustas el multiplicador      |
 

@@ -145,10 +145,17 @@ describe('AI_TRADER — las puertas que faltaban (spec 068)', () => {
     expect(plan.pausar).toContain('Caída máxima');
   });
 
-  it('el modo IA no se puede elegir mientras no haya proveedor', () => {
+  /**
+   * Este test afirmaba lo contrario hasta el spec 069: mientras no habia
+   * proveedor cableado, elegir el modo IA se rechazaba en el formulario, porque
+   * un mando que se puede poner y no hace nada es peor que uno que no esta.
+   * Ya hay proveedor, asi que ahora es un AVISO: la configuracion es correcta y
+   * lo que puede faltar —la clave, el interruptor— esta en el servidor.
+   */
+  it('el modo IA ya se puede elegir, con su aviso', () => {
     const r = aiTrader.validate({ ...contexto().config, decisionMode: ModoDecision.IA }, MERCADO);
-    expect(r.ok).toBe(false);
-    expect(r.issues.some((i) => i.field === 'decisionMode')).toBe(true);
+    expect(r.ok).toBe(true);
+    expect(r.issues.find((i) => i.field === 'decisionMode')?.severity).toBe('WARNING');
   });
 
   it('y en reglas valida sin quejarse de eso', () => {

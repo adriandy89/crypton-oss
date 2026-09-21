@@ -17,10 +17,11 @@ import {
   type CommonBotConfig,
   type FieldMeta,
   type Numeric,
-  eficienciaKaufman,
   type Ticker,
+  type ValidationIssue,
   type VenueOrder,
 } from '@crypton/shared';
+import { warn } from '../common';
 
 export const BPS = D(10_000);
 
@@ -105,6 +106,53 @@ export function desequilibrio(ticker: Ticker): Decimal | null {
   const q = tamanos(ticker);
   if (!q) return null;
   return q.bid.minus(q.ask).div(q.bid.plus(q.ask));
+}
+
+/**
+ * El aviso de tener apagado el sesgo por inventario, para las dos versiones.
+ *
+ * ── El defecto ──
+ *
+ * Ninguno de los dos market makers lee `entryPrice` de la posición: las dos
+ * cotizaciones —la que añade y la que reduce— salen del precio de mercado. En
+ * cuanto el precio se va, la salida se planta POR DEBAJO del coste medio y
+ * realiza una pérdida que la estrategia nunca quiso hacer. El beneficio está
+ * acotado por el diferencial; la pérdida, no.
+ *
+ * Medido con el motor real sobre ocho pares y veinte días de velas de 5 min,
+ * con los valores de fábrica de la V2: el 48 % de los cierres cae por debajo
+ * del coste medio y cada uno pesa 1,71 veces lo que pesa uno bueno. Las
+ * comisiones eran 63 USDC de una pérdida de 520, o sea que no se pierde por lo
+ * que se paga, sino por dónde se pone la salida.
+ *
+ * El sesgo es el único mando que pelea eso, y funciona: encendido en 1 la
+ * pérdida realizada baja un 44 %; con el de tamaño también, un 54 %.
+ *
+ * ── Por qué un aviso y no un valor de fábrica distinto ──
+ *
+ * La V1 lo trae encendido desde siempre y la V2 apagado. Cambiar el de la V2
+ * movería dónde cotiza cada bot V2 que ya está en marcha, y eso no se hace sin
+ * decisión de su dueño (spec 071). Callarlo, en cambio, no hacía falta.
+ *
+ * Las DOS formas de tenerlo apagado cuentan: el interruptor en false, y el
+ * interruptor en true con el factor en cero — que no hace nada porque
+ * `centroSesgado` multiplica por él.
+ */
+export function avisoSinSesgoInventario(cfg: {
+  inventoryPriceAdjustment?: boolean;
+  inventorySkewFactor?: string;
+}): ValidationIssue[] {
+  const activo = cfg.inventoryPriceAdjustment !== false && D(cfg.inventorySkewFactor ?? 0).gt(0);
+  if (activo) return [];
+  return [
+    warn(
+      'inventoryPriceAdjustment',
+      'Sin ajuste de precio por inventario, la venta se calcula desde el precio de mercado y no ' +
+        'desde tu coste: cuando el precio se va, el bot cierra POR DEBAJO de lo que compró. ' +
+        'Medido, así se cierra en pérdida casi la mitad de las veces y cada una pesa 1,7 veces ' +
+        'lo que pesa una buena. Enciéndelo con factor 1.',
+    ),
+  ];
 }
 
 /**
@@ -879,41 +927,6 @@ export function resolverMarkout(
  */
 export const penalizacionMarkout = (markoutBps: Decimal, sensibilidad: Numeric): Decimal =>
   Decimal.max(D(0), markoutBps.negated()).mul(D(sensibilidad));
-
-// ── Deriva y eficiencia ───────────────────────────────────────────────────
-
-export interface DerivaRead {
-  /** Recorrido NETO en la ventana, en bps y con signo. */
-  bps: Decimal;
-  /**
-   * Eficiencia de Kaufman: `|recorrido neto| / suma de |movimientos|`, en [0,1].
-   *
-   * 1 = línea recta; 0 = ir y venir sin avanzar. Es la misma fórmula que el
-   * asesor usa en la API para elegir configuración, y la razón de mirarla aquí
-   * es la misma: una rejilla o un market maker viven del ir y venir, así que
-   * una eficiencia alta es el aviso de que este mercado no es para ellos.
-   */
-  eficiencia: Decimal;
-}
-
-/** Deriva y eficiencia del anillo de muestras. `null` con menos de tres. */
-export function deriva(muestras: unknown): DerivaRead | null {
-  const raw = Array.isArray(muestras) ? (muestras as VolSample[]) : [];
-  const s = raw.filter((m) => Array.isArray(m) && m.length === 2);
-  if (s.length < 3) return null;
-
-  const primero = D(s[0][1]);
-  const ultimo = D(s[s.length - 1][1]);
-  if (!primero.gt(0)) return null;
-
-  return {
-    bps: ultimo.minus(primero).div(primero).mul(BPS),
-    // La MISMA función que usa el asesor sobre cierres horarios: son entradas
-    // distintas y la misma pregunta, y dos implementaciones serían dos
-    // respuestas (spec 039).
-    eficiencia: eficienciaKaufman(s.map((m) => m[1])),
-  };
-}
 
 // ── Condición de activación ───────────────────────────────────────────────
 

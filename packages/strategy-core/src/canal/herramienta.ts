@@ -41,7 +41,7 @@ import {
   type OpcionStop,
   type PlanOperacion,
   type SalidaHerramienta,
-  type TasasBase,
+  type ResumenTasas,
   type Ticker,
   type UsoDelDia,
 } from '@crypton/shared';
@@ -134,7 +134,7 @@ export interface EntradaHerramienta {
   canal: CanalDetectado | null;
   candidatos: readonly CandidatoBase[];
   /** Tasas base por id de candidato, si se calcularon. */
-  tasas: ReadonlyMap<string, TasasBase>;
+  tasas: ReadonlyMap<string, ResumenTasas>;
   /** Apertura de la última vela cerrada de 5 min. */
   barT: number;
   ahora: number;
@@ -157,7 +157,7 @@ export function riesgoDisponible(cfg: ConfigCanal, historial: HistorialOperacion
 }
 
 /** ¿Llega la evidencia del histórico a lo que pide la configuración? */
-export function evidenciaSuficiente(tasas: TasasBase | null, minima: EvidenciaMinima): boolean {
+export function evidenciaSuficiente(tasas: ResumenTasas | null, minima: EvidenciaMinima): boolean {
   if (minima === 'NO') return true;
   if (!tasas) return false;
   if (minima === 'MODERADA') return tasas.evidencia === Evidencia.MODERADA;

@@ -3,7 +3,6 @@ import { getStrategy } from '../registry';
 import { BASE_CONFIG, makeContext, makePosition } from '../testing';
 import {
   centroSesgado,
-  deriva,
   desequilibrio,
   factorDeTamano,
   fundingBps,
@@ -212,41 +211,6 @@ describe('markout', () => {
   });
 });
 
-describe('deriva y eficiencia de Kaufman', () => {
-  const serie = (precios: number[]): VolSample[] =>
-    precios.map((p, i) => [i * 1000, String(p)] as VolSample);
-
-  it('una rampa monotona tiene eficiencia 1', () => {
-    const r = deriva(serie([100, 101, 102, 103]))!;
-    expect(r.eficiencia.toFixed(2)).toBe('1.00');
-    expect(r.bps.toFixed(0)).toBe('300');
-  });
-
-  it('una rampa a la BAJA tiene eficiencia 1 y deriva negativa', () => {
-    const r = deriva(serie([100, 99, 98]))!;
-    expect(r.eficiencia.toFixed(2)).toBe('1.00');
-    expect(Number(r.bps)).toBeLessThan(0);
-  });
-
-  it('ir y venir sin avanzar tiene eficiencia 0', () => {
-    // El terreno del market maker: mucho recorrido y ningun avance.
-    const r = deriva(serie([100, 102, 100, 102, 100]))!;
-    expect(r.eficiencia.toFixed(2)).toBe('0.00');
-    expect(r.bps.toFixed(0)).toBe('0');
-  });
-
-  it('un zigzag con tendencia queda en medio', () => {
-    const r = deriva(serie([100, 102, 101, 103, 102, 104]))!;
-    expect(Number(r.eficiencia)).toBeGreaterThan(0.2);
-    expect(Number(r.eficiencia)).toBeLessThan(0.8);
-  });
-
-  it('con menos de tres muestras no se pronuncia', () => {
-    expect(deriva(serie([100, 101]))).toBeNull();
-    expect(deriva(undefined)).toBeNull();
-  });
-});
-
 describe('estimador de volatilidad', () => {
   /** Mismo recorrido, distinto numero de muestras dentro de la ventana. */
   const anillo = (n: number): VolSample[] =>
@@ -366,7 +330,9 @@ describe('los mandos de microestructura en plan()', () => {
 
   it('la V2 ya tiene sesgo de inventario: con posicion larga la venta se acerca', () => {
     const largo = { position: makePosition('5', '100') }; // 500 = 50 % del tope
-    const sin = planV2({}, largo);
+    // Apagado a mano: desde el spec 071 el valor de fabrica es encendido, asi
+    // que la comparacion con `{}` no comparaba nada.
+    const sin = planV2({ inventoryPriceAdjustment: false }, largo);
     const con = planV2({ inventoryPriceAdjustment: true, inventorySkewFactor: '1' }, largo);
     expect(Number(ask(con)!.price)).toBeLessThan(Number(ask(sin)!.price));
     expect(Number(bid(con)!.price)).toBeLessThan(Number(bid(sin)!.price));
@@ -432,31 +398,6 @@ describe('los mandos de microestructura en plan()', () => {
     expect(Number(bid(con)!.price)).toBeLessThan(Number(bid(sin)!.price));
     expect(ask(con)!.price).toBe(ask(sin)!.price);
     expect(con.note).toContain('markout');
-  });
-
-  it('el filtro de tendencia deja de anadir contra una rampa', () => {
-    // Rampa monotona a la BAJA, eficiencia 1. Quien pelea contra la tendencia
-    // es la COMPRA -coger un cuchillo que cae-, asi que es la que se corta; la
-    // venta va con la tendencia y sigue viva.
-    const bajando = Array.from({ length: 10 }, (_, i) => [i * 1000, String(100 - i)]);
-    const r = planV2(
-      { trendGuardEfficiency: '0.8' },
-      { cycle: { scratch: { cycleSeq: 1, volSamples: bajando } } },
-    );
-    expect(bid(r)).toBeUndefined();
-    expect(ask(r)).toBeDefined();
-    expect(r.note).toContain('tendencia');
-  });
-
-  it('con una onda -ir y venir- el filtro de tendencia no corta nada', () => {
-    // Es el terreno del market maker: eficiencia ~0.
-    const onda = Array.from({ length: 10 }, (_, i) => [i * 1000, String(100 + (i % 2 ? 2 : 0))]);
-    const r = planV2(
-      { trendGuardEfficiency: '0.8' },
-      { cycle: { scratch: { cycleSeq: 1, volSamples: onda } } },
-    );
-    expect(bid(r)).toBeDefined();
-    expect(ask(r)).toBeDefined();
   });
 
   it('onFill no escribe nada con el markout apagado', () => {

@@ -40,6 +40,7 @@ import {
   anotarFill,
   bookSpreadBps,
   centroDeMercado,
+  avisoSinSesgoInventario,
   centroSesgado,
   factorDeTamano,
   fundingAdverso,
@@ -687,6 +688,9 @@ export const marketMaker: Strategy<MarketMakerConfig> = {
         ),
       );
     }
+    // La V1 lo trae encendido de fábrica, pero se puede apagar, y apagado tiene
+    // exactamente la misma consecuencia que en la V2 (spec 071).
+    issues.push(...avisoSinSesgoInventario(cfg));
     // Un parámetro que no hace nada porque otro lo apaga tiene que decirlo: es
     // el mismo problema de 001/F-12, pero por combinación (030/F-04).
     if (cfg.inventoryPriceAdjustment === false && D(cfg.inventorySkewFactor ?? 0).gt(0)) {

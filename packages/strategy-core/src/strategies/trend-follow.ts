@@ -204,6 +204,16 @@ function senal(
   const a = atr(velas, Math.floor(cfg.atrPeriod ?? 14));
   if (!canal || !a || !a.gt(0)) return null;
 
+  // OJO con la ventana: es la de `barsNecesarias(cfg)`, o sea
+  // `max(breakoutPeriod, atrPeriod) + 5`, porque es lo que el motor sirve en
+  // `ctx.candles`. Con los defectos son 25 velas.
+  //
+  // Eso significa que subir `breakoutPeriod` ALARGA tambien la ventana del
+  // filtro de tendencia, aunque sean dos mandos distintos. No esta puesto a
+  // proposito —`barsNecesarias` es un calculo de suficiencia, no una ventana
+  // elegida— y no se cambia aqui porque cambiarlo moveria la conducta de los
+  // bots que ya corren con un `breakoutPeriod` distinto del de fabrica. Queda
+  // fijado por test para que nadie lo mueva sin querer (spec 071).
   const eficiencia = eficienciaKaufman(velas.map((v) => v.c));
   const lado = canal.cierre.gt(canal.alto) ? 'BUY' : canal.cierre.lt(canal.bajo) ? 'SELL' : null;
   return { lado, atrValor: a, eficiencia };

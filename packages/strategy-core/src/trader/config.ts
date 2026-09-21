@@ -64,37 +64,80 @@ export const DEFAULTS_TRADER = {
   invalidationAtr: '0.5',
 
   /**
-   * Los umbrales de confianza son del USUARIO. El modelo no los toca jamás.
+   * ── En modo IA, DECIDE LA IA. Todos los jueces de encima, apagados. ──
    *
-   * Estaban en 0,90 y 0,95, copiados del «act automatically above 0.9» de la
-   * documentación del proveedor. Probando contra BTC real, el modelo **no pasó
-   * de 0,61** en dieciséis llamadas seguidas (rango 0,35-0,61): con 0,90 el bot
-   * no operaría jamás. La propia documentación avisa de esto —«the correct
-   * threshold values depend on your domain... test with your own data»— así que
-   * esto es hacerle caso.
+   * Estos cinco mandos pueden anular al modelo, y por eso arrancan a cero:
    *
-   * OJO: dieciséis llamadas de un par y doce horas son POCA muestra para
-   * calibrar un umbral. Es un punto de partida medido, no un valor asentado, y
-   * por eso es un campo del usuario y no una constante.
+   * - `minRouteConfidence` y `fullSizeConfidence` comparan la confianza del
+   *   modelo contra un suelo. A cero, su elección se ejecuta y con el tamaño
+   *   entero.
+   * - `statedThreshold` decide si se le hace caso al modelo sobre el stop y el
+   *   objetivo, o si se usan los valores por defecto. A cero, **manda siempre
+   *   su elección**.
+   * - `requireAgreement` deja que las tres preguntas de contexto VETEN el
+   *   enrutado. Apagado: el modelo ya integra esas tres cosas cuando elige, y
+   *   volver a preguntárselas por separado para poder llevarle la contraria es
+   *   ponerle un juez encima.
+   *
+   * Estaban en 0,45 / 0,60 / 0,60 / sí, y con eso el modelo casi nunca decidía:
+   * probando contra BTC real su confianza **no pasó de 0,61** en dieciséis
+   * llamadas (rango 0,35-0,61), así que la mitad de sus decisiones salían con
+   * tamaño medio y una parte no salía. Se medía el juez, no la IA.
+   *
+   * Siguen siendo campos del USUARIO y se pueden subir: quien quiera un suelo
+   * de confianza o un veto de contexto lo enciende. Lo que cambia es el
+   * defecto, que ahora dice lo que el modo promete.
+   *
+   * Los tres `minXxxProb` solo se miran si `requireAgreement` está encendido:
+   * son el valor que tendría el veto SI alguien lo quiere, no un veto activo.
    */
-  minRouteConfidence: '0.45',
-  fullSizeConfidence: '0.6',
+  minRouteConfidence: '0',
+  fullSizeConfidence: '0',
   minRegimeProb: '0.75',
   minExhaustionProb: '0.65',
   minEvidenceProb: '0.55',
-  statedThreshold: '0.6',
-  requireAgreement: true,
+  statedThreshold: '0',
+  requireAgreement: false,
   defaultStopBucket: 'MEDIDO',
   defaultTargetBucket: 'EN_LA_MEDIA',
   halfSizeFallback: 'NO_OPERAR',
   wrongEnvironmentCooldownBars: 8,
+
+  /**
+   * La cadencia de decision (spec 070).
+   *
+   * 15 min por defecto, y es lo MEDIDO como mejor en el caso dificil: sobre BTC
+   * con costes reales da 0,71 evaluaciones al dia contra 0,38 a 5 min y 0,34 a
+   * 30 min, y sin comision ninguna sigue ganando (3,69 contra 2,90 y 1,81).
+   *
+   * **1 minuto no esta, y no es un olvido**: 30 dias de BTC dieron 8.719 toques
+   * y CERO ejecutables, porque el coste de ida y vuelta es fijo en precio y el
+   * recorrido disponible encoge con la raiz del tiempo. Un ajuste que da cero
+   * operaciones medidas seria una trampa, y ademas triplicaria la carga de
+   * datos de mercado a cambio de nada.
+   *
+   * Es un campo del usuario porque el mejor valor depende del par: con cero
+   * comision y sobre doce pares, 5 min daba MAS evaluaciones que 15 (16,10
+   * contra 10,31 al dia), porque los alts tienen mucho mas recorrido relativo
+   * que BTC.
+   */
+  decisionInterval: '15m',
 
   maxTradesPerDay: 8,
   maxConsecutiveLosses: 3,
   lossStreakCooldownMinutes: 120,
   stopCooldownMinutes: 30,
   cooldownMinutes: 15,
-  aiDailyCallBudget: 48,
+  /**
+   * El presupuesto de llamadas del dia.
+   *
+   * Sube de 48 a 300 en el spec 070. El 48 estaba calibrado para un modelo
+   * TRESCIENTAS veces mas caro; el de ahora cuesta 0,000081 $ por llamada, o
+   * sea que el maximo teorico a 5 min —288 velas al dia— sale por dos centimos
+   * y medio al mes. Ademas, medido: el tope nunca se rozo, porque quien limita
+   * la cadencia es la puerta de coste y no el presupuesto.
+   */
+  aiDailyCallBudget: 300,
 
   // `null` y no cadena vacía: el descriptor declara `default: null` y la
   // batería genérica exige que el formulario y el motor digan lo mismo.
@@ -110,8 +153,22 @@ export const RespaldoMedio = {
 } as const;
 export type RespaldoMedio = (typeof RespaldoMedio)[keyof typeof RespaldoMedio];
 
+/** Las cadencias que el motor sabe decidir. Sin 1 min: ver `DEFAULTS_TRADER`. */
+export const CADENCIAS = ['5m', '15m', '30m', '1h'] as const;
+export type Cadencia = (typeof CADENCIAS)[number];
+
+/** Los milisegundos de cada cadencia. */
+export const PASO_CADENCIA: Readonly<Record<Cadencia, number>> = {
+  '5m': 300_000,
+  '15m': 900_000,
+  '30m': 1_800_000,
+  '1h': 3_600_000,
+};
+
 export interface ConfigTrader {
   modo: ModoDecision;
+  /** Cada cuanto se decide, y de que velas sale la senal. */
+  cadencia: Cadencia;
   soloObservar: boolean;
   entradasActivas: boolean;
 
@@ -196,6 +253,7 @@ export function leerConfigTrader(cfg: BotConfig, venue: Venue): ConfigTrader {
   const tope = decimal(c['maxNotionalCap'], '0');
   return {
     modo: enumerado(c['decisionMode'], [ModoDecision.IA, ModoDecision.REGLAS], d.decisionMode),
+    cadencia: enumerado(c['decisionInterval'], [...CADENCIAS], d.decisionInterval),
     soloObservar: booleano(c['observeOnly'], d.observeOnly),
     entradasActivas: booleano(c['entriesEnabled'], d.entriesEnabled),
 

@@ -674,7 +674,6 @@ describe('apply — los casos reales de produccion (spec 051)', () => {
     useFullSizeUntilMax: false,
     highRiskThresholdPct: 80,
     maxAdverseFundingBps: '0',
-    trendGuardEfficiency: '0',
     volatilityMultiplier: 0.35,
     defensiveThresholdPct: 70,
     markoutHorizonSeconds: 0,

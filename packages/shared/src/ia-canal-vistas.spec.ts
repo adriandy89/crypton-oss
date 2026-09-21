@@ -7,6 +7,7 @@ import {
   Veredicto,
   claveValeCanal,
   eleccionEfectiva,
+  esEleccionCanal,
   esEventoModoIa,
   esValeCanal,
   interruptorCerrado,
@@ -17,6 +18,7 @@ import {
   cifrasCanalDe,
   eleccionDe,
   falloDe,
+  veredictoDe,
   insigniaCanal,
   lineasDelCanal,
   operacionCanalDe,
@@ -543,5 +545,60 @@ describe('cifrasCanalDe', () => {
       ventanas: [],
       operaciones: [],
     });
+  });
+});
+
+/**
+ * Las dos estrategias con IA guardan su eleccion en la MISMA columna JSON. Lo
+ * que separa una forma de otra son estos dos lectores, y lo que pasa cuando
+ * fallan es que un bot ejecuta una decision que no era suya.
+ */
+describe('veredictoDe y esEleccionCanal (spec 069)', () => {
+  const DEL_TRADER = {
+    accion: 'TOMAR',
+    confianza: 'ALTA',
+    acuerdo: true,
+    stop: 'MEDIDO',
+    objetivo: 'EN_LA_MEDIA',
+    tamano: 'COMPLETO',
+  };
+  const DEL_CANAL = {
+    veredicto: 'OPERAR',
+    opcion: 'A',
+    stop: 'NORMAL',
+    objetivo: 'MEDIA',
+    apalancamiento: 'BAJA',
+    tamano: 'COMPLETO',
+    confianza: 'ALTA',
+  };
+
+  it('lee el veredicto del «Bot de IA»', () => {
+    expect(veredictoDe(DEL_TRADER)).toEqual(DEL_TRADER);
+  });
+
+  it('las dos formas son excluyentes: ningun lector lee la del otro', () => {
+    expect(veredictoDe(DEL_CANAL)).toBeNull();
+    expect(eleccionDe(DEL_TRADER)).toBeNull();
+  });
+
+  it('y se distinguen por su forma, no por el nombre de la estrategia', () => {
+    expect(esEleccionCanal(DEL_CANAL as never)).toBe(true);
+    expect(esEleccionCanal(DEL_TRADER as never)).toBe(false);
+  });
+
+  /**
+   * Viene de una columna JSON: lo que no encaja se lee como «sin eleccion», y
+   * sin eleccion la estrategia no opera. Nunca se completa a medias.
+   */
+  it.each([
+    ['sin accion', { ...DEL_TRADER, accion: undefined }],
+    ['con una accion inventada', { ...DEL_TRADER, accion: 'COMPRAR_TODO' }],
+    ['con el acuerdo como texto', { ...DEL_TRADER, acuerdo: 'si' }],
+    ['con un stop que no existe', { ...DEL_TRADER, stop: 'ENORME' }],
+    ['con confianza fuera de la lista', { ...DEL_TRADER, confianza: 0.9 }],
+    ['que no es un objeto', 'TOMAR'],
+    ['nulo', null],
+  ])('%s se lee como sin eleccion', (_caso, json) => {
+    expect(veredictoDe(json)).toBeNull();
   });
 });

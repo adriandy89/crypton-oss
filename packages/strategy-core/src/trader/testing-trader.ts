@@ -71,6 +71,16 @@ export function senalDePrueba(o: Partial<SenalTrader> = {}): SenalTrader {
       rMedio: 0.11,
       wilsonInferior: 0.42,
       evidencia: Evidencia.MODERADA,
+      estiramientoRef: 1.5,
+      // Con muestra suficiente y algo que decir: es lo que el modelo lee para
+      // juzgar este estiramiento en concreto (spec 070).
+      similares: {
+        n: 21,
+        aciertos: 9,
+        rMedio: -0.08,
+        wilsonInferior: 0.24,
+        evidencia: Evidencia.DEBIL,
+      },
     },
     ...o,
   };

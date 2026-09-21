@@ -49,8 +49,23 @@ const REGIMEN_RANGO: Regimen = {
   crudos: [RegimenMercado.RANGO, RegimenMercado.RANGO, RegimenMercado.RANGO],
 };
 
+/**
+ * Los cuatro mandos que pueden ponerle un juez encima al modelo.
+ *
+ * Desde la revision del 069 vienen APAGADOS de fabrica —en modo IA decide la
+ * IA—, asi que este bloque los enciende a mano: lo que prueba es que el
+ * mecanismo funciona cuando el usuario lo quiere, no lo que pasa por defecto.
+ * Lo que pasa por defecto se prueba mas abajo, y es lo contrario.
+ */
+const CON_JUEZ = {
+  minRouteConfidence: 0.45,
+  fullSizeConfidence: 0.6,
+  statedThreshold: 0.6,
+  requireAgreement: true,
+};
+
 describe('cuantiza — la frontera del invariante 13 (spec 068)', () => {
-  const cfg = configDePrueba();
+  const cfg = configDePrueba(CON_JUEZ);
 
   it('de probabilidades entran, y de ahí salen solo enumeraciones', () => {
     const v = cuantiza(respuesta(), cfg);
@@ -104,8 +119,9 @@ describe('cuantiza — la frontera del invariante 13 (spec 068)', () => {
 
   it('la confianza solo REDUCE el tamaño: nunca hay una opción mayor', () => {
     expect(cuantiza(respuesta(), cfg).tamano).toBe(TamanoOperacion.COMPLETO);
-    // Con los umbrales calibrados contra BTC real (0,45 de ruta y 0,60 de
-    // tamaño completo), una confianza de 0,50 opera a media posición.
+    // Con el juez encendido (0,45 de ruta y 0,60 de tamaño completo), una
+    // confianza de 0,50 opera a media posición. Apagado —que es el defecto—
+    // operaría entera.
     expect(cuantiza(respuesta({ accion: segura(AccionTrader.TOMAR, 0.5) }), cfg).tamano).toBe(
       TamanoOperacion.MEDIO,
     );
@@ -113,7 +129,9 @@ describe('cuantiza — la frontera del invariante 13 (spec 068)', () => {
 });
 
 describe('construirOperacionTrader — de la decisión al dinero (spec 068)', () => {
-  const cfg = configDePrueba();
+  // Con el juez encendido: este bloque comprueba que cada negativa tiene su
+  // motivo, y dos de esas negativas solo existen si el juez esta puesto.
+  const cfg = configDePrueba(CON_JUEZ);
   const espacio = espacioTrader(entradaDePrueba());
   const construir = (r: RespuestaTrader, c = cfg) =>
     construirOperacionTrader(espacio, cuantiza(r, c), c, MERCADO_TRADER, 'i1', T0_TRADER);
@@ -255,5 +273,75 @@ describe('juezTrader — el brazo de control (spec 068)', () => {
       T0_TRADER,
     );
     expect(plan).not.toBeNull();
+  });
+});
+
+/**
+ * En modo IA decide la IA (spec 069, revision).
+ *
+ * Este bloque existe porque la primera version del 069 le puso al modelo tres
+ * jueces encima: un veto de «acuerdo», un suelo de confianza y un umbral que
+ * TIRABA su eleccion de stop para sustituirla por el valor por defecto. Con la
+ * confianza real del modelo —que medida contra BTC no paso de 0,61— eso
+ * significaba que la mitad de sus decisiones salian a medio tamano y otra parte
+ * no salia. Se estaba midiendo al juez, no a la IA.
+ *
+ * Si alguien vuelve a subir uno de estos defectos, esto falla. Es el punto.
+ */
+describe('cuantiza con los defectos: manda el modelo', () => {
+  const respuesta = (o: Partial<RespuestaTrader> = {}): RespuestaTrader => ({
+    accion: {
+      clave: AccionTrader.TOMAR,
+      probabilidades: { TOMAR: 0.5, ESPERAR: 0.3, ENTORNO_EQUIVOCADO: 0.2 },
+      // Baja a proposito: con los umbrales viejos esto no habria operado.
+      confianza: 0.35,
+    },
+    regimenRevierte: 0.2,
+    toqueAgotamiento: 0.2,
+    historialApoya: 0.2,
+    stopDeterminado: 0.05,
+    stop: { clave: BucketStop.HOLGADO, probabilidades: {}, confianza: 0.2 },
+    objetivoDeterminado: 0.05,
+    objetivo: { clave: BucketObjetivo.CORTO, probabilidades: {}, confianza: 0.2 },
+    ...o,
+  });
+
+  it('su eleccion de stop y objetivo se ejecuta aunque no «este determinada»', () => {
+    const v = cuantiza(respuesta(), configDePrueba());
+
+    expect(v.stop).toBe(BucketStop.HOLGADO);
+    expect(v.objetivo).toBe(BucketObjetivo.CORTO);
+  });
+
+  it('una confianza baja no le quita tamano ni le impide operar', () => {
+    const v = cuantiza(respuesta(), configDePrueba());
+
+    expect(v.confianza).toBe(NivelConfianza.ALTA);
+    expect(v.tamano).toBe(TamanoOperacion.COMPLETO);
+  });
+
+  it('las tres preguntas de contexto no vetan al enrutado', () => {
+    const v = cuantiza(respuesta(), configDePrueba());
+
+    expect(v.acuerdo).toBe(true);
+    expect(v.accion).toBe(AccionTrader.TOMAR);
+  });
+
+  /**
+   * Los mandos siguen ahi y siguen siendo del usuario: quien quiera un juez
+   * encima del modelo lo enciende. Lo que cambio es el defecto.
+   */
+  it('pero el usuario puede volver a ponerle un juez encima', () => {
+    const conJuez = configDePrueba({
+      minRouteConfidence: 0.45,
+      fullSizeConfidence: 0.6,
+      statedThreshold: 0.6,
+      requireAgreement: true,
+    });
+    const v = cuantiza(respuesta(), conJuez);
+
+    expect(v.confianza).toBe(NivelConfianza.BAJA);
+    expect(v.acuerdo).toBe(false);
+    expect(v.stop).toBe(conJuez.stopPorDefecto);
   });
 });

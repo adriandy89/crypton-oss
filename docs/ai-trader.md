@@ -70,10 +70,16 @@ liquidación más lejana posible.
 - **Reglas** (por defecto): una tabla determinista. Entra si el régimen es de rango, el ADX está
   bajo, la banda es bastante ancha y el precio vuelve a la media deprisa. Stop medido, objetivo en
   la media. No gasta ninguna consulta.
-- **IA**: el modelo recibe el estado y contesta ocho preguntas en una sola llamada. **Todavía no
-  está disponible**: falta conectar el proveedor (spec 069), y el formulario lo rechaza. Se probó
-  contra BTC real y funciona, pero mientras no exista el camino completo un bot en ese modo se
-  quedaría mirando en silencio, y eso es peor que no ofrecerlo.
+- **IA** (spec 069): el modelo recibe el estado y contesta ocho preguntas en una sola llamada. El
+  motor construye la operación con lo que elija, por el mismo camino que usa el juez. **Sin
+  respuesta válida no hay entrada, nunca al revés**: si el proveedor no contesta, contesta tarde o
+  contesta algo que no encaja, esa vela no abre operación y el bot lo dice.
+
+  Hace falta que el servidor tenga la IA encendida y su clave puesta. Si no las tiene, el bot no
+  abre operaciones y lo escribe en cada vela: no hay forma de que opere «a medias».
+
+  Cinco fallos seguidos del proveedor duermen las consultas de ese bot **seis horas**, y te avisa.
+  Las operaciones ya abiertas siguen con su stop: no dependen de nadie.
 
 ### Paso 5 — La entrada y las salidas
 
@@ -95,13 +101,26 @@ Las ocho preguntas: qué hacer con el toque (tomar, esperar, o entorno equivocad
 —¿esto revierte?, ¿el toque es agotamiento?, ¿el histórico acompaña?— y dos parejas para el stop y
 el objetivo, cada una con su pregunta previa de «¿tienes una razón clara?».
 
-**La IA nunca fija un número.** Contesta enumeraciones y probabilidades; las probabilidades pasan
-por una única función que las convierte en enumeraciones antes de que nada aguas abajo las vea, y
-los umbrales con los que se comparan son **campos tuyos**.
+**La IA nunca fija un número, y nadie corrige a la IA.** Son dos cosas distintas y las dos
+importan:
 
-Y una regla que lo cierra: **todo lo que no es la elección principal solo puede restar.** Una
-pregunta de contexto puede vetar, la confianza puede reducir el tamaño a la mitad; ninguna puede
-ampliar nada.
+- *Nunca fija un número*: contesta enumeraciones y probabilidades, y una única función las
+  convierte en enumeraciones antes de que nada aguas abajo las vea. El precio, la cantidad y el
+  apalancamiento los calcula el motor. Esto no se puede apagar: es lo que hace que cualquier
+  decisión suya sea ejecutable y esté dentro de tus topes.
+- *Nadie la corrige*: **en modo IA decide la IA**. Su elección de qué hacer, de stop y de objetivo
+  se ejecuta tal cual.
+
+Hubo una primera versión que no era así, y merece quedar escrito porque es el error que hay que no
+repetir: llevaba tres jueces por encima del modelo —un veto de las preguntas de contexto, un suelo
+de confianza y un umbral que descartaba su elección de stop— y con su confianza real, que contra
+BTC nunca pasó de 0,61, **el que decidía era el juez**. En las dieciséis llamadas de aquella prueba
+su elección de stop se tiró las dieciséis veces. Ahora esos cuatro mandos vienen a cero.
+
+Siguen ahí y siguen siendo **tuyos**: si quieres un suelo de confianza o un veto de contexto, los
+enciendes. Lo que cambia es el defecto, que ahora hace lo que el modo promete. Y la regla de
+siempre se mantiene para cuando los enciendas: **todo lo que no es la elección principal solo
+puede restar** — vetar o reducir el tamaño, nunca ampliar nada.
 
 ## 4. Lo que no sabemos
 
@@ -109,9 +128,10 @@ Esto es lo que hay que leer dos veces.
 
 - **Probado contra BTC real** (dieciséis llamadas sobre doce horas de velas de 15 min): el modelo
   funciona, contesta en 292 ms de mediana y gasta unos 2.200 tokens por llamada. Pero **su confianza
-  no pasó de 0,61**, cuando la documentación del fabricante sugiere actuar por encima de 0,9. Los
-  umbrales que vienen por defecto (0,45 y 0,60) están calibrados sobre esas dieciséis llamadas:
-  **es poca muestra**, es un punto de partida medido y no un valor asentado.
+  no pasó de 0,61**, cuando la documentación del fabricante sugiere actuar por encima de 0,9. Por
+  eso los umbrales de confianza vienen **a cero**: cualquier suelo razonable se comía casi todas
+  sus decisiones. Si algún día quieres poner uno, mide antes cuántas decisiones te estás comiendo
+  con él —dieciséis llamadas de un par y doce horas son muy poca muestra para calibrarlo.
 - **El backtest no puede medir al modelo.** Lo dice el propio motor cuando replica esta estrategia:
   allí decide el juez de reglas. Lo que un walk-forward mide es el motor y las reglas. Para medir
   al modelo hace falta verlo en sombra con bots simulados, comparándolo con el juez.
@@ -134,8 +154,38 @@ Todos los campos están documentados dentro de la app, en la guía de la estrate
 conviene mirar antes que ninguno:
 
 #### Quién decide · `decisionMode` · por defecto **Reglas**
-De momento es la única opción: el modo IA está rechazado en el formulario hasta que el proveedor
-esté conectado.
+En «Reglas» decide una tabla determinista y no se gasta ninguna consulta. En «IA» decide el modelo.
+Empieza en Reglas: es el brazo que está medido, y es contra el que hay que comparar al modelo.
+
+Hay tres interruptores entre tú y una llamada de pago, y los tres tienen que estar a favor: este
+mando, el interruptor del servidor con su clave, y el **modo sombra** —que viene encendido de
+fábrica en el servidor—, en el que se pregunta, se registra lo que habría decidido y no se ejecuta.
+
+**Los bots simulados también gastan consultas.** Una vela de 15 min con toque es una consulta,
+venga de un bot con dinero o de uno de prueba.
+
+#### Cadencia · `decisionInterval` · por defecto **15 minutos**
+Cada cuánto mira y decide. Marca también de qué velas sale la banda y en qué unidades se cuentan
+los topes de duración.
+
+**Por qué 15 y no menos**, medido sobre 30 días de BTC con costes reales:
+
+| cadencia | toques al día | **evaluaciones al día** |
+|---|---|---|
+| 1 min | 292,7 | **0,00** |
+| 5 min | 57,7 | 0,38 |
+| **15 min** | 20,0 | **0,71** |
+| 30 min | 11,2 | 0,34 |
+| 60 min | 6,2 | 0,46 |
+
+**1 minuto no está en la lista.** No es un olvido: 8.719 toques en 30 días y ni uno ejecutable.
+El coste de entrar y salir es **fijo en precio** y el recorrido de una vela encoge con la raíz del
+tiempo, así que a un minuto las comisiones, la horquilla y el deslizamiento se comen la operación
+entera antes de empezarla. Tampoco se arregla con un venue sin comisión: ahí 15 minutos sigue
+ganando (3,69 al día contra 1,81).
+
+En pares más volátiles que BTC la cosa cambia: sobre doce pares sin comisión, 5 minutos daba más
+evaluaciones que 15 (16,1 contra 10,3 al día). Por eso es un ajuste tuyo y no una constante.
 
 #### Solo observar · `observeOnly` · por defecto **Sí**
 El bot funciona entero y apunta lo que habría hecho, sin tocar el mercado.
@@ -153,4 +203,5 @@ spec 066 midió que por debajo de quince veces el coste de ida y vuelta se pierd
 1. Créalo simulado, con los defectos, y **déjalo una o dos semanas en «solo observar»**.
 2. Mira su histórico: qué habría hecho, cuántas veces y con qué resultado.
 3. Quita «solo observar», sigue en **Reglas**, y dale capital pequeño.
-4. La IA, al final del todo, y solo si la sombra dice que aporta.
+4. La IA, al final del todo. Ponla primero en sombra desde el servidor, compárala con el juez
+   durante unos días, y solo si aporta déjala decidir de verdad.

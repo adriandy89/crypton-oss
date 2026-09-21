@@ -433,9 +433,19 @@ export const neutralGrid: Strategy<NeutralGridConfig> = {
         admitidas.add(l.index);
       }
     }
-    const capReached = cap != null && cap.gt(0);
+    /**
+     * ¿Hay tope configurado? Es la condición para FILTRAR, no para avisar.
+     *
+     * Se llamaba `capReached` y se usaba para las dos cosas, así que un bot con
+     * tope puesto decía «Tope de exposición alcanzado» en TODOS los ticks,
+     * tendiera la retícula entera o no. Un aviso que miente siempre enseña a
+     * ignorar los avisos, que es peor que no avisar.
+     */
+    const hayTope = cap != null && cap.gt(0);
 
     const orders: DesiredOrder[] = [];
+    /** El tope ha dejado FUERA alguna línea de verdad. Eso sí es noticia. */
+    let topeMordio = false;
 
     for (const line of lines) {
       if (line.qty.lte(0)) continue;
@@ -446,9 +456,12 @@ export const neutralGrid: Strategy<NeutralGridConfig> = {
 
       // Las que REDUCEN la posición neta se dejan siempre: retirarlas dejaría la
       // posición sin contrapartida, que es lo que arruina una retícula.
-      if (capReached) {
+      if (hayTope) {
         const wouldIncrease = (isBuy && posQty.gte(0)) || (!isBuy && posQty.lte(0));
-        if (wouldIncrease && !admitidas.has(line.index)) continue;
+        if (wouldIncrease && !admitidas.has(line.index)) {
+          topeMordio = true;
+          continue;
+        }
       }
 
       const kind = isBuy ? LevelKind.GRID_BUY : LevelKind.GRID_SELL;
@@ -468,7 +481,7 @@ export const neutralGrid: Strategy<NeutralGridConfig> = {
     }
 
     let note = 'Retícula neutral: ' + orders.length + ' órdenes activas.';
-    if (capReached) note = 'Tope de exposición alcanzado: solo órdenes que reducen posición.';
+    if (topeMordio) note = 'Tope de exposición alcanzado: solo órdenes que reducen posición.';
 
     // Espera entre ciclos (001/F-12): al volver a plano se cierra el ciclo y, si
     // hay espera configurada, la retícula no vuelve a tenderse hasta que pase.

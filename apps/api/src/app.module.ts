@@ -19,6 +19,7 @@ import { AdminModule } from './modules/admin';
 import { ActivityModule } from './modules/activity';
 import { AdvisorModule } from './modules/advisor';
 import { AiChannelModule } from './modules/ai-channel';
+import { AiTraderModule } from './modules/ai-trader';
 import { BacktestsModule } from './modules/backtests';
 import { AuthModule } from './modules/auth';
 import { CustomThrottlerGuard } from './modules/auth/guards';
@@ -79,6 +80,10 @@ import { TelegramModule } from './modules/telegram';
     SupervisorModule,
     // La IA del canal (spec 059): también usa el cliente del modelo.
     AiChannelModule,
+    // La IA del «Bot de IA» (spec 069). NO comparte cliente con las anteriores:
+    // habla con TypeSafe y no con OpenRouter, a proposito, para que un proveedor
+    // caido no arrastre al otro.
+    AiTraderModule,
     BacktestsModule,
     TelegramModule,
     LeaderboardModule,

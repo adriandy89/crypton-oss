@@ -1465,8 +1465,11 @@ describe('registro de estrategias', () => {
       listStrategies()
         .filter((s) => s[flag] !== undefined)
         .map((s) => s.kind);
+
+    // Los cinco flags que cambian como el motor fija el apalancamiento, mide la
+    // liquidacion y lleva el tope diario siguen siendo SOLO de los dos bots de
+    // IA: ninguna otra estrategia puede verse afectada por ellos.
     for (const flag of [
-      'series',
       'apalancamientoPorOperacion',
       'reglaLiquidacion',
       'topeDiarioReanuda',
@@ -1478,6 +1481,21 @@ describe('registro de estrategias', () => {
         kinds: [StrategyKind.AI_CHANNEL, StrategyKind.AI_TRADER],
       });
     }
+
+    // `series` es el unico que ya no. El Market Maker V2 lo declara desde el
+    // spec 071 para su puerta de regimen, y entra en la lista con su coste
+    // dicho en alto: un market maker corre en muchos bots a la vez y cada
+    // sondeo cuenta contra el mismo deposito por IP.
+    //
+    // Lo que lo hace aceptable es que su `series` devuelve una lista VACIA
+    // mientras la puerta este apagada —que es como se entrega—, asi que un bot
+    // que no la use no pide ni una vela. Hay un test que lo fija en
+    // `mm-regimen.spec.ts`; si alguien lo rompe, esta lista deja de ser segura.
+    expect(con('series')).toEqual([
+      StrategyKind.MARKET_MAKER_V2,
+      StrategyKind.AI_CHANNEL,
+      StrategyKind.AI_TRADER,
+    ]);
   });
 
   it('comunCon revienta al cargar si la clave no existe', () => {

@@ -30,6 +30,7 @@
     "stack:up": "docker compose -f docker/docker-compose.yml up -d --build",
     "stack:down": "docker compose -f docker/docker-compose.yml down",
     "stack:logs": "docker compose -f docker/docker-compose.yml logs -f api worker",
-    "check:env": "node scripts/check-env.mjs"
+    "check:env": "node scripts/check-env.mjs",
+    "check:labels": "node scripts/check-labels.mjs"
   }
 }

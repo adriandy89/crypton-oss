@@ -19,7 +19,7 @@ import {
   Evidencia,
   TipoSetup,
   type CalidadCanal,
-  type TasasBase,
+  type ResumenTasas,
   type TipoCanal,
 } from '@crypton/shared';
 import { calidadSuficiente, detectarCanal, nivelesEn } from './canales';
@@ -220,7 +220,7 @@ export function etiquetasHistoricas(
 }
 
 /** Las tasas por setup y lado (`claveTasas`). */
-export function resumirTasas(etiquetas: readonly Etiqueta[]): Map<string, TasasBase> {
+export function resumirTasas(etiquetas: readonly Etiqueta[]): Map<string, ResumenTasas> {
   const grupos = new Map<string, Etiqueta[]>();
   for (const e of etiquetas) {
     const clave = claveTasas(e.setup, e.lado);
@@ -228,7 +228,7 @@ export function resumirTasas(etiquetas: readonly Etiqueta[]): Map<string, TasasB
     if (grupo) grupo.push(e);
     else grupos.set(clave, [e]);
   }
-  const out = new Map<string, TasasBase>();
+  const out = new Map<string, ResumenTasas>();
   for (const [clave, grupo] of grupos) {
     const n = grupo.length;
     const aciertos = grupo.filter((e) => e.r > 0).length;
@@ -248,6 +248,6 @@ export function tasasBase(
   atr: ArrayLike<number>,
   giros: readonly Giro[],
   p: ParametrosTasas,
-): Map<string, TasasBase> {
+): Map<string, ResumenTasas> {
   return resumirTasas(etiquetasHistoricas(s, atr, giros, p));
 }

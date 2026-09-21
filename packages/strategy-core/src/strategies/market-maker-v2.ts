@@ -6,6 +6,8 @@ import {
   LevelKind,
   Mutability,
   PositionModeSetting,
+  RegimenMercado,
+  SentidoTendencia,
   PriceSource,
   SizingMode,
   SourceMarketType,
@@ -38,6 +40,8 @@ import {
   type RawLevel,
 } from '../common';
 import { geometricWeights } from '../ladder';
+import { serieNumerica } from '../canal/numeros';
+import { regimen } from '../canal/regimen';
 import type { Strategy } from '../types';
 import { validatePriceBand, validateRiskThresholds } from './market-maker';
 import {
@@ -45,8 +49,8 @@ import {
   anotarFill,
   BPS,
   centroDeMercado,
+  avisoSinSesgoInventario,
   centroSesgado,
-  deriva,
   factorDeTamano,
   fundingAdverso,
   fundingBps,
@@ -119,8 +123,23 @@ export interface MarketMakerV2Config extends CommonBotConfig, IntelConfig {
   /** El sesgo de inventario que la V1 tenía y la V2 no (spec 039 R-3). */
   inventoryPriceAdjustment?: boolean;
   inventorySkewFactor?: string;
-  /** Por encima de esta eficiencia de Kaufman, no se añade contra la deriva. */
-  trendGuardEfficiency?: string;
+  /**
+   * La puerta de regimen (spec 071).
+   *
+   * El filtro de tendencia que ya habia mide la eficiencia de Kaufman sobre un
+   * anillo de muestras de SEGUNDOS, y el inventario de un market maker se
+   * envenena a lo largo de HORAS: mira la escala de tiempo equivocada. Medido
+   * sobre 26 pares y 400 dias discrimina +0,015 pp, mientras que el clasificador
+   * de regimen sobre velas de 1 h y 15 min discrimina +0,156 pp con el mismo
+   * tiempo activo.
+   *
+   * - `OFF`: nada. Es el defecto y no cambia ningun bot que ya corra.
+   * - `EVITA_TENDENCIA`: en tendencia deja de AÑADIR del lado que acumula
+   *   contra ella. El lado que reduce sigue vivo, como con las bandas de precio.
+   * - `SOLO_RANGO`: solo añade en RANGO o COMPRESION. Mucho mas restrictivo:
+   *   medido, deja al bot añadiendo el 9 % del tiempo.
+   */
+  regimeGuard?: 'OFF' | 'EVITA_TENDENCIA' | 'SOLO_RANGO';
   volEstimator?: 'RANGE' | 'PARKINSON';
   layers: number;
   layerDistanceMultiplier: string;
@@ -663,7 +682,7 @@ const V2_FIELDS: readonly FieldMeta[] = [
     labelKey: 'strategy.mm.inventoryPriceAdjustment',
     helpKey: 'strategy.mm.inventoryPriceAdjustmentHelp',
     required: false,
-    default: false,
+    default: true,
     group: 'intelligence',
     advanced: true,
   },
@@ -677,23 +696,23 @@ const V2_FIELDS: readonly FieldMeta[] = [
     max: 3,
     step: 0.05,
     required: false,
-    default: 0,
+    default: 1,
     group: 'intelligence',
     advanced: true,
   },
   {
-    key: 'trendGuardEfficiency',
-    kind: 'number',
-    mutability: Mutability.HOT,
-    labelKey: 'strategy.mmv2.trendGuardEfficiency',
-    helpKey: 'strategy.mmv2.trendGuardEfficiencyHelp',
-    min: 0,
-    max: 1,
-    step: 0.05,
+    key: 'regimeGuard',
+    kind: 'enum',
+    mutability: Mutability.COLD,
+    labelKey: 'strategy.mmv2.regimeGuard',
+    helpKey: 'strategy.mmv2.regimeGuardHelp',
+    options: ['OFF', 'EVITA_TENDENCIA', 'SOLO_RANGO'],
     required: false,
-    default: 0,
+    default: 'EVITA_TENDENCIA',
     group: 'intelligence',
     advanced: true,
+    // COLD: decide si el motor pide velas de 1 h y 15 min. Eso se resuelve al
+    // arrancar, no en caliente.
   },
   {
     key: 'volEstimator',
@@ -876,10 +895,78 @@ export function resolveAnchor(
   return fair.isFinite() && fair.gt(0) ? fair : null;
 }
 
+/**
+ * Qué lado deja de AÑADIR según el régimen, o `null` (spec 071).
+ *
+ * El mecanismo es el mismo que el de las bandas de precio y el del filtro de
+ * tendencia que ya había: nunca se para el bot, solo se deja de engordar el
+ * lado que acumula contra el mercado. El lado que reduce sigue vivo, porque
+ * retirarlo dejaría al inventario sin salida — que es lo contrario de lo que se
+ * busca.
+ *
+ * En una tendencia ALCISTA el market maker acumula CORTO —vende cada vez que el
+ * precio sube y nunca recompra—, así que lo que se bloquea es la venta. Y al
+ * revés en una bajista.
+ *
+ * `SOLO_RANGO` es mucho más estricto: bloquea los DOS lados salvo en RANGO o
+ * COMPRESIÓN. Medido, eso deja al bot añadiendo el 9 % del tiempo.
+ */
+function bloqueoPorRegimen(ctx: BotContext, cfg: MarketMakerV2Config): 'BUY' | 'SELL' | null {
+  const modo = cfg.regimeGuard ?? 'OFF';
+  if (modo === 'OFF') return null;
+  const s15 = ctx.series?.['15m'];
+  const h1 = ctx.series?.['1h'];
+  // Sin velas no se inventa un régimen: se deja pasar. Un market maker sin
+  // cotizar no gana nada, y la puerta es una mejora, no una condición.
+  if (!s15?.length || !h1?.length) return null;
+
+  let reg;
+  try {
+    reg = regimen(serieNumerica(h1), serieNumerica(s15));
+  } catch {
+    return null;
+  }
+
+  if (modo === 'SOLO_RANGO') {
+    const deRango =
+      reg.regimen === RegimenMercado.RANGO || reg.regimen === RegimenMercado.COMPRESION;
+    // Bloquear los dos lados no se puede expresar con un solo valor, así que se
+    // devuelve el lado que MÁS daño hace: el que va contra el sentido medido, y
+    // si no hay sentido, el de compra —el lado por el que un mercado en caída se
+    // lleva por delante a un market maker.
+    if (deRango) return null;
+    return reg.sentido === SentidoTendencia.ALCISTA ? 'SELL' : 'BUY';
+  }
+
+  if (reg.regimen !== RegimenMercado.TENDENCIA) return null;
+  return reg.sentido === SentidoTendencia.ALCISTA ? 'SELL' : 'BUY';
+}
+
+/** Velas que pide la puerta de regimen. Las mismas que `regimen()` necesita. */
+const VELAS_1H_REGIMEN = 200;
+const VELAS_15M_REGIMEN = 260;
+
 export const marketMakerV2: Strategy<MarketMakerV2Config> = {
   kind: StrategyKind.MARKET_MAKER_V2,
   meta: META,
   reusesOrderSlots: true,
+
+  /**
+   * Velas SOLO si la puerta de regimen esta encendida (spec 071).
+   *
+   * Con el mando apagado devuelve una lista vacia y el motor no pide ni una
+   * vela: un market maker corre en muchos bots a la vez y cada sondeo cuenta
+   * contra el cupo del venue, que es justo lo que provoco el incidente de
+   * TICK_SLOW del spec 065.
+   */
+  series: (config) =>
+    (config.regimeGuard ?? 'OFF') === 'OFF'
+      ? []
+      : [
+          { interval: '15m', bars: VELAS_15M_REGIMEN },
+          { interval: '1h', bars: VELAS_1H_REGIMEN },
+        ],
+
   // Quedar plano no cierra el ciclo (ver la V1): aquí además sobreviven las
   // muestras de volatilidad y el armado de la activación (001/F-58, F-62).
   keepCycleOnFlat: true,
@@ -921,11 +1008,32 @@ export const marketMakerV2: Strategy<MarketMakerV2Config> = {
       layers: 1,
       layerDistanceMultiplier: '1',
       layerSizeMultiplier: '1',
-      // El sesgo de inventario que la V1 tiene desde siempre llega aquí
-      // APAGADO: encenderlo cambiaría dónde cotiza un bot V2 en marcha.
-      inventoryPriceAdjustment: false,
-      inventorySkewFactor: '0',
-      trendGuardEfficiency: '0',
+      // El sesgo de inventario, ENCENDIDO y con el mismo factor que la V1
+      // (spec 071). Llegó apagado en el 039 por prudencia con los bots que ya
+      // corrían, y esa prudencia costaba dinero: sin él, la cotización que
+      // REDUCE se calcula desde el precio de mercado igual que la que añade, así
+      // que en cuanto el precio se va la salida se planta por debajo del coste
+      // medio. Medido con el motor real sobre ocho pares y veinte días, el 48 %
+      // de los cierres caía ahí y cada uno pesaba 1,71 veces lo que pesaba uno
+      // bueno; encendido, la pérdida realizada baja un 44 %.
+      //
+      // Cambiar esto NO toca ningún bot en marcha, y no por delicadeza sino por
+      // cómo está escrito: el worker lee la configuración guardada tal cual —
+      // nadie la rellena desde `defaults()`— y `plan()` calcula sesgo cero salvo
+      // que las DOS claves digan lo contrario. Un bot viejo las tiene guardadas
+      // en false/0, y uno que no las tuviera también daría cero.
+      inventoryPriceAdjustment: true,
+      inventorySkewFactor: '1',
+      // La puerta de regimen, ENCENDIDA (spec 071). Es la respuesta al unico
+      // riesgo de verdad de esta estrategia —que el precio no vaya y venga, sino
+      // que se vaya en linea recta— y medida con el motor real sobre ocho pares
+      // y 120 dias, ella y el ajuste por inventario llevan juntas el resultado
+      // de -19,9 % a -11,4 %, mejor en 7 de 8 pares.
+      //
+      // Cuesta pedir velas de 15 min y 1 h, que cuentan contra el cupo del
+      // venue. Se paga a proposito: el incidente de TICK_SLOW del 065 fue por
+      // sondeos que no servian para nada, y estos si.
+      regimeGuard: 'EVITA_TENDENCIA',
       volEstimator: 'RANGE',
       ...INTEL_DEFAULTS,
       priceSource: PriceSource.EXCHANGE,
@@ -1023,6 +1131,8 @@ export const marketMakerV2: Strategy<MarketMakerV2Config> = {
         ),
       );
     }
+    issues.push(...avisoSinSesgoInventario(cfg));
+
     if (D(cfg.feeEstimateBps ?? 0).lte(0)) {
       issues.push(
         warn(
@@ -1355,20 +1465,16 @@ export const marketMakerV2: Strategy<MarketMakerV2Config> = {
     const castigoBid = penalizacionMarkout(mk.bidBps, sens);
     const castigoAsk = penalizacionMarkout(mk.askBps, sens);
 
-    // Filtro de tendencia: por encima de esta eficiencia de Kaufman el mercado
-    // va en línea recta, que es el terreno donde un market maker acumula todo
-    // el inventario del lado equivocado. Deja de AÑADIR contra la deriva; el
-    // lado que reduce sigue vivo, como con las bandas de precio (spec 039 R-8).
-    const umbralTendencia = D(cfg.trendGuardEfficiency ?? 0);
-    const tendencia = umbralTendencia.gt(0) ? deriva(scratch['volSamples']) : null;
-    const contraTendencia =
-      tendencia && tendencia.eficiencia.gte(umbralTendencia)
-        ? tendencia.bps.gt(0)
-          ? 'SELL'
-          : tendencia.bps.lt(0)
-            ? 'BUY'
-            : null
-        : null;
+    // La puerta de REGIMEN, sobre velas de verdad (spec 071).
+    //
+    // Hubo un filtro de tendencia anterior que medía la eficiencia de Kaufman
+    // sobre el anillo de muestras de SEGUNDOS. Se quitó: el inventario de un
+    // market maker se envenena a lo largo de HORAS, así que estaba mirando la
+    // escala de tiempo equivocada, y medido sobre 26 pares y 400 días
+    // discriminaba +0,015 pp —dentro del ruido— contra los +0,156 pp de este
+    // con el mismo tiempo activo. Dos mandos para la misma pregunta, uno de
+    // ellos que no funciona, es peor que uno solo.
+    const contraTendencia: 'BUY' | 'SELL' | null = bloqueoPorRegimen(ctx, cfg);
 
     const profile = profileOf(cfg.behaviorPreset);
     const buy = composeSpreadBps(cfg, D(cfg.buyDistanceBps), volBps);

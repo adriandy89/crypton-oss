@@ -58,8 +58,14 @@ export const AI_TRADER_GUIDE: StrategyGuide<AiTraderConfig> = {
     decisionMode: {
       what: 'Quién elige entre las operaciones que el motor ha calculado.',
       affects:
-        'Con «reglas» decide una tabla determinista y no se gasta ninguna llamada. El modo IA todavía no está disponible: falta conectar el proveedor, y el formulario lo rechaza.',
-      tip: 'Reglas. Cuando el modo IA esté conectado, lo primero será verlo en sombra antes de dejarle decidir.',
+        'Con «reglas» decide una tabla determinista y no se gasta ninguna llamada. Con «IA» decide el modelo: por cada toque de la banda recibe el estado de la vela y contesta ocho preguntas, y el motor construye la operación con lo que elija. Sin respuesta válida no hay entrada, nunca al revés.',
+      tip: 'Empieza en reglas. Cuando pases a IA, déjalo antes en «solo observar» unos días: verás en la línea de tiempo qué habría decidido y con cuánta confianza, sin que toque el mercado.',
+    },
+    decisionInterval: {
+      what: 'Cada cuánto mira el mercado y decide.',
+      affects:
+        'Marca de qué velas sale la banda, cada cuánto puede abrir, y cuánto dura una operación: los topes de velas se cuentan en velas de esta cadencia.',
+      tip: '15 minutos, y no es arbitrario: medido sobre BTC con costes reales da 0,71 evaluaciones al día contra 0,38 a 5 minutos y 0,34 a 30. En pares más volátiles que BTC, 5 minutos puede dar más. 1 minuto no está porque no funciona: 30 días de BTC dieron 8.719 toques y ninguno ejecutable, porque el coste de entrar y salir es fijo y el recorrido de una vela de 1 minuto no llega a pagarlo.',
     },
     observeOnly: {
       what: 'Apuntar lo que haría, sin mandar ninguna orden.',
@@ -185,20 +191,22 @@ export const AI_TRADER_GUIDE: StrategyGuide<AiTraderConfig> = {
     },
 
     minRouteConfidence: {
-      what: 'La confianza mínima de la IA para que se opere.',
-      affects: 'Por debajo, esa vela no se opera aunque diga que sí.',
-      tip: '0,45. Medido contra BTC real, el modelo no pasó de 0,61 en dieciséis llamadas: con el 0,9 que sugiere el fabricante, el bot no operaría nunca. Es un punto de partida medido sobre poca muestra, no un valor asentado.',
+      what: 'Un suelo de confianza por debajo del cual no se opera, aunque la IA diga que sí.',
+      affects:
+        'A 0 —como viene— decide la IA: su elección se ejecuta. Súbelo y le pones un juez encima.',
+      tip: '0, y por una razón medida: contra BTC real su confianza no pasó de 0,61 en dieciséis llamadas. Con un suelo de 0,45 el que decidía era el umbral, no el modelo. Si lo subes, sube poco y mira antes cuántas decisiones te estás comiendo.',
     },
     fullSizeConfidence: {
       what: 'La confianza a partir de la cual se entra con la posición entera.',
       affects:
-        'Por debajo se entra con la mitad. La confianza solo puede reducir el tamaño, nunca subirlo.',
-      tip: '0,6.',
+        'A 0 —como viene— se entra siempre entera. Por encima, una confianza menor entra con la mitad. Nunca sube el tamaño: solo puede reducirlo.',
+      tip: '0. El tamaño ya lo gobierna tu riesgo por operación, que es lo que de verdad limita la pérdida.',
     },
     requireAgreement: {
-      what: 'Exigir que las tres preguntas de contexto acompañen a la decisión.',
-      affects: 'Si el modelo dice que sí pero alguna de las tres dice que no, no se opera.',
-      tip: 'Encendido. El desacuerdo es información, no ruido.',
+      what: 'Dejar que las tres preguntas de contexto VETEN la decisión de la IA.',
+      affects:
+        'Apagado —como viene— manda lo que la IA eligió. Encendido, si alguna de las tres no acompaña, no se opera.',
+      tip: 'Apagado. El modelo ya tiene en cuenta el régimen, el toque y el histórico cuando elige; volver a preguntárselos por separado para poder llevarle la contraria es ponerle un juez encima. Enciéndelo solo si quieres ese juez.',
     },
     minRegimeProb: {
       what: 'Cuánto tiene que creer la IA que el mercado está dando vueltas y no yéndose.',
@@ -217,10 +225,10 @@ export const AI_TRADER_GUIDE: StrategyGuide<AiTraderConfig> = {
       tip: '0,55.',
     },
     statedThreshold: {
-      what: 'Cuánta razón tiene que tener la IA para que se le haga caso sobre el stop y el objetivo.',
+      what: 'Cuánta razón tiene que declarar la IA para que se le haga caso sobre el stop y el objetivo.',
       affects:
-        'Si no llega, mandan tus valores por defecto. Es lo que evita que una opinión floja sobre un detalle tumbe una decisión buena.',
-      tip: '0,6. En la prueba contra BTC el modelo se abstuvo en las dieciséis, así que mandaron los defectos.',
+        'A 0 —como viene— manda SIEMPRE su elección. Por encima, si no llega al umbral se usan tus valores por defecto en su lugar.',
+      tip: '0. Estaba en 0,6, y en las dieciséis llamadas contra BTC real el modelo se quedó por debajo las dieciséis veces: su elección de stop se tiraba entera y mandaba el valor por defecto. Eso no es que decida la IA.',
     },
     defaultStopBucket: {
       what: 'Qué stop se usa cuando la IA no tiene una razón clara para preferir otro.',
@@ -246,7 +254,7 @@ export const AI_TRADER_GUIDE: StrategyGuide<AiTraderConfig> = {
     aiDailyCallBudget: {
       what: 'Cuántas consultas al modelo puede gastar este bot al día.',
       affects: 'Al agotarlo deja de preguntar hasta el día siguiente.',
-      tip: '48. Con una vela cada quince minutos hay 96 al día, así que esto es la mitad.',
+      tip: '300, que cubre de sobra la cadencia más rápida. No es un número apretado a propósito: cada consulta cuesta 0,000081 $, así que gastarlas todas un mes entero sale por menos de tres céntimos. Y medido, el tope no se roza nunca: quien limita cuántas veces se decide es la puerta del coste, no esto.',
     },
 
     maxTradesPerDay: {

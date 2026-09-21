@@ -608,6 +608,7 @@ pnpm test:adapters     # codecs, errores, caudal, presupuesto, simulador
 pnpm --filter api test      # cifrado de credenciales y codec de copy-trading
 pnpm --filter worker test   # reconciliación y motor de bots
 pnpm check:env              # coherencia entre código, .env.example y compose
+pnpm check:labels           # cada campo de estrategia tiene nombre y ayuda en la app
 ```
 
 El grueso de la cobertura está en `strategy-core` a propósito: ahí vive la lógica

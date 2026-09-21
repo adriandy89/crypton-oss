@@ -63,6 +63,7 @@ export const MOTIVO_INTENCION: Readonly<Record<string, string>> = {
   NO_OPERAR: 'la IA prefirió no operar',
   OFERTA: 'la elección no estaba en la oferta',
   CONFIANZA: 'menos confianza de la pedida',
+  DESACUERDO: 'el contexto no acompañaba',
   SOMBRA: 'modo sombra',
   MODELO: 'el modelo no respondió',
   CONTRATO: 'respuesta fuera del contrato',

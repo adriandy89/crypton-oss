@@ -11,7 +11,13 @@
  * un precio como `string`. Ni un `number` de este fichero acaba en una orden:
  * para eso está `esqueletos.ts`, que cruza a `Decimal` una sola vez.
  */
-import { Evidencia, type PositionSide, type SenalTrader, type TasasBase } from '@crypton/shared';
+import {
+  Evidencia,
+  type PositionSide,
+  type ResumenTasas,
+  type SenalTrader,
+  type TasasBase,
+} from '@crypton/shared';
 import {
   atrSerie,
   bollinger,
@@ -51,6 +57,17 @@ export interface Banda {
 const VELAS_ETIQUETA = 24;
 /** El stop con el que se etiqueta el histórico: el bucket por defecto, 2 ATR. */
 const ATR_ETIQUETA = 2;
+
+/**
+ * Cuanto se parece un estiramiento a otro para contarlos juntos, en ATR, y
+ * cuantos casos hacen falta para que la tasa condicionada se publique.
+ *
+ * Doce es poco, pero es el minimo con el que un porcentaje deja de ser una
+ * anecdota con decimales. Por debajo se devuelve `null` y el estado dice que no
+ * hay muestra, que es mejor que dar un numero que nadie deberia usar.
+ */
+const VENTANA_ESTIRAMIENTO = 0.5;
+const MIN_SIMILARES = 12;
 
 export interface ParametrosSenal {
   periodoBanda: number;
@@ -242,6 +259,8 @@ function tasasDeToques(
   p: ParametrosSenal,
 ): TasasBase | null {
   const rs: number[] = [];
+  /** El estiramiento de cada toque contado, en el mismo orden que `rs`. */
+  const estiramientos: number[] = [];
   for (let i = desde; i <= hasta - VELAS_ETIQUETA; i++) {
     const sup = bb.superior[i];
     const inf = bb.inferior[i];
@@ -266,11 +285,40 @@ function tasasDeToques(
       VELAS_ETIQUETA,
       p.costes,
     );
-    if (et) rs.push(et.r);
+    if (et) {
+      rs.push(et.r);
+      // El estiramiento de ESE toque, medido igual que el de ahora: distancia
+      // del cierre a la media en ATR.
+      estiramientos.push(Math.abs(s15.c[i] - bb.media[i]) / atr);
+    }
   }
 
   const n = rs.length;
   if (n === 0) return null;
+
+  const refSup = bb.superior[hasta];
+  const refInf = bb.inferior[hasta];
+  const refAtr = atrs[hasta];
+  const refMedia = bb.media[hasta];
+  const estiramientoRef =
+    finito(refMedia) && finito(refSup) && finito(refInf) && refAtr > 0
+      ? Math.abs(s15.c[hasta] - refMedia) / refAtr
+      : 0;
+
+  const cerca = rs.filter(
+    (_r, k) => Math.abs(estiramientos[k] - estiramientoRef) <= VENTANA_ESTIRAMIENTO,
+  );
+
+  return {
+    ...resumir(rs),
+    estiramientoRef,
+    similares: cerca.length >= MIN_SIMILARES ? resumir(cerca) : null,
+  };
+}
+
+/** Un puñado de resultados, resumido. */
+function resumir(rs: number[]): ResumenTasas {
+  const n = rs.length;
   const aciertos = rs.filter((r) => r > 0).length;
   return {
     n,

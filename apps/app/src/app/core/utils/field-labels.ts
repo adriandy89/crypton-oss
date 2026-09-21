@@ -196,6 +196,30 @@ export const FIELD_LABELS: Record<string, string> = {
   'strategy.trend.entryEfficiency': 'Eficiencia mínima para entrar',
   'strategy.trend.stopRepriceBps': 'Movimiento mínimo del stop',
   'strategy.trend.direction': 'Lados que opera',
+  'strategy.trend.candleIntervalHelp':
+    'Velas más cortas: más rupturas, más operaciones y más falsas. Más largas: menos operaciones y ' +
+    'señales más fiables, pero se entra más tarde. 4 h es el punto de equilibrio.',
+  'strategy.trend.breakoutPeriodHelp':
+    'Cuántas velas anteriores forman el rango que hay que romper. La vela que rompe NO cuenta en su ' +
+    'propio rango. Con 20 velas de 4 h el canal cubre unos tres días.',
+  'strategy.trend.atrPeriodHelp':
+    'Cuántas velas entran en el ATR, la medida de cuánto se mueve este par. De ahí salen dos cosas a ' +
+    'la vez: dónde va el stop y qué tamaño tiene la posición. 14 es el valor clásico.',
+  'strategy.trend.atrStopMultiplierHelp':
+    'A cuántos ATR se pone el stop. Más ATR es más espacio para respirar; el tamaño se ajusta para ' +
+    'que el riesgo en dinero sea el mismo. Nunca por debajo de 1,5.',
+  'strategy.trend.riskPerTradePctHelp':
+    'Qué porcentaje de tu capital pierdes si el stop salta. 1 % es lo estándar: con 2 %, cinco ' +
+    'pérdidas seguidas son un 10 % del capital.',
+  'strategy.trend.entryEfficiencyHelp':
+    'Compara el recorrido neto con el total: 1 es una línea recta y 0 es ir y venir sin avanzar. Por ' +
+    'debajo del umbral no se abre. Con 0 está apagado.',
+  'strategy.trend.stopRepriceBpsHelp':
+    'Cuánto tiene que moverse el stop para recolocarlo de verdad. Sin esto el trailing es un goteo ' +
+    'constante de órdenes que gasta cuota del exchange sin cambiar nada.',
+  'strategy.trend.directionHelp':
+    'Una tendencia bajista es una tendencia igual, así que lo útil son los dos lados. Solo largos o ' +
+    'solo cortos significa «solo rupturas en ese sentido»: es convicción, no prudencia.',
 
   'strategy.mm.fairPriceMode': 'Precio justo',
   'strategy.mm.obiSkewFactor': 'Sesgo por desequilibrio del libro',
@@ -204,6 +228,28 @@ export const FIELD_LABELS: Record<string, string> = {
   'strategy.mm.maxAdverseFundingBps': 'Funding máximo en contra',
   'strategy.mm.markoutHorizonSeconds': 'Horizonte de markout',
   'strategy.mm.markoutSensitivity': 'Sensibilidad al markout',
+  'strategy.mm.fairPriceModeHelp':
+    'Punto medio ignora las cantidades del libro; microprecio pondera cada lado por la cantidad ' +
+    'del contrario. Lighter no publica tamaños: allí los dos se comportan igual.',
+  'strategy.mm.obiSkewFactorHelp':
+    'Cuánto mueve la cotización el desequilibrio entre el mejor bid y el mejor ask. Con 0 no se ' +
+    'mira. Subirlo mucho recotiza a menudo, y cada recotización cuesta cuota y prioridad.',
+  'strategy.mm.sizeSkewFactorHelp':
+    'Sesga el TAMAÑO de cada lado según el inventario en vez de la distancia: con posición larga, ' +
+    'compras más pequeñas y ventas más grandes.',
+  'strategy.mm.inventorySkewFactorHelp':
+    'Con cuánta fuerza se desplaza el centro en contra del inventario. Con 0 no hay desplazamiento.',
+  'strategy.mm.fundingSkewFactorHelp':
+    'Inclina la cotización hacia el lado al que el exchange paga funding. Lighter no lo publica.',
+  'strategy.mm.maxAdverseFundingBpsHelp':
+    'Funding en contra a partir del cual deja de ABRIR del lado que paga. El lado que reduce ' +
+    'inventario sigue vivo siempre. Con 0 no hay filtro.',
+  'strategy.mm.markoutHorizonSecondsHelp':
+    'Cuántos segundos después de cada ejecución se mira dónde está el mercado: la medida de si te ' +
+    'están eligiendo. Con 0 no se mide ni se guarda nada. 30-60 s.',
+  'strategy.mm.markoutSensitivityHelp':
+    'Cuánto se aleja un lado cuando su markout es negativo. Un markout bueno NO acerca la ' +
+    'cotización. Necesita el horizonte encendido.',
   'strategy.mm.dynamicSpreadHelp': 'Ensancha la cotización a medida que crece el inventario.',
   'strategy.mm.layers': 'Capas',
   'strategy.mm.layerDistanceMultiplier': 'Multiplicador de distancia por capa',
@@ -334,6 +380,16 @@ export const FIELD_LABELS: Record<string, string> = {
   'strategy.mmv2.layersHelp': 'Cuántas órdenes escalonadas por lado.',
   'strategy.mmv2.layerDistanceMultiplier': 'Multiplicador de distancia por nivel',
   'strategy.mmv2.layerSizeMultiplier': 'Multiplicador de tamaño por nivel',
+  'strategy.mmv2.regimeGuard': 'Puerta de régimen',
+  'strategy.mmv2.regimeGuardHelp':
+    'Deja de ABRIR contra el mercado cuando el régimen dice que no es tu terreno, mirando velas de ' +
+    '15 minutos y una hora. El lado que reduce sigue vivo siempre. «Solo rango» es mucho más ' +
+    'estricto: deja al bot abriendo alrededor del 9 % del tiempo. Apagado no pide ni una vela.',
+  'strategy.mmv2.volEstimator': 'Estimador de volatilidad',
+  'strategy.mmv2.volEstimatorHelp':
+    'Recorrido es máximo menos mínimo y crece con el número de muestras; Parkinson quita esa ' +
+    'dependencia. ⚠️ Parkinson da números mucho más pequeños: al cambiarlo hay que reajustar el ' +
+    'multiplicador de volatilidad.',
   'strategy.mmv2.positionMode': 'Modo de posición',
   'strategy.mmv2.positionModeHelp':
     'Automático deja el de la cuenta. En cobertura una venta abre un corto en paralelo al largo en vez ' +
@@ -373,6 +429,11 @@ export const FIELD_LABELS: Record<string, string> = {
   'strategy.aiTrader.decisionMode': 'Quién decide',
   'strategy.aiTrader.decisionModeHelp':
     'Con «reglas» decide una tabla determinista y no se gasta ninguna consulta. Con «IA» decide el modelo.',
+  'strategy.aiTrader.decisionInterval': 'Cada cuánto decide',
+  'strategy.aiTrader.decisionIntervalHelp':
+    'Marca de qué velas sale la banda, cada cuánto puede abrir y cuánto dura una operación: los ' +
+    'topes de velas se cuentan en velas de esta cadencia. 15 minutos. 1 minuto no está porque no ' +
+    'funciona: el coste de entrar y salir es fijo y el recorrido de una vela de 1 minuto no lo paga.',
   'strategy.aiTrader.observeOnly': 'Solo observar',
   'strategy.aiTrader.observeOnlyHelp': 'Apunta lo que haria, sin mandar ninguna orden.',
   'strategy.aiTrader.entriesEnabled': 'Entradas activas',
@@ -409,6 +470,19 @@ export const FIELD_LABELS: Record<string, string> = {
   'strategy.aiTrader.maxDrawdownPctHelp': 'Al llegar, pausa. Reanudar es cosa tuya.',
   'strategy.aiTrader.dailyProfitTargetPct': 'Objetivo de ganancia del día',
   'strategy.aiTrader.dailyProfitTargetPctHelp': 'Al llegar deja de entrar. Cero lo apaga.',
+  'strategy.aiTrader.maxTradesPerDayHelp': 'Al llegar no entra más hasta el día siguiente. 8.',
+  'strategy.aiTrader.lossStreakCooldownMinutesHelp':
+    'El descanso que corta una racha de pérdidas. 120 minutos.',
+  'strategy.aiTrader.stopCooldownMinutesHelp':
+    'Cuánto espera tras saltar un stop, para no volver a entrar donde acaba de fallar. 30 minutos.',
+  'strategy.aiTrader.makerFeeBpsHelp':
+    'La comisión de las órdenes que esperan en el libro: el objetivo. Vacío usa la del exchange.',
+  'strategy.aiTrader.takerFeeBpsHelp':
+    'La comisión de las que cruzan el libro: la entrada y el stop. Entra en la pérdida al stop y, ' +
+    'por tanto, en el tamaño. Vacío usa la del exchange.',
+  'strategy.aiTrader.slippageBpsHelp':
+    'El deslizamiento que se supone al saltar el stop. Se suma a la pérdida: más deslizamiento, ' +
+    'menos tamaño. Vacío usa el del exchange.',
   'strategy.aiTrader.bandPeriod': 'Velas de la banda',
   'strategy.aiTrader.bandPeriodHelp': 'Cuantos cierres entran en su media.',
   'strategy.aiTrader.bandSigma': 'Anchura de la banda',

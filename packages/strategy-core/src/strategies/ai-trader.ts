@@ -31,6 +31,7 @@ import {
   MotivoTrader,
   StrategyKind,
   apalancamientoPorStop,
+  esEleccionCanal,
   maintenanceMarginRateOf,
   type BotContext,
   type CommonBotConfig,
@@ -38,8 +39,11 @@ import {
   type DesiredState,
   type EspacioTrader,
   type FieldMeta,
+  type CandleInterval,
+  type MarcaDecision,
   type MarketSpec,
   type PlanTrader,
+  type VeredictoTrader,
   type PreviewResult,
   type StrategyMeta,
   type ValidationIssue,
@@ -62,18 +66,24 @@ import { makeCoid } from '../client-order-id';
 import type { Strategy } from '../types';
 import { serieNumerica } from '../canal/numeros';
 import { serieFresca } from '../canal/velas';
-import { DEFAULTS_TRADER, leerConfigTrader, type ConfigTrader } from '../trader/config';
+import {
+  CADENCIAS,
+  DEFAULTS_TRADER,
+  PASO_CADENCIA,
+  leerConfigTrader,
+  type ConfigTrader,
+} from '../trader/config';
 import { senalTrader } from '../trader/senal';
 import { espacioTrader } from '../trader/esqueletos';
 import { construirOperacionTrader, cuantiza } from '../trader/construir';
 import { juezTrader } from '../trader/juez';
 import { regimen } from '../canal/regimen';
 
-const QUINCE_MIN = 900_000;
 /** Velas de 1 h que pide el filtro de régimen, más las tres de la histéresis. */
 const VELAS_1H = 130;
-/** Velas de 15 min: la ventana de la banda más margen para las tasas base. */
-const VELAS_15M = 220;
+/** Velas de la cadencia: la ventana de la banda más margen para las tasas base. */
+const VELAS_SENAL = 220;
+/** Velas de 5 min del disparo, cuando la cadencia no es ya de 5 min. */
 const VELAS_5M = 144;
 
 /**
@@ -99,6 +109,7 @@ interface CierreEnCurso {
 
 export interface AiTraderConfig extends CommonBotConfig {
   decisionMode?: 'IA' | 'REGLAS';
+  decisionInterval?: '5m' | '15m' | '30m' | '1h';
   observeOnly?: boolean;
   entriesEnabled?: boolean;
 
@@ -180,6 +191,18 @@ const PROPIOS: FieldMeta[] = [
     default: d.decisionMode,
     group: 'core',
     control: 'segment',
+  }),
+  campo({
+    key: 'decisionInterval',
+    kind: 'enum',
+    labelKey: 'strategy.aiTrader.decisionInterval',
+    helpKey: 'strategy.aiTrader.decisionIntervalHelp',
+    options: [...CADENCIAS],
+    default: d.decisionInterval,
+    group: 'core',
+    control: 'select',
+    // COLD: cambia que series pide el motor, y eso se decide al arrancar.
+    mutability: 'COLD',
   }),
   campo({
     key: 'observeOnly',
@@ -434,7 +457,7 @@ const PROPIOS: FieldMeta[] = [
     kind: 'number',
     labelKey: 'strategy.aiTrader.minRouteConfidence',
     helpKey: 'strategy.aiTrader.minRouteConfidenceHelp',
-    min: 0.2,
+    min: 0,
     max: 0.99,
     step: 0.05,
     default: Number(d.minRouteConfidence),
@@ -446,7 +469,7 @@ const PROPIOS: FieldMeta[] = [
     kind: 'number',
     labelKey: 'strategy.aiTrader.fullSizeConfidence',
     helpKey: 'strategy.aiTrader.fullSizeConfidenceHelp',
-    min: 0.3,
+    min: 0,
     max: 0.99,
     step: 0.05,
     default: Number(d.fullSizeConfidence),
@@ -503,7 +526,7 @@ const PROPIOS: FieldMeta[] = [
     kind: 'number',
     labelKey: 'strategy.aiTrader.statedThreshold',
     helpKey: 'strategy.aiTrader.statedThresholdHelp',
-    min: 0.3,
+    min: 0,
     max: 0.95,
     step: 0.05,
     default: Number(d.statedThreshold),
@@ -559,7 +582,7 @@ const PROPIOS: FieldMeta[] = [
     labelKey: 'strategy.aiTrader.aiDailyCallBudget',
     helpKey: 'strategy.aiTrader.aiDailyCallBudgetHelp',
     min: 1,
-    max: 96,
+    max: 300,
     step: 1,
     default: d.aiDailyCallBudget,
     group: 'intelligence',
@@ -917,21 +940,32 @@ function conPosicion(
 
 // ── En plano ────────────────────────────────────────────────────────────────
 
-/** Las velas de 15 min que hay que mirar: es donde vive la señal. */
-function seriesDe(): { interval: '5m' | '15m' | '1h'; bars: number }[] {
-  return [
-    { interval: '5m', bars: VELAS_5M },
-    { interval: '15m', bars: VELAS_15M },
-    { interval: '1h', bars: VELAS_1H },
-  ];
+/**
+ * Las velas que hay que mirar, según la cadencia elegida (spec 070).
+ *
+ * Tres series salvo cuando la cadencia ES de 5 min, que entonces la de la señal
+ * y la del disparo son la misma y pedir dos veces lo mismo solo gastaría cupo
+ * del venue. La de 1 h está siempre: el régimen se mide ahí, pase lo que pase.
+ */
+function seriesDe(c: ConfigTrader): { interval: CandleInterval; bars: number }[] {
+  const senal = { interval: c.cadencia as CandleInterval, bars: VELAS_SENAL };
+  const regimen = { interval: '1h' as CandleInterval, bars: VELAS_1H };
+  if (c.cadencia === '1h') return [{ interval: '5m', bars: VELAS_5M }, regimen];
+  if (c.cadencia === '5m') return [senal, regimen];
+  return [{ interval: '5m', bars: VELAS_5M }, senal, regimen];
 }
+
+/** Los intervalos que esta configuración usa de verdad. */
+const intervalosDe = (c: ConfigTrader): CandleInterval[] => seriesDe(c).map((x) => x.interval);
 
 /** La oferta de esta vela, o `null` si no hay nada que ofrecer. */
 function ofertaDe(ctx: BotContext, c: ConfigTrader): EspacioTrader | null {
-  const s5 = ctx.series?.['5m'];
-  const s15 = ctx.series?.['15m'];
+  // Con cadencia de 5 min la serie de la señal y la del disparo son la misma.
+  const sSenal = ctx.series?.[c.cadencia];
+  const s5 = ctx.series?.['5m'] ?? sSenal;
   const h1 = ctx.series?.['1h'];
-  if (!s5?.length || !s15?.length || !h1?.length || !ctx.historial) return null;
+  if (!s5?.length || !sSenal?.length || !h1?.length || !ctx.historial) return null;
+  const s15 = sSenal;
 
   const n5 = serieNumerica(s5);
   const n15 = serieNumerica(s15);
@@ -1050,12 +1084,8 @@ function enPlano(ctx: BotContext, c: ConfigTrader, seq: number): DesiredState {
 
   // Las velas, cerradas de verdad. Sin esto la señal puede salir de una vela a
   // medio formar, que es una señal que cambia sola antes de ejecutarse.
-  for (const [intervalo, velas] of [
-    ['5m', ctx.series?.['5m']],
-    ['15m', ctx.series?.['15m']],
-    ['1h', ctx.series?.['1h']],
-  ] as const) {
-    if (!serieFresca(velas, intervalo, ctx.now, GRACIA_VELA_MS)) {
+  for (const intervalo of intervalosDe(c)) {
+    if (!serieFresca(ctx.series?.[intervalo], intervalo, ctx.now, GRACIA_VELA_MS)) {
       return sinEntrada(`Esperando la última vela de ${intervalo}.`);
     }
   }
@@ -1078,31 +1108,116 @@ function enPlano(ctx: BotContext, c: ConfigTrader, seq: number): DesiredState {
   const enfriado = Number(ctx.cycle.scratch['enfriadoHasta'] ?? 0);
   if (ctx.now < enfriado) return sinEntrada('Entorno equivocado: esperando a que cambie.');
 
-  // Decide el juez. El modo IA no llega aquí: `validate()` lo rechaza mientras
-  // no haya proveedor cableado (spec 069). Antes esta rama escribía una
-  // solicitud que nadie atendía —la barrera de la API sigue clavada al canal—,
-  // así que el bot se quedaba mirando en silencio para siempre. Prefiero que no
-  // se pueda elegir a que se pueda elegir y no haga nada.
-  const s15 = ctx.series?.['15m'];
+  // ── Quién decide ───────────────────────────────────────────────────────
+  const s15 = ctx.series?.[c.cadencia];
   const h1 = ctx.series?.['1h'];
   if (!s15 || !h1) return sinEntrada('Sin series para decidir.');
+  const paso = PASO_CADENCIA[c.cadencia];
 
-  const reg = regimen(serieNumerica(h1), serieNumerica(s15));
-  const respuesta = juezTrader(espacio, reg, c);
-  const veredicto = cuantiza(respuesta, c);
   const patch: Record<string, unknown> = {};
+  /** El enfriado lo arma el veredicto, venga del juez o del modelo. */
+  const enfriar = (v: VeredictoTrader): void => {
+    if (v.accion === AccionTrader.ENTORNO_EQUIVOCADO && c.enfriadoEntornoVelas > 0) {
+      patch['enfriadoHasta'] = ctx.now + c.enfriadoEntornoVelas * paso;
+    }
+  };
 
-  if (veredicto.accion === AccionTrader.ENTORNO_EQUIVOCADO && c.enfriadoEntornoVelas > 0) {
-    patch['enfriadoHasta'] = ctx.now + c.enfriadoEntornoVelas * QUINCE_MIN;
+  let veredicto: VeredictoTrader;
+  let intentId: string;
+  /** La marca que cierra la fila de una decisión que no se usa. */
+  let cierre: MarcaDecision | null = null;
+
+  if (c.modo === ModoDecision.REGLAS) {
+    const reg = regimen(serieNumerica(h1), serieNumerica(s15));
+    veredicto = cuantiza(juezTrader(espacio, reg, c), c);
+    enfriar(veredicto);
+    // El id lleva el BOT y la vela dentro. La vela sola no basta: este id es la
+    // clave primaria de `bot_ai_intents`, así que dos bots de esta estrategia
+    // que decidieran la misma vela de 15 min colisionaban, y el segundo se
+    // quedaba sin fila —y por tanto sin entrada— en silencio (spec 069).
+    intentId = `reglas:${ctx.botId}:${espacio.barT}`;
+  } else {
+    const dIa = ctx.decisionIa ?? null;
+    const deEstaVela = dIa !== null && dIa.barT === espacio.barT && dIa.cycleSeq === seq;
+    if (!dIa || !deEstaVela) {
+      // Sin decisión para esta vela: se pide y se espera a la siguiente pasada.
+      // El plazo es el cierre de la vela más un minuto, como en el canal: una
+      // decisión que llega después ya no vale para el precio que la motivó.
+      return sinEntrada('Toque listo: solicitud enviada a la IA.', {
+        scratchPatch: patch,
+        solicitudIa: {
+          barT: espacio.barT,
+          huella: espacio.huella,
+          expiresAt: espacio.barT + 2 * paso + 60_000,
+          snapshot: espacio,
+        },
+      });
+    }
+    if (dIa.estado !== EstadoIntencion.DECIDIDA || !dIa.eleccion) {
+      const esperando =
+        dIa.estado === EstadoIntencion.SOLICITADA || dIa.estado === EstadoIntencion.CONSULTANDO;
+      return sinEntrada(
+        esperando
+          ? 'Consultando a la IA.'
+          : `La IA no operó en esta vela${dIa.motivo ? `: ${dIa.motivo}` : ''}.`,
+        { scratchPatch: patch },
+      );
+    }
+    // Una decisión que no se puede usar se RECHAZA con su motivo: la fila queda
+    // cerrada y el usuario ve por qué, en vez de una intención colgada.
+    const rechazar = (motivo: MotivoRechazo, nota: string): DesiredState =>
+      sinEntrada(nota, {
+        scratchPatch: patch,
+        decision: { intentId: dIa.intentId, estado: EstadoIntencion.RECHAZADA, motivo, plan: null },
+      });
+    if (dIa.expiresAt <= ctx.now) {
+      return rechazar(MotivoRechazo.PLAZO, 'La decisión de la IA llegó tarde.');
+    }
+    if (dIa.huella !== espacio.huella) {
+      return rechazar(MotivoRechazo.HUELLA, 'La oferta cambió desde que se consultó a la IA.');
+    }
+    // La forma, no el nombre de la estrategia: una elección del canal aquí no
+    // se interpreta «como se pueda».
+    if (esEleccionCanal(dIa.eleccion)) {
+      return rechazar(MotivoRechazo.OFERTA, 'La decisión guardada no es de esta estrategia.');
+    }
+    veredicto = dIa.eleccion;
+    enfriar(veredicto);
+    if (veredicto.accion !== AccionTrader.TOMAR) {
+      return rechazar(
+        MotivoRechazo.OFERTA,
+        veredicto.accion === AccionTrader.ENTORNO_EQUIVOCADO
+          ? 'La IA ve un entorno equivocado: deja de mirar unas velas.'
+          : 'La IA prefiere esperar un toque mejor.',
+      );
+    }
+    // El acuerdo y la confianza NO se miran aquí: los mira
+    // `construirOperacionTrader`, que es el único camino a una orden en los dos
+    // brazos, y los mira más estrictamente —un veredicto sin acuerdo no entra
+    // aunque el dueño no lo exija, porque lo exigido ya lo aplicó `cuantiza()`
+    // al escribirlo—. Repetir la puerta aquí solo crearía dos sitios donde
+    // aflojarla.
+    intentId = dIa.intentId;
+    cierre = {
+      intentId,
+      estado: EstadoIntencion.RECHAZADA,
+      motivo: MotivoRechazo.PUERTA,
+      plan: null,
+    };
   }
 
-  // El id lleva la vela dentro: es la idempotencia de la fila del histórico, y
-  // lo que impide que una misma vela se decida dos veces.
-  const intentId = `reglas:${espacio.barT}`;
   const r = construirOperacionTrader(espacio, veredicto, c, ctx.market, intentId, ctx.now);
   const scratchPatch = Object.keys(patch).length > 0 ? patch : undefined;
 
-  if (!r.plan) return sinEntrada(motivoLegible(r.motivo), { scratchPatch });
+  // En modo IA la fila ya existe y está `DECIDIDA`: si la operación no se puede
+  // construir hay que cerrarla, o se queda colgada hasta que caduque y el bot
+  // aparenta estar esperando algo que no va a llegar. En reglas no hay fila que
+  // cerrar todavía.
+  if (!r.plan)
+    return sinEntrada(motivoLegible(r.motivo), {
+      scratchPatch,
+      ...(cierre ? { decision: cierre } : {}),
+    });
 
   const plan = r.plan;
   if (c.soloObservar) {
@@ -1181,7 +1296,7 @@ export const aiTrader: Strategy<AiTraderConfig> = {
   topeDiarioReanuda: true,
   consumeDecisionesIa: true,
   sinIa: (config) => ({ ...config, decisionMode: 'REGLAS' }),
-  series: () => seriesDe(),
+  series: (config) => seriesDe(leer(config, 'HYPERLIQUID')),
   nocionalMaximo: (config) => nocionalMaximoDe(leer(config, 'HYPERLIQUID')).toFixed(),
 
   defaults() {
@@ -1239,17 +1354,17 @@ export const aiTrader: Strategy<AiTraderConfig> = {
     // comisión da −0,11. La puerta del coste no solo evita la imposibilidad
     // aritmética: con comisiones altas se convierte en un filtro de calidad, y
     // con comisiones cero deja pasar cualquier cosa (spec 068).
-    // El modo IA todavía no tiene proveedor cableado: la barrera de la API sigue
-    // siendo del canal, así que una solicitud de este bot se cerraría sin
-    // respuesta y el bot no operaría nunca, en silencio. Se rechaza en el
-    // formulario hasta el spec 069: un mando que se puede poner y no hace nada
-    // es peor que un mando que no está.
+    // El modo IA ya tiene proveedor (spec 069). Se avisa —no se rechaza— de lo
+    // que de verdad puede sorprender: que el servidor lo tenga apagado o sin
+    // clave no se sabe desde aquí, y en ese caso el bot no abre operaciones y
+    // lo dice en cada vela. Es un aviso, no un error, porque la configuración
+    // es correcta: lo que puede faltar está en el servidor, no en el formulario.
     if (c.modo === ModoDecision.IA) {
       issues.push(
-        err(
+        warn(
           'decisionMode',
-          'El modo IA todavía no está disponible para esta estrategia: falta conectar el ' +
-            'proveedor. De momento decide el juez de reglas.',
+          'Decide el modelo. Si el servidor tiene la IA apagada o sin clave, el bot no abrirá ' +
+            'operaciones y lo dirá en cada vela. Sin respuesta válida no hay entrada, nunca al revés.',
         ),
       );
     }

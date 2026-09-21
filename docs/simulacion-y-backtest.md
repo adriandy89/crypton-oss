@@ -61,6 +61,14 @@ Consecuencia: **el simulador es algo optimista** para un market maker (todo se e
 del venue. Un bot que pierde en simulación perderá en real; uno que gana en simulación **puede** perder en
 real.
 
+> ✅ **Para un market maker, esta es la herramienta buena, y no el backtest.** Aquí las cotizaciones se
+> enfrentan al **libro de verdad**, tick a tick: cuando el mejor precio contrario baja hasta tu compra es
+> porque alguien ha vendido ahí, y eso incluye al flujo que cruza tu precio sin moverlo, que es de lo que
+> vive un market maker. El backtest **no tiene** ese flujo —solo velas— y por eso sus cifras para un market
+> maker no significan lo que parecen. Está explicado en [el recuadro del backtest](#lo-que-el-backtest-no-reproduce).
+> Lo único que este simulador te regala es la **cola**: aquí no la hay y en el venue sí, así que cuenta con
+> ejecutar menos de lo que ves.
+
 ### Qué mirar en un bot simulado
 
 1. La **vista previa** al crearlo: peor caso, margen, liquidación estimada, y que ningún nivel salga en rojo.
@@ -129,7 +137,8 @@ Los nueve avisos comunes que acompañan **siempre** al resultado, y que hay que 
 1. **Orden dentro de la vela**: una vela no dice si el máximo llegó antes que el mínimo. Cuanto más larga
    la vela, mayor el error. Con «Pesimista» estresas un resultado que parece demasiado bueno.
 2. **Sin profundidad de libro**: una orden en reposo se ejecuta entera al tocarla, sin parciales ni cola.
-   Un market maker sale mejor aquí que en el venue.
+   En eso un market maker sale mejor aquí que en el venue — pero **ojo con la dirección del sesgo**: la
+   falta de flujo pesa mucho más, y esa va en contra. Ver el recuadro de abajo.
 3. **Margen de mantenimiento plano** (≈ 0,5 %): una posición grande revienta **antes** en el venue.
 4. **Los precios son de la fuente** (Binance), no del venue: mismo activo, otro diferencial, otras mechas.
 5. **Sin funding**: en posiciones de días puede ser el mayor componente del resultado.
@@ -141,6 +150,22 @@ Los nueve avisos comunes que acompañan **siempre** al resultado, y que hay que 
 Y lo que queda fuera a propósito por diseño: la persistencia, los leases, los comandos manuales, el
 cortacircuitos por colocaciones fallidas y las guardas que dependen de otras posiciones.
 
+> ⛔ **ESTE BACKTEST NO PUEDE DECIR SI UN MARKET MAKER GANA O PIERDE.** Y merece el recuadro más grande
+> de esta guía, porque la conclusión equivocada es muy fácil de sacar.
+>
+> El replay solo tiene **precios**. Una cotización se ejecuta si, y solo si, el precio llega hasta ella —
+> o sea que **todas las ejecuciones que verás son de las que el mercado vino a por ti**. Un market maker
+> vive exactamente de lo contrario: del flujo que cruza su precio **sin moverlo** (alguien cerrando
+> posición, un arbitrajista, una liquidación). Ese flujo no está en una vela y el replay no puede
+> inventarlo.
+>
+> Medido: un Market Maker V2 con los valores de fábrica sobre ocho pares y 120 días da **−19,9 %** en el
+> replay. Eso **no** es prueba de que la estrategia pierda; es lo que sale de medir solo la mitad mala.
+>
+> **Para saber si gana, usa un bot simulado en el venue**, que sí ve flujo real. El backtest sirve para lo
+> otro, y para eso es bueno: ver si tu configuración hace lo que crees —dónde cotiza, cuánto inventario
+> acumula, cuándo se pone defensivo— y **comparar dos configuraciones entre sí** sobre el mismo periodo.
+
 > ℹ️ **Lo que el replay no reproduce de un market maker, y sus avisos lo dicen.** Se recotiza **una vez por
 > vela**: el intervalo de actualización, la espera tras ejecución y la ventana de volatilidad no se
 > reproducen, y el precio de referencia externo es la propia serie. Si «Actualizar órdenes después de» es
@@ -148,7 +173,8 @@ cortacircuitos por colocaciones fallidas y las guardas que dependen de otras pos
 > el bot cotiza en vela alterna; el aviso lo cuenta con los números de tu configuración. Para las dos
 > rejillas, DCA, martingala y GridMart la reconstrucción es fiel a la mecánica (en la neutral, una vela solo
 > puede cruzar cada línea una vez). Los rechazos del simulador al colocar una orden se **cuentan** y salen en
-> los avisos con su motivo. No dimensiones un market maker con el backtest.
+> los avisos con su motivo. Nada de esto, eso sí, pesa tanto como la falta de flujo del recuadro de arriba:
+> **no dimensiones un market maker con el backtest, y no lo descartes por él tampoco.**
 
 > ℹ️ **Tendencia en el backtest.** Decide con velas de **su** intervalo, no con las del replay.
 > - **Si el intervalo del replay lo divide** (15m para una Tendencia de 1h), las construye agrupando

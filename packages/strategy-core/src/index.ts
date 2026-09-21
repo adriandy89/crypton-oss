@@ -125,4 +125,12 @@ export {
 export { construirOperacionTrader, cuantiza, type ResultadoConstruir } from './trader/construir';
 export { juezTrader } from './trader/juez';
 export { estadoTrader, type EstadoTrader } from './trader/estado';
+export {
+  CASCADA_POR_DEFECTO,
+  detectarCascada,
+  rasgosCascada,
+  type FlujoAgresor,
+  type ParametrosCascada,
+  type RasgosCascada,
+} from './trader/cascada';
 export { dimensionar, tramosOrdenados, type Dimension } from './dimension';
