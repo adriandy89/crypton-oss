@@ -28,7 +28,7 @@ import {
   apalancamientoPorStop,
   candleSpanMs,
   maintenanceMarginRateOf,
-  precioLiquidacionAislada,
+  precioLiquidacion,
   type BandaCalculada,
   TipoCanal,
   type CanalDetectado,
@@ -514,12 +514,7 @@ export function opcionDeStop(
   ];
   for (const [banda, apalancamiento] of valores) {
     const margen = nocional.div(apalancamiento);
-    const liquidacion = precioLiquidacionAislada(
-      tope,
-      apalancamiento,
-      mejor.mantenimiento,
-      cand.lado,
-    );
+    const liquidacion = precioLiquidacion(tope, apalancamiento, mejor.mantenimiento, cand.lado);
     // La garantía, comprobada otra vez: la liquidación va detrás del stop.
     if (liquidacion && (largo ? liquidacion.gte(stop) : liquidacion.lte(stop))) {
       return inviable(tipo, precioStop, 'LIQUIDACION');

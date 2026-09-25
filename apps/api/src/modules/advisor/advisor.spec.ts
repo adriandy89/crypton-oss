@@ -1,9 +1,15 @@
 import { StrategyKind } from '@crypton/db';
-import { composeSpreadBps, getStrategy } from '@crypton/strategy-core';
+import { camposEfectivos, composeSpreadBps, getStrategy } from '@crypton/strategy-core';
 import { D, esEstrategiaSoloAdmin, type BotConfig, type MarketSpec } from '@crypton/shared';
 import { BANDS, buildConfig, defaultKnobs, PROFILES, type BuildContext } from './build';
 import type { MarketFeatures } from './market-features';
-import { coerceConfig, enforceCouplings, ladderCoveragePct, MAX_SAFE_LEVERAGE } from './sanitize';
+import {
+  coerceConfig,
+  distanciaLiquidacionPct,
+  enforceCouplings,
+  ladderCoveragePct,
+  maxApalancamientoSeguro,
+} from './sanitize';
 
 /**
  * La red de seguridad de toda la funcionalidad.
@@ -149,10 +155,71 @@ function materializar(
   const strategy = getStrategy(kind);
   const knobs = defaultKnobs(profile, ctx.features);
   const generado = buildConfig(kind, knobs, ctx);
-  let config = coerceConfig(strategy.meta.fields, strategy.defaults(), generado);
+  // Como el servicio: el descriptor EFECTIVO, que da a los % sobre el margen su
+  // tope con el apalancamiento generado (spec 080).
+  let config = coerceConfig(
+    camposEfectivos(strategy.meta.fields, generado, ctx.market),
+    strategy.defaults(),
+    generado,
+  );
   config = enforceCouplings(kind, config, ctx.market, ctx.maxLeverageUsuario);
   return { config, ctx };
 }
+
+describe('los % de resultado del asesor, sobre el margen (spec 080)', () => {
+  const CON_ROI = [
+    StrategyKind.MARTINGALE,
+    StrategyKind.GRIDMART,
+    StrategyKind.TDCA,
+    StrategyKind.TRAILING_PROFIT,
+  ];
+
+  for (const kind of CON_ROI) {
+    for (const profile of PROFILES) {
+      for (const mercado of MERCADOS) {
+        for (const regimen of REGIMENES) {
+          it(`${kind} / ${profile} / ${mercado.nombre} / ${regimen.nombre}`, () => {
+            const ctx: BuildContext = {
+              market: mercado.spec,
+              features: { ...regimen.f, mark: mercado.mark },
+              totalInvestment: 1000,
+              maxLeverageUsuario: null,
+              direction: 'LONG',
+            };
+            const knobs = defaultKnobs(profile, ctx.features);
+            const generado = buildConfig(kind, knobs, ctx);
+            const { config } = materializar(kind, profile, ctx);
+
+            // Los ROI se generan con SU apalancamiento: si una reparación lo
+            // cambiara después, el precio del objetivo y del stop se movería en
+            // silencio.
+            expect(Number(config['leverage'])).toBe(Number(generado['leverage']));
+
+            // Y cada % de resultado es el de precio por el apalancamiento: el
+            // mismo generador a 1× da el de precio.
+            const aUno = buildConfig(kind, knobs, { ...ctx, apalancamientoDeResultados: 1 });
+            const lev = Number(generado['leverage']);
+            for (const campo of getStrategy(kind).meta.fields.filter((f) => f.roi)) {
+              if (!(campo.key in generado) || !(campo.key in aUno)) continue;
+              const porMargen = Number(generado[campo.key]) / lev;
+              expect(Math.abs(porMargen - Number(aUno[campo.key]))).toBeLessThanOrEqual(0.1);
+            }
+
+            // Y el stop que propone nunca queda detrás de la liquidación.
+            const r = getStrategy(kind).validate(
+              { ...config, symbol: mercado.spec.symbol, exchangeAccountId: 'x' } as never,
+              mercado.spec,
+            );
+            const errores = r.issues.filter(
+              (i) => i.field === 'stopLossPct' && i.severity === 'ERROR',
+            );
+            expect(errores).toEqual([]);
+          });
+        }
+      }
+    }
+  }
+});
 
 describe('ninguna banda deja las capas al mismo precio (spec 037 R-2)', () => {
   // `defaultKnobs` no llega a MUY_BAJA en `spread` -su minimo es BAJA-, pero el
@@ -199,8 +266,9 @@ describe('ninguna banda deja las capas al mismo precio (spec 037 R-2)', () => {
 
 describe('recomendaciones de configuracion', () => {
   describe('el apalancamiento nunca supera lo que el servidor acepta', () => {
-    // 18x y no 20x: `RiskService` rechaza con 403 si la distancia a liquidacion
-    // baja del 5 %, y esa distancia es `100/lev - 0,5`. A 19x son 4,76 %.
+    // `RiskService` rechaza con 403 si la liquidacion EXACTA del lado queda a
+    // menos del 5 %, con el mantenimiento de cada mercado (079/F-08): no hay un
+    // 18 fijo que valga para todos.
     for (const kind of ESTRATEGIAS) {
       for (const profile of PROFILES) {
         for (const mercado of MERCADOS) {
@@ -217,10 +285,12 @@ describe('recomendaciones de configuracion', () => {
               const lev = Number(config['leverage']);
 
               expect(lev).toBeGreaterThanOrEqual(1);
-              expect(lev).toBeLessThanOrEqual(MAX_SAFE_LEVERAGE);
+              expect(lev).toBeLessThanOrEqual(maxApalancamientoSeguro(mercado.spec, 'LONG'));
               expect(lev).toBeLessThanOrEqual(mercado.spec.maxLeverage);
               // La cuenta exacta que hace el servidor al crear el bot.
-              expect(100 / lev - 0.5).toBeGreaterThanOrEqual(5);
+              expect(distanciaLiquidacionPct(lev, mercado.spec, 'LONG')).toBeGreaterThanOrEqual(
+                5 - 1e-9,
+              );
             });
           }
         }

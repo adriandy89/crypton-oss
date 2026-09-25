@@ -16,8 +16,9 @@ import {
 } from '@crypton/shared';
 import { makeCoid } from '../client-order-id';
 import {
-  COMMON_FIELDS,
   buildPreview,
+  commonFieldsWith,
+  comunCon,
   entrySide,
   err,
   exitSide,
@@ -26,6 +27,7 @@ import {
   px,
   qy,
   toResult,
+  validarObjetivoRoi,
   validateCommon,
   warn,
   type RawLevel,
@@ -51,7 +53,8 @@ export interface TdcaConfig extends CommonBotConfig, TrailingConfig {
   /** Cuánto por debajo del medio hace falta estar para comprar. */
   marginBelowAveragePct?: string;
   /**
-   * Beneficio al que sale, sobre el precio medio real del venue.
+   * Beneficio al que sale, en % del MARGEN desde el precio medio real del venue
+   * (spec 080). A 1× es lo mismo que un % del precio.
    *
    * Con `trailingTakeProfit` encendido este campo NO cambia de unidad ni de
    * sitio: cambia de papel. Deja de ser «el precio al que salgo» y pasa a ser
@@ -123,10 +126,15 @@ const TDCA_FIELDS: readonly FieldMeta[] = [
     kind: 'percent',
     mutability: Mutability.HOT,
     labelKey: 'strategy.tdca.takeProfitPct',
+    // La ayuda existía y no se veía: el campo no la declaraba (079/F-18).
+    helpKey: 'strategy.tdca.takeProfitPctHelp',
     min: 0.05,
-    max: 100,
+    // % del MARGEN desde el spec 080; el tope de siempre, un 100 % del precio.
+    maxPrecioPct: 100,
+    roi: 'BENEFICIO',
     step: 0.05,
     required: true,
+    // A 1×, el apalancamiento de fábrica de TDCA, margen y precio coinciden.
     default: 1.5,
   },
   {
@@ -147,7 +155,9 @@ const META: StrategyMeta = {
   kind: StrategyKind.TDCA,
   labelKey: 'strategy.tdca.label',
   descriptionKey: 'strategy.tdca.description',
-  fields: [...COMMON_FIELDS, ...TDCA_FIELDS],
+  // El DCA nace a 1×: la ficha común dice 2× y la ayuda y el relleno de un
+  // campo vacío (`sinVacios`) leían ese 2 (strategies.spec, desincronizados).
+  fields: [...commonFieldsWith([comunCon('leverage', { default: 1 })]), ...TDCA_FIELDS],
 };
 
 export const tdca: Strategy<TdcaConfig> = {
@@ -183,10 +193,15 @@ export const tdca: Strategy<TdcaConfig> = {
     const maxBuys = Math.floor(cfg.maxBuysPerCycle ?? 0);
     if (maxBuys < 1) issues.push(err('maxBuysPerCycle', 'Debe permitir al menos 1 compra.'));
 
-    const tp = D(cfg.takeProfitPct ?? 0);
-    if (!tp.isFinite() || tp.lte(0)) {
-      issues.push(err('takeProfitPct', 'El take profit debe ser mayor que cero.'));
-    }
+    issues.push(
+      ...validarObjetivoRoi(
+        'takeProfitPct',
+        'El take profit',
+        cfg.takeProfitPct,
+        Number(cfg.leverage) || 1,
+        cfg.direction,
+      ),
+    );
 
     issues.push(...validarTrailing(cfg));
 
@@ -225,7 +240,7 @@ export const tdca: Strategy<TdcaConfig> = {
       issues.push(
         warn(
           'marginBelowAveragePct',
-          '«Solo si mejora el precio medio» está desactivado: el margen exigido no se usa.',
+          '«Solo si mejora el precio medio» está desactivado: la mejora mínima sobre la media no se usa.',
         ),
       );
     }
@@ -245,23 +260,47 @@ export const tdca: Strategy<TdcaConfig> = {
     const maxBuys = Math.max(1, Math.floor(cfg.maxBuysPerCycle ?? 1));
     const marginBelow = D(cfg.marginBelowAveragePct ?? 0);
 
-    // El preview proyecta el peor caso razonable: cada compra ocurre cuando el
-    // precio ha caído el margen exigido respecto de la media anterior. No es una
-    // predicción, es la cota que hace visible hasta dónde puede llegar el bot.
+    // El preview proyecta el peor caso razonable: cada compra ocurre en cuanto el
+    // precio mejora la MEDIA de lo ya comprado en la mejora mínima, que es la
+    // condición de `plan()`. Se proyectaba contra el precio de la compra
+    // anterior, más lejos que la media, y la escalera enseñada salía más
+    // profunda que la real (079/F-12). No es una predicción: es la cota que hace
+    // visible hasta dónde puede llegar el bot.
     const levels: RawLevel[] = [];
+    const sign = cfg.direction === 'SHORT' ? D(1) : D(-1);
+    // Los mismos dos topes que `plan()`, y manda el menor: al llegar deja de
+    // comprar, y la compra que no cabe entera se recorta a lo que queda. Sin
+    // ellos la vista previa enseñaba todas las compras aunque el bot se fuera a
+    // parar en el tope (encontrado al rehacer la guía del DCA con el 080).
+    const topes = [cfg.maxPositionNotional, cfg.maxNotionalCap]
+      .map((t) => (t ? D(t) : D(0)))
+      .filter((t) => t.gt(0));
+    const tope = topes.length > 0 ? Decimal.min(...topes) : null;
+    const minimo = D(market.minNotional ?? 0);
     let projected = ref;
+    let sumaNotional = D(0);
+    let sumaQty = D(0);
     for (let i = 0; i < maxBuys; i++) {
-      if (i > 0) {
-        const sign = cfg.direction === 'SHORT' ? D(1) : D(-1);
-        projected = projected.mul(D(1).plus(sign.mul(marginBelow).div(100)));
+      if (i > 0 && sumaQty.gt(0)) {
+        const media = sumaNotional.div(sumaQty);
+        projected = media.mul(D(1).plus(sign.mul(marginBelow).div(100)));
       }
+      // Lo abierto se mide a la marca, como en `plan()`: aquí, al precio de la compra.
+      const hueco = tope ? tope.minus(sumaQty.mul(projected)) : notional;
+      const notionalCompra = Decimal.min(notional, hueco);
+      if (!notionalCompra.gt(0)) break;
+      // Un recorte que no llega al mínimo del venue lo quita el motor antes de
+      // mandarlo (`order-gate`): no se enseña una compra que no va a salir.
+      if (notionalCompra.lt(notional) && notionalCompra.lt(minimo)) break;
+      const qtyCompra = projected.gt(0) ? notionalCompra.div(projected) : D(0);
+      sumaNotional = sumaNotional.plus(projected.mul(qtyCompra));
+      sumaQty = sumaQty.plus(qtyCompra);
       levels.push({
         index: i,
         kind: i === 0 ? LevelKind.BASE : LevelKind.SAFETY,
         side: entrySide(cfg.direction),
         price: projected,
-        qty: projected.gt(0) ? notional.div(projected) : D(0),
-        margin: amount,
+        qty: qtyCompra,
         isEntry: true,
       });
     }
@@ -273,7 +312,9 @@ export const tdca: Strategy<TdcaConfig> = {
       direction: cfg.direction,
       leverage: cfg.leverage,
       marginMode: cfg.marginMode,
-      takeProfitPct: cfg.takeProfitPct,
+      // Con el seguimiento encendido el objetivo es donde EMPIEZA a seguir (079/F-15).
+      objetivo: { roiPct: cfg.takeProfitPct, activacion: cfg.trailingTakeProfit === true },
+      stopLossRoiPct: cfg.stopLossPct,
       issues,
     });
   },
@@ -293,7 +334,13 @@ export const tdca: Strategy<TdcaConfig> = {
     // ── Salida: siempre viva mientras haya posición ──
     if (pos.gt(0) && ctx.position) {
       const salida = exitSide(cfg.direction);
-      const tp = takeProfitPrice(ctx.position.entryPrice, cfg.takeProfitPct, cfg.direction);
+      // Un % del MARGEN desde la media (spec 080).
+      const tp = takeProfitPrice(
+        ctx.position.entryPrice,
+        cfg.takeProfitPct,
+        cfg.leverage,
+        cfg.direction,
+      );
 
       if (cfg.trailingTakeProfit) {
         // Con el seguimiento encendido, `tp` deja de ser el precio de salida y
@@ -374,7 +421,7 @@ export const tdca: Strategy<TdcaConfig> = {
       );
       const improves = cfg.direction === 'SHORT' ? mark.gte(required) : mark.lte(required);
       if (!improves) {
-        blockers.push('el precio no mejora el medio en el margen exigido');
+        blockers.push('el precio no mejora la media en la mejora mínima exigida');
       }
     }
 

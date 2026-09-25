@@ -26,9 +26,13 @@
 import {
   D,
   Decimal,
+  HOLGURA_LIQUIDACION,
   LevelKind,
   StrategyKind,
+  distanciaLiquidacion,
   eficienciaKaufman,
+  ladoMasEstrecho,
+  maintenanceMarginRateOf,
   type BotContext,
   type CommonBotConfig,
   type DesiredOrder,
@@ -117,6 +121,9 @@ const TREND_FIELDS: readonly FieldMeta[] = [
     default: 1,
     group: 'core',
     risky: true,
+    // Del capital del bot: el formulario lo enseñaba como un número suelto
+    // (079/F-22).
+    unit: '%',
   },
   {
     key: 'atrPeriod',
@@ -229,6 +236,9 @@ const distanciaStop = (cfg: TrendFollowConfig, atrValor: Decimal): Decimal =>
  * emergencia, y por eso es uno solo.
  */
 const ATR_DE_RESERVA = '0.02';
+
+/** Una fracción (0,0535) como porcentaje con dos decimales (5.35). */
+const pct = (x: Decimal): string => x.mul(100).toFixed(2);
 
 /**
  * Cantidad por objetivo de volatilidad.
@@ -435,7 +445,10 @@ export const trendFollow: Strategy<TrendFollowConfig> = {
   },
 
   validate(config: TrendFollowConfig, market: MarketSpec): ValidationResult {
-    const issues: ValidationIssue[] = validateCommon(config, market);
+    // Su stop lo pone ella con el ATR: `stopLossPct` no se usa (y se avisa
+    // abajo si viene), así que no hay stop común que medir contra la
+    // liquidación (spec 080).
+    const issues: ValidationIssue[] = validateCommon(config, market, { stopPropio: true });
 
     if (!INTERVALOS.includes(config.candleInterval)) {
       issues.push(err('candleInterval', 'Resolución de vela no admitida.'));
@@ -472,6 +485,40 @@ export const trendFollow: Strategy<TrendFollowConfig> = {
       );
     }
 
+    // El stop por ATR frente a la liquidación (spec 080, 079/F-01). El ATR de
+    // verdad solo se conoce al entrar, y ahí `plan()` descarta la ruptura cuyo
+    // stop no saltaría. Aquí se avisa con el de la estimación, un 2 % del
+    // precio, y se dice a partir de qué volatilidad este apalancamiento ya no
+    // cabe. En cruzado la liquidación real queda más lejos: no se avisa, como
+    // con el stop común en cruzado cuando cabe.
+    const k = D(config.atrStopMultiplier ?? 0);
+    const lev = Number(config.leverage) || 1;
+    if (k.gt(0) && lev >= 1 && config.marginMode !== 'CROSS') {
+      const d = distanciaLiquidacion(
+        lev,
+        maintenanceMarginRateOf(market),
+        ladoMasEstrecho(config.direction),
+      );
+      const s = k.mul(D(ATR_DE_RESERVA));
+      if (d.gt(0) && s.mul(1 + HOLGURA_LIQUIDACION).gt(d)) {
+        issues.push(
+          warn(
+            'atrStopMultiplier',
+            // En Neutral manda el corto, que liquida antes: se dice, como en el
+            // aviso del apalancamiento.
+            `A ${lev}× la liquidación llega${config.direction === 'NEUTRAL' ? ' en corto' : ''} ` +
+              `con un ${pct(d)} % en contra, y el stop, a ` +
+              `${k.toFixed()} ATR, solo salta antes mientras el ATR sea menor que un ` +
+              `${pct(d.div(k))} % del precio. Con un ATR del 2 % quedaría a un ${pct(s)} %` +
+              (s.gte(d)
+                ? ', detrás de ella: el bot descartará esas rupturas.'
+                : ', a menos de medio stop de ella.') +
+              ' Baja el apalancamiento o el multiplicador del stop.',
+          ),
+        );
+      }
+    }
+
     if (D(config.riskPerTradePct ?? 0).gt(2)) {
       issues.push(
         warn(
@@ -503,7 +550,6 @@ export const trendFollow: Strategy<TrendFollowConfig> = {
       ? techoNocional(config, String(config.totalInvestment ?? 0)).div(precio)
       : D(0);
     const qty = deseada.gt(maxQty) ? maxQty : deseada;
-    const notional = qty.mul(precio);
     // Con NEUTRAL el preview enseña el lado largo: es una sola operación, no
     // dos a la vez, y el corto es su espejo exacto.
     const largo = config.direction !== 'SHORT';
@@ -515,7 +561,6 @@ export const trendFollow: Strategy<TrendFollowConfig> = {
         side: largo ? 'BUY' : 'SELL',
         price: precio,
         qty,
-        margin: D(config.leverage ?? 1).gt(0) ? notional.div(D(config.leverage ?? 1)) : notional,
         isEntry: true,
       },
     ];
@@ -527,13 +572,19 @@ export const trendFollow: Strategy<TrendFollowConfig> = {
       direction: largo ? 'LONG' : 'SHORT',
       leverage: config.leverage,
       marginMode: config.marginMode,
+      // Su stop es suyo, `k × ATR`, con el mismo ATR supuesto que el tamaño: la
+      // Revisión lo enseña como estimación (079/F-22).
+      stopPropio: { precio: largo ? precio.minus(riesgo) : precio.plus(riesgo), estimado: true },
       issues: [
         ...validation.issues,
         warn(
           null,
-          'El tamaño de arriba es una estimación con un ATR del 2 % del precio. El real lo ' +
-            'calculará el bot con el ATR de verdad del par: con un mercado más nervioso, la ' +
-            'posición será menor, y el riesgo en dinero el mismo.',
+          'El tamaño y el stop de arriba son una estimación con un ATR del 2 % del precio. Los ' +
+            'reales los calculará el bot con el ATR de verdad del par: con un mercado más ' +
+            'nervioso, la posición será menor y el stop más ancho, y el riesgo en dinero el mismo.' +
+            (config.direction === 'NEUTRAL'
+              ? ' Con NEUTRAL entra hacia el lado de la ruptura: el corto es el espejo del largo.'
+              : ''),
         ),
       ],
     });
@@ -608,6 +659,35 @@ export const trendFollow: Strategy<TrendFollowConfig> = {
       };
     }
 
+    // El stop por ATR tiene que saltar antes que la liquidación (spec 080,
+    // 079/F-01; encontrado al rehacer la guía de la tendencia). En aislado, uno
+    // que queda en ella o detrás no salta nunca: el venue liquida antes, con su
+    // penalización, y el «riesgo por operación» deja de ser el de la operación.
+    // No se entra: con la volatilidad de hoy, el apalancamiento de la
+    // configuración no cabe. En cruzado la liquidación real queda más lejos,
+    // como en la regla del stop común, y se entra.
+    const mark = D(ctx.ticker.mark);
+    const lev = Math.max(1, Number(cfg.leverage) || 1);
+    const distLiq = distanciaLiquidacion(
+      lev,
+      maintenanceMarginRateOf(ctx.market),
+      s.lado === 'BUY' ? 'LONG' : 'SHORT',
+    );
+    const distStop = mark.gt(0) ? riesgo.div(mark) : D(0);
+    const aislado = cfg.marginMode !== 'CROSS';
+    if (aislado && distStop.gte(distLiq)) {
+      return {
+        orders: [],
+        immediate: [],
+        note:
+          `Ruptura descartada: el stop, a ${D(cfg.atrStopMultiplier ?? 2.5).toFixed()} ATR, ` +
+          `quedaría a un ${pct(distStop)} %, detrás de la liquidación a ${lev}× ` +
+          `(${pct(distLiq)} %): no saltaría nunca. Baja el apalancamiento o el multiplicador ` +
+          'del stop.',
+      };
+    }
+    const cercaDeLiq = aislado && distStop.mul(1 + HOLGURA_LIQUIDACION).gt(distLiq);
+
     const precio = px(ctx.market, D(ctx.ticker.mark), s.lado);
     const deseada = cantidad(cfg, riesgo);
     const techo = techoNocional(cfg, ctx.availableBalance);
@@ -641,6 +721,9 @@ export const trendFollow: Strategy<TrendFollowConfig> = {
         `${s.eficiencia.toFixed(2)}. ATR ${s.atrValor.toFixed(ctx.market.priceDecimals)}.` +
         (recortada
           ? ' Tamaño recortado al capital disponible: se arriesga menos del porcentaje pedido.'
+          : '') +
+        (cercaDeLiq
+          ? ` El stop queda a menos de medio stop de la liquidación a ${lev}× (${pct(distLiq)} %).`
           : ''),
     };
   },

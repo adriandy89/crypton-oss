@@ -16,7 +16,9 @@ export const FIELD_LABELS: Record<string, string> = {
   'strategy.common.direction': 'Dirección',
   'strategy.common.leverage': 'Apalancamiento',
   'strategy.common.leverageHelp':
-    'Multiplica tanto el beneficio como la pérdida. Se fija en el exchange antes del primer ciclo.',
+    'Multiplica el beneficio y la pérdida, y acerca la liquidación. Se fija en el exchange antes ' +
+    'del primer ciclo y no se cambia con la posición abierta. El stop y los objetivos van en % de ' +
+    'tu margen: con más apalancamiento, el mismo % queda más cerca en precio.',
   'strategy.common.marginMode': 'Modo de margen',
   'strategy.common.totalInvestment': 'Capital asignado',
   'strategy.common.totalInvestmentHelp': 'Margen que este bot puede usar. No sale de tu cuenta.',
@@ -24,9 +26,17 @@ export const FIELD_LABELS: Record<string, string> = {
   'strategy.common.maxNotionalCapHelp':
     'Tope del valor de la posición. Martingala, GridMart y la rejilla clásica lo aplican al tender, ' +
     'cortando en el escalón o la línea que lo superaría; la rejilla neutral y el DCA lo aplican como ' +
-    'segundo tope junto al suyo; los market makers no lo leen.',
-  'strategy.common.stopLossPct': 'Stop loss (%)',
-  'strategy.common.maxDailyLossPct': 'Pérdida diaria máxima (%)',
+    'segundo tope junto al suyo; el seguimiento y la tendencia entran, como mucho, por este valor.',
+  'strategy.common.stopLossPct': 'Stop loss (sobre el margen)',
+  'strategy.common.stopLossPctHelp':
+    'Cuánto de tu margen puedes perder antes de que el bot cierre, como el SL por ROI de un ' +
+    'exchange: a 10×, un 20 % del margen es un 2 % del precio. Se mide desde tu precio medio y ' +
+    'tiene que saltar antes que la liquidación: debajo del campo ves su precio y lo que pierdes, y ' +
+    'si no cabe, el más ancho que sí.',
+  'strategy.common.maxDailyLossPct': 'Pérdida diaria máxima (sobre el capital)',
+  'strategy.common.maxDailyLossPctHelp':
+    'Lo que el bot puede perder en un día con lo ya cerrado, en % del capital asignado. Al pasarlo ' +
+    'se pausa y te avisa.',
   'strategy.common.cooldownMinutes': 'Espera entre ciclos (min)',
   'strategy.common.liquidationAction': 'Al acercarse la liquidación',
   'strategy.common.liquidationActionHelp':
@@ -62,7 +72,8 @@ export const FIELD_LABELS: Record<string, string> = {
     'Cuánto más dinero mueven los niveles lejanos al ancla frente a los cercanos. Con 1 pesan todos igual.',
   'strategy.neutral.maxExposure': 'Exposición máxima',
   'strategy.neutral.maxExposureHelp':
-    'Tope de la posición neta. Alcanzado, solo quedan vivas las órdenes que la reducen. Sin él, crece hasta agotar el margen.',
+    'Tope de la posición neta. Cada lado se tiende desde el precio hasta donde quepa, y alcanzado, solo ' +
+    'quedan vivas las órdenes que la reducen. Sin él, crece hasta agotar el margen.',
 
   // DCA temporizado
   'strategy.tdca.label': 'DCA temporizado',
@@ -73,27 +84,32 @@ export const FIELD_LABELS: Record<string, string> = {
   'strategy.tdca.buyOnlyIfImprovesAverage': 'Comprar solo si mejora la media',
   'strategy.tdca.buyOnlyIfImprovesAverageHelp':
     'Activado, solo compra por debajo de tu precio medio, así que tu media solo puede mejorar.',
-  'strategy.tdca.marginBelowAveragePct': 'Margen bajo la media (%)',
+  // «Margen» chocaba con el margen del apalancamiento (079/F-18).
+  'strategy.tdca.marginBelowAveragePct': 'Mejora mínima sobre la media (del precio)',
   'strategy.tdca.marginBelowAveragePctHelp':
-    'Cuánto tiene que estar el precio por debajo de tu media para que la compra cuente como mejora.',
+    'Cuánto tiene que mejorar el precio tu media para volver a comprar: estar por debajo en largo, ' +
+    'por encima en corto. Es un % del precio.',
   'strategy.tdca.maxBuysPerCycle': 'Compras máximas por ciclo',
   'strategy.tdca.maxBuysPerCycleHelp':
     'Importe por compra multiplicado por este número es todo el dinero que el bot puede llegar a comprometer.',
   'strategy.tdca.maxPositionNotional': 'Notional máximo de la posición',
   'strategy.tdca.maxPositionNotionalHelp':
     'Tope del valor de la posición. Alcanzado, deja de comprar aunque le quede cupo e intervalo cumplido.',
-  'strategy.tdca.takeProfitPct': 'Take profit (%)',
+  'strategy.tdca.takeProfitPct': 'Take profit (sobre el margen)',
   'strategy.tdca.takeProfitPctHelp':
-    'Beneficio sobre el precio medio al que se cierra la posición entera. Con «Seguir al máximo» ' +
-    'encendido deja de ser la salida y pasa a ser el punto en el que empieza el seguimiento.',
+    'Beneficio sobre tu margen al que se cierra la posición entera, medido desde el precio medio: a ' +
+    '3×, un 1,5 % del margen es un 0,5 % del precio. Con «Seguir al máximo» encendido deja de ser ' +
+    'la salida y pasa a ser el punto en el que empieza el seguimiento.',
   'strategy.tdca.trailingTakeProfit': 'Seguir al máximo (trailing)',
   'strategy.tdca.trailingTakeProfitHelp':
-    'El take profit deja de ser un precio fijo: al llegar a él, el bot empieza a seguir al máximo y ' +
-    'solo cierra cuando el precio retrocede lo que digas. Con 15 % y 1 %, lo mínimo que cobras es +13,85 %.',
-  'strategy.tdca.trailingCallbackPct': 'Retroceso para salir (%)',
+    'El take profit deja de ser un precio fijo: al llegar a él, el bot empieza a seguir al mejor ' +
+    'precio y solo cierra cuando retrocede lo que digas desde ahí. Lo mínimo que cobra te lo dice ' +
+    'la Revisión, en precio.',
+  'strategy.tdca.trailingCallbackPct': 'Retroceso para salir (del precio)',
   'strategy.tdca.trailingCallbackPctHelp':
-    'Cuánto tiene que caer desde el máximo para que cierre. Por debajo del 0,5 % te saca en el primer ' +
-    'respiro del par: muchas criptos se mueven un 1-3 % al día sin cambiar de tendencia.',
+    'Cuánto tiene que retroceder el precio desde el mejor punto —el máximo en largo, el mínimo en ' +
+    'corto— para que cierre. Por debajo del 0,5 % te saca en el primer respiro del par: muchas ' +
+    'criptos se mueven un 1-3 % al día sin cambiar de tendencia.',
   'strategy.tdca.trailingRepriceBps': 'Umbral para mover el disparador (bps)',
   'strategy.tdca.trailingRepriceBpsHelp':
     'Cuánto tiene que avanzar el disparador para recolocarlo en el exchange. Bajarlo lo hace más fino ' +
@@ -104,28 +120,32 @@ export const FIELD_LABELS: Record<string, string> = {
   'strategy.martingale.baseOrderType': 'Tipo de orden base',
   'strategy.martingale.numLimitBuys': 'Nº de órdenes de seguridad',
   'strategy.martingale.numLimitBuysHelp':
-    'Cuántas órdenes se cuelgan por debajo de la entrada base. Cada una que entra baja tu media y aumenta la posición.',
-  'strategy.martingale.initialSeparationPct': 'Separación inicial (%)',
+    'Cuántas órdenes se cuelgan en contra de la entrada base: por debajo en largo, por encima en ' +
+    'corto. Cada una que entra mejora tu media y aumenta la posición.',
+  'strategy.martingale.initialSeparationPct': 'Separación inicial (del precio)',
   'strategy.martingale.initialSeparationPctHelp':
-    'A qué distancia de la entrada base se cuelga la primera orden de seguridad.',
+    'A qué distancia de la entrada base se cuelga la primera orden de seguridad, en % del precio.',
   'strategy.martingale.stepScale': 'Escala de distancia',
   'strategy.martingale.stepScaleHelp':
     'Cuánto se aleja cada seguridad respecto de la anterior. Decide la profundidad total que cubre la escalera.',
   'strategy.martingale.volumeScale': 'Escala de volumen',
   'strategy.martingale.volumeScaleHelp':
     'Cuánto crece cada seguridad respecto de la anterior. Baja tu media más rápido, concentrando el capital en los últimos escalones.',
-  'strategy.martingale.takeProfitPct': 'Take profit (%)',
+  'strategy.martingale.takeProfitPct': 'Take profit (sobre el margen)',
   'strategy.martingale.takeProfitPctHelp':
-    'Beneficio sobre el precio medio al que se cierra la posición entera. Se recalcula con cada seguridad ejecutada.',
+    'Beneficio sobre tu margen al que se cierra la posición entera, medido desde el precio medio: a ' +
+    '2×, un 2 % del margen es un 1 % del precio. Se recalcula con cada seguridad ejecutada.',
   'strategy.martingale.tpMode': 'Modo de take profit',
   'strategy.martingale.trailingTakeProfit': 'Seguir al máximo (trailing)',
   'strategy.martingale.trailingTakeProfitHelp':
-    'El take profit deja de ser un precio fijo: al llegar a él, el bot empieza a seguir al máximo y ' +
-    'solo cierra cuando el precio retrocede lo que digas. Con 15 % y 1 %, lo mínimo que cobras es +13,85 %.',
-  'strategy.martingale.trailingCallbackPct': 'Retroceso para salir (%)',
+    'El take profit deja de ser un precio fijo: al llegar a él, el bot empieza a seguir al mejor ' +
+    'precio y solo cierra cuando retrocede lo que digas desde ahí. Lo mínimo que cobra te lo dice ' +
+    'la Revisión, en precio.',
+  'strategy.martingale.trailingCallbackPct': 'Retroceso para salir (del precio)',
   'strategy.martingale.trailingCallbackPctHelp':
-    'Cuánto tiene que caer desde el máximo para que cierre. Por debajo del 0,5 % te saca en el primer ' +
-    'respiro del par: muchas criptos se mueven un 1-3 % al día sin cambiar de tendencia.',
+    'Cuánto tiene que retroceder el precio desde el mejor punto —el máximo en largo, el mínimo en ' +
+    'corto— para que cierre. Por debajo del 0,5 % te saca en el primer respiro del par: muchas ' +
+    'criptos se mueven un 1-3 % al día sin cambiar de tendencia.',
   'strategy.martingale.trailingRepriceBps': 'Umbral para mover el disparador (bps)',
   'strategy.martingale.trailingRepriceBpsHelp':
     'Cuánto tiene que avanzar el disparador para recolocarlo en el exchange. Bajarlo lo hace más fino ' +
@@ -135,18 +155,20 @@ export const FIELD_LABELS: Record<string, string> = {
   'strategy.trailing.label': 'Seguimiento de beneficio',
   'strategy.trailing.activationMode': 'Cuándo entra',
   'strategy.trailing.activationModeHelp':
-    'A mercado abre en la primera revisión. Las otras dos esperan sin coste a que la marca cruce tu precio.',
+    '«Sin condición» abre a mercado en la primera revisión. Las otras dos esperan sin coste a que la marca cruce tu ' +
+    'precio; si al crearlo ya lo ha cruzado, entra en el acto.',
   'strategy.trailing.activationPrice': 'Precio de entrada',
   'strategy.trailing.activationPriceHelp':
     'El nivel que tiene que cruzar la marca para abrir. Es un disparador, no una orden colgada en el libro.',
-  'strategy.trailing.takeProfitPct': 'Beneficio al que empieza a seguir (%)',
+  'strategy.trailing.takeProfitPct': 'Beneficio al que empieza a seguir (sobre el margen)',
   'strategy.trailing.takeProfitPctHelp':
-    'No es el precio al que sale: es donde deja de mirar un precio fijo y empieza a seguir al máximo. ' +
-    'Ponlo por encima de lo que el par se mueve en un día normal.',
-  'strategy.trailing.trailingCallbackPct': 'Retroceso para salir (%)',
+    'No es el precio al que sale: es donde deja de mirar un precio fijo y empieza a seguir al mejor ' +
+    'precio. Va sobre tu margen: a 15×, un 30 % es un 2 % del precio. Que en precio quede por ' +
+    'encima de lo que el par se mueve en un día normal.',
+  'strategy.trailing.trailingCallbackPct': 'Retroceso para salir (del precio)',
   'strategy.trailing.trailingCallbackPctHelp':
-    'Cuánto tiene que caer desde el máximo para que cierre. Por debajo del 0,5 % te saca en el primer ' +
-    'respiro del par.',
+    'Cuánto tiene que retroceder el precio desde el mejor punto —el máximo en largo, el mínimo en ' +
+    'corto— para que cierre. Por debajo del 0,5 % te saca en el primer respiro del par.',
   'strategy.trailing.trailingRepriceBps': 'Umbral para mover el disparador (bps)',
   'strategy.trailing.trailingRepriceBpsHelp':
     'Cuánto tiene que avanzar el disparador para recolocarlo en el exchange. Súbelo en Lighter, donde ' +
@@ -160,16 +182,19 @@ export const FIELD_LABELS: Record<string, string> = {
   'strategy.gridmart.corePctSoldAtLevel1': '% del núcleo vendido en el nivel 1',
   'strategy.gridmart.corePctSoldAtLevel1Help':
     'Qué parte del núcleo se vende en la primera línea de la rejilla. Por el número de ventas, cuánto núcleo cubre.',
-  'strategy.gridmart.gridRebuyDiscountPct': 'Descuento de recompra (%)',
+  'strategy.gridmart.gridRebuyDiscountPct': 'Descuento de recompra (del precio)',
   'strategy.gridmart.gridRebuyDiscountPctHelp':
-    'Cuánto por debajo de una venta ejecutada se anota su recompra. Mantenlo por debajo de la separación de venta.',
+    'Cuánto mejor que una venta ejecutada se anota su recompra: por debajo en largo, por encima en ' +
+    'corto. Mantenlo por debajo de la separación de venta.',
   'strategy.gridmart.gridSellCount': 'Ventas de rejilla',
   'strategy.gridmart.gridSellDistanceMultiplier': 'Multiplicador de distancia de venta',
-  'strategy.gridmart.gridSellInitialSeparationPct': 'Separación inicial de venta (%)',
+  'strategy.gridmart.gridSellInitialSeparationPct': 'Separación inicial de venta (del precio)',
   'strategy.gridmart.gridSellQtyMultiplier': 'Multiplicador de cantidad de venta',
-  'strategy.gridmart.satelliteTpPct': 'Take profit satélite (%)',
+  'strategy.gridmart.satelliteTpPct': 'Take profit satélite (sobre el margen)',
   'strategy.gridmart.satelliteTpPctHelp':
-    'Beneficio al que se cierra todo lo que añadieron las seguridades. Es la salida rápida del bot.',
+    'Beneficio sobre el margen al que se cierra todo lo que añadieron las seguridades, medido desde ' +
+    'el precio medio: a 2×, un 1,2 % del margen es un 0,6 % del precio. Es la salida rápida del ' +
+    'bot; el núcleo sale por la rejilla de ventas.',
 
   // Market maker
   //
@@ -177,6 +202,9 @@ export const FIELD_LABELS: Record<string, string> = {
   // propio campo. Repetirlas daba «Distancia de compra (bps)» seguido de «bps».
   'strategy.mm.label': 'Market maker',
   'strategy.mm.description': 'Cotiza a los dos lados y cobra el diferencial.',
+  'strategy.mm.totalInvestmentHelp':
+    'El capital del bot: contra él se miden su resultado y su pérdida diaria. No dimensiona ninguna ' +
+    'orden: el tamaño lo pone el tamaño por orden y el tope, el valor máximo de posición.',
   'strategy.mm.buyDistanceBps': 'Distancia de compra',
   'strategy.mm.buyDistanceBpsHelp': 'A cuánto del precio medio se pone la compra.',
   'strategy.mm.sellDistanceBps': 'Distancia de venta',
@@ -192,7 +220,7 @@ export const FIELD_LABELS: Record<string, string> = {
   'strategy.trend.breakoutPeriod': 'Velas del canal de ruptura',
   'strategy.trend.atrPeriod': 'Velas del ATR',
   'strategy.trend.atrStopMultiplier': 'Stop, en ATR',
-  'strategy.trend.riskPerTradePct': 'Riesgo por operación',
+  'strategy.trend.riskPerTradePct': 'Riesgo por operación (sobre el capital)',
   'strategy.trend.entryEfficiency': 'Eficiencia mínima para entrar',
   'strategy.trend.stopRepriceBps': 'Movimiento mínimo del stop',
   'strategy.trend.direction': 'Lados que opera',
@@ -207,7 +235,8 @@ export const FIELD_LABELS: Record<string, string> = {
     'la vez: dónde va el stop y qué tamaño tiene la posición. 14 es el valor clásico.',
   'strategy.trend.atrStopMultiplierHelp':
     'A cuántos ATR se pone el stop. Más ATR es más espacio para respirar; el tamaño se ajusta para ' +
-    'que el riesgo en dinero sea el mismo. Nunca por debajo de 1,5.',
+    'que el riesgo en dinero sea el mismo. Nunca por debajo de 1,5. En margen aislado tiene que ' +
+    'quedar antes que la liquidación: si no, el bot deja pasar la ruptura.',
   'strategy.trend.riskPerTradePctHelp':
     'Qué porcentaje de tu capital pierdes si el stop salta. 1 % es lo estándar: con 2 %, cinco ' +
     'pérdidas seguidas son un 10 % del capital.',
@@ -302,10 +331,12 @@ export const FIELD_LABELS: Record<string, string> = {
     'de reducirlo. Se aplica al arrancar el bot solo en Aster (Unidireccional; Cobertura no se admite ' +
     'allí). En Hyperliquid y Lighter no existe: manda el modo de la cuenta.',
   'strategy.mm.direction': 'Dirección',
-  'strategy.mm.priceFloor': 'No operar por debajo de',
-  'strategy.mm.priceFloorHelp': 'Por debajo de este precio el bot solo reduce, no abre.',
-  'strategy.mm.priceCeiling': 'No operar por encima de',
-  'strategy.mm.priceCeilingHelp': 'Por encima de este precio el bot solo reduce, no abre.',
+  'strategy.mm.priceFloor': 'No abrir cortos por debajo de',
+  'strategy.mm.priceFloorHelp':
+    'Por debajo de este precio el bot no abre cortos nuevos: sigue comprando, y sigue vendiendo para reducir un largo.',
+  'strategy.mm.priceCeiling': 'No abrir largos por encima de',
+  'strategy.mm.priceCeilingHelp':
+    'Por encima de este precio el bot no abre largos nuevos: sigue vendiendo, y sigue comprando para cerrar un corto.',
 
   // Market maker V2
   'strategy.mmv2.label': 'Market maker V2',
@@ -372,7 +403,7 @@ export const FIELD_LABELS: Record<string, string> = {
   'strategy.mmv2.maxDynamicSpreadBps': 'Spread dinámico máximo',
   'strategy.mmv2.maxDynamicSpreadBpsHelp':
     'Techo del diferencial compuesto, aplicado después de los multiplicadores de nivel, comportamiento ' +
-    'y modo de riesgo: ninguna capa cotiza más ancha. Con 0 no hay techo (la app avisa).',
+    'y modo de riesgo: ninguna capa cotiza más ancha. Vacío, no hay techo (la app avisa).',
   'strategy.mmv2.useFullSizeUntilMax': 'Usar tamaño normal hasta el máximo',
   'strategy.mmv2.useFullSizeUntilMaxHelp':
     'Activado, la última capa se coloca entera o no se coloca; desactivado, se recorta al hueco.',
@@ -408,10 +439,12 @@ export const FIELD_LABELS: Record<string, string> = {
   'strategy.mmv2.sourceSymbolOverrideHelp':
     'Solo si el par no se llama igual en Binance. Por defecto se pide «<base>USDT» (BTCUSDT); ' +
     'escribe aquí el símbolo exacto si allí es otro, como «1000PEPEUSDT».',
-  'strategy.mmv2.priceFloor': 'Piso de precio',
-  'strategy.mmv2.priceFloorHelp': 'Por debajo de este precio el bot solo reduce, no abre.',
-  'strategy.mmv2.priceCeiling': 'Techo de precio',
-  'strategy.mmv2.priceCeilingHelp': 'Por encima de este precio el bot solo reduce, no abre.',
+  'strategy.mmv2.priceFloor': 'No abrir cortos por debajo de',
+  'strategy.mmv2.priceFloorHelp':
+    'Por debajo de este precio el bot no abre cortos nuevos: sigue comprando, y sigue vendiendo para reducir un largo.',
+  'strategy.mmv2.priceCeiling': 'No abrir largos por encima de',
+  'strategy.mmv2.priceCeilingHelp':
+    'Por encima de este precio el bot no abre largos nuevos: sigue vendiendo, y sigue comprando para cerrar un corto.',
   'strategy.mmv2.activationMode': 'Condición de activación',
   'strategy.mmv2.activationModeHelp':
     'El bot no cotiza hasta que el precio cruce el disparador. Una vez armado sigue cotizando mientras ' +
@@ -599,7 +632,7 @@ export const FIELD_LABELS: Record<string, string> = {
   'strategy.agentTrade.tp2Price': 'Segundo objetivo',
   'strategy.agentTrade.tp2PriceHelp':
     'Opcional. Si está, la posición sale en dos partes; si no, entera en el primero.',
-  'strategy.agentTrade.tp1Fraction': 'Parte en el primer objetivo (%)',
+  'strategy.agentTrade.tp1Fraction': 'Parte en el primer objetivo (de la posición)',
   'strategy.agentTrade.tp1FractionHelp':
     'Con dos objetivos, la parte de la posición que sale en el primero. El resto, en el segundo.',
   'strategy.agentTrade.breakevenAfterTp1': 'Stop a la entrada tras el primer objetivo',
@@ -610,7 +643,7 @@ export const FIELD_LABELS: Record<string, string> = {
   'strategy.agentTrade.trailAfterTp1Help':
     'Cobrado el primer objetivo, el stop sigue al mejor precio a la distancia de abajo, y nunca ' +
     'retrocede.',
-  'strategy.agentTrade.trailCallbackPct': 'Distancia del seguimiento (%)',
+  'strategy.agentTrade.trailCallbackPct': 'Distancia del seguimiento (del precio)',
   'strategy.agentTrade.trailCallbackPctHelp':
     'A cuánto del mejor precio va el stop que lo sigue. Más pequeña asegura más y salta antes.',
   'strategy.agentTrade.positionCap': 'Tope de posición',

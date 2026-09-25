@@ -51,7 +51,7 @@ público que usan los bots reales.
 | Comisiones | **0,02 % maker · 0,05 % taker**, descontadas del PnL realizado | Las del venue (y las del builder, si las hay) |
 | Stop-loss / take profit condicionales | Orden **en reposo** que se dispara con el precio de marca y se ejecuta al precio del disparador con deslizamiento (corregido en el spec 004; antes cerraba en el acto) | Igual, condicional nativa |
 | Orden que solo reduce (`reduceOnly`) | Se ejecuta **como mucho por el tamaño de la posición**. Si ya no hay nada que reducir, la límite o el stop se retiran sin ejecutarse y la de mercado se rechaza. Hasta el spec 057 (F-05) se ejecutaba entera: un stop y un objetivo tocados en la misma vela giraban la posición | Igual |
-| Liquidación | Comprobada con una tasa de mantenimiento plana del 0,5 % | Escala por tramos del venue |
+| Liquidación | Con la tasa de mantenimiento **de cada mercado** (1,25 % en BTC de Hyperliquid), la misma con la que la vista previa calcula la liquidación, pero sin la escala por tramos. Hasta el spec 080 era un 0,5 % plano para todos los pares, y en BTC la simulación liquidaba bastante más lejos de lo que la app había enseñado | Escala por tramos del venue |
 | Funding | **No existe** | Se cobra o paga periódicamente |
 | Margen retenido por órdenes en reposo | **No se descuenta** del saldo disponible | Sí |
 | Límites de cuota y de órdenes activas | No aplican (`NO_BUDGET`) | Aplican (Lighter: 60 peticiones/min, 30 órdenes por mercado) |
@@ -71,7 +71,8 @@ real.
 
 ### Qué mirar en un bot simulado
 
-1. La **vista previa** al crearlo: peor caso, margen, liquidación estimada, y que ningún nivel salga en rojo.
+1. La **vista previa** al crearlo: por lado, el margen y dónde quedan el objetivo, el stop y la
+   liquidación estimada; que ningún nivel salga en rojo y que la escalera no se corte antes de tiempo.
 2. La **bitácora** las primeras horas: `BOT_STARTED`, las órdenes que se tienden (pestaña Órdenes), los
    `FILL`, y que no haya `ORDER_UNVIABLE` ni `INSUFFICIENT_FUNDS`. Un `ORDER_REJECTED` «Post-only rechazada»
    justo tras un `FILL` es normal (ver [comandos, guardas y eventos](./comandos-guardas-y-eventos.md#órdenes-con-problema)).
@@ -139,7 +140,9 @@ Los nueve avisos comunes que acompañan **siempre** al resultado, y que hay que 
 2. **Sin profundidad de libro**: una orden en reposo se ejecuta entera al tocarla, sin parciales ni cola.
    En eso un market maker sale mejor aquí que en el venue — pero **ojo con la dirección del sesgo**: la
    falta de flujo pesa mucho más, y esa va en contra. Ver el recuadro de abajo.
-3. **Margen de mantenimiento plano** (≈ 0,5 %): una posición grande revienta **antes** en el venue.
+3. **Margen de mantenimiento del primer tramo del mercado** (el de la vista previa: 1,25 % en BTC de
+   Hyperliquid), sin la escala por tramos: una posición grande revienta **antes** en el venue. Hasta el
+   spec 080 era un 0,5 % plano para todos los pares.
 4. **Los precios son de la fuente** (Binance), no del venue: mismo activo, otro diferencial, otras mechas.
 5. **Sin funding**: en posiciones de días puede ser el mayor componente del resultado.
 6. **La ficha del mercado es la de hoy** (tick, paso, mínimo), no la del periodo reproducido.

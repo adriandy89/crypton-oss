@@ -72,13 +72,21 @@ export const MARKET_MAKER_GUIDE: StrategyGuide<MarketMakerConfig> = {
         { label: 'Distancia compra / venta', value: '15 bps / 35 bps' },
         { label: 'Precio de referencia', value: '136' },
         { label: 'Sesgo por inventario', value: '1,5' },
-        { label: 'No operar por debajo de', value: '120' },
+        { label: 'No abrir largos por encima de', value: '150' },
       ],
       outcome:
-        'Con la compra a 15 bps y la venta a 35 el bot compra más fácil de lo que vende: acumula SOL a propósito. El precio de referencia de 136 hace que cotice alrededor de ese ancla y no del mercado, así que si SOL sube por encima el bot deja de comprar solo. Por debajo de 120 no abre posición nueva, solo reduce.',
+        'Con la compra a 15 bps y la venta a 35 el bot compra más fácil de lo que vende: acumula SOL a propósito. El precio de referencia de 136 hace que cotice alrededor de ese ancla y no del mercado, así que si SOL sube por encima el bot deja de comprar solo. Y por encima de 150 no abre largos nuevos: no acumula SOL caro, aunque sigue vendiendo lo que ya tiene.',
     },
   ],
   options: {
+    // El capital común aquí no dimensiona nada: la ficha compartida diría lo
+    // contrario (079/F-19).
+    totalInvestment: {
+      what: 'El capital del bot: contra él se miden su resultado y su pérdida diaria.',
+      affects:
+        'No dimensiona ninguna orden. El tamaño de cada cotización lo pone el tamaño por compra/venta, y el inventario máximo, el valor máximo de posición.',
+      tip: 'Ponlo en lo que estás dispuesto a comprometer: es la base del ROI y de la pérdida diaria máxima.',
+    },
     // ── Microestructura (spec 039) ──────────────────────────────────
     //
     // Todo esto nace APAGADO. Son los mandos que dejan al bot mirar algo más
@@ -275,15 +283,20 @@ export const MARKET_MAKER_GUIDE: StrategyGuide<MarketMakerConfig> = {
         'En valor nocional el bot ajusta la cantidad al precio de cada momento; en cantidad, el valor en USDC de cada orden varía con el precio.',
       tip: 'Valor nocional es lo más fácil de comparar contra el tope de posición.',
     },
+    // Decían «solo reduce, no abre» y que el suelo apagaba las compras: es al
+    // revés. Cada uno bloquea solo el lado que abriría posición en su sentido
+    // (`priceBand`), y el otro sigue vivo.
     priceFloor: {
-      what: 'Por debajo de este precio el bot solo reduce, no abre.',
+      what: 'Por debajo de este precio el bot no abre cortos nuevos.',
       affects:
-        'Desactiva el lado comprador cuando el precio cae por debajo del nivel a partir del cual ya no quieres seguir acumulando.',
+        'Deja de vender lo que no tiene cuando el precio ya está bajo. Sigue comprando, y sigue vendiendo para reducir un largo: bajo el suelo el bot aún puede acumular.',
+      tip: 'Para dejar de comprar caro, lo que sirve es el techo.',
     },
     priceCeiling: {
-      what: 'Por encima de este precio el bot solo reduce, no abre.',
+      what: 'Por encima de este precio el bot no abre largos nuevos.',
       affects:
-        'Desactiva el lado vendedor cuando el precio sube por encima de donde ya no quieres seguir vendiendo.',
+        'Deja de comprar cuando el precio ya está alto. Sigue vendiendo, y sigue comprando para cerrar un corto: sobre el techo el bot aún puede quedarse corto.',
+      tip: 'Es el freno para no acumular inventario caro en un bot con sesgo largo.',
     },
   },
 };

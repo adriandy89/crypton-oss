@@ -441,4 +441,17 @@ describe('runReplay — stop-loss', () => {
     expect(stops[0].isTaker).toBe(true);
     expect(r.fills.some((f) => f.liquidation)).toBe(false);
   });
+
+  it('el stop es un % del margen, como en el motor: a 3× un 30 % dispara a un 10 % del precio', async () => {
+    // Spec 080. La rejilla compra en varios niveles y el stop se mide desde la
+    // media de lo comprado (≈ 91): salta en torno a 82. Con la semántica de
+    // antes, un 30 % del PRECIO quedaba en ≈ 64 y la caída hasta 70 no lo
+    // tocaba nunca.
+    const r = await run(rampa(60, 100, 70), { stopLossPct: '30', leverage: 3 });
+    const compras = r.fills.filter((f) => f.side === 'BUY');
+    const stops = r.fills.filter((f) => f.levelKind === 'STOP_LOSS');
+    expect(stops.length).toBeGreaterThan(0);
+    expect(Number(stops[0].price)).toBeLessThanOrEqual(Number(compras[0].price) * 0.9 + 0.1);
+    expect(Number(stops[0].price)).toBeGreaterThan(70);
+  });
 });

@@ -28,7 +28,6 @@ import {
 import { makeCoid, parseCoid } from '../client-order-id';
 import {
   buildPreview,
-  commonFieldsWith,
   comunCon,
   err,
   invalidPreview,
@@ -48,6 +47,7 @@ import {
   activationGate,
   anotarFill,
   BPS,
+  camposComunesMm,
   centroDeMercado,
   avisoSinSesgoInventario,
   centroSesgado,
@@ -63,6 +63,7 @@ import {
   hayLibro,
   inventoryOf,
   limitBreach,
+  nocionalMaximoMm,
   orderAges,
   priceBand,
   profileOf,
@@ -133,9 +134,10 @@ export interface MarketMakerV2Config extends CommonBotConfig, IntelConfig {
    * de regimen sobre velas de 1 h y 15 min discrimina +0,156 pp con el mismo
    * tiempo activo.
    *
-   * - `OFF`: nada. Es el defecto y no cambia ningun bot que ya corra.
+   * - `OFF`: nada. Es como se lee un bot guardado sin la clave.
    * - `EVITA_TENDENCIA`: en tendencia deja de AÑADIR del lado que acumula
    *   contra ella. El lado que reduce sigue vivo, como con las bandas de precio.
+   *   Es el valor de fabrica (`defaults()` y el de la ficha del campo).
    * - `SOLO_RANGO`: solo añade en RANGO o COMPRESION. Mucho mas restrictivo:
    *   medido, deja al bot añadiendo el 9 % del tiempo.
    */
@@ -758,7 +760,7 @@ const META: StrategyMeta = {
   kind: StrategyKind.MARKET_MAKER_V2,
   labelKey: 'strategy.mmv2.label',
   descriptionKey: 'strategy.mmv2.description',
-  fields: [...commonFieldsWith([V2_DIRECTION, ...V2_COMUNES]), ...V2_FIELDS, ...INTEL_FIELDS],
+  fields: [...camposComunesMm([V2_DIRECTION, ...V2_COMUNES]), ...V2_FIELDS, ...INTEL_FIELDS],
 };
 
 /**
@@ -950,6 +952,8 @@ export const marketMakerV2: Strategy<MarketMakerV2Config> = {
   kind: StrategyKind.MARKET_MAKER_V2,
   meta: META,
   reusesOrderSlots: true,
+  // Su tope de posición, no capital × apalancamiento (spec 080, 079/F-03).
+  nocionalMaximo: nocionalMaximoMm,
 
   /**
    * Velas SOLO si la puerta de regimen esta encendida (spec 071).
@@ -1047,7 +1051,8 @@ export const marketMakerV2: Strategy<MarketMakerV2Config> = {
   },
 
   validate(cfg: MarketMakerV2Config, market: MarketSpec): ValidationResult {
-    const issues: ValidationIssue[] = validateCommon(cfg, market);
+    // Su tope es `maxBotPositionValue`: el común no lo lee (079/F-27).
+    const issues: ValidationIssue[] = validateCommon(cfg, market, { topeDeExposicion: false });
 
     const size = D(cfg.orderSizePerSide ?? 0);
     if (!size.isFinite() || size.lte(0)) {
@@ -1241,7 +1246,6 @@ export const marketMakerV2: Strategy<MarketMakerV2Config> = {
     const distWeights = geometricWeights(layers, cfg.layerDistanceMultiplier ?? 1);
     // Con el perfil (×0,7 en Conservador), que es lo que se manda (001/F-57).
     const size = D(cfg.orderSizePerSide ?? 0).mul(profile.size);
-    const lev = D(cfg.leverage);
 
     // Sin histórico no hay volatilidad que medir: el preview enseña el
     // diferencial en reposo, que es el suelo de lo que el bot va a cotizar.
@@ -1257,53 +1261,74 @@ export const marketMakerV2: Strategy<MarketMakerV2Config> = {
     const levels: RawLevel[] = [];
     const dir = cfg.direction ?? 'NEUTRAL';
 
+    // Lo mismo que `plan()` con el inventario a cero: cada capa se recorta al
+    // hueco que queda hasta el tope de posición (`fitToRoom`), y un precio ya
+    // colocado no se repite. Sin esto la lista enseñaba capas enteras que el
+    // bot recorta o no coloca (079/F-14).
+    const maxPos = D(cfg.maxBotPositionValue ?? 0);
+    const minNotional = D(market.minNotional ?? 0);
+    const proyectado = { BUY: D(0), SELL: D(0) };
+    const colocados = { BUY: new Set<string>(), SELL: new Set<string>() };
+    // Lo que pedirían todas las capas de cada lado sin tope, para el aviso.
+    const pedido = { BUY: D(0), SELL: D(0) };
+    const capa = (l: number, lado: 'BUY' | 'SELL', bps: Decimal, unit: Decimal): void => {
+      const price = mid.mul(D(1).plus((lado === 'BUY' ? bps.neg() : bps).div(BPS)));
+      if (!price.gt(0)) return;
+      const wanted = sizeToQty(cfg.sizingMode, unit, price);
+      pedido[lado] = pedido[lado].plus(wanted.notional);
+      const room = maxPos.gt(0) ? maxPos.minus(proyectado[lado]) : wanted.notional;
+      const notional = fitToRoom(cfg, wanted.notional, room, false, minNotional);
+      const qty = notional.eq(wanted.notional) ? wanted.qty : notional.div(price);
+      const precio = px(market, price, lado);
+      if (!qty.gt(0) || colocados[lado].has(precio)) return;
+      colocados[lado].add(precio);
+      proyectado[lado] = proyectado[lado].plus(notional);
+      levels.push({
+        index: lado === 'BUY' ? l : layers + l,
+        kind: lado === 'BUY' ? LevelKind.QUOTE_BID : LevelKind.QUOTE_ASK,
+        side: lado,
+        price,
+        qty,
+        isEntry: true,
+      });
+    };
+
     for (let l = 0; l < layers; l++) {
       const unit = size.mul(sizeWeights[l]);
-
       if (dir === 'NEUTRAL' || dir === 'LONG') {
-        const bps = conTecho(buy, buy.bps.mul(distWeights[l]).mul(profile.distance));
-        const price = mid.mul(D(1).minus(bps.div(BPS)));
-        const { qty, notional } = sizeToQty(cfg.sizingMode, unit, price);
-        levels.push({
-          index: l,
-          kind: LevelKind.QUOTE_BID,
-          side: 'BUY',
-          price,
-          qty,
-          margin: lev.gt(0) ? notional.div(lev) : notional,
-          isEntry: true,
-        });
+        capa(l, 'BUY', conTecho(buy, buy.bps.mul(distWeights[l]).mul(profile.distance)), unit);
       }
-
       if (dir === 'NEUTRAL' || dir === 'SHORT') {
-        const bps = conTecho(sell, sell.bps.mul(distWeights[l]).mul(profile.distance));
-        const price = mid.mul(D(1).plus(bps.div(BPS)));
-        const { qty, notional } = sizeToQty(cfg.sizingMode, unit, price);
-        levels.push({
-          index: layers + l,
-          kind: LevelKind.QUOTE_ASK,
-          side: 'SELL',
-          price,
-          qty,
-          margin: lev.gt(0) ? notional.div(lev) : notional,
-          isEntry: true,
-        });
+        capa(l, 'SELL', conTecho(sell, sell.bps.mul(distWeights[l]).mul(profile.distance)), unit);
       }
+    }
+
+    // El aviso que la V1 da desde el spec 031 y a la V2 le faltaba: con todas
+    // las capas llenas de un lado se pasa del tope, así que las más profundas se
+    // recortan o no llegan a colocarse (079/F-14).
+    const avisos: ValidationIssue[] = [];
+    const porLado = Decimal.max(pedido.BUY, pedido.SELL);
+    if (maxPos.gt(0) && porLado.gt(maxPos)) {
+      avisos.push(
+        warn(
+          'layers',
+          `Las capas de un lado suman ${porLado.toFixed(2)}, por encima del tope de posición ` +
+            `(${maxPos.toFixed(2)}): las más profundas se recortan o no llegan a colocarse.`,
+        ),
+      );
     }
 
     return buildPreview({
       levels,
       market,
       refPrice,
-      direction: cfg.direction === 'SHORT' ? 'SHORT' : 'LONG',
+      // Con dirección NEUTRAL el bot cotiza los DOS lados: cada uno se describe
+      // aparte, con su posición y su liquidación (spec 037 R-6, 079/F-11).
+      direction: dir,
       leverage: cfg.leverage,
       marginMode: cfg.marginMode,
-      // Con dirección NEUTRAL el bot cotiza los DOS lados, así que mezclar
-      // compras y ventas en una sola media ponderada da una entrada media y una
-      // liquidación que no existen. Es lo mismo que `neutral-grid` resolvió en
-      // 001/F-14 y que aquí faltaba (spec 037 R-6).
-      neutral: cfg.direction === 'NEUTRAL',
-      issues: validation.issues,
+      stopLossRoiPct: cfg.stopLossPct,
+      issues: [...validation.issues, ...avisos],
     });
   },
 

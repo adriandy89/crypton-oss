@@ -17,7 +17,7 @@ difieren):
 | **Paso** (`step_size`) | Salto mínimo de **cantidad** | En DOGE, kPEPE y 1000PEPE el paso es **1 moneda entera**: 15 USDT son 162 DOGE, no 162,9 |
 | **Notional mínimo** (`min_notional`) | Valor mínimo de una orden en USDC/USDT | Cada orden suelta tiene que superarlo |
 | **Cantidad mínima** (`min_qty`) | Mínimo en la moneda | En Lighter SOL es 0,1 SOL: a 138 USDC son 13,8 USDC, por encima del notional mínimo |
-| **Apalancamiento máximo** (`max_leverage`) | Tope del venue para ese par | La app rechaza por encima (y la API por debajo del 5 % de distancia a liquidación) |
+| **Apalancamiento máximo** (`max_leverage`) | Tope del venue para ese par | La app y la API rechazan por encima, y también lo que deje la liquidación a menos del 5 % en su lado. Con él se calcula además el margen de mantenimiento cuando la ficha no lo trae (Lighter sí lo trae): la mitad del margen inicial a ese máximo, la regla de Hyperliquid (BTC a 40× → 1,25 %) |
 | **Activo** (`active`) | Si el mercado opera | Un mercado inactivo bloquea la creación y el arranque |
 
 Muestra fija de fichas (24-08-2026, mainnet salvo indicación; la ficha real puede cambiar y el motor lo
@@ -38,8 +38,11 @@ avisa con `MARKET_SPEC_CHANGED`):
 | Aster 1000PEPEUSDT | 0,0000001 | **1** | 5 | 1 | 50× |
 
 Regla de la casa: **≥ 20 USDC por orden**, el doble del mínimo, para que el redondeo al paso no la deje
-por debajo. Y el apalancamiento máximo del par **no es una recomendación**: 50× en Aster liquida con un
-1,5 % de movimiento (la API rechaza todo lo que quede a menos del 5 %: en la práctica, 18×).
+por debajo. Y el apalancamiento máximo del par **no es una recomendación**: 50× en Aster BTCUSDT
+(mantenimiento 1 %) liquida con un 1 % de movimiento en contra. La app y la API rechazan todo lo que
+deje la liquidación a menos del 5 %, medido por lado con la fórmula exacta: en la práctica, 16× en los
+dos lados en Aster, y 16× en largo y 15× en corto en BTC de Hyperliquid
+([la regla](./riesgo-y-liquidacion.md#4-el-semáforo-y-la-regla-del-5-)).
 
 ---
 

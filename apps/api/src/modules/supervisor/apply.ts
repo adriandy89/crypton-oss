@@ -1,8 +1,12 @@
 import {
   D,
   Decimal,
+  distanciaLiquidacion,
   isFiniteNum,
+  ladoMasEstrecho,
+  maintenanceMarginRateOf,
   Mutability,
+  stopMaximoRoi,
   type BotConfig,
   type FieldMeta,
   type MarketSpec,
@@ -15,7 +19,7 @@ import {
   type Strategy,
 } from '@crypton/strategy-core';
 import { buildConfig, shiftBand, type Band, type BuildContext, type Knobs } from '../advisor/build';
-import { enforceCouplings, MAX_SAFE_LEVERAGE } from '../advisor/sanitize';
+import { enforceCouplings, maxApalancamientoSeguro } from '../advisor/sanitize';
 
 /**
  * De lo que dice el modelo a una configuracion que se le puede aplicar a un bot
@@ -583,10 +587,13 @@ export const CAMPOS_DE_RIESGO: Readonly<Record<string, Readonly<Record<string, C
  * `diferencial` movia el de verdad (spec 052, F-01).
  */
 export const BLOQUEADOS_CON_POSICION: Readonly<Record<string, readonly string[]>> = {
-  MARKET_MAKER: ['stopLossPct'],
-  MARKET_MAKER_V2: ['stopLossPct'],
-  TREND_FOLLOW: ['stopLossPct', 'atrStopMultiplier'],
-  TRAILING_PROFIT: ['stopLossPct', 'takeProfitPct', 'trailingCallbackPct'],
+  // El apalancamiento, en todas desde el spec 080 (P-3): con los % de resultado
+  // sobre el margen, cambiarlo con la posicion abierta movería en silencio el
+  // stop y el objetivo de lo que ya esta abierto, y acerca la liquidacion.
+  MARKET_MAKER: ['stopLossPct', 'leverage'],
+  MARKET_MAKER_V2: ['stopLossPct', 'leverage'],
+  TREND_FOLLOW: ['stopLossPct', 'atrStopMultiplier', 'leverage'],
+  TRAILING_PROFIT: ['stopLossPct', 'takeProfitPct', 'trailingCallbackPct', 'leverage'],
 };
 
 /**
@@ -745,9 +752,16 @@ export function decidirCambio(input: EntradaDeCambio): CambioPropuesto | MotivoD
   // 2. El generador determinista, DOS VECES: con las perillas de antes y con las
   //    de despues. El capital sale del bot vivo, nunca del modelo. Lo que cambia
   //    entre las dos es lo que el desplazamiento significa.
+  //    Los % sobre el MARGEN (spec 080), los dos con el apalancamiento del BOT:
+  //    así su diferencia es solo lo que cambió el % de PRECIO que pide la
+  //    perilla, y mover el apalancamiento deja el resultado sobre el margen como
+  //    estaba (D-4). Cada uno con el suyo, la diferencia mezclaba los dos
+  //    cambios y el ruido del redondeo.
   const ctxCapital = {
     ...ctx,
     totalInvestment: Number(vigente.totalInvestment ?? ctx.totalInvestment),
+    apalancamientoDeResultados:
+      num((vigente as unknown as Record<string, unknown>)['leverage']) ?? undefined,
   };
   const antes = buildConfig(strategy.kind, input.knobs, ctxCapital);
   const despues = buildConfig(strategy.kind, knobs, ctxCapital);
@@ -783,6 +797,11 @@ export function decidirCambio(input: EntradaDeCambio): CambioPropuesto | MotivoD
   // 7. El stop loss solo se ESTRECHA. Ensancharlo o apagarlo es exactamente lo
   //    que nadie quiere que haga un proceso automatico de madrugada.
   config = conStopQueSoloSeEstrecha(config, vigente);
+
+  // 7b. Y nunca detras de la liquidacion: el stop es un % del margen (spec 080),
+  //     y con el apalancamiento que sale de aqui un stop que era valido puede
+  //     quedar detras de ella. Se estrecha al mas ancho valido.
+  config = conStopDelanteDeLaLiquidacion(config, market);
 
   // 8. Con posicion abierta, ni mas riesgo ni nada que pueda cerrarla.
   const guarda = guardaDePosicion(strategy.kind, vigente, config, posicion);
@@ -904,7 +923,7 @@ const num = (v: unknown): number | null => {
  * El apalancamiento sube como mucho un punto por revision; bajar es libre.
  *
  * Los topes absolutos ya los impone `enforceCouplings` (el menor de
- * `MAX_SAFE_LEVERAGE`, el del venue y el del usuario). Lo que anade esto es una
+ * `maxApalancamientoSeguro`, el del venue y el del usuario). Lo que anade esto es una
  * cota al SALTO: sin ella, dos revisiones seguidas con la banda al alza llevan un
  * bot de 2x a 10x sin que nadie haya mirado, y cada punto de apalancamiento
  * acerca la liquidacion de una posicion que ya existe.
@@ -919,7 +938,11 @@ export function conTopeDeApalancamiento(
   const pedido = num(config['leverage']) ?? actual;
   if (pedido <= actual) return config;
 
-  const topes = [actual + 1, MAX_SAFE_LEVERAGE, market.maxLeverage];
+  const topes = [
+    actual + 1,
+    maxApalancamientoSeguro(market, (vigente as unknown as Record<string, unknown>)['direction']),
+    market.maxLeverage,
+  ];
   if (maxLeverageUsuario != null) topes.push(maxLeverageUsuario);
   return { ...config, leverage: Math.max(1, Math.floor(Math.min(pedido, ...topes))) };
 }
@@ -947,6 +970,39 @@ export function conStopQueSoloSeEstrecha(
   const pedido = num(config['stopLossPct']);
   if (pedido !== null && pedido <= actual) return config;
   return { ...config, stopLossPct: (vigente as unknown as Record<string, unknown>)['stopLossPct'] };
+}
+
+/**
+ * El stop, nunca detras de la liquidacion (spec 080, 079/F-01).
+ *
+ * Solo en AISLADO y solo cuando el stop queda en la liquidacion o detras —lo
+ * que `validate()` rechaza—: entonces se estrecha al mas ancho que deja medio
+ * stop de holgura (`stopMaximoRoi`). Un stop que el dueño dejo en la zona del
+ * aviso, por delante de la liquidacion, no se toca: estrecharlo sin que nadie lo
+ * pida tambien seria decidir por el. En cruzado la liquidacion real queda mas
+ * lejos y la validacion solo avisa.
+ */
+export function conStopDelanteDeLaLiquidacion(
+  config: Record<string, unknown>,
+  market: MarketSpec,
+): Record<string, unknown> {
+  const stop = num(config['stopLossPct']);
+  if (stop === null || stop <= 0 || config['marginMode'] === 'CROSS') return config;
+  const lev = num(config['leverage']) ?? 1;
+  const direction = config['direction'];
+  const lado = ladoMasEstrecho(
+    direction === 'LONG' || direction === 'SHORT' ? direction : 'NEUTRAL',
+  );
+  const mmr = maintenanceMarginRateOf(market);
+  const d = distanciaLiquidacion(lev, mmr, lado);
+  const s = D(stop).div(lev).div(100);
+  if (!d.gt(0) || s.lt(d)) return config;
+  const maximo = stopMaximoRoi(lev, mmr, lado);
+  if (!maximo.gt(0)) return config;
+  return {
+    ...config,
+    stopLossPct: typeof config['stopLossPct'] === 'string' ? maximo.toFixed() : maximo.toNumber(),
+  };
 }
 
 /** Algun campo cambiado redibuja la escalera o la reticula. */

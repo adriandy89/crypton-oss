@@ -9,7 +9,7 @@ export const NEUTRAL_GRID_GUIDE: StrategyGuide<NeutralGridConfig> = {
     'Un par que oscila alrededor de un precio de referencia claro y al que no quieres apostar ni al alza ni a la baja. A diferencia de la rejilla clásica, aquí el bot opera desde el primer momento a los dos lados, no solo comprando.',
   howItWorks: [
     'Eliges un precio ancla y un rango a su alrededor. El ancla es el centro: el punto donde el bot considera que tu posición debería ser cero.',
-    'Reparte los niveles por todo el rango y coloca compras en los que están por debajo del precio actual y ventas en los que están por encima.',
+    'Reparte los niveles por todo el rango y coloca compras en los que están por debajo del precio actual y ventas en los que están por encima. Con tope de exposición, cada lado se tiende desde el precio hacia fuera hasta donde quepa.',
     'El capital no se reparte a partes iguales: los niveles más lejanos al ancla pesan más, para que las entradas fuertes ocurran en los extremos.',
     'Cada vez que una compra se ejecuta, tu posición se vuelve más larga; cada venta, más corta. En el centro del rango la posición neta vuelve a rondar cero.',
     'Una línea tendida sigue viva hasta que el precio la cruza; la línea cruzada se queda sin orden hasta que el precio se aleja medio escalón, y vuelve con el lado que toque. Así no se recompra encima de lo que acaba de ejecutarse ni se recoloca nada en cada movimiento mínimo.',
@@ -40,7 +40,7 @@ export const NEUTRAL_GRID_GUIDE: StrategyGuide<NeutralGridConfig> = {
         { label: 'Exposición máxima', value: '700 USDC' },
       ],
       outcome:
-        'Con ETH en 2.503 la posición arranca prácticamente en cero: hay compras colgadas hasta 2.200 y ventas hasta 2.800. Cada vuelta del precio al ancla cierra ciclos por los dos lados. Si ETH se va a 2.200 el bot habra acumulado un largo, pero el tope de 700 USDC corta las compras antes de comprometer los 1.600 USDC que permitiria el apalancamiento.',
+        'Con ETH en 2.503 la posición arranca en cero y el tope de 700 USDC da a cada lado su presupuesto: al arrancar hay diez compras colgadas, hasta 2.270, y diez ventas, hasta 2.771; las cuatro líneas de los extremos se quedan sin orden. Cada vuelta del precio al ancla cierra ciclos por los dos lados. Si ETH baja hasta 2.200 el bot acumula un largo de once compras, hasta 2.247, y ahí para: el tope lo corta antes de que ese lado llegue a los 865 USDC que suman sus líneas, y la Revisión lo enseña cortado en el mismo sitio. Las compras y las ventas no se suman: nunca son la misma posición, y la Revisión enseña cada lado aparte.',
     },
     {
       title: 'BTC con el tope de exposición como freno principal',
@@ -56,7 +56,7 @@ export const NEUTRAL_GRID_GUIDE: StrategyGuide<NeutralGridConfig> = {
         { label: 'Exposición máxima', value: '500 USDC' },
       ],
       outcome:
-        'El tope de 500 USDC es la mitad del capital: el bot puede cotizar en las veinte líneas, pero en cuanto la posición neta llega a 500 USDC en cualquier dirección solo deja vivas las órdenes que la reducen. Es la forma de tener una rejilla ancha sin que una ruptura la convierta en una posición direccional grande.',
+        'El tope de 500 USDC es la mitad del capital, y cada lado se tiende desde el precio hacia fuera hasta donde quepa: al arrancar, cinco compras y cinco ventas alrededor de 78.910, y las diez líneas de los extremos se quedan sin orden. Si BTC cae, el largo se queda en cinco compras; si sube, el corto se queda en cuatro, porque un corto vale más según sube el precio y la quinta venta deja de caber. Las órdenes que reducen la posición siguen siempre vivas. Es la forma de tener una rejilla ancha sin que una ruptura la convierta en una posición direccional grande.',
     },
     {
       title: 'SOL cargando los extremos',
@@ -73,7 +73,7 @@ export const NEUTRAL_GRID_GUIDE: StrategyGuide<NeutralGridConfig> = {
         { label: 'Exposición máxima', value: '600 USDC' },
       ],
       outcome:
-        'Con multiplicador 1,5 las líneas pegadas al ancla mueven poco dinero (23 USDC en 140) y las de los extremos mucho (263 USDC en 115, 175 en 165): el bot apenas se mueve mientras SOL ronde los 138, y carga de verdad si se va a 115 o a 165. Es útil cuando esperas ruido en el centro y quieres reservar la munición para los extremos. Con más niveles o más multiplicador las líneas del centro caen por debajo del mínimo del par y la app rechaza el bot.',
+        'Con multiplicador 1,5 las líneas pegadas al ancla mueven poco dinero (23 USDC en 140) y las de los extremos mucho (263 USDC en 115, 175 en 165): el bot apenas se mueve mientras SOL ronde los 138, y carga fuerte hacia los extremos. Es útil cuando esperas ruido en el centro y quieres reservar la munición para los extremos. Pero el tope de 600 USDC es menor que los 719,59 que suma el lado largo: la línea de 115, la de 263 USDC, se queda sin orden, y lo más abajo que compra es 118,84; arriba cabe todo, hasta 165. Con el tope en 720 también se tiende la de 115. Con más niveles o más multiplicador las líneas del centro caen por debajo del mínimo del par y la app rechaza el bot.',
     },
   ],
   options: {
@@ -111,21 +111,21 @@ export const NEUTRAL_GRID_GUIDE: StrategyGuide<NeutralGridConfig> = {
       tip: 'Entre 1 y 1,5 para empezar. Por encima de 2, casi todo el capital vive en las dos o tres líneas de cada extremo.',
     },
     maxExposure: {
-      what: 'Tope de la posición NETA del bot, en USDC, mirando los dos lados. Es el freno propio de esta estrategia.',
+      what: 'Tope de la posición NETA del bot, en USDC. Es el freno propio de esta estrategia.',
       affects:
-        'Alcanzado el tope, el bot deja vivas únicamente las órdenes que REDUCEN la posición: sigue cerrando, pero no vuelve a cargar en la misma dirección.',
-      tip: 'Ponlo siempre. Sin el, la app te avisa por una razón concreta: en una ruptura la posición neta crece hasta agotar el margen.',
+        'Cada lado tiene su presupuesto: se tienden las líneas de la más cercana al precio hacia fuera mientras la posición, al precio de ahora, más esas órdenes quepan en el tope. Las órdenes que REDUCEN la posición siguen siempre vivas. La Revisión lo aplica igual y corta cada lado en la primera línea que ya no cabe.',
+      tip: 'Ponlo siempre: sin él, en una ruptura la posición neta crece hasta agotar el margen. Si es menor que lo que suman las líneas de un lado, la app te avisa de que ese lado no se tenderá entero; si no deja tender ni la línea más cercana al ancla, no deja crear el bot.',
     },
     maxNotionalCap: {
-      what: 'Tope genérico de notional que comparten varias estrategias.',
+      what: 'Tope del valor de la posición que comparten varias estrategias. Aquí tiene el mismo sentido que Exposición máxima.',
       affects:
-        'En la rejilla neutral el freno que manda es Exposición máxima, que es el que el motor consulta al planificar. Este campo queda como límite adicional y no sustituye a aquel.',
-      tip: 'Configura Exposición máxima; deja este vacio salvo que quieras un segundo techo aún más bajo.',
+        'Manda el menor de los dos: el plan, la Revisión y la validación usan ese. Con este solo, sin Exposición máxima, la retícula ya tiene freno y la app no avisa de que falte.',
+      tip: 'Configura Exposición máxima y deja este vacío, salvo que quieras un segundo techo aún más bajo.',
     },
     direction: {
-      what: 'Hacia donde se inclina la retícula. Hoy el motor no lo lee al planificar: en neutral, largo o corto la retícula es la misma, compras bajo el ancla y ventas encima.',
+      what: 'Hacia donde se inclinaría la retícula. El motor no lo lee: en neutral, largo o corto la retícula es la misma, compras bajo el ancla y ventas encima.',
       affects:
-        'No sesga ninguna orden ni cambia la vista previa, que enseña las dos liquidaciones; la app avisa si lo cambias. Neutral es lo que le da sentido a esta estrategia.',
+        'No sesga ninguna orden ni cambia la Revisión, que enseña los dos lados, ni la validación, que mide la liquidación siempre contra el corto; la app avisa si lo cambias. Neutral es lo que le da sentido a esta estrategia.',
       tip: 'Déjalo en Neutral. No se puede cambiar después.',
     },
   },

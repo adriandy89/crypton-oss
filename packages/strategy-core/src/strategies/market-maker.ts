@@ -22,7 +22,6 @@ import {
 import { makeCoid, parseCoid } from '../client-order-id';
 import {
   buildPreview,
-  commonFieldsWith,
   comunCon,
   err,
   invalidPreview,
@@ -38,6 +37,7 @@ import type { Strategy } from '../types';
 import {
   BPS,
   anotarFill,
+  camposComunesMm,
   bookSpreadBps,
   centroDeMercado,
   avisoSinSesgoInventario,
@@ -55,6 +55,7 @@ import {
   precioEstable,
   inventoryOf,
   limitBreach,
+  nocionalMaximoMm,
   orderAges,
   priceBand,
   profileOf,
@@ -480,12 +481,14 @@ const META: StrategyMeta = {
   kind: StrategyKind.MARKET_MAKER,
   labelKey: 'strategy.mm.label',
   descriptionKey: 'strategy.mm.description',
-  fields: [...commonFieldsWith([MM_DIRECTION, ...MM_COMUNES]), ...MM_FIELDS, ...INTEL_FIELDS],
+  fields: [...camposComunesMm([MM_DIRECTION, ...MM_COMUNES]), ...MM_FIELDS, ...INTEL_FIELDS],
 };
 
 export const marketMaker: Strategy<MarketMakerConfig> = {
   kind: StrategyKind.MARKET_MAKER,
   meta: META,
+  // Su tope de posición, no capital × apalancamiento (spec 080, 079/F-03).
+  nocionalMaximo: nocionalMaximoMm,
   // Cada capa reutiliza su id en cada recotización; el propio plan decide
   // cuándo cotizar. Sin esto, una capa moría tras su primera ejecución.
   reusesOrderSlots: true,
@@ -525,7 +528,8 @@ export const marketMaker: Strategy<MarketMakerConfig> = {
   },
 
   validate(cfg: MarketMakerConfig, market: MarketSpec): ValidationResult {
-    const issues = validateCommon(cfg, market);
+    // Su tope es `maxBotPositionValue`: el común no lo lee (079/F-27).
+    const issues = validateCommon(cfg, market, { topeDeExposicion: false });
 
     const size = D(cfg.orderSizePerSide ?? 0);
     if (!size.isFinite() || size.lte(0)) {
@@ -720,42 +724,74 @@ export const marketMaker: Strategy<MarketMakerConfig> = {
     // vista previa enseñaba 12 USDC por capa donde el bot mandaba 8,40, por
     // debajo del mínimo del par, y el bot no cotizaba nada (001/F-57).
     const size = D(cfg.orderSizePerSide ?? 0).mul(profile.size);
-    const lev = D(cfg.leverage);
 
     const levels: RawLevel[] = [];
     const quoteBoth = (cfg.direction ?? 'NEUTRAL') === 'NEUTRAL';
+
+    // Lo mismo que `plan()` con el inventario a cero: el suelo de distancia,
+    // los topes que dejan capas fuera y el precio repetido que no se coloca dos
+    // veces. Sin ellos, con el perfil agresivo, 10/8 bps se enseñaban como 7 y
+    // el bot cotizaba a 8, y capas que el tope no deja tender salían en la
+    // lista (079/F-14).
+    const minBps = D(cfg.minAllowedDistanceBps ?? 1);
+    const maxPos = D(cfg.maxBotPositionValue ?? 0);
+    const topeLado = (raw: string | null | undefined): Decimal => {
+      const v = raw ? D(raw) : D(0);
+      return v.gt(0) ? v : maxPos;
+    };
+    const longCap = topeLado(cfg.maxLongPosition);
+    const shortCap = topeLado(cfg.maxShortPosition);
+    let proyectadoLargo = D(0);
+    let proyectadoCorto = D(0);
+    const colocados = { BUY: new Set<string>(), SELL: new Set<string>() };
 
     for (let l = 0; l < layers; l++) {
       const unit = size.mul(sizeWeights[l]);
 
       if (quoteBoth || cfg.direction === 'LONG') {
-        const bps = D(cfg.buyDistanceBps).mul(distWeights[l]).mul(profile.distance);
+        const bps = Decimal.max(
+          minBps,
+          D(cfg.buyDistanceBps).mul(distWeights[l]).mul(profile.distance),
+        );
         const price = mid.mul(D(1).minus(bps.div(BPS)));
         const { qty, notional } = sizeToQty(cfg.sizingMode, unit, price);
-        levels.push({
-          index: l,
-          kind: LevelKind.QUOTE_BID,
-          side: 'BUY',
-          price,
-          qty,
-          margin: lev.gt(0) ? notional.div(lev) : notional,
-          isEntry: true,
-        });
+        const precio = px(market, price, 'BUY');
+        const cabe = proyectadoLargo.plus(notional).lte(longCap);
+        if (price.gt(0) && qty.gt(0) && cabe && !colocados.BUY.has(precio)) {
+          colocados.BUY.add(precio);
+          proyectadoLargo = proyectadoLargo.plus(notional);
+          levels.push({
+            index: l,
+            kind: LevelKind.QUOTE_BID,
+            side: 'BUY',
+            price,
+            qty,
+            isEntry: true,
+          });
+        }
       }
 
       if (quoteBoth || cfg.direction === 'SHORT') {
-        const bps = D(cfg.sellDistanceBps).mul(distWeights[l]).mul(profile.distance);
+        const bps = Decimal.max(
+          minBps,
+          D(cfg.sellDistanceBps).mul(distWeights[l]).mul(profile.distance),
+        );
         const price = mid.mul(D(1).plus(bps.div(BPS)));
         const { qty, notional } = sizeToQty(cfg.sizingMode, unit, price);
-        levels.push({
-          index: layers + l,
-          kind: LevelKind.QUOTE_ASK,
-          side: 'SELL',
-          price,
-          qty,
-          margin: lev.gt(0) ? notional.div(lev) : notional,
-          isEntry: true,
-        });
+        const precio = px(market, price, 'SELL');
+        const cabe = proyectadoCorto.plus(notional).lte(shortCap);
+        if (price.gt(0) && qty.gt(0) && cabe && !colocados.SELL.has(precio)) {
+          colocados.SELL.add(precio);
+          proyectadoCorto = proyectadoCorto.plus(notional);
+          levels.push({
+            index: layers + l,
+            kind: LevelKind.QUOTE_ASK,
+            side: 'SELL',
+            price,
+            qty,
+            isEntry: true,
+          });
+        }
       }
     }
 
@@ -763,14 +799,12 @@ export const marketMaker: Strategy<MarketMakerConfig> = {
       levels,
       market,
       refPrice,
-      direction: cfg.direction === 'SHORT' ? 'SHORT' : 'LONG',
+      // Con dirección NEUTRAL el bot cotiza los DOS lados: cada uno se describe
+      // aparte, con su posición y su liquidación (spec 037 R-6, 079/F-11).
+      direction: cfg.direction ?? 'NEUTRAL',
       leverage: cfg.leverage,
       marginMode: cfg.marginMode,
-      // Con dirección NEUTRAL el bot cotiza los DOS lados, así que mezclar
-      // compras y ventas en una sola media ponderada da una entrada media y una
-      // liquidación que no existen. Es lo mismo que `neutral-grid` resolvió en
-      // 001/F-14 y que aquí faltaba (spec 037 R-6).
-      neutral: cfg.direction === 'NEUTRAL',
+      stopLossRoiPct: cfg.stopLossPct,
       issues: [...validation.issues, ...avisosDeTopeEnMoneda(cfg, mid)],
     });
   },

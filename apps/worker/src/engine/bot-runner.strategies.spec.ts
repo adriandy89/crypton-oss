@@ -918,7 +918,6 @@ describe('GridMart en el simulador', () => {
       stepScale: '2',
       volumeScale: '2',
       totalInvestment: '700',
-      takeProfitPct: '1',
       satelliteTpPct: '0.5',
       gridSellCount: 2,
       gridSellInitialSeparationPct: '1',

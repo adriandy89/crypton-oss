@@ -47,7 +47,7 @@ const CONFIG_BASE = {
   sizingMode: 'QUOTE',
 };
 
-function build(filledLevelIndexes: number[]) {
+function build(filledLevelIndexes: number[], posicion: string | null = null) {
   const bot = {
     id: BOT_ID,
     user_id: USER_ID,
@@ -79,6 +79,10 @@ function build(filledLevelIndexes: number[]) {
       findFirst: jest.fn().mockResolvedValue({ filled_level_indexes: filledLevelIndexes }),
     },
     botEvent: { create: jest.fn((a: unknown) => a) },
+    // La última foto del worker: la que dice si hay posición (spec 080, P-3).
+    botSnapshot: {
+      findFirst: jest.fn().mockResolvedValue(posicion === null ? null : { position_qty: posicion }),
+    },
     exchangeAccount: {
       findUnique: jest.fn().mockResolvedValue({ testnet: false, paper: false }),
     },
@@ -245,5 +249,52 @@ describe('BotsService.updateConfig — la version que se leyo (spec 052, F-06)',
       expectedVersion: 1,
     });
     expect(db.botConfigRevision.create).not.toHaveBeenCalled();
+  });
+});
+
+describe('BotsService.updateConfig — el apalancamiento con la posición abierta (spec 080, P-3)', () => {
+  /**
+   * El stop y los objetivos son un % del MARGEN: con la posición abierta,
+   * cambiar el apalancamiento los desplazaría en silencio, igual que la
+   * liquidación de lo ya abierto. Se mira la última foto del worker.
+   */
+  it('con posición se rechaza, y no se escribe nada', async () => {
+    const { service, db } = build([], '0.5');
+    const error = await service
+      .updateConfig(USER_ID, BOT_ID, revision({ leverage: 2 }))
+      .catch((e: ConflictException) => e);
+
+    expect(error).toBeInstanceOf(ConflictException);
+    expect((error as ConflictException).getResponse()).toMatchObject({
+      reason: 'LEVERAGE_WITH_POSITION',
+    });
+    expect(db.botConfigRevision.create).not.toHaveBeenCalled();
+    expect(db.bot.updateMany).not.toHaveBeenCalled();
+  });
+
+  it('en corto también: la cantidad viene con signo', async () => {
+    const { service } = build([], '-0.5');
+    await expect(
+      service.updateConfig(USER_ID, BOT_ID, revision({ leverage: 2 })),
+    ).rejects.toBeInstanceOf(ConflictException);
+  });
+
+  it('plano, se aplica', async () => {
+    const { service } = build([], '0');
+    const r = await service.updateConfig(USER_ID, BOT_ID, revision({ leverage: 2 }));
+    expect(r.applied).toBe(true);
+  });
+
+  it('sin foto del worker no hay posición que proteger', async () => {
+    const { service } = build([], null);
+    const r = await service.updateConfig(USER_ID, BOT_ID, revision({ leverage: 2 }));
+    expect(r.applied).toBe(true);
+  });
+
+  it('sin tocar el apalancamiento, la posición no importa', async () => {
+    const { service, db } = build([], '0.5');
+    const r = await service.updateConfig(USER_ID, BOT_ID, revision({ cooldownMinutes: 5 }));
+    expect(r.applied).toBe(true);
+    expect(db.botSnapshot.findFirst).not.toHaveBeenCalled();
   });
 });

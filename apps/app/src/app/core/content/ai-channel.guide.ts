@@ -10,7 +10,7 @@ export const AI_CHANNEL_GUIDE: StrategyGuide<AiChannelConfig> = {
   howItWorks: [
     'Cada cinco minutos, al cerrar la vela, mira tres gráficos: 1 h para saber si el mercado está en rango, 15 min para dibujar el canal y 5 min para ver el toque del borde.',
     'Un canal solo cuenta si pasa todas sus pruebas: toques en los dos bordes y alternados, el precio dentro casi siempre, una anchura que paga las comisiones y un precio que vuelve a la media deprisa. Sale con una nota de A a C.',
-    'Cuando el precio toca un borde y lo rechaza —mecha, RSI extremo, divergencia, volumen tranquilo—, el rebote queda listo. Por defecto hacen falta dos confirmaciones.',
+    'Cuando el precio toca un borde y lo rechaza —mecha, RSI extremo, divergencia, volumen tranquilo—, el rebote queda listo. Por defecto basta una confirmación: pedir dos filtra sin distinguir las buenas de las malas.',
     'El motor calcula cada operación posible: tres stops (ajustado, normal y amplio), dos objetivos (la media y cerca del borde opuesto), tres bandas de apalancamiento, el tamaño, el R neto y dónde quedaría la liquidación.',
     'La IA elige entre esas opciones sin poner un solo número. En modo reglas elige un juez fijo según el perfil. Sin una elección válida no se abre nada.',
     'La entrada es una orden límite inmediata con precio tope: si el libro se ha ido, no se llena y no pasa nada. El apalancamiento se fija justo antes, y solo con la posición plana.',

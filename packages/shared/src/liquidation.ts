@@ -1,47 +1,54 @@
-import type { Direction, MarginMode } from './enums';
+import type { Direction, MarginMode, PositionSide } from './enums';
 import type { NivelApalancamiento } from './ia-canal';
 import { D, Decimal, type Numeric } from './money';
 
 /**
- * Tasa de margen de mantenimiento por defecto cuando el venue no la expone.
- * 0,5 % es lo habitual en los tramos bajos de los perps que soportamos; los
- * tramos altos son peores, así que esta estimación es OPTIMISTA. Se etiqueta
- * como estimación en la UI justamente por eso: nunca se presenta como el precio
- * de liquidación real del venue.
+ * Tasa de margen de mantenimiento cuando el mercado no la declara NI se conoce
+ * su apalancamiento máximo. Es el último recurso de `maintenanceMarginRateOf`:
+ * 0,5 % es lo habitual en los tramos bajos de los perps que soportamos, y los
+ * tramos altos son peores, así que por sí sola es OPTIMISTA.
  */
 export const DEFAULT_MAINTENANCE_MARGIN_RATE = 0.005;
 
 /**
- * Liquidación aproximada de una posición aislada.
+ * El lado cuya liquidación manda para una dirección configurada.
  *
- *   LONG : liq ≈ entry × (1 − 1/apalancamiento + mmr)
- *   SHORT: liq ≈ entry × (1 + 1/apalancamiento − mmr)
- *
- * Sirve para dimensionar el riesgo antes de crear el bot y para la alerta de
- * cercanía. El precio que manda siempre es el que devuelve el venue en la
- * posición abierta; este solo cubre el caso "aún no hay posición".
+ * NEUTRAL puede acabar en cualquiera de los dos, y el corto es siempre el más
+ * estrecho —`(1/L − mmr)/(1 + mmr)` frente a `(1/L − mmr)/(1 − mmr)`—, así que
+ * una regla que tenga que valer para los dos se mide contra él.
  */
-export function estimateLiquidationPrice(
-  averageEntry: Numeric,
-  leverage: number,
-  direction: Direction,
-  maintenanceMarginRate: number = DEFAULT_MAINTENANCE_MARGIN_RATE,
-): Decimal | null {
-  if (leverage <= 0) return null;
-  const entry = D(averageEntry);
-  if (!entry.isFinite() || entry.lte(0)) return null;
-  const inv = D(1).div(leverage);
-  const mmr = D(maintenanceMarginRate);
-  const factor = direction === 'SHORT' ? D(1).plus(inv).minus(mmr) : D(1).minus(inv).plus(mmr);
-  const liq = entry.mul(factor);
-  return liq.gt(0) ? liq : null;
+export function ladoMasEstrecho(direction: Direction): PositionSide {
+  return direction === 'LONG' ? 'LONG' : 'SHORT';
 }
 
-/** Cuánto puede caer (o subir) el precio antes de liquidar, en %. Siempre ≥ 0. */
+/** Cuánto le falta a una posición VIVA para liquidarse, desde el precio de ahora, en %. Siempre ≥ 0. */
 export function liquidationDistancePct(currentPrice: Numeric, liquidationPrice: Numeric): Decimal {
   const cur = D(currentPrice);
   if (cur.lte(0)) return D(0);
   return D(liquidationPrice).minus(cur).div(cur).mul(100).abs();
+}
+
+/**
+ * Cuánto puede moverse el precio desde el de referencia, EN CONTRA, antes de la
+ * liquidación más cercana de una previsualización, en % (spec 080): un largo
+ * mira hacia abajo y un corto hacia arriba, cada uno con su posición llena
+ * hasta donde llega el recorrido del peor caso. Lleva signo: uno negativo sería
+ * una liquidación del lado del beneficio, que la fórmula exacta no da. null si
+ * ningún lado se liquida (un largo a 1×).
+ *
+ * Sustituye al «aguanta un movimiento de» que medía con valor absoluto y no
+ * decía de qué lado quedaba la liquidación (079/F-07).
+ */
+export function distanciaDesdeHoyALiquidacion(
+  sides: readonly { direction: PositionSide; liquidation: { fromRefPct: string } | null }[],
+): string | null {
+  let menor: Decimal | null = null;
+  for (const s of sides) {
+    if (!s.liquidation) continue;
+    const d = D(s.liquidation.fromRefPct).mul(s.direction === 'LONG' ? -1 : 1);
+    if (menor === null || d.lt(menor)) menor = d;
+  }
+  return menor ? menor.toFixed(2) : null;
 }
 
 /**
@@ -80,14 +87,23 @@ export function maintenanceMarginRateOf(market: {
 }
 
 /**
- * Apalancamiento máximo (entero) con el que la liquidación estimada queda a
- * `minDistancePct` o más del precio: `1/lev − mmr ≥ d` → `lev ≤ 1/(d + mmr)`.
+ * Apalancamiento máximo (entero) con el que la liquidación queda a
+ * `minDistancePct` o más de la entrada, con la fórmula EXACTA del lado:
+ *
+ *   `(1/L − m)/(1 ∓ m) ≥ d`  →  `L ≤ 1 / (m + d·(1 ∓ m))`
+ *
+ * (`−` en el largo, `+` en el corto). Antes era la lineal `1/(d + m)`, que en
+ * el corto se pasaba de uno: BTC a 16× dejaba la liquidación a un 4,94 %, por
+ * debajo del mínimo que la regla decía garantizar (spec 079, F-07).
  */
-export function maxLeverageWithinDistance(
+export function maxApalancamientoConDistancia(
   mmr: number,
+  lado: PositionSide,
   minDistancePct: number = MIN_LIQUIDATION_DISTANCE_PCT,
 ): number {
-  return Math.max(1, Math.floor(1 / (minDistancePct / 100 + mmr) + 1e-9));
+  const d = minDistancePct / 100;
+  const denominador = mmr + d * (lado === 'SHORT' ? 1 + mmr : 1 - mmr);
+  return Math.max(1, Math.floor(1 / denominador + 1e-9));
 }
 
 /** Lo mínimo de una posición para saber qué caja la respalda. */
@@ -162,9 +178,9 @@ export function collateralBacking(
 /**
  * Liquidación de una posición, con su modo de margen tenido en cuenta.
  *
- * Es lo que hay que llamar cuando se conoce la cuenta entera;
- * `estimateLiquidationPrice` a secas sirve para el caso «aún no hay posición»,
- * donde no hay cuenta que mirar.
+ * Es lo que hay que llamar cuando se conoce la cuenta entera; `precioLiquidacion`
+ * a secas sirve para el caso «aún no hay posición», donde no hay cuenta que
+ * mirar.
  */
 export function liquidationOfPosition(
   target: CollateralPosition,
@@ -180,34 +196,40 @@ export function liquidationOfPosition(
   if (caja.lte(0) || notional.lte(0)) return null;
 
   // El apalancamiento EFECTIVO: el notional entre la caja que lo sostiene. Con
-  // caja de sobra sale por debajo de 1 y la fórmula devuelve un precio negativo,
-  // que `estimateLiquidationPrice` ya traduce a null — «esto no se liquida».
-  return estimateLiquidationPrice(
+  // caja de sobra un largo sale por debajo de 1 y la fórmula da un precio
+  // negativo, que `precioLiquidacion` traduce a null — «esto no se liquida».
+  return precioLiquidacion(
     target.entryPrice,
     notional.div(caja).toNumber(),
-    qty.gt(0) ? 'LONG' : 'SHORT',
     maintenanceMarginRate,
+    qty.gt(0) ? 'LONG' : 'SHORT',
   );
 }
 
-// ── La regla por stop del canal con IA (spec 058) ──────────────────────────
-
 /**
- * Precio de liquidación EXACTO de una posición aislada, sin comisiones.
+ * Precio de liquidación EXACTO de una posición aislada, sin comisiones. Es la
+ * única fórmula de liquidación del proyecto.
  *
  * La equidad a precio `P` es `margen + qty·(P − E)`, y el venue liquida cuando
  * baja del mantenimiento `mmr·qty·P`. Despejando:
  * - LARGO: `P = E·(1 − 1/L) / (1 − mmr)`
  * - CORTO: `P = E·(1 + 1/L) / (1 + mmr)`
  *
- * `estimateLiquidationPrice` es la aproximación lineal de lo mismo, y en el
- * corto queda algo optimista. El canal, que opera a 25×, usa esta.
+ * Es la de Hyperliquid despejada —«liq_price = price − side · margin_available /
+ * position_size / (1 − l · side)», con `margin_available = margen − mmr·qty·E`—
+ * y la de Lighter, que liquida cuando el valor de la cuenta baja de
+ * `Σ S·mark·M` (spec 079, referencias oficiales). En Aster, con la tasa del
+ * tramo y sin su «importe de mantenimiento», queda del lado prudente.
+ *
+ * Hasta el spec 080 convivía con una aproximación lineal
+ * (`E·(1 ∓ 1/L ± mmr)`) que en el corto salía optimista: la previsualización
+ * enseñaba una liquidación y las IA calculaban otra (079/F-07).
  */
-export function precioLiquidacionAislada(
+export function precioLiquidacion(
   entrada: Numeric,
   apalancamiento: number,
   mantenimiento: number,
-  lado: 'LONG' | 'SHORT',
+  lado: PositionSide,
 ): Decimal | null {
   if (!(apalancamiento > 0)) return null;
   const e = D(entrada);
@@ -229,16 +251,71 @@ export function precioLiquidacionAislada(
  *
  * La del corto es siempre la más estrecha de las dos.
  */
-export function distanciaLiquidacionAislada(
+export function distanciaLiquidacion(
   apalancamiento: number,
   mantenimiento: number,
-  lado: 'LONG' | 'SHORT',
+  lado: PositionSide,
 ): Decimal {
   if (!(apalancamiento > 0)) return D(0);
   const m = D(mantenimiento);
   const num = D(1).div(apalancamiento).minus(m);
   return num.div(lado === 'SHORT' ? D(1).plus(m) : D(1).minus(m));
 }
+
+/**
+ * Lo que se ha perdido del margen al llegar a la liquidación, en % (positivo):
+ * la distancia exacta por el apalancamiento. A 15× en corto en BTC, un 80,2 %;
+ * el resto es el mantenimiento, que el venue se queda al liquidar.
+ */
+export function perdidaEnLiquidacionPct(
+  apalancamiento: number,
+  mantenimiento: number,
+  lado: PositionSide,
+): Decimal {
+  return distanciaLiquidacion(apalancamiento, mantenimiento, lado).mul(apalancamiento).mul(100);
+}
+
+// ── El stop frente a la liquidación (spec 080) ────────────────────────────
+
+/**
+ * La liquidación tiene que quedar al menos a MEDIO STOP detrás del stop.
+ *
+ * Es la regla de la casa desde el canal con IA (spec 058) y los agentes
+ * (spec 074): un stop es una orden condicional que dispara a mercado, y con la
+ * liquidación pegada detrás un deslizamiento o una mecha lo dejan sin tiempo de
+ * salir. Desde el spec 080 la mide también el stop común de todas las
+ * estrategias, que hasta entonces podía quedar detrás de la liquidación sin que
+ * nada lo dijera (079/F-01).
+ */
+export const HOLGURA_LIQUIDACION = 0.5;
+
+/** El paso con el que se proponen stops: el mismo que el del campo en el formulario. */
+const PASO_STOP = D('0.1');
+
+/**
+ * El stop más ancho, en % sobre el margen, que deja la liquidación al menos a
+ * medio stop detrás: con `s` el movimiento de precio del stop y `d` la
+ * distancia exacta a la liquidación, `s·(1 + HOLGURA) ≤ d`. Redondeado hacia
+ * abajo al paso del campo, para que el valor propuesto cumpla la regla.
+ *
+ * A 15× en corto en BTC (mantenimiento 1,25 %): `d = 5,35 %`, `s ≤ 3,57 %`,
+ * es decir un 53,4 % del margen.
+ */
+export function stopMaximoRoi(
+  apalancamiento: number,
+  mantenimiento: number,
+  lado: PositionSide,
+): Decimal {
+  const d = distanciaLiquidacion(apalancamiento, mantenimiento, lado);
+  if (!d.gt(0)) return D(0);
+  const roi = d
+    .div(1 + HOLGURA_LIQUIDACION)
+    .mul(apalancamiento)
+    .mul(100);
+  return roi.div(PASO_STOP).floor().mul(PASO_STOP);
+}
+
+// ── La regla por stop del canal con IA (spec 058) ──────────────────────────
 
 /**
  * El tramo que rige para un nocional: el de mayor `desdeNocional` que no lo

@@ -80,9 +80,9 @@ export class BotsController {
   @Post('preview')
   @HttpCode(200)
   @ApiOperation({
-    summary: 'Calcula la escalera completa y el peor caso',
+    summary: 'Calcula las órdenes y, por lado, la posición y sus salidas',
     description:
-      'Devuelve nivel a nivel el precio, la cantidad, el margen y el notional acumulado, más la liquidación estimada. Es el mismo cálculo que ejecutará el motor.',
+      'Devuelve nivel a nivel el precio, la cantidad, el margen y el notional acumulado de su lado, y por cada lado la posición del peor caso con su objetivo, su stop y su liquidación exacta: precio, movimiento, resultado sin comisiones y % sobre el margen. Es el mismo cálculo que ejecutará el motor.',
   })
   preview(@GetUserInfo() user: SessionUser, @Body() dto: PreviewBotDto) {
     return this.bots.preview(user.id, dto);

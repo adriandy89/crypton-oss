@@ -52,9 +52,13 @@ import {
   edicionesDe,
   esEstrategiaSoloAdmin,
   esEventoModoIa,
+  isFiniteNum,
   recolocarBorrador,
+  salidaPorRoi,
   type FieldMeta,
+  type Numeric,
 } from '@crypton/shared';
+import { getStrategy } from '@crypton/strategy-core';
 import { Clipboard } from '@capacitor/clipboard';
 import { BotsService, LeaderboardService, StreamService, ToastService } from '../../core/services';
 import type {
@@ -79,6 +83,7 @@ import {
   orderStatusLabel,
   parseHttpError,
   pct,
+  pistaRoi,
   pnlColor,
   price,
   qty,
@@ -89,6 +94,7 @@ import {
   uptime,
   venueLabel,
   textoDeConfig,
+  type SalidaPista,
 } from '../../core/utils';
 import {
   UiBadgeComponent,
@@ -810,6 +816,52 @@ export class BotDetailPage implements OnInit {
 
   value(key: string): unknown {
     return this.draft()[key];
+  }
+
+  /**
+   * La equivalencia de cada % sobre el margen (spec 080, D-4). Con la posición
+   * abierta, dónde queda desde la entrada real y cuánto es en dinero, con el
+   * apalancamiento del borrador; sin ella, solo en precio. Las estrategias que
+   * ponen su propio stop no usan el común, y a ese no se le pinta.
+   */
+  readonly pistas = computed<Map<string, string>>(() => {
+    const out = new Map<string, string>();
+    const b = this.bot();
+    if (!b) return out;
+    const draft = this.draft();
+    const apalancamiento = draft['leverage'] ?? b.leverage;
+    const cantidad = b.positionQty;
+    const entrada = b.averageEntry;
+    const conPosicion =
+      isFiniteNum(cantidad) &&
+      !D(cantidad).isZero() &&
+      entrada !== null &&
+      isFiniteNum(entrada) &&
+      D(entrada).gt(0);
+    const lado = isFiniteNum(cantidad) && D(cantidad).lt(0) ? 'SHORT' : 'LONG';
+    const stopPropio = getStrategy(b.strategy).stopPropio === true;
+    for (const f of b.fields) {
+      if (!f.roi || (f.roi === 'PERDIDA' && stopPropio)) continue;
+      const roi = draft[f.key];
+      const salidas: SalidaPista[] = [];
+      if (conPosicion && entrada !== null && isFiniteNum(roi) && isFiniteNum(apalancamiento)) {
+        const conSigno = f.roi === 'PERDIDA' ? D(roi as Numeric).neg() : D(roi as Numeric);
+        const s = salidaPorRoi(entrada, cantidad, conSigno, apalancamiento as Numeric, lado);
+        salidas.push({ lado, precio: s.precio.toString(), pnl: s.pnl.toFixed(2) });
+      }
+      const texto = pistaRoi({
+        roiPct: roi,
+        apalancamiento,
+        salidas,
+        nota: salidas.length ? 'desde tu entrada.' : undefined,
+      });
+      if (texto) out.set(f.key, texto);
+    }
+    return out;
+  });
+
+  hintFor(key: string): string {
+    return this.pistas().get(key) ?? '';
   }
 
   setValue(key: string, value: unknown): void {

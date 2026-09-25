@@ -187,7 +187,8 @@ describe('RiskService con la regla por stop', () => {
     await expect(
       r.assertWithinLimits(USUARIO, cfg(25), mercado(20), { reglaLiquidacion: 'POR_STOP' }),
     ).rejects.toThrow(/como mucho a 20×/);
-    await expect(r.topeDeApalancamiento(USUARIO, '1000', mercado())).resolves.toBe(16);
+    // Sin la regla del stop, el 5 % con la liquidación exacta del corto (079/F-07).
+    await expect(r.topeDeApalancamiento(USUARIO, '1000', mercado())).resolves.toBe(15);
     await expect(
       r.topeDeApalancamiento(USUARIO, '1000', mercado(), { reglaLiquidacion: 'POR_STOP' }),
     ).resolves.toBe(25);

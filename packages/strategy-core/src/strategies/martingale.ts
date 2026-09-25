@@ -1,6 +1,6 @@
 import {
   D,
-  Decimal,
+  distanciaLiquidacion,
   maintenanceMarginRateOf,
   LevelKind,
   Mutability,
@@ -17,8 +17,9 @@ import {
 } from '@crypton/shared';
 import { makeCoid } from '../client-order-id';
 import {
-  COMMON_FIELDS,
   buildPreview,
+  commonFieldsWith,
+  comunCon,
   entrySide,
   err,
   exitSide,
@@ -27,11 +28,12 @@ import {
   px,
   qy,
   toResult,
+  validarObjetivoRoi,
   validateCommon,
   warn,
   type RawLevel,
 } from '../common';
-import { baseLimitPrice, scaledLadder, takeProfitPrice } from '../ladder';
+import { baseLimitPrice, recorridoPeorCaso, scaledLadder, takeProfitPrice } from '../ladder';
 import {
   TRAILING_DEFAULTS,
   camposTrailing,
@@ -42,21 +44,30 @@ import {
 } from '../trailing-take-profit';
 import type { Strategy } from '../types';
 
-export interface MartingaleConfig extends CommonBotConfig, TrailingConfig {
+/**
+ * La escalera de seguridad: lo que comparten la martingala y GridMart. GridMart
+ * no hereda el take profit ni el seguimiento, porque sale por el satélite y por
+ * la rejilla del núcleo (spec 080, P-7).
+ */
+export interface EscaleraConfig extends CommonBotConfig {
   numLimitBuys: number;
   initialSeparationPct: string;
   volumeScale: string;
   stepScale: string;
+  /** Cómo se abre el ciclo: a mercado (entra ya) o limit al precio actual. */
+  baseOrderType?: 'MARKET' | 'LIMIT';
+}
+
+export interface MartingaleConfig extends EscaleraConfig, TrailingConfig {
   /**
-   * Beneficio al que sale, sobre el precio medio real del venue.
+   * Beneficio al que sale, en % del MARGEN desde el precio medio real del venue
+   * (spec 080): a 5×, un 10 % es un 2 % del precio.
    *
    * Con `trailingTakeProfit` encendido este campo NO cambia de unidad ni de
    * sitio: cambia de papel. Deja de ser «el precio al que salgo» y pasa a ser
    * «el precio en el que empiezo a seguir al máximo» (spec 042).
    */
   takeProfitPct: string;
-  /** Cómo se abre el ciclo: a mercado (entra ya) o limit al precio actual. */
-  baseOrderType?: 'MARKET' | 'LIMIT';
   /** LIMIT deja la salida como maker; MARKET garantiza el cierre. */
   tpMode?: 'LIMIT' | 'MARKET';
 }
@@ -123,10 +134,16 @@ export const MARTINGALE_FIELDS: readonly FieldMeta[] = [
     labelKey: 'strategy.martingale.takeProfitPct',
     helpKey: 'strategy.martingale.takeProfitPctHelp',
     min: 0.05,
-    max: 50,
+    // % del MARGEN desde el spec 080. El tope de siempre, un 50 % del precio,
+    // se conserva en precio: `camposEfectivos` lo multiplica por el
+    // apalancamiento.
+    maxPrecioPct: 50,
+    roi: 'BENEFICIO',
     step: 0.05,
     required: true,
-    default: 1,
+    // El 1 % del precio de antes al apalancamiento de fábrica (2×): a 2× el bot
+    // sale exactamente donde salía.
+    default: 2,
   },
   {
     key: 'baseOrderType',
@@ -153,7 +170,12 @@ const META: StrategyMeta = {
   kind: StrategyKind.MARTINGALE,
   labelKey: 'strategy.martingale.label',
   descriptionKey: 'strategy.martingale.description',
-  fields: [...COMMON_FIELDS, ...MARTINGALE_FIELDS],
+  // Un minuto entre ciclos, como `defaults()`: la ficha común dice 0 y la ayuda
+  // y el relleno de un campo vacío (`sinVacios`) leían ese 0.
+  fields: [
+    ...commonFieldsWith([comunCon('cooldownMinutes', { default: 1 })]),
+    ...MARTINGALE_FIELDS,
+  ],
 };
 
 /**
@@ -162,23 +184,15 @@ const META: StrategyMeta = {
  * de arrancar, en vez de descubrirlo cuando el bot ya lleva 5 niveles llenos.
  */
 /**
- * Por debajo de este take profit, con una entrada taker y una salida maker, un
- * ciclo cerrado puede acabar en pérdida. El mínimo del campo (0,05 %) se
- * conserva para no pausar bots existentes al recargar; se avisa (spec 026, F-94).
+ * Por debajo de este movimiento de PRECIO, con una entrada taker y una salida
+ * maker, un ciclo cerrado puede acabar en pérdida (spec 026, F-94). Es una
+ * distancia de precio y se sigue midiendo así: el objetivo es un % del margen
+ * desde el spec 080, y se compara su equivalente en precio (`validarObjetivoRoi`).
  */
 export const TP_MINIMO_RENTABLE_PCT = '0.3';
 
-export function avisoDeTpCorto(que: string): string {
-  return (
-    que +
-    ' está por debajo del ' +
-    TP_MINIMO_RENTABLE_PCT +
-    ' %: con una entrada taker y una salida maker, un ciclo cerrado puede acabar en pérdida.'
-  );
-}
-
 export function validateLadderConfig(
-  cfg: MartingaleConfig,
+  cfg: EscaleraConfig,
   market: MarketSpec,
 ): ReturnType<typeof validateCommon> {
   const issues = validateCommon(cfg, market);
@@ -201,52 +215,101 @@ export function validateLadderConfig(
     issues.push(err('stepScale', 'El multiplicador de distancia no puede ser menor que 1.'));
   }
 
-  const tp = D(cfg.takeProfitPct ?? 0);
-  if (!tp.isFinite() || tp.lte(0)) {
-    issues.push(err('takeProfitPct', 'El take profit debe ser mayor que cero.'));
-  } else if (tp.lt(TP_MINIMO_RENTABLE_PCT)) {
-    issues.push(warn('takeProfitPct', avisoDeTpCorto('El take profit')));
-  }
+  // El take profit NO se valida aquí: GridMart no lo tiene (sale por el TP
+  // satélite y la rejilla del núcleo). Cada estrategia valida el suyo.
 
-  // Cobertura total de la escalera: hasta dónde aguanta antes de quedarse sin
-  // órdenes. Si es menor que la distancia a liquidación, el bot se queda sin
-  // munición justo antes de que el venue cierre la posición.
-  if (n >= 1 && sep.gt(0) && step.gte(1)) {
-    let gap = sep;
-    let coverage = D(0);
-    for (let i = 0; i < n; i++) {
-      coverage = coverage.plus(gap);
-      gap = gap.mul(step);
-    }
+  // La escalera llenándose en contra, nivel a nivel, con la liquidación EXACTA
+  // de la media de lo ya comprado y el stop (un % del margen). Se hace sobre un
+  // ancla de 1: todo es relativo. Antes se comparaba la cobertura desde el
+  // ancla con `100/L − mmr`, sin contar que la liquidación se mueve con la
+  // media ni que el stop puede cortar la escalera antes (079/F-01, F-07).
+  //
+  // Con el tope de exposición, como el plan: la base sin mirarlo y cada
+  // seguridad solo si cabe. El nocional de un nivel no depende del ancla
+  // (margen × apalancamiento), así que el tope en USDC vale también aquí.
+  const sinErrores = !issues.some((i) => i.severity === 'ERROR');
+  if (sinErrores && n >= 1 && sep.gt(0) && step.gte(1)) {
     const lev = Number(cfg.leverage) || 1;
-    // Con la tasa de mantenimiento del mercado: comparar con 100/apalancamiento
-    // a secas dejaba los últimos escalones más allá de la liquidación real
-    // (001/F-93).
-    const liqDistance = D(100)
-      .div(lev)
-      .minus(D(maintenanceMarginRateOf(market)).mul(100));
-    if (coverage.gte(liqDistance)) {
+    const lado = cfg.direction === 'SHORT' ? 'SHORT' : 'LONG';
+    const mmr = maintenanceMarginRateOf(market);
+    const niveles = ladderLevels(cfg, '1');
+    const r = recorridoPeorCaso(
+      niveles,
+      lado,
+      lev,
+      mmr,
+      cfg.stopLossPct,
+      cfg.maxNotionalCap ? { nocional: cfg.maxNotionalCap, desde: 1 } : null,
+    );
+    const aislado = cfg.marginMode !== 'CROSS';
+    const hacia = lado === 'SHORT' ? 'subida' : 'caída';
+    // En largo, una escalera más profunda que el 100 % pone seguridades a precio
+    // cero o negativo. La comparación vieja con `100/L` lo impedía de paso; el
+    // recorrido nivel a nivel no, porque a 1× no hay liquidación que lo corte,
+    // y editar o arrancar solo pasan por aquí (encontrado al rehacer las guías
+    // del 080). Se dice aunque la liquidación o el stop corten antes: esas
+    // órdenes se colocarían igual, y el venue las rechazaría.
+    const bajoCero = lado === 'LONG' ? niveles.findIndex((l) => !D(l.price).gt(0)) : -1;
+    if (bajoCero >= 0) {
       issues.push(
         err(
           'numLimitBuys',
-          'La escalera cubre un ' +
-            coverage.toFixed(1) +
-            ' % de recorrido, pero a ' +
-            lev +
-            'x la liquidación llega sobre el ' +
-            liqDistance.toFixed(1) +
-            ' %: los últimos niveles nunca se ejecutarían.',
+          `La seguridad ${bajoCero} quedaría a un ` +
+            `${D(niveles[bajoCero].price).minus(1).abs().mul(100).toFixed(1)} % de caída desde la ` +
+            'entrada: a precio cero o negativo. Reduce las seguridades, la separación o la escala ' +
+            'de distancia.',
         ),
       );
-    } else if (coverage.lt(liqDistance.div(2))) {
-      issues.push(
-        warn(
-          'numLimitBuys',
-          'La escalera solo cubre un ' +
-            coverage.toFixed(1) +
-            ' % de caída. Por debajo de ahí el bot deja de promediar.',
-        ),
-      );
+    }
+    if (r.corte && r.corte.por !== 'TOPE') {
+      const k = r.corte.nivel;
+      const precioCorte = D(niveles[k].price);
+      const distancia = precioCorte.minus(1).abs().mul(100).toFixed(1);
+      const restantes = `las seguridades ${k} a ${n} no se ejecutarían nunca`;
+      if (r.corte.por === 'LIQUIDACION') {
+        const mensaje =
+          `A ${lev}× la liquidación llega antes que la seguridad ${k}, que está a un ` +
+          `${distancia} % de ${hacia} desde la entrada: con la media de lo ya comprado, ` +
+          `${restantes}.` +
+          (aislado ? '' : ' En margen cruzado la liquidación real queda más lejos.');
+        issues.push(aislado ? err('numLimitBuys', mensaje) : warn('numLimitBuys', mensaje));
+      } else {
+        issues.push(
+          warn(
+            'stopLossPct',
+            `El stop del ${D(cfg.stopLossPct ?? 0).toFixed()} % del margen salta antes que la ` +
+              `seguridad ${k}, que está a un ${distancia} % de ${hacia} desde la entrada: ` +
+              `${restantes}.`,
+          ),
+        );
+      }
+    } else {
+      // Entera —o hasta donde deja el tope—, pero corta: el último nivel queda
+      // a menos de la mitad del camino hasta la liquidación, y por debajo el
+      // bot deja de promediar.
+      const ultimo = r.corte ? r.corte.nivel - 1 : niveles.length - 1;
+      const cobertura = D(niveles[ultimo].price).minus(1).abs().mul(100);
+      const hastaLiq = distanciaLiquidacion(lev, mmr, lado).mul(100);
+      if (ultimo === 0) {
+        issues.push(
+          warn(
+            'maxNotionalCap',
+            'Con este tope de exposición no cabe ninguna seguridad: el bot abre la base y no ' +
+              'promedia.',
+          ),
+        );
+      } else if (cobertura.lt(hastaLiq.div(2))) {
+        issues.push(
+          warn(
+            'numLimitBuys',
+            (r.corte
+              ? `Con el tope de exposición la escalera se queda en la seguridad ${ultimo}: ` +
+                `solo cubre un ${cobertura.toFixed(1)} % de ${hacia}.`
+              : `La escalera solo cubre un ${cobertura.toFixed(1)} % de ${hacia}.`) +
+              ' Más allá el bot deja de promediar.',
+          ),
+        );
+      }
     }
   }
 
@@ -261,8 +324,28 @@ export function validateLadderConfig(
   return issues;
 }
 
+/**
+ * La escalera, su take profit y su seguimiento. `validateLadderConfig` la
+ * comparte GridMart, que NO tiene take profit ni seguimiento: esos dos van aquí
+ * para no colarle campos que no usa.
+ */
+function validarMartingala(cfg: MartingaleConfig, market: MarketSpec) {
+  return [
+    ...validateLadderConfig(cfg, market),
+    ...validarObjetivoRoi(
+      'takeProfitPct',
+      'El take profit',
+      cfg.takeProfitPct,
+      Number(cfg.leverage) || 1,
+      cfg.direction,
+      TP_MINIMO_RENTABLE_PCT,
+    ),
+    ...validarTrailing(cfg),
+  ];
+}
+
 /** Niveles crudos de la escalera; los comparte GridMart tal cual. */
-export function ladderLevels(cfg: MartingaleConfig, anchor: string): RawLevel[] {
+export function ladderLevels(cfg: EscaleraConfig, anchor: string): RawLevel[] {
   const levels = scaledLadder({
     anchor,
     safetyCount: Math.max(0, Math.floor(cfg.numLimitBuys ?? 0)),
@@ -280,7 +363,6 @@ export function ladderLevels(cfg: MartingaleConfig, anchor: string): RawLevel[] 
     side: entrySide(cfg.direction),
     price: lv.price,
     qty: lv.qty,
-    margin: lv.margin,
     isEntry: true,
   }));
 }
@@ -295,7 +377,8 @@ export const martingale: Strategy<MartingaleConfig> = {
       initialSeparationPct: '1',
       volumeScale: '1.6',
       stepScale: '1.2',
-      takeProfitPct: '1',
+      // % del margen (spec 080): el 1 % del precio de antes, a 2×.
+      takeProfitPct: '2',
       baseOrderType: 'MARKET',
       tpMode: 'LIMIT',
       ...TRAILING_DEFAULTS,
@@ -307,13 +390,11 @@ export const martingale: Strategy<MartingaleConfig> = {
   },
 
   validate(cfg: MartingaleConfig, market: MarketSpec): ValidationResult {
-    // `validateLadderConfig` la comparte GridMart, que NO ofrece seguimiento:
-    // el aviso del retroceso va aquí para no colarle un campo que no tiene.
-    return toResult([...validateLadderConfig(cfg, market), ...validarTrailing(cfg)]);
+    return toResult(validarMartingala(cfg, market));
   },
 
   preview(cfg: MartingaleConfig, market: MarketSpec, refPrice: string): PreviewResult {
-    const issues = [...validateLadderConfig(cfg, market), ...validarTrailing(cfg)];
+    const issues = validarMartingala(cfg, market);
     // Ver `invalidPreview`: sin config valida, calcular es reventar.
     if (issues.some((i) => i.severity === 'ERROR')) return invalidPreview(issues);
     return buildPreview({
@@ -323,7 +404,14 @@ export const martingale: Strategy<MartingaleConfig> = {
       direction: cfg.direction,
       leverage: cfg.leverage,
       marginMode: cfg.marginMode,
-      takeProfitPct: cfg.takeProfitPct,
+      // Con el seguimiento encendido el objetivo es donde EMPIEZA a seguir, y la
+      // Revisión lo dice (079/F-15).
+      objetivo: { roiPct: cfg.takeProfitPct, activacion: cfg.trailingTakeProfit === true },
+      stopLossRoiPct: cfg.stopLossPct,
+      // El tope de exposición corta la escalera como en `plan()`: la base entra
+      // sin mirarlo y cada seguridad solo si cabe.
+      topeNocional: cfg.maxNotionalCap,
+      topeDesde: 1,
       issues,
     });
   },
@@ -441,7 +529,8 @@ export const martingale: Strategy<MartingaleConfig> = {
     // una seguridad el medio se mueve y esta orden se recoloca sola en el
     // siguiente tick, que es exactamente lo que debe pasar.
     const avgEntry = ctx.position!.entryPrice;
-    const tp = takeProfitPrice(avgEntry, cfg.takeProfitPct, cfg.direction);
+    // Un % del MARGEN desde la media (spec 080).
+    const tp = takeProfitPrice(avgEntry, cfg.takeProfitPct, cfg.leverage, cfg.direction);
     const scratchPatch: Record<string, unknown> = {};
     let notaSalida = '';
 
@@ -522,10 +611,3 @@ export const martingale: Strategy<MartingaleConfig> = {
     };
   },
 };
-
-/** Reexportado para GridMart, que construye su TP sobre el mismo cálculo. */
-export const martingaleTakeProfit = (
-  avgEntry: string,
-  pct: string,
-  direction: MartingaleConfig['direction'],
-): Decimal => takeProfitPrice(avgEntry, pct, direction);

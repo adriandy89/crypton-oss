@@ -189,9 +189,17 @@ describe('RiskService', () => {
     // quien PROPONE un cambio pueda respetarla en vez de descubrirla con un 403.
     // El supervisor de IA la usa para no proponer lo que va a fallar.
     const sinLimites = build({}, []);
-    // 40x de maximo en el mercado → mantenimiento 1,25 % → 16x por distancia de
-    // liquidacion, que manda aunque el usuario no tenga ningun tope puesto.
-    await expect(sinLimites.service.topeDeApalancamiento('u1', '1000', MARKET)).resolves.toBe(16);
+    // 40x de maximo en el mercado → mantenimiento 1,25 % → con la liquidacion
+    // EXACTA, 16x en largo y 15x en corto, que manda aunque el usuario no tenga
+    // ningun tope puesto. Sin direccion se mide contra el corto, que liquida
+    // antes (079/F-07).
+    await expect(sinLimites.service.topeDeApalancamiento('u1', '1000', MARKET)).resolves.toBe(15);
+    await expect(
+      sinLimites.service.topeDeApalancamiento('u1', '1000', MARKET, { direction: 'LONG' }),
+    ).resolves.toBe(16);
+    await expect(
+      sinLimites.service.topeDeApalancamiento('u1', '1000', MARKET, { direction: 'SHORT' }),
+    ).resolves.toBe(15);
 
     const conTope = build({ max_leverage: 5 }, []);
     await expect(conTope.service.topeDeApalancamiento('u1', '1000', MARKET)).resolves.toBe(5);
@@ -210,8 +218,8 @@ describe('RiskService', () => {
     ).resolves.toBe(3);
 
     // Sin inversion no hay notional que limitar: dividir por cero daria un tope
-    // inventado, asi que solo queda el del mercado.
-    await expect(porBot.service.topeDeApalancamiento('u1', '0', MARKET)).resolves.toBe(16);
+    // inventado, asi que solo queda el del mercado (sin direccion, el del corto).
+    await expect(porBot.service.topeDeApalancamiento('u1', '0', MARKET)).resolves.toBe(15);
 
     // Y nunca por debajo de 1x: que ya no quepa lo dice el 403, no un tope de cero.
     const sinSitio = build({ max_notional_per_bot: decimal('10') }, []);

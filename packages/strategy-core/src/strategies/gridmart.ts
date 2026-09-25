@@ -4,6 +4,7 @@ import {
   LevelKind,
   Mutability,
   StrategyKind,
+  normalizeOrder,
   type BotContext,
   type CycleState,
   type DesiredOrder,
@@ -17,8 +18,9 @@ import {
 } from '@crypton/shared';
 import { makeCoid, parseCoid } from '../client-order-id';
 import {
-  COMMON_FIELDS,
   buildPreview,
+  commonFieldsWith,
+  comunCon,
   entrySide,
   err,
   exitSide,
@@ -27,21 +29,21 @@ import {
   px,
   qy,
   toResult,
+  validarObjetivoRoi,
   warn,
   type RawLevel,
 } from '../common';
-import { baseLimitPrice, scaledLadder, takeProfitPrice } from '../ladder';
+import { baseLimitPrice, scaledLadder, takeProfitPrice, weightedAverage } from '../ladder';
 import {
   MARTINGALE_FIELDS,
   TP_MINIMO_RENTABLE_PCT,
-  avisoDeTpCorto,
   ladderLevels,
   validateLadderConfig,
-  type MartingaleConfig,
+  type EscaleraConfig,
 } from './martingale';
 import type { Strategy } from '../types';
 
-export interface GridMartConfig extends MartingaleConfig {
+export interface GridMartConfig extends EscaleraConfig {
   /** Salida rápida del inventario de seguridad, por encima del breakeven. */
   satelliteTpPct: string;
   gridSellCount: number;
@@ -84,10 +86,14 @@ const GRIDMART_FIELDS: readonly FieldMeta[] = [
     labelKey: 'strategy.gridmart.satelliteTpPct',
     helpKey: 'strategy.gridmart.satelliteTpPctHelp',
     min: 0.05,
-    max: 20,
+    // % del MARGEN desde el precio medio de la posición (spec 080). El tope de
+    // siempre, un 20 % del precio, se conserva en precio.
+    maxPrecioPct: 20,
+    roi: 'BENEFICIO',
     step: 0.05,
     required: true,
-    default: 0.6,
+    // El 0,6 % del precio de antes al apalancamiento de fábrica (2×).
+    default: 1.2,
   },
   {
     key: 'gridSellCount',
@@ -169,9 +175,12 @@ const GRIDMART_FIELDS: readonly FieldMeta[] = [
 
 /**
  * Campos de la escalera que en GridMart no gobiernan ninguna orden: el satélite
- * sale por `satelliteTpPct` y el núcleo por la rejilla. Fuera del formulario;
- * `defaults()` los sigue fijando porque la validación compartida de la escalera
- * los espera (spec 026, F-12).
+ * sale por `satelliteTpPct` y el núcleo por la rejilla. Fuera del formulario
+ * (spec 026, F-12) y, desde el spec 080, también de `defaults()` y de la
+ * validación: la de la escalera ya no mira el take profit, que valida cada
+ * estrategia por su cuenta, y un campo muerto en la configuración es un
+ * número que parece mandar y no manda (P-7). La migración del 080 los borra
+ * de las configuraciones guardadas.
  *
  * Los tres del seguimiento al máximo llegan aquí por herencia de tipo y se van
  * por la misma puerta. GridMart no puede ofrecerlo con un interruptor: no usa
@@ -192,7 +201,8 @@ const META: StrategyMeta = {
   labelKey: 'strategy.gridmart.label',
   descriptionKey: 'strategy.gridmart.description',
   fields: [
-    ...COMMON_FIELDS,
+    // Un minuto entre ciclos, como `defaults()` (spec 026, 001/F-94).
+    ...commonFieldsWith([comunCon('cooldownMinutes', { default: 1 })]),
     ...MARTINGALE_FIELDS.filter((f) => !HEREDADOS_SIN_EFECTO.has(f.key)),
     ...GRIDMART_FIELDS,
   ],
@@ -259,11 +269,10 @@ export const gridmart: Strategy<GridMartConfig> = {
       initialSeparationPct: '1',
       volumeScale: '1.6',
       stepScale: '1.2',
-      takeProfitPct: '1',
       baseOrderType: 'MARKET',
-      tpMode: 'LIMIT',
       classicMode: false,
-      satelliteTpPct: '0.6',
+      // % del margen (spec 080): el 0,6 % del precio de antes, a 2×.
+      satelliteTpPct: '1.2',
       gridSellCount: 4,
       gridSellInitialSeparationPct: '1',
       gridSellDistanceMultiplier: '1.2',
@@ -283,12 +292,16 @@ export const gridmart: Strategy<GridMartConfig> = {
   validate(cfg: GridMartConfig, market: MarketSpec): ValidationResult {
     const issues = validateLadderConfig(cfg, market);
 
-    const sat = D(cfg.satelliteTpPct ?? 0);
-    if (!sat.isFinite() || sat.lte(0)) {
-      issues.push(err('satelliteTpPct', 'El TP satélite debe ser mayor que cero.'));
-    } else if (sat.lt(TP_MINIMO_RENTABLE_PCT)) {
-      issues.push(warn('satelliteTpPct', avisoDeTpCorto('El TP satélite')));
-    }
+    issues.push(
+      ...validarObjetivoRoi(
+        'satelliteTpPct',
+        'El TP satélite',
+        cfg.satelliteTpPct,
+        Number(cfg.leverage) || 1,
+        cfg.direction,
+        TP_MINIMO_RENTABLE_PCT,
+      ),
+    );
 
     if (!cfg.classicMode) {
       const count = Math.floor(cfg.gridSellCount ?? 0);
@@ -369,32 +382,40 @@ export const gridmart: Strategy<GridMartConfig> = {
     // El preview muestra la escalera de entrada Y los escalones de venta que se
     // tenderían sobre el peor caso: es la única forma de ver de un vistazo por
     // dónde saldría el bot si se llenara entera.
-    const worstQty = entryLevels.reduce((acc, l) => acc.plus(D(l.qty)), D(0));
-    const worstAvgNum = entryLevels.reduce((acc, l) => acc.plus(D(l.price).mul(l.qty)), D(0));
-    const breakeven = worstQty.gt(0) ? worstAvgNum.div(worstQty) : D(refPrice);
+    //
+    // Sobre los niveles YA redondeados a la retícula, que son los que el venue
+    // ejecutaría: la media de los brutos no era la de ninguna posición posible
+    // (079/F-24).
+    const lado = entrySide(cfg.direction);
+    const redondeados = entryLevels.map((l) => normalizeOrder(market, l.price, l.qty, lado));
+    const worstQty = redondeados.reduce((acc, n) => acc.plus(n.qty), D(0));
+    const breakeven =
+      weightedAverage(redondeados.map((n) => ({ price: n.price, qty: n.qty }))) ?? D(refPrice);
+    // Las ventas de la rejilla, sobre el NÚCLEO —la entrada base—, como en
+    // `plan()`: dimensionarlas sobre la posición entera las hacía unas 43 veces
+    // más grandes con los valores de fábrica, y el mínimo del venue se medía
+    // contra esa cantidad, no contra la que se venderá (079/F-02).
+    const coreQty = redondeados[0]?.qty ?? D(0);
 
     const exitLevels: RawLevel[] = [];
     if (!cfg.classicMode) {
-      for (const gs of gridSellLevels(cfg, breakeven, worstQty)) {
+      for (const gs of gridSellLevels(cfg, breakeven, coreQty)) {
         exitLevels.push({
           index: entryLevels.length + gs.index,
           kind: LevelKind.GRID_SELL,
           side: exitSide(cfg.direction),
           price: gs.price,
           qty: gs.qty,
-          margin: 0,
           isEntry: false,
         });
       }
     } else {
-      const sign = cfg.direction === 'SHORT' ? D(-1) : D(1);
       exitLevels.push({
         index: entryLevels.length,
         kind: LevelKind.TAKE_PROFIT,
         side: exitSide(cfg.direction),
-        price: breakeven.mul(D(1).plus(sign.mul(D(cfg.satelliteTpPct)).div(100))),
+        price: takeProfitPrice(breakeven, cfg.satelliteTpPct, cfg.leverage, cfg.direction),
         qty: worstQty,
-        margin: 0,
         isEntry: false,
       });
     }
@@ -406,9 +427,16 @@ export const gridmart: Strategy<GridMartConfig> = {
       direction: cfg.direction,
       leverage: cfg.leverage,
       marginMode: cfg.marginMode,
-      // El TP que existe es el del satélite en los dos modos: `takeProfitPct` no
-      // gobierna ninguna orden en GridMart (001/F-12).
-      takeProfitPct: cfg.satelliteTpPct,
+      // El TP que existe es el del satélite en los dos modos (001/F-12): sobre
+      // lo que añadieron las seguridades —todo menos el núcleo—, o sobre todo
+      // en Classic.
+      objetivo: cfg.classicMode
+        ? { roiPct: cfg.satelliteTpPct }
+        : { roiPct: cfg.satelliteTpPct, reserva: coreQty },
+      stopLossRoiPct: cfg.stopLossPct,
+      // Como en la martingala: la base sin mirar el tope, las seguridades si caben.
+      topeNocional: cfg.maxNotionalCap,
+      topeDesde: 1,
       issues,
     });
   },
@@ -520,8 +548,9 @@ export const gridmart: Strategy<GridMartConfig> = {
     const satelliteQty = pos.minus(coreQty);
 
     if (cfg.classicMode) {
-      // Classic: una única salida sobre el total, sin rejilla de ventas.
-      const tp = takeProfitPrice(breakeven, cfg.satelliteTpPct, cfg.direction);
+      // Classic: una única salida sobre el total, sin rejilla de ventas. Un % del
+      // MARGEN desde el precio medio (spec 080).
+      const tp = takeProfitPrice(breakeven, cfg.satelliteTpPct, cfg.leverage, cfg.direction);
       orders.push({
         clientOrderId: makeCoid(ctx.botId, seq, LevelKind.TAKE_PROFIT, 0),
         levelKind: LevelKind.TAKE_PROFIT,
@@ -541,7 +570,7 @@ export const gridmart: Strategy<GridMartConfig> = {
 
     // ── TP satélite: solo el inventario de las seguridades ──
     if (satelliteQty.gt(0)) {
-      const satPrice = takeProfitPrice(breakeven, cfg.satelliteTpPct, cfg.direction);
+      const satPrice = takeProfitPrice(breakeven, cfg.satelliteTpPct, cfg.leverage, cfg.direction);
       orders.push({
         clientOrderId: makeCoid(ctx.botId, seq, LevelKind.TAKE_PROFIT, 0),
         levelKind: LevelKind.TAKE_PROFIT,

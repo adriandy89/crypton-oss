@@ -42,7 +42,7 @@ export const MARKET_MAKER_V2_GUIDE: StrategyGuide<MarketMakerV2Config> = {
         { label: 'Spread dinámico máximo', value: '100 bps' },
       ],
       outcome:
-        'El suelo sale de 2 bps por lado contados dos veces más 8 de margen: 12 bps, por debajo de los cuales el bot no cotiza. Con una volatilidad medida de 25 bps, la parte dinámica añade 1,5 + 25 x 0,35 = 10,25 bps. El total queda en 40 + 10,25 + 4 = 54 bps, un 0,54 %: compra en 78.484 y vende en 79.336. Si el mercado se calma y la volatilidad baja a 5 bps, el mismo bot pasa a cotizar sobre 47 bps sin que toques nada.',
+        'El suelo sale de 2 bps por lado contados dos veces más 8 de margen: 12 bps, por debajo de los cuales el bot no cotiza. Con una volatilidad medida de 25 bps, la parte dinámica añade 1,5 + 25 x 0,35 = 10,25 bps. Cada lado queda a 20 de base + 10,25 + 4 de comisión de ida y vuelta = 34,25 bps, un 0,34 %: compra en 78.640 y vende en 79.180. Si el mercado se calma y la volatilidad baja a 5 bps, el mismo bot pasa a cotizar a 27,25 bps por lado sin que toques nada.',
     },
     {
       title: 'ETH anclado al precio de Binance',
@@ -80,6 +80,14 @@ export const MARKET_MAKER_V2_GUIDE: StrategyGuide<MarketMakerV2Config> = {
     },
   ],
   options: {
+    // El capital común aquí no dimensiona nada: la ficha compartida diría lo
+    // contrario (079/F-19).
+    totalInvestment: {
+      what: 'El capital del bot: contra él se miden su resultado y su pérdida diaria.',
+      affects:
+        'No dimensiona ninguna orden. El tamaño de cada cotización lo pone el tamaño por compra/venta, y el inventario máximo, el valor máximo de posición.',
+      tip: 'Ponlo en lo que estás dispuesto a comprometer: es la base del ROI y de la pérdida diaria máxima.',
+    },
     // ── Microestructura (spec 039) ──────────────────────────────────
     //
     // Todo esto nace APAGADO. Son los mandos que dejan al bot mirar algo más
@@ -131,7 +139,7 @@ export const MARKET_MAKER_V2_GUIDE: StrategyGuide<MarketMakerV2Config> = {
       what: 'Desplaza el centro de la cotización en contra del inventario para deshacerlo antes.',
       affects:
         'Con posición larga el centro baja: la venta queda más cerca y la compra más lejos, así que el bot tiende solo a volver a cero. Sin esto, lo único que reacciona al inventario son los modos de riesgo.',
-      tip: 'Enciéndelo con factor 1. La V1 lo tiene así desde siempre; aquí llega apagado solo para no mover la conducta de los bots que ya existen, no porque sea mejor. Sin él, la venta se calcula desde el precio de mercado y no desde tu coste, así que cuando el precio se va el bot cierra POR DEBAJO de lo que compró: medido sobre ocho pares y veinte días, el 48 % de los cierres cae ahí y cada uno pesa 1,7 veces lo que pesa uno bueno. Encendiéndolo, la pérdida realizada baja un 44 %; con el sesgo de tamaño también, un 54 %.',
+      tip: 'Viene encendido con factor 1, como en la V1, y conviene dejarlo así. Sin él, la venta se calcula desde el precio de mercado y no desde tu coste, así que cuando el precio se va el bot cierra POR DEBAJO de lo que compró: medido sobre ocho pares y veinte días, el 48 % de los cierres cae ahí y cada uno pesa 1,7 veces lo que pesa uno bueno. Encendiéndolo, la pérdida realizada baja un 44 %; con el sesgo de tamaño también, un 54 %.',
     },
     inventorySkewFactor: {
       what: 'Con cuánta fuerza empuja ese desplazamiento.',
@@ -183,7 +191,7 @@ export const MARKET_MAKER_V2_GUIDE: StrategyGuide<MarketMakerV2Config> = {
       what: 'Suelo duro absoluto: el bot no cotiza nunca más cerca del precio que esto.',
       affects:
         'Compite con el suelo calculado (comisión de ida y vuelta más margen mínimo); manda el más alto de los dos.',
-      tip: 'A diferencia del market maker clásico, aquí la app no comprueba que sea menor que tus distancias de compra y venta. Revísalo tu.',
+      tip: 'A diferencia del market maker clásico, aquí superar tus distancias de compra o de venta no es un error: la app te avisa y el bot las eleva hasta este suelo.',
     },
     feeEstimateBps: {
       what: 'Lo que te cobra el exchange por lado, en puntos básicos. Se cuenta DOS veces, porque una vuelta completa son dos operaciones.',
@@ -277,7 +285,7 @@ export const MARKET_MAKER_V2_GUIDE: StrategyGuide<MarketMakerV2Config> = {
     maxDynamicSpreadBps: {
       what: 'Techo del diferencial compuesto (base, libro, volatilidad y coste). Se aplica DESPUÉS de los multiplicadores de nivel, de comportamiento y de modo de riesgo: ninguna capa cotiza más ancha que esto.',
       affects:
-        'Impide que un pico puntual mande la cotización tan lejos que deje de ejecutarse durante horas. El suelo por coste sigue mandando por debajo. Con 0 no hay techo, y la app lo avisa.',
+        'Impide que un pico puntual mande la cotización tan lejos que deje de ejecutarse durante horas. El suelo por coste sigue mandando por debajo. Vacío, no hay techo, y la app lo avisa.',
       tip: 'Tiene que quedar por encima del suelo calculado (comisión de ida y vuelta más margen mínimo); si no, la app rechaza la configuración porque el bot no podría cotizar con beneficio.',
     },
     layers: {
@@ -362,15 +370,20 @@ export const MARKET_MAKER_V2_GUIDE: StrategyGuide<MarketMakerV2Config> = {
         'En neutral cotiza igual a los dos lados; con intención long coloca SOLO compras (y con short, solo ventas): acumula sin salida propia y una posición contraria previa no se deshace sola.',
       tip: 'Neutral es lo natural en un market maker. No se puede cambiar después.',
     },
+    // Decían «solo reduce, no abre» y que el suelo apagaba las compras: es al
+    // revés. Cada uno bloquea solo el lado que abriría posición en su sentido
+    // (`priceBand`), y el otro sigue vivo.
     priceFloor: {
-      what: 'Por debajo de este precio el bot solo reduce, no abre.',
+      what: 'Por debajo de este precio el bot no abre cortos nuevos.',
       affects:
-        'Desactiva el lado comprador cuando el precio cae por debajo de donde ya no quieres seguir acumulando.',
+        'Deja de vender lo que no tiene cuando el precio ya está bajo. Sigue comprando, y sigue vendiendo para reducir un largo: bajo el suelo el bot aún puede acumular.',
+      tip: 'Para dejar de comprar caro, lo que sirve es el techo.',
     },
     priceCeiling: {
-      what: 'Por encima de este precio el bot solo reduce, no abre.',
+      what: 'Por encima de este precio el bot no abre largos nuevos.',
       affects:
-        'Desactiva el lado vendedor cuando el precio sube por encima de donde ya no quieres seguir vendiendo.',
+        'Deja de comprar cuando el precio ya está alto. Sigue vendiendo, y sigue comprando para cerrar un corto: sobre el techo el bot aún puede quedarse corto.',
+      tip: 'Es el freno para no acumular inventario caro en un bot con sesgo largo.',
     },
   },
 };

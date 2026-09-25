@@ -64,6 +64,7 @@ describe('trailing take profit — antes de activarse', () => {
       cycleSeq: 1,
       market: { ...MERCADO } as never,
       stopLossPct: '5',
+      leverage: 1,
     });
     expect(conStop.orders.some((o) => o.levelKind === LevelKind.STOP_LOSS)).toBe(true);
     expect(salida(conStop)).toBeDefined();

@@ -287,6 +287,20 @@ se mandará al exchange.
 | **Canal con IA** · solo administradores | Rebotes en el borde de un rango o canal de 15 min, con el apalancamiento que permite el stop (hasta 25×). El motor calcula cada operación posible y una IA elige entre ellas con palabras de una lista; sin respuesta válida no entra. | **Alto** |
 | **Operación IA** · solo administradores | La operación de un agente de IA: entra una vez con un precio tope, stop y objetivos nativos desde el primer momento, y se detiene al cerrarse. No se crea a mano. | **Alto** |
 
+### Los % de resultado van sobre el margen
+
+Como en un exchange apalancado (spec 080): el **stop loss**, el **take profit** de las escaleras, el
+**objetivo** del seguimiento y el **TP satélite** de GridMart son un % del **margen** de la posición,
+con la fórmula del TP/SL por ROI de Binance, `precio = entrada × (1 ± ROI/apalancamiento)`. A 10×, un
+stop del 20 % es un 2 % del precio. Las **distancias** —separaciones, retrocesos, descuentos, bps—
+siguen en % del precio. La liquidación es **una sola**, la exacta de cada lado con el mantenimiento del
+mercado, y un stop que quede en ella o detrás es un error en margen aislado (la app propone el más
+ancho que cabe). La Revisión, antes de crear el bot, enseña por cada lado la entrada media, el tamaño,
+el margen y el objetivo, el stop y la liquidación con su precio, el resultado en USDC sin comisiones y
+el % sobre el margen. Aplica el tope de exposición como el motor, y corta la escalera o cada lado de la
+rejilla donde el tope, el stop o la liquidación llegan antes. Todo en
+[`docs/riesgo-y-liquidacion.md`](docs/riesgo-y-liquidacion.md).
+
 El **Canal con IA** y la **Operación IA** son las únicas que solo ve y usa un `ADMIN` (el rol se
 lee de la base al listar, crear, editar y arrancar). La guía del canal,
 [`docs/ai-channel.md`](docs/ai-channel.md), cuenta el reparto entre el motor y la IA, la regla del

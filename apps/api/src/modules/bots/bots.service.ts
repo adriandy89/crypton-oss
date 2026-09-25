@@ -219,8 +219,9 @@ export class BotsService implements OnModuleInit {
   // ═══════════════════════════════════════════════════════════════
 
   /**
-   * Devuelve la escalera completa, nivel a nivel, con el peor caso y la
-   * liquidación estimada. Es el mismo cálculo que ejecutará el motor —viene de
+   * Devuelve las órdenes nivel a nivel y, por cada lado, la posición del peor
+   * caso con su objetivo, su stop y su liquidación (spec 080). Es el mismo
+   * cálculo que ejecutará el motor —viene de
    * `strategy-core`— así que lo que se ve aquí es literalmente lo que se
    * mandará al venue, no una aproximación para la interfaz.
    */
@@ -962,7 +963,9 @@ export class BotsService implements OnModuleInit {
     const preview = strategy.preview(config, market, refPrice);
     if (!preview.valid) {
       throw new BadRequestException({
-        message: 'La escalera resultante no es válida en este mercado.',
+        // No toda estrategia tiene escalera: un seguimiento o una operación de
+        // agente tienen una sola orden (079/F-20).
+        message: 'Las órdenes resultantes no son válidas en este mercado.',
         issues: preview.issues,
       });
     }
@@ -1121,6 +1124,30 @@ export class BotsService implements OnModuleInit {
           reason: 'RESHAPE_WITH_INVENTORY',
           changed: diff.changed,
           filledLevelIndexes: ciclo.filled_level_indexes,
+        });
+      }
+    }
+    // Con la posición abierta el apalancamiento no se cambia (spec 080, P-3).
+    // El stop y los objetivos son un % del MARGEN: moverlo desplazaría en
+    // silencio el stop y la salida de lo que ya está abierto, y además acerca
+    // o aleja su liquidación. En un exchange las órdenes ya colocadas no se
+    // mueven al cambiar el apalancamiento; aquí se replanifican, así que se
+    // cierra la puerta. Se mira la última foto del worker, que es la que tiene
+    // la posición; sin foto no hay nada que proteger todavía.
+    if (diff.changed.some((c) => c.key === 'leverage')) {
+      const foto = await this.db.botSnapshot.findFirst({
+        where: { bot_id: id },
+        orderBy: { taken_at: 'desc' },
+        select: { position_qty: true },
+      });
+      if (foto && !D(foto.position_qty.toString()).isZero()) {
+        throw new ConflictException({
+          message:
+            'Con la posición abierta no se puede cambiar el apalancamiento: el stop y el objetivo ' +
+            'son un % del margen y se moverían con él, igual que la liquidación de lo ya abierto. ' +
+            'Cierra la posición o espera a que termine el ciclo.',
+          reason: 'LEVERAGE_WITH_POSITION',
+          changed: diff.changed,
         });
       }
     }
@@ -1290,6 +1317,12 @@ export class BotsService implements OnModuleInit {
       await this.puedeUsar(userId, bot.strategy);
       await this.risk.assertCanStart(userId, bot.id);
       await this.assertPairFree(bot);
+      // La configuración, contra el mercado y los límites de HOY (spec 080,
+      // P-5). Se validaba al crear y al editar, nunca al arrancar: un bot parado
+      // hace semanas arrancaba con un mantenimiento que había subido, un tope
+      // del usuario que había bajado o, tras la migración del 080, un stop que
+      // quedaba detrás de la liquidación.
+      const nocional = await this.validarParaArrancar(userId, bot);
       try {
         await this.db.bot.update({
           where: { id },
@@ -1297,6 +1330,9 @@ export class BotsService implements OnModuleInit {
             status: BotStatus.STARTING,
             started_at: new Date(),
             last_error: null,
+            // El nocional que la estrategia declara, fresco: el de un market
+            // maker no se escribía hasta su primera edición (079/F-03).
+            max_notional: nocional,
           },
         });
       } catch (e) {
@@ -1563,6 +1599,53 @@ export class BotsService implements OnModuleInit {
       },
       acceptRelayout: true,
     });
+  }
+
+  /**
+   * La configuración vigente de un bot, contra el mercado y los límites de hoy,
+   * antes de arrancarlo (spec 080, P-5). Devuelve el nocional máximo que
+   * declara la estrategia, o null si no declara ninguno.
+   *
+   * Es lo mismo que se mira al crear y al editar, por el mismo camino: la
+   * validación de la estrategia y `assertWithinLimits`. Sin esto, el mercado y
+   * los límites solo se miraban el día que se escribió la configuración.
+   */
+  private async validarParaArrancar(
+    userId: string,
+    bot: {
+      id: string;
+      strategy: StrategyKind;
+      venue: Venue;
+      symbol: string;
+      exchange_account_id: string;
+      config_version: number;
+    },
+  ): Promise<string | null> {
+    const revision = await this.db.botConfigRevision.findUniqueOrThrow({
+      where: { bot_id_version: { bot_id: bot.id, version: bot.config_version } },
+    });
+    const config = revision.config as unknown as BotConfig;
+    const market = await this.markets.getSpec(
+      bot.venue,
+      bot.symbol,
+      (await this.networkOf(bot.exchange_account_id)).testnet,
+    );
+    const strategy = getStrategy(bot.strategy);
+    const validacion = strategy.validate(config, market);
+    if (!validacion.ok) {
+      throw new BadRequestException({
+        message:
+          'La configuración de este bot no vale con el mercado de hoy: corrígela antes de arrancarlo.',
+        issues: validacion.issues,
+      });
+    }
+    const nocional = strategy.nocionalMaximo?.(config) ?? null;
+    await this.risk.assertWithinLimits(userId, config, market, {
+      excludeBotId: bot.id,
+      reglaLiquidacion: strategy.reglaLiquidacion,
+      nocional,
+    });
+    return nocional;
   }
 
   /**

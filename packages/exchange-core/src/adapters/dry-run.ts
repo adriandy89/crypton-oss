@@ -72,7 +72,8 @@ export interface DryRunOptions {
   slippageRate?: string;
   /**
    * Margen de mantenimiento en tanto por uno. Por debajo de él, el venue
-   * liquida. Ver `checkLiquidation`.
+   * liquida. Ver `checkLiquidation`. Sin él, el de cada mercado
+   * (`maintenanceMarginRateOf`), que es con el que calcula la app.
    */
   maintenanceMarginRate?: number;
   /**
@@ -214,11 +215,12 @@ interface SimPosition {
  * profundidad del libro (una orden se ejecuta entera al tocarse el precio, sin
  * impacto de mercado) y la cola de prioridad de las post-only.
  *
- * La liquidación SÍ se simula (ver `checkLiquidation`), pero con un margen de
- * mantenimiento plano —0,5 % por defecto— en lugar de la escala por tramos que
- * aplica cada venue. Los tramos altos son peores que ese 0,5 %, así que la
- * estimación es OPTIMISTA: una posición grande revienta en el venue algo antes
- * de lo que revienta aquí.
+ * La liquidación SÍ se simula (ver `checkLiquidation`), con el mantenimiento de
+ * cada mercado (`maintenanceMarginRateOf`), el mismo con el que la Revisión
+ * enseña la liquidación antes de crear el bot (spec 080, P-6). Es el del primer
+ * tramo, no la escala por tramos que aplica cada venue: los tramos altos son
+ * peores, así que para una posición grande la estimación sigue siendo
+ * OPTIMISTA y el venue la revienta algo antes de lo que la revienta aquí.
  *
  * Los tramos que INFORMA (`getLeverageTiers`) son los del venue cuando la
  * fuente sabe leerlos. Si no puede, porque Aster los sirve firmados y la fuente
@@ -278,7 +280,10 @@ export class DryRunAdapter implements ExchangeAdapter {
   private readonly makerFee: Decimal;
   private readonly takerFee: Decimal;
   private readonly slippage: Decimal;
-  private readonly mmr: number;
+  /** El mantenimiento que fija quien construye el simulador; null = el de cada mercado. */
+  private readonly mmrFijo: number | null;
+  /** El de cada mercado, aprendido de su ficha. Ver `mantenimientoDe`. */
+  private readonly mantenimientoPorSimbolo = new Map<string, number>();
   private readonly closeSource: boolean;
   private readonly limitFill: LimitFillMode;
 
@@ -314,7 +319,7 @@ export class DryRunAdapter implements ExchangeAdapter {
     this.makerFee = D(opts.makerFeeRate ?? '0.0002');
     this.takerFee = D(opts.takerFeeRate ?? '0.0005');
     this.slippage = D(opts.slippageRate ?? '0.0005');
-    this.mmr = opts.maintenanceMarginRate ?? DEFAULT_MAINTENANCE_MARGIN_RATE;
+    this.mmrFijo = opts.maintenanceMarginRate ?? null;
     this.closeSource = opts.closeSource !== false;
     this.limitFill = opts.limitFill ?? 'TOUCH';
     this.runId = opts.runId ?? randomUUID().slice(0, 8);
@@ -531,7 +536,13 @@ export class DryRunAdapter implements ExchangeAdapter {
     ]);
   }
 
-  getPositions(symbol?: string): Promise<Position[]> {
+  async getPositions(symbol?: string): Promise<Position[]> {
+    // El mantenimiento de cada mercado con posición, antes de calcular su
+    // liquidación: tras un reinicio el estado vuelve con posiciones y ninguna
+    // orden ha pasado todavía por `placeOrder`, que es donde se aprende.
+    for (const [sym, p] of this.positions) {
+      if ((!symbol || sym === symbol) && !p.qty.isZero()) await this.aprenderMantenimiento(sym);
+    }
     const out: Position[] = [];
     for (const [sym, p] of this.positions) {
       if (symbol && sym !== symbol) continue;
@@ -562,7 +573,7 @@ export class DryRunAdapter implements ExchangeAdapter {
         marginUsed: margin.toFixed(),
       });
     }
-    return Promise.resolve(out);
+    return out;
   }
 
   getOpenOrders(symbol?: string): Promise<VenueOrder[]> {
@@ -580,6 +591,7 @@ export class DryRunAdapter implements ExchangeAdapter {
   // ── Ejecución simulada ───────────────────────────────────────────
 
   async placeOrder(req: PlaceOrderRequest): Promise<OrderAck> {
+    await this.aprenderMantenimiento(req.symbol);
     const ticker = this.lastTicker.get(req.symbol) ?? (await this.getTicker(req.symbol));
     const venueOrderId = 'sim-' + ++this.seq;
 
@@ -1070,8 +1082,39 @@ export class DryRunAdapter implements ExchangeAdapter {
       },
       this.collateralView(),
       this.equity(),
-      this.mmr,
+      this.mantenimientoDe(symbol),
     );
+  }
+
+  /**
+   * La tasa de mantenimiento con la que se liquida `symbol`.
+   *
+   * La de la opción, si la hay (el backtest la fija); si no, la del mercado, la
+   * misma que usa la Revisión antes de crear el bot. Era un 0,5 % plano para
+   * todos los pares, así que en BTC (1,25 %) la simulación liquidaba bastante
+   * más lejos de lo que la app había enseñado (spec 080, P-6). Hasta que se
+   * aprende la del mercado, la plana.
+   */
+  private mantenimientoDe(symbol: string): number {
+    return (
+      this.mmrFijo ?? this.mantenimientoPorSimbolo.get(symbol) ?? DEFAULT_MAINTENANCE_MARGIN_RATE
+    );
+  }
+
+  /**
+   * Aprende el mantenimiento del mercado de `symbol`, una vez por símbolo.
+   *
+   * Un fallo no se propaga: una orden simulada no puede rechazarse porque la
+   * ficha del mercado no llegue, y el siguiente intento vuelve a preguntar.
+   */
+  private async aprenderMantenimiento(symbol: string): Promise<void> {
+    if (this.mmrFijo !== null || this.mantenimientoPorSimbolo.has(symbol)) return;
+    try {
+      const market = (await this.source.getMarkets()).find((m) => m.symbol === symbol);
+      if (market) this.mantenimientoPorSimbolo.set(symbol, maintenanceMarginRateOf(market));
+    } catch {
+      // Se reintenta en la siguiente orden o lectura de posiciones.
+    }
   }
 
   /**

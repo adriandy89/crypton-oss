@@ -65,13 +65,13 @@ export const ETIQUETAS: Readonly<Record<string, string>> = {
   // Tendencia
   'strategy.trend.breakoutPeriod': 'Velas del canal de ruptura',
   'strategy.trend.atrStopMultiplier': 'Stop, en ATR',
-  'strategy.trend.riskPerTradePct': 'Riesgo por operación',
+  'strategy.trend.riskPerTradePct': 'Riesgo por operación (sobre el capital)',
   'strategy.trend.entryEfficiency': 'Eficiencia mínima para entrar',
   'strategy.trend.stopRepriceBps': 'Movimiento mínimo del stop',
 
   // Seguimiento de beneficio
-  'strategy.trailing.takeProfitPct': 'Beneficio al que empieza a seguir (%)',
-  'strategy.trailing.trailingCallbackPct': 'Retroceso para salir (%)',
+  'strategy.trailing.takeProfitPct': 'Beneficio al que empieza a seguir (sobre el margen)',
+  'strategy.trailing.trailingCallbackPct': 'Retroceso para salir (del precio)',
   'strategy.trailing.trailingRepriceBps': 'Umbral para mover el disparador (bps)',
 };
 

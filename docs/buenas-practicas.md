@@ -15,9 +15,10 @@
   introduzcas tu frase semilla** en ningún formulario: la app la rechaza si lo intentas.
 - **Martingala y GridMart con apalancamiento tienen riesgo de ruina real**: el peor caso es la suma de
   todos los niveles multiplicada por el apalancamiento, y aparece en la vista previa **antes** de crear el
-  bot. Léelo.
-- **La vista previa no es una promesa.** Es la escalera que se tendería y el peor caso si se llenara, con
-  los tamaños que de verdad se mandan.
+  bot, con el escalón en el que se corta la escalera si el stop o la liquidación llegan antes. Léelo.
+- **La vista previa no es una promesa.** Es la escalera que se tendería y, lado a lado, dónde quedarían
+  el objetivo, el stop y la liquidación si se llenara, con lo que ganarías o perderías en cada uno —en
+  USDC y en % del margen, sin comisiones— y los tamaños que de verdad se mandan.
 
 ---
 
@@ -74,19 +75,29 @@ que no cumple.
 
 ## 4. Apalancamiento y distancia a liquidación
 
-| Apalancamiento | Distancia estimada a la liquidación |
-|---|---|
-| 1× | sin liquidación práctica |
-| 2× | ≈ 49,5 % |
-| 3× | ≈ 32,8 % |
-| 5× | ≈ 19,5 % |
-| 10× | ≈ 9,5 % |
-| 18× | ≈ 5,1 % (el máximo que la API acepta) |
+Cuánto puede moverse el precio en contra, desde la entrada, antes de la liquidación. Es la fórmula
+exacta, con el mantenimiento de BTC en Hyperliquid (1,25 %):
 
-- El semáforo de la app: **verde ≥ 25 %, ámbar entre 10 y 25 %, rojo < 10 %**. La API rechaza cualquier
-  bot cuya liquidación estimada quede a **menos del 5 %**.
-- La estimación usa la tasa de mantenimiento del mercado (la mitad del margen inicial a su apalancamiento
-  máximo): en una altcoin de 10× hay cinco puntos menos de distancia que en BTC con el mismo apalancamiento.
+| Apalancamiento | Largo | Corto |
+|---|---|---|
+| 1× | sin liquidación | 97,5 % |
+| 2× | 49,4 % | 48,1 % |
+| 3× | 32,5 % | 31,7 % |
+| 5× | 19,0 % | 18,5 % |
+| 10× | 8,9 % | 8,6 % |
+| 15× | 5,5 % | 5,35 % (el máximo que se acepta en corto) |
+| 16× | 5,06 % (el máximo que se acepta en largo) | 4,94 %: se rechaza |
+
+- El semáforo de la app: **verde ≥ 25 %, ámbar entre 10 y 25 %, rojo < 10 %**. La app y la API rechazan
+  cualquier bot cuya liquidación estimada quede a **menos del 5 %**, medida **por lado**: el corto
+  liquida antes, y una dirección neutral —la de fábrica en la rejilla neutral, los market makers y la
+  tendencia—, que puede acabar en corto, se mide contra él. La rejilla neutral se mide contra el corto
+  siempre, diga lo que diga su dirección, porque la dirección no cambia su retícula. En BTC, 16× en
+  largo y 15× en corto.
+- La estimación usa la tasa de mantenimiento del mercado (la que publica el venue o, si no, la mitad del
+  margen inicial a su apalancamiento máximo): cuanto más bajo es el máximo del par, antes llega la
+  liquidación. En DOGE de Hyperliquid (máximo 10×, mantenimiento 5 %) un largo a 5× se liquida con un
+  15,8 % en contra, frente al 19,0 % de BTC.
 - **Recomendación**: 1× o 2× en todo lo que retenga inventario; nunca más de 3× en las que promedian a la
   baja. Un market maker gana céntimos muchas veces: multiplicar el riesgo por diez para ganar los mismos
   céntimos no compensa.
@@ -104,17 +115,35 @@ Todo esto, con las fórmulas, en [riesgo y liquidación](./riesgo-y-liquidacion.
 
 ## 5. El stop-loss nativo
 
-Si rellenas **Stop loss (%)**, el motor coloca una **orden condicional en el propio exchange**, sobre el
-precio medio real y con la dirección de la posición real. Se dispara aunque la plataforma esté caída.
+Si rellenas **Stop loss (sobre el margen)**, el motor coloca una **orden condicional en el propio
+exchange**, sobre el precio medio real y con la dirección de la posición real. Se dispara aunque la
+plataforma esté caída.
+
+**Es un % de tu margen, no del precio** (spec 080), como el SL por ROI de un exchange: el disparo queda
+en `precio medio × (1 ∓ stop / (100 · L))`. A 2×, un stop del 10 % está a un 5 % del precio; a 10×, el
+mismo 10 % está a un 1 %. Debajo del campo, el formulario enseña su precio y lo que perderías en USDC.
+Se convierte con el apalancamiento de la configuración; si el exchange tiene la posición más
+apalancada, se usa el suyo, que deja el stop más cerca, y la bitácora lo avisa una vez
+(`LEVERAGE_SKIPPED`).
+
+**Tiene que saltar antes que la liquidación.** Un stop más ancho que la distancia a la liquidación no
+salta nunca: el venue liquida antes y se pierde el margen entero. En margen **aislado**, un stop en la
+liquidación o detrás es un error, y uno que la deja a menos de medio stop detrás, un aviso; en
+**cruzado**, los dos son avisos, porque la liquidación real queda más lejos. Los dos proponen el stop
+más ancho que deja medio stop de holgura, y «Usar el stop más ancho válido» lo pone con un toque. Un
+corto a 15× en BTC de Hyperliquid se liquida con un 5,35 % de subida, al perder el 80,2 % del margen:
+un stop del 90 % no saltaría nunca, y el más ancho que se acepta sin aviso es un 53,4 % (un 3,56 % del
+precio). Más en [riesgo y liquidación](./riesgo-y-liquidacion.md#el-stop-frente-a-la-liquidación).
 
 | Comando | ¿Conserva el stop? |
 |---|---|
-| Pausar · Parar manteniendo posición · Recentrar la retícula · pausa por guarda de riesgo | ✅ **Sí** |
-| Cancelar órdenes | ❌ Lo cancela |
+| Pausar · Parar conservando la posición · Recentrar la retícula · pausa por guarda de riesgo | ✅ **Sí** |
+| Cancelar todas las órdenes | ❌ Lo cancela |
 | Parar y cerrar · Pánico | ❌ Lo cancela **después** de que el cierre haya salido; si el exchange no acepta el cierre, el stop se queda y el bot pasa a pausado avisando en CRITICAL |
 
-**Dónde ponerlo**: en escaleras, por debajo del último escalón; en rejillas, por debajo del precio inferior;
-en un DCA, donde reconocerías que la tesis falló. **Tendencia, el Canal con IA y la Operación IA ponen el
+**Dónde ponerlo**: en escaleras, más allá del último escalón —si salta antes que una seguridad, la app
+lo avisa y la vista previa corta ahí la escalera—; en rejillas, por debajo del precio inferior; en un
+DCA, donde reconocerías que la tesis falló. **Tendencia, el Canal con IA y la Operación IA ponen el
 suyo** y no leen este campo. Su tamaño mínimo se mide sobre la posición al precio de
 marca, así que cabe siempre que la posición supere el mínimo del par.
 
@@ -142,9 +171,12 @@ del exchange antes de dejar un bot con inventario varios días, y cuenta con ell
   rejillas, escaleras y market makers cotizan **post-only** para ser maker; las entradas a mercado del DCA
   y de la martingala son taker.
 - Regla: **el paso de la rejilla y el take profit tienen que ser bastante mayores que la suma de las dos
-  comisiones**. Un ciclo maker+maker cuesta ≈ 0,04 %; uno taker+maker ≈ 0,07 %. La app avisa por debajo
-  de 0,05 % de paso, pero eso es el mínimo aceptable, no un buen valor: pasos del 0,5 % al 1,5 % y take
-  profits ≥ 0,5 % es lo razonable.
+  comisiones**. Un ciclo maker+maker cuesta ≈ 0,04 %; uno taker+maker ≈ 0,07 %. Se pagan sobre el
+  nocional, así que se comparan con lo que se mueve el **precio**. La app avisa por debajo de 0,05 % de
+  paso, pero eso es el mínimo aceptable, no un buen valor: pasos del 0,5 % al 1,5 % y take profits que
+  **en precio** queden en el 0,5 % o más es lo razonable. El take profit se escribe en % del margen
+  (spec 080): a 2×, un 0,5 % del precio es un 1 % del margen. En martingala y GridMart la app avisa si el
+  objetivo, en precio, baja del 0,3 %.
 - En el **Market Maker V2**, «Estimación de comisión» viene a **0** de fábrica: ponla (la app avisa si la
   dejas a 0), o el suelo de beneficio no cubre nada.
 - Una operación **en rojo** en el historial del exchange tras un par compra-venta cerrado **es normal**:
@@ -203,6 +235,9 @@ La lista completa con su significado, en [comandos, guardas y eventos](./comando
   ciclo: la API lo rechaza y te dice que cierres la posición o esperes al fin del ciclo. Con el ciclo
   limpio, sin problema.
 - ❄️ **En frío**: hay que crear otro bot.
+- El **apalancamiento** no se cambia con la posición abierta: la API lo rechaza, porque el stop y los
+  objetivos son un % del margen y se moverían con él, igual que la liquidación de lo ya abierto. Con la
+  posición en cero, sin problema.
 - «Recentrar la retícula» solo existe en las escaleras (Martingala y GridMart) y pide confirmación: vuelve a
   tender la escalera entera bajo el precio actual con la posición abierta. En las demás estrategias el menú
   no lo ofrece y el motor lo rechaza diciendo el motivo. «Aportar margen» mueve colateral a la posición
@@ -234,7 +269,7 @@ web del exchange. Detalle en [venues y mínimos](./venues-y-minimos.md).
 - [ ] Apalancamiento 1× o 2×; distancia a liquidación en verde. (En el Canal con IA, el que calcula su regla por stop.)
 - [ ] Cada orden suelta ≥ 20 USDC.
 - [ ] El paso / take profit cubre holgadamente dos comisiones.
-- [ ] Stop loss puesto donde toca (o peor caso aceptado a conciencia).
+- [ ] Stop loss puesto donde toca y por delante de la liquidación (o peor caso aceptado a conciencia).
 - [ ] El freno propio de la estrategia está configurado: `maxExposure` (neutral), `maxPositionNotional` (DCA), `maxBotPositionValue` (market makers), `maxNotionalCap` (escaleras).
 - [ ] En Lighter: ≤ 30 órdenes, y sé lo de las órdenes a mercado.
 - [ ] Sé qué comandos conservan el stop y cuáles no.

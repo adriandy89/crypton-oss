@@ -10,12 +10,14 @@ import type {
   OrderSide,
   OrderType,
   PositionModeSetting,
+  PositionSide,
   SizingMode,
   StrategyKind,
   TimeInForce,
   Venue,
 } from './enums';
 import type { Candle, CandleInterval } from './candle';
+import type { ValidationIssue } from './config-meta';
 import type {
   AvisoEstrategia,
   DecisionIa,
@@ -308,10 +310,14 @@ export interface LevelPreview {
   qty: string;
   notional: string;
   marginUsed: string;
-  /** Acumulados hasta este nivel incluido: es el número que importa de verdad. */
+  /**
+   * Acumulados hasta este nivel incluido, DENTRO DE SU LADO: es el número que
+   * importa de verdad. En una rejilla neutral las compras y las ventas no se
+   * suman entre sí, porque nunca llegan a ser la misma posición (079/F-11).
+   */
   cumulativeNotional: string;
   cumulativeMargin: string;
-  /** Precio medio de entrada si se llenaran todos los niveles hasta aquí. */
+  /** Precio medio de entrada del lado si se llenaran todos sus niveles hasta aquí. */
   averageEntry: string | null;
   /** Distancia en % desde el precio actual. */
   distancePct: string;
@@ -319,19 +325,82 @@ export interface LevelPreview {
   violations: string[];
 }
 
+/**
+ * Una salida posible de un lado: el objetivo, el stop o la liquidación
+ * (spec 080). Todo lo que un exchange enseña al poner un TP/SL, sin comisiones.
+ */
+export interface PreviewExit {
+  /** Precio, en la retícula del venue y redondeado como lo manda el motor. */
+  price: string;
+  /**
+   * Movimiento del precio desde el precio medio del lado, en %: positivo si
+   * sube. Si es a favor o en contra lo dice el signo de `pnl`.
+   */
+  movePct: string;
+  /** Distancia desde el precio de referencia (el de hoy), en %: positivo por encima. */
+  fromRefPct: string;
+  /** Cantidad que sale. */
+  qty: string;
+  /** Resultado en la moneda de cotización, sin comisiones. */
+  pnl: string;
+  /** Resultado sobre el margen de lo que sale, en %. */
+  roiPct: string;
+}
+
+/**
+ * La posición que un lado puede llegar a tener y cómo saldría de ella
+ * (spec 080). Un largo y un corto nunca conviven, así que cada uno se describe
+ * aparte: una rejilla neutral o un market maker tienen dos.
+ */
+export interface PreviewSide {
+  direction: PositionSide;
+  /** Niveles de entrada que se llegan a llenar antes de que algo corte el recorrido. */
+  entries: number;
+  averageEntry: string;
+  qty: string;
+  notional: string;
+  margin: string;
+  /** El objetivo; null si la estrategia no tiene uno fijo (rejillas, market makers, tendencia). */
+  takeProfit: PreviewExit | null;
+  /** true = el objetivo es donde EMPIEZA a seguir al máximo, no donde sale. */
+  takeProfitIsActivation: boolean;
+  /** El stop; null si no hay. */
+  stopLoss: PreviewExit | null;
+  /** true = el stop es una estimación (el de tendencia sale de un ATR supuesto). */
+  stopLossEstimated: boolean;
+  /**
+   * Relación beneficio/riesgo: lo que el precio recorre de la media al objetivo
+   * entre lo que recorre hasta el stop. null sin uno de los dos.
+   */
+  rewardRisk: string | null;
+  /** La liquidación exacta del lado; null si no se liquida (un largo a 1×). */
+  liquidation: PreviewExit | null;
+  /** true en cruzado: la liquidación es una cota, la real queda más lejos. */
+  liquidationIsBound: boolean;
+  /**
+   * Dónde se corta el recorrido: el nivel que no llega a llenarse porque, con la
+   * media de lo ya lleno, el stop o la liquidación llegan antes, o porque el
+   * tope de exposición no deja tenderlo (`TOPE`). null = entero.
+   */
+  cutAt: { level: number; by: 'STOP' | 'LIQUIDACION' | 'TOPE' } | null;
+}
+
 export interface PreviewResult {
   levels: LevelPreview[];
-  /** El peor caso: todos los niveles ejecutados. */
+  /**
+   * Lo que comprometen TODAS las órdenes de entrada que se llegan a tender, de
+   * los dos lados si los hay: lo que hace falta para tenderlas. Las que el tope
+   * de exposición no deja tender no cuentan; las que cortan el stop o la
+   * liquidación, sí. La posición de cada lado va en `sides`.
+   */
   worstCaseNotional: string;
   worstCaseMargin: string;
-  worstCaseAverageEntry: string | null;
-  /** Estimación con la fórmula del venue; null si falta información. */
-  estimatedLiquidationPrice: string | null;
-  /** Caída en % desde el precio actual hasta la liquidación estimada. */
-  liquidationDistancePct: string | null;
-  takeProfitPrice: string | null;
+  leverage: number;
+  marginMode: string | null;
+  /** La posición de cada lado y sus salidas (spec 080). */
+  sides: PreviewSide[];
   valid: boolean;
-  issues: { field: string | null; message: string; severity: 'ERROR' | 'WARNING' }[];
+  issues: ValidationIssue[];
 }
 
 // ── Vistas para la app ────────────────────────────────────────────────────

@@ -4,6 +4,7 @@ import { addIcons } from 'ionicons';
 import { sparklesOutline, warningOutline } from 'ionicons/icons';
 import type { RecommendationSet, RecommendedProfile } from '../../core/models';
 import { money } from '../../core/utils';
+import { liqTone } from '../../core/utils/risk';
 import { UiBadgeComponent } from './ui-badge.component';
 import { UiNoticeComponent } from './ui-notice.component';
 
@@ -69,11 +70,12 @@ import { UiNoticeComponent } from './ui-notice.component';
                 <b>{{ money(p.headline.worstCaseMargin) }}</b>
               </span>
               <span>
-                <em>A liquidación</em>
-                <b [class.riesgo]="cerca(p)">
-                  {{ p.headline.liquidationDistancePct ?? '—' }}
-                  @if (p.headline.liquidationDistancePct) {
-                    %
+                <em>Aguanta en contra</em>
+                <b [class]="tonoLiq(p)">
+                  @if (p.headline.liquidationDistancePct; as d) {
+                    {{ money(d) }} %
+                  } @else {
+                    no se liquida
                   }
                 </b>
               </span>
@@ -229,10 +231,14 @@ import { UiNoticeComponent } from './ui-notice.component';
         overflow-wrap: anywhere;
       }
 
-      /* Menos del 15 % hasta la liquidación es lo que hay que ver antes de
-         pulsar, no después. */
+      /* El semáforo de toda la app (core/utils/risk.ts): lo que hay que ver
+         antes de pulsar, no después. */
       .cifras b.riesgo {
         color: var(--signal-warn);
+      }
+
+      .cifras b.peligro {
+        color: var(--pnl-down);
       }
 
       .aplicada {
@@ -270,16 +276,15 @@ export class UiRecommendationsComponent {
   }
 
   /**
-   * Menos del 15 % hasta la liquidacion.
+   * El color de lo que aguanta hasta la liquidación, con los umbrales de toda la
+   * app: ámbar por debajo del 25 % y rojo por debajo del 10 %. Aquí era ámbar
+   * por debajo de un 15 % propio (079/F-26).
    *
-   * La comprobacion de nulo va PRIMERO: `Number(null)` es 0, asi que sin ella
-   * una estrategia sin liquidacion estimada —las rejillas y los market makers
-   * devuelven null— pintaba su guion en ambar, como si la liquidacion llegara
-   * con un movimiento adverso del 0 %.
+   * Sin liquidación no hay color: `liqTone` trata el nulo antes de convertir,
+   * porque `Number(null)` es 0 y pintaría «a punto de liquidar».
    */
-  cerca(p: RecommendedProfile): boolean {
-    if (p.headline.liquidationDistancePct === null) return false;
-    const d = Number(p.headline.liquidationDistancePct);
-    return Number.isFinite(d) && d < 15;
+  tonoLiq(p: RecommendedProfile): string {
+    const t = liqTone(p.headline.liquidationDistancePct);
+    return t === 'danger' ? 'peligro' : t === 'warning' ? 'riesgo' : '';
   }
 }

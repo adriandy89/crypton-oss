@@ -1580,6 +1580,66 @@ describe('reutilización de ids por estrategia', () => {
       expect(adapter.placed.filter((c) => c.includes('SL'))).toHaveLength(0);
       await runner.dispose();
     });
+
+    /**
+     * Spec 080: el stop es un % del MARGEN. A 3× un 30 % es un 10 % del precio,
+     * con el apalancamiento de la configuración que el motor fija en el venue.
+     */
+    it('el stop es un % del margen: a 3× un 30 % dispara a un 10 % del precio', async () => {
+      const capturado: PlaceOrderRequest[] = [];
+      const { runner, adapter, store } = build(
+        { orders: [], immediate: [] },
+        {},
+        { stopLossPct: '30', leverage: 3 },
+      );
+      adapter.position = { ...conPos(), leverage: 3 };
+      const original = adapter.placeOrder.bind(adapter);
+      adapter.placeOrder = async (req: PlaceOrderRequest) => {
+        capturado.push(req);
+        return original(req);
+      };
+      try {
+        await runner.start();
+        const sl = capturado.find((r) => r.clientOrderId.includes('SL'))!;
+        expect(sl.triggerPrice).toBe('90.0');
+        expect(store.events).not.toContain('LEVERAGE_SKIPPED');
+      } finally {
+        await runner.dispose();
+      }
+    });
+
+    /**
+     * Si el venue tiene la posición MÁS apalancada que la configuración, el
+     * stop se calcula con la suya —el más estrecho— y se avisa una vez: con la
+     * de la configuración quedaría detrás de la liquidación real (spec 080, P-2).
+     */
+    it('con el venue más apalancado usa el suyo y lo avisa una sola vez', async () => {
+      const capturado: PlaceOrderRequest[] = [];
+      const { runner, adapter, store } = build(
+        { orders: [], immediate: [] },
+        {},
+        { stopLossPct: '30', leverage: 3 },
+      );
+      adapter.position = { ...conPos(), leverage: 10 };
+      const original = adapter.placeOrder.bind(adapter);
+      adapter.placeOrder = async (req: PlaceOrderRequest) => {
+        capturado.push(req);
+        return original(req);
+      };
+      try {
+        await runner.start();
+        // Un segundo tick con lo mismo: el aviso no se repite.
+        runner.pedirTick();
+        await new Promise((r) => setImmediate(r));
+        await (runner as unknown as { gate: Promise<unknown> }).gate;
+        const sl = capturado.find((r) => r.clientOrderId.includes('SL'))!;
+        // 30 % del margen a 10× = 3 % del precio.
+        expect(sl.triggerPrice).toBe('97.0');
+        expect(store.events.filter((e) => e === 'LEVERAGE_SKIPPED')).toHaveLength(1);
+      } finally {
+        await runner.dispose();
+      }
+    });
   });
 
   describe('el stop vivo no se recoloca en cada tick (spec 057, F-01)', () => {

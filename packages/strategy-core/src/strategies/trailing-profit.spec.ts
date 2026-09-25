@@ -174,7 +174,11 @@ describe('trailingProfit — lo que avisa al configurarlo', () => {
 
   it('nace con stop loss y con espera entre operaciones', () => {
     const d = estrategia.defaults();
-    expect(d['stopLossPct']).toBe('5');
+    // % del MARGEN desde el spec 080: a 2× son el 5 % y el 15 % del precio de
+    // antes, así que a su apalancamiento de fábrica el bot hace lo mismo.
+    expect(d['leverage']).toBe(2);
+    expect(d['stopLossPct']).toBe('10');
+    expect(d['takeProfitPct']).toBe('30');
     expect(d['cooldownMinutes']).toBe(60);
   });
 
@@ -196,7 +200,9 @@ describe('trailingProfit — lo que avisa al configurarlo', () => {
   });
 
   it('la vista previa dice que el objetivo no es el precio de salida', () => {
-    const p = estrategia.preview(cfg(), market, '100');
+    // 30 % del margen a 2× = 15 % del precio: activa en 115 y, con un 1 % de
+    // retroceso, lo mínimo que cobra es 113,85.
+    const p = estrategia.preview(cfg({ takeProfitPct: '30', leverage: 2 }), market, '100');
     expect(p.issues.some((i) => i.message.includes('113.85'))).toBe(true);
   });
 
@@ -205,9 +211,11 @@ describe('trailingProfit — lo que avisa al configurarlo', () => {
     // vista previa pintaba entrada 100, cantidad 10 y objetivo 115. El bot
     // entrara en 80 con 12,5 y seguira desde 92: los cuatro numeros estaban mal
     // en la pantalla donde el usuario decide comprometer dinero.
+    // A 1× un 15 % del margen es un 15 % del precio.
     const p = estrategia.preview(
       cfg({
         leverage: 1,
+        takeProfitPct: '15',
         activationMode: ActivationMode.PRICE_BELOW,
         activationPrice: '80',
       }),
@@ -216,7 +224,7 @@ describe('trailingProfit — lo que avisa al configurarlo', () => {
     );
     expect(p.levels[0].price).toBe('80.00');
     expect(p.levels[0].qty).toBe('12.500');
-    expect(p.takeProfitPrice).toBe('92.00');
+    expect(p.sides[0].takeProfit?.price).toBe('92.00');
     expect(p.issues.some((i) => i.message.includes('precio de entrada'))).toBe(true);
   });
 

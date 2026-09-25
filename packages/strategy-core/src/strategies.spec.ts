@@ -3,7 +3,7 @@ import {
   FairPriceOrigin,
   LevelKind,
   edicionesDe,
-  estimateLiquidationPrice,
+  precioLiquidacion,
   Mutability,
   PriceSource,
   StrategyKind,
@@ -21,6 +21,7 @@ import { parseCoid } from './client-order-id';
 import { withStopLoss } from './stop-loss';
 import {
   BASE_CONFIG,
+  CONFIG_MINIMA,
   makeContext,
   makeCycle,
   makeMarket,
@@ -235,7 +236,6 @@ describe('validación genérica y parámetros comunes (spec 019)', () => {
     stepScale: '2',
     volumeScale: '2',
     totalInvestment: '70',
-    takeProfitPct: '1',
     satelliteTpPct: '0.5',
     gridSellCount: 2,
     gridSellInitialSeparationPct: '1',
@@ -321,11 +321,24 @@ describe('validación genérica y parámetros comunes (spec 019)', () => {
     ).toBe(false);
   });
 
+  it('en corto la regla se mide con la liquidación exacta del corto (spec 079, F-07)', () => {
+    // Corto: 1/(0,0125 + 0,05·1,0125) = 15,8… → 15x. A 16x la liquidación
+    // exacta queda a un 4,94 %, por debajo del mínimo.
+    const corto = { ...(gridCfg as object), direction: 'SHORT' };
+    expect(errorEn(grid.validate(cfg({ ...corto, leverage: 16 }), makeMarket()), 'leverage')).toBe(
+      true,
+    );
+    expect(errorEn(grid.validate(cfg({ ...corto, leverage: 15 }), makeMarket()), 'leverage')).toBe(
+      false,
+    );
+  });
+
   it('la liquidación estimada usa la tasa de mantenimiento del mercado', () => {
     const p = grid.preview(cfg({ ...(gridCfg as object), leverage: 2 }), makeMarket(), '100');
-    const esperado = estimateLiquidationPrice(p.worstCaseAverageEntry ?? '0', 2, 'LONG', 0.0125);
+    const [lado] = p.sides;
+    const esperado = precioLiquidacion(lado.averageEntry, 2, 0.0125, 'LONG');
     expect(
-      D(p.estimatedLiquidationPrice ?? '0')
+      D(lado.liquidation?.price ?? '0')
         .minus(esperado ?? 0)
         .abs()
         .lt(0.15),
@@ -395,14 +408,29 @@ describe('validación genérica y parámetros comunes (spec 019)', () => {
   });
 
   it('la vista previa de GridMart pinta el TP del satélite, el único que existe', () => {
+    // 0,5 % del margen a 1× = 0,5 % del precio, desde la media de la escalera.
     const p = gm.preview(gmCfg, makeMarket(), '100');
-    const satelite = D(p.worstCaseAverageEntry ?? '0').mul('1.005');
+    const [lado] = p.sides;
+    const satelite = D(lado.averageEntry).mul('1.005');
     expect(
-      D(p.takeProfitPrice ?? '0')
+      D(lado.takeProfit?.price ?? '0')
         .minus(satelite)
         .abs()
         .lt(0.15),
     ).toBe(true);
+  });
+
+  it('y dimensiona sus ventas sobre el NÚCLEO, como el plan (079/F-02)', () => {
+    const p = gm.preview(gmCfg, makeMarket(), '100');
+    const base = p.levels.find((l) => l.kind === LevelKind.BASE)!;
+    const ventas = p.levels.filter((l) => l.kind === LevelKind.GRID_SELL);
+    const vendido = ventas.reduce((s, l) => s.plus(l.qty), D(0));
+    // Todo lo que vende la rejilla es el núcleo (la entrada base), no la
+    // posición entera con las seguridades.
+    expect(vendido.lte(D(base.qty))).toBe(true);
+    // Y el TP satélite sale solo por lo que añadieron las seguridades.
+    const [lado] = p.sides;
+    expect(D(lado.takeProfit?.qty ?? '0').toFixed()).toBe(D(lado.qty).minus(base.qty).toFixed());
   });
 
   it('avisa de que la dirección no sesga la retícula neutral', () => {
@@ -441,7 +469,6 @@ describe('rejillas: dimensionado y vista previa (spec 017)', () => {
     stepScale: '2',
     volumeScale: '2',
     totalInvestment: '70',
-    takeProfitPct: '1',
     satelliteTpPct: '0.5',
     gridSellCount: 2,
     gridSellInitialSeparationPct: '1',
@@ -584,14 +611,23 @@ describe('rejillas: dimensionado y vista previa (spec 017)', () => {
     expect(new Set(mensajes).size).toBe(mensajes.length);
   });
 
-  it('en cruzado y neutral la vista previa avisa de que la liquidacion es una cota y da la del lado corto', () => {
+  it('en cruzado y neutral la vista previa avisa de que la liquidacion es una cota y da la de CADA lado', () => {
+    // Antes daba una sola, la del corto, con un precio medio que mezclaba compras
+    // y ventas que nunca conviven (079/F-10 y F-11). Ahora cada lado tiene la
+    // suya, del lado correcto de su media, y las dos se rotulan como cota. A 3×,
+    // porque un largo a 1× no se liquida.
     const p = getStrategy(StrategyKind.NEUTRAL_GRID).preview(
-      cfg({ ...(neutralCfg as object), marginMode: 'CROSS' }),
+      cfg({ ...(neutralCfg as object), marginMode: 'CROSS', leverage: 3 }),
       makeMarket(),
       '100',
     );
     expect(p.issues.some((i) => /cruzado/i.test(i.message))).toBe(true);
-    expect(p.issues.some((i) => /corto/i.test(i.message))).toBe(true);
+    const largo = p.sides.find((s) => s.direction === 'LONG');
+    const corto = p.sides.find((s) => s.direction === 'SHORT');
+    expect(largo?.liquidationIsBound).toBe(true);
+    expect(corto?.liquidationIsBound).toBe(true);
+    expect(D(largo!.liquidation!.price).lt(largo!.averageEntry)).toBe(true);
+    expect(D(corto!.liquidation!.price).gt(corto!.averageEntry)).toBe(true);
   });
 });
 
@@ -828,7 +864,7 @@ describe('tdca.plan', () => {
     expect(note).toContain('siguiente compra');
   });
 
-  it('no compra si el precio no mejora el medio en el margen exigido', () => {
+  it('no compra si el precio no mejora la media en la mejora mínima exigida', () => {
     const ctx = makeContext({
       strategy: StrategyKind.TDCA,
       config,
@@ -839,7 +875,7 @@ describe('tdca.plan', () => {
     });
     const { immediate, note } = getStrategy(StrategyKind.TDCA).plan(ctx);
     expect(immediate).toHaveLength(0);
-    expect(note).toContain('no mejora el medio');
+    expect(note).toContain('no mejora la media');
   });
 
   it('compra en cuanto el precio cae por debajo del umbral', () => {
@@ -988,7 +1024,7 @@ describe('neutralGrid.plan', () => {
     });
     const { orders, note } = getStrategy(StrategyKind.NEUTRAL_GRID).plan(ctx);
     expect(orders.every((o) => o.side === 'SELL')).toBe(true);
-    expect(note).toContain('Tope de exposición');
+    expect(note).toContain('el tope de exposición deja fuera');
   });
 
   it('avisa si no hay tope de exposición configurado', () => {
@@ -1026,7 +1062,6 @@ describe('gridmart.plan', () => {
     stepScale: '2',
     volumeScale: '2',
     totalInvestment: '70',
-    takeProfitPct: '1',
     satelliteTpPct: '0.5',
     gridSellCount: 2,
     gridSellInitialSeparationPct: '1',
@@ -1423,18 +1458,15 @@ describe('registro de estrategias', () => {
    * Paso en la V2: el spec 035 bajo la distancia de 40 a 20 y subio la edad
    * maxima de 120 a 300 en `defaults()`, y nadie toco los descriptores.
    *
-   * Las cuatro excepciones son campos COMUNES cuyo descriptor vive una sola vez
-   * en `COMMON_FIELDS` mientras cada estrategia lo redefine en su `defaults()`.
-   * La via para arreglarlo ya existe -`commonFieldsWith`, que es lo que usan los
-   * dos market makers- y sale en su propio spec (037/F-08). Esta lista tiene que
-   * MENGUAR; si crece, es que alguien ha desincronizado un campo nuevo.
+   * Sin excepciones. Hubo cuatro, campos COMUNES cuyo descriptor vivia una
+   * sola vez en `COMMON_FIELDS` mientras la estrategia los redefinia en su
+   * `defaults()` (037/F-08): el apalancamiento del DCA, el margen de la rejilla
+   * neutral y la espera de la martingala y de GridMart. El spec 080 las cerro
+   * con `commonFieldsWith`, porque `sinVacios` rellena un campo en blanco con
+   * el valor de la ficha: con los dos en desacuerdo, un DCA con el
+   * apalancamiento en blanco se calculaba a 2x, y su objetivo sobre el margen
+   * valia la mitad en precio.
    */
-  const DESINCRONIZADOS_CONOCIDOS: Record<string, string[]> = {
-    NEUTRAL_GRID: ['marginMode'],
-    TDCA: ['leverage'],
-    MARTINGALE: ['cooldownMinutes'],
-    GRIDMART: ['cooldownMinutes'],
-  };
 
   it('solo la de tendencia pide velas (specs 038 y 040)', () => {
     // El motor reconcilia contra el LIBRO, no contra un grafico. Ese principio
@@ -1464,20 +1496,27 @@ describe('registro de estrategias', () => {
     for (const flag of ['topeDiarioReanuda', 'consumeDecisionesIa'] as const) {
       expect({ flag, kinds: con(flag) }).toEqual({ flag, kinds: [StrategyKind.AI_CHANNEL] });
     }
-    // Los tres que cambian como el motor fija el apalancamiento, mide la
-    // liquidacion y cuenta el nocional los comparte la operacion de un agente
-    // (spec 074): tambien pide su apalancamiento en cada entrada y mide la
-    // liquidacion contra su stop. Nadie mas.
-    for (const flag of [
-      'apalancamientoPorOperacion',
-      'reglaLiquidacion',
-      'nocionalMaximo',
-    ] as const) {
+    // Los dos que cambian como el motor fija el apalancamiento y mide la
+    // liquidacion los comparte la operacion de un agente (spec 074): tambien
+    // pide su apalancamiento en cada entrada y mide la liquidacion contra su
+    // stop. Nadie mas.
+    for (const flag of ['apalancamientoPorOperacion', 'reglaLiquidacion'] as const) {
       expect({ flag, kinds: con(flag) }).toEqual({
         flag,
         kinds: [StrategyKind.AI_CHANNEL, StrategyKind.AGENT_TRADE],
       });
     }
+    // El nocional, ademas, lo declaran los market makers: su tamaño no sale del
+    // capital sino de su tope de posicion, y la API medía sus limites con
+    // capital × apalancamiento (spec 080, 079/F-03).
+    expect(con('nocionalMaximo').sort()).toEqual(
+      [
+        StrategyKind.MARKET_MAKER,
+        StrategyKind.MARKET_MAKER_V2,
+        StrategyKind.AI_CHANNEL,
+        StrategyKind.AGENT_TRADE,
+      ].sort(),
+    );
 
     // `series` es el unico que ya no. El Market Maker V2 lo declara desde el
     // spec 071 para su puerta de regimen, y entra en la lista con su coste
@@ -1499,20 +1538,6 @@ describe('registro de estrategias', () => {
     expect(() => comunCon('margenMode', { default: 'CROSS' })).toThrow(/margenMode/);
   });
 
-  /**
-   * La unica excepcion, y esta razonada.
-   *
-   * GridMart HEREDA la escalera de Martingala y su validacion compartida exige
-   * `takeProfitPct`, pero alli no gobierna ninguna orden -sale por el satelite y
-   * por la rejilla del nucleo-, asi que el spec 026 lo saco del formulario. Es
-   * el unico caso en el que un campo tiene que estar en la config y no puede
-   * estar en la meta. Queda anotado para que la proxima estrategia que lo
-   * intente tenga que explicarse aqui.
-   */
-  const NO_DECLARADOS_CONOCIDOS: Record<string, string[]> = {
-    GRIDMART: ['takeProfitPct', 'tpMode'],
-  };
-
   it('defaults() no devuelve ningun campo que meta.fields no declare', () => {
     // Spec 044, F-04. `diffConfig` trata como COLD todo campo que la estrategia
     // no declara -la opcion conservadora, y la correcta-. Un campo que vive en
@@ -1520,12 +1545,13 @@ describe('registro de estrategias', () => {
     // que reconstruyera la config desde `meta.fields` lo dejaria fuera,
     // `diffConfig` lo veria cambiar a `undefined` y RECHAZARIA la edicion entera
     // de un bot en marcha por un campo que el usuario no puede ni ver.
+    //
+    // Sin excepciones: la unica que hubo, el `takeProfitPct` y el `tpMode` que
+    // GridMart heredaba de la escalera sin que gobernaran ninguna orden, se fue
+    // con el spec 080 (P-7).
     for (const s of listStrategies()) {
       const declarados = new Set(s.meta.fields.map((f) => f.key));
-      const permitidos = NO_DECLARADOS_CONOCIDOS[s.kind] ?? [];
-      const sobran = Object.keys(s.defaults()).filter(
-        (k) => !declarados.has(k) && !permitidos.includes(k),
-      );
+      const sobran = Object.keys(s.defaults()).filter((k) => !declarados.has(k));
       expect({ kind: s.kind, sobran }).toEqual({ kind: s.kind, sobran: [] });
     }
   });
@@ -1533,10 +1559,8 @@ describe('registro de estrategias', () => {
   it('meta.default coincide con defaults() en toda estrategia', () => {
     for (const s of listStrategies()) {
       const d = s.defaults();
-      const permitidos = DESINCRONIZADOS_CONOCIDOS[s.kind] ?? [];
       for (const f of s.meta.fields) {
         if (f.default === undefined || !(f.key in d)) continue;
-        if (permitidos.includes(f.key)) continue;
         expect({ kind: s.kind, key: f.key, meta: String(f.default) }).toEqual({
           kind: s.kind,
           key: f.key,
@@ -1606,8 +1630,11 @@ describe('registro de estrategias', () => {
     const gridmart = getStrategy(StrategyKind.GRIDMART).meta.fields.map((f) => f.key);
     expect(gridmart).not.toContain('takeProfitPct');
     expect(gridmart).not.toContain('tpMode');
-    // La validación compartida de la escalera los sigue esperando: `defaults()` los fija.
-    expect(getStrategy(StrategyKind.GRIDMART).defaults()).toMatchObject({ tpMode: 'LIMIT' });
+    // Desde el spec 080 tampoco en `defaults()` (P-7): la validación de la
+    // escalera ya no mira el take profit, y un campo muerto en la configuración
+    // es un número que parece mandar y no manda.
+    expect(getStrategy(StrategyKind.GRIDMART).defaults()).not.toHaveProperty('takeProfitPct');
+    expect(getStrategy(StrategyKind.GRIDMART).defaults()).not.toHaveProperty('tpMode');
   });
 
   /** Spec 026 (001/F-12): `targetLeverage` no tenía consumidor; el apalancamiento se fija al arrancar. */
@@ -1677,40 +1704,18 @@ describe('registro de estrategias', () => {
    * WARN. Y una perdida diaria de cero pausaba el bot al arrancar.
    */
   it('validateCommon rechaza un stop loss imposible y una pérdida diaria no positiva, en todas', () => {
-    const MINIMOS: Record<string, Record<string, unknown>> = {
-      GRID_CLASSIC: { lowerPrice: '90', upperPrice: '110', gridLevels: 5 },
-      NEUTRAL_GRID: {
-        lowerPrice: '90',
-        upperPrice: '110',
-        anchorPrice: '100',
-        gridLevels: 5,
-        maxExposure: '500',
-      },
-      TDCA: { amountPerBuy: '25' },
-      MARTINGALE: {},
-      GRIDMART: {},
-      MARKET_MAKER: { orderSizePerSide: '50', maxBotPositionValue: '500' },
-      MARKET_MAKER_V2: { orderSizePerSide: '50', maxBotPositionValue: '500', feeEstimateBps: '2' },
-      // La operacion de un agente no tiene valores de fabrica para su plan: los
-      // pone el agente (spec 074). Estos son los de un largo cualquiera.
-      AGENT_TRADE: {
-        entryLimitPrice: '100',
-        stopPrice: '98',
-        tp1Price: '104',
-        quantity: '0.5',
-        riskAmount: '1.1',
-        entryDeadline: 2_000_000_000_000,
-        agentProposalId: 'propuesta-1',
-      },
-    };
+    // Desde el spec 080 el stop es un % del MARGEN, y en cruzado un 150 % puede
+    // ser legítimo: el resto de la cuenta respalda más que el margen. Imposible
+    // es el cero y lo que pasa del tope del campo, el 90 % del precio por el
+    // apalancamiento.
     const malos: [string, string][] = [
-      ['stopLossPct', '150'],
+      ['stopLossPct', '100000'],
       ['stopLossPct', '0'],
       ['maxDailyLossPct', '-1'],
       ['maxDailyLossPct', '0'],
     ];
     for (const s of listStrategies()) {
-      const base = cfg({ ...s.defaults(), ...MINIMOS[s.kind] });
+      const base = cfg({ ...s.defaults(), ...CONFIG_MINIMA[s.kind] });
       expect(s.validate(base, makeMarket()).ok).toBe(true);
       for (const [key, value] of malos) {
         const r = s.validate(cfg({ ...(base as object), [key]: value }), makeMarket());
@@ -2175,6 +2180,7 @@ describe('marketMaker.plan — guardas nuevas', () => {
       cycleSeq: 1,
       market: makeMarket(),
       stopLossPct: '10',
+      leverage: 1,
     });
     const stop = conStop.orders.find((o) => o.levelKind === LevelKind.STOP_LOSS);
     expect(p.immediate).toHaveLength(1);
@@ -3015,12 +3021,18 @@ describe('marketMakerV2.plan', () => {
     const neutral = vista('NEUTRAL');
     const soloLargo = vista('LONG');
 
-    // Las compras de los dos son las MISMAS, asi que la liquidacion del lado
-    // largo tiene que salir igual. Mezclando compras y ventas en una sola media
-    // ponderada salia otra cosa: una entrada media que no existe.
-    expect(neutral.estimatedLiquidationPrice).toBe(soloLargo.estimatedLiquidationPrice);
-    // Y el lado corto se avisa aparte, en vez de desaparecer en la media.
-    expect(neutral.issues.some((i) => /Lado corto/.test(i.message))).toBe(true);
+    // Las compras de los dos son las MISMAS, asi que el lado largo tiene que
+    // salir igual. Mezclando compras y ventas en una sola media ponderada salia
+    // otra cosa: una entrada media que no existe.
+    const largo = (p: typeof neutral) => p.sides.find((s) => s.direction === 'LONG');
+    expect(largo(neutral)?.liquidation).toEqual(largo(soloLargo)?.liquidation);
+    expect(largo(neutral)?.averageEntry).toBe(largo(soloLargo)?.averageEntry);
+    // Y el lado corto se describe aparte, con su propia liquidación por encima
+    // de sus ventas (spec 080, 079/F-11).
+    const corto = neutral.sides.find((s) => s.direction === 'SHORT');
+    expect(corto).toBeDefined();
+    expect(D(corto!.liquidation!.price).gt(corto!.averageEntry)).toBe(true);
+    expect(soloLargo.sides).toHaveLength(1);
   });
 });
 
@@ -3165,8 +3177,7 @@ describe('preview() con una config que no vale', () => {
         expect(result.levels).toEqual([]);
         expect(result.worstCaseNotional).toBe('0');
         expect(result.worstCaseMargin).toBe('0');
-        expect(result.estimatedLiquidationPrice).toBeNull();
-        expect(result.liquidationDistancePct).toBeNull();
+        expect(result.sides).toEqual([]);
       });
     });
   }
@@ -3338,5 +3349,31 @@ describe('H-03 · la reticula geometrica proyecta su ultima linea geometricament
     );
     // 100 · 125 · 150 · 175 · 200 → la siguiente es 225 en los dos criterios.
     expect(Number(venta!.price)).toBeCloseTo(225, 0);
+  });
+});
+
+describe('el tope de exposición común (spec 080, 079/F-19 y F-27)', () => {
+  it('los market makers no lo ofrecen: no lo leen, su tope es el valor máximo de posición', () => {
+    for (const kind of [StrategyKind.MARKET_MAKER, StrategyKind.MARKET_MAKER_V2]) {
+      const s = getStrategy(kind);
+      expect(s.meta.fields.map((f) => f.key)).not.toContain('maxNotionalCap');
+      // Y una configuración vieja que lo traiga no recibe un aviso sobre él.
+      const r = s.validate(
+        cfg({ ...s.defaults(), ...CONFIG_MINIMA[kind], maxNotionalCap: '10' }),
+        makeMarket(),
+      );
+      expect(r.issues.filter((i) => i.field === 'maxNotionalCap')).toEqual([]);
+    }
+  });
+
+  it('en las demás, el aviso dice lo que pasa sin hablar de escaleras', () => {
+    const trailing = getStrategy(StrategyKind.TRAILING_PROFIT);
+    const r = trailing.validate(
+      cfg({ ...trailing.defaults(), leverage: 2, maxNotionalCap: '500' }),
+      makeMarket(),
+    );
+    const [i] = r.issues.filter((x) => x.field === 'maxNotionalCap');
+    expect(i.message).toContain('no pasará de 500.00');
+    expect(i.message).not.toContain('escalera');
   });
 });

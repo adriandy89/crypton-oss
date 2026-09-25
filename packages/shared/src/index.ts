@@ -12,6 +12,7 @@ export * from './borrador';
 export * from './price-source';
 export * from './wallet';
 export * from './liquidation';
+export * from './roi';
 export * from './series';
 export * from './capital';
 export * from './portfolio';

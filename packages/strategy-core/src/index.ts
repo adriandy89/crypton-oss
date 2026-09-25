@@ -4,15 +4,6 @@ export * from './mutability';
 export * from './client-order-id';
 export * from './ladder';
 export * from './trailing-take-profit';
-// La liquidacion estimada vivia aqui, pero la necesita tambien el simulador de
-// `exchange-core` —que no depende de este paquete— para poder reventar una
-// posicion como lo haria el venue. Se mudo a `shared`, que es lo unico que los
-// dos comparten, y se reexporta desde aqui para no mover a quien ya la importa.
-export {
-  DEFAULT_MAINTENANCE_MARGIN_RATE,
-  estimateLiquidationPrice,
-  liquidationDistancePct,
-} from '@crypton/shared';
 export {
   camposEfectivos,
   COMMON_FIELDS,

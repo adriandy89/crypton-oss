@@ -1,6 +1,10 @@
 import {
   StrategyKind,
   type BotConfig,
+  type BotContext,
+  type CycleState,
+  type FieldMeta,
+  type Fill,
   type MarketSpec,
   type StrategyMeta,
   type ValidationIssue,
@@ -34,37 +38,106 @@ const fusionar = (propios: ValidationIssue[], meta: ValidationIssue[]): Validati
 ];
 
 /**
+ * Un campo opcional vacío es un campo ausente (spec 080, 079/F-29).
+ *
+ * El formulario manda `''` al vaciar una casilla y `validateMeta` ya lo trataba
+ * como ausente, pero las estrategias leen `D(cfg.x ?? defecto)`, y `??` no tapa
+ * la cadena vacía: `new Decimal('')` lanza. Vaciar el techo del diferencial de
+ * la V2 daba un 500 al previsualizar, y un campo vacío que `validate()` dejaba
+ * pasar —el umbral defensivo del market maker— reventaba el tick del worker en
+ * cada revisión. La regla es la de `validateMeta`:
+ *
+ * - un opcional vacío está ausente: un stop vacío es «sin stop», un techo
+ *   vacío es «sin techo»;
+ * - un obligatorio con valor de fábrica vacío vale ese valor, que es con lo
+ *   que `validateMeta` lo da por bueno;
+ * - un obligatorio sin valor de fábrica se queda como viene, para que
+ *   `validateMeta` lo rechace con «Falta …».
+ */
+export function sinVacios<C>(config: C, campos: readonly FieldMeta[]): C {
+  const original = config as Record<string, unknown>;
+  let limpia: Record<string, unknown> | null = null;
+  for (const f of campos) {
+    if (original[f.key] !== '') continue;
+    if (!f.required) {
+      limpia ??= { ...original };
+      delete limpia[f.key];
+    } else if (f.default !== undefined) {
+      limpia ??= { ...original };
+      limpia[f.key] = f.default;
+    }
+  }
+  return (limpia ?? config) as C;
+}
+
+/**
  * Envuelve una estrategia con la validacion generica de sus `meta.fields`
  * (001/F-13): `validate()` suma los rangos y opciones que solo el formulario
  * aplicaba, y `preview()` no calcula nada con una configuracion fuera de rango
- * (GridMart sin sus multiplicadores lanzaba `DecimalError`). Se hace aqui, en
- * el unico sitio por el que la API, el worker y la app resuelven estrategias,
- * para que una estrategia nueva lo tenga sin acordarse de nada.
+ * (GridMart sin sus multiplicadores lanzaba `DecimalError`). Y todo lo que
+ * recibe la configuración la recibe sin opcionales vacíos (`sinVacios`). Se
+ * hace aqui, en el unico sitio por el que la API, el worker, la app y el
+ * backtest resuelven estrategias, para que una estrategia nueva lo tenga sin
+ * acordarse de nada.
  */
 // Como el registro: heterogeneo a proposito, el tipo se concreta al pedirla.
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 function conValidacionGenerica(s: Strategy<any>): Strategy<any> {
+  const limpia = <T>(cfg: T): T => sinVacios(cfg, s.meta.fields);
+  const { candles, series, sinIa, nocionalMaximo, soloReduceRiesgo } = s;
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const envuelta: Strategy<any> = {
     ...s,
+    ...(candles ? { candles: (cfg: BotConfig) => candles(limpia(cfg)) } : {}),
+    ...(series ? { series: (cfg: BotConfig) => series(limpia(cfg)) } : {}),
+    // `sinIa` devuelve la configuración de la estrategia, que aquí es `any`.
+    ...(sinIa ? { sinIa: (cfg: BotConfig): BotConfig => sinIa(limpia(cfg)) as BotConfig } : {}),
+    ...(nocionalMaximo ? { nocionalMaximo: (cfg: BotConfig) => nocionalMaximo(limpia(cfg)) } : {}),
+    ...(soloReduceRiesgo
+      ? {
+          soloReduceRiesgo: (anterior: BotConfig, nueva: BotConfig) =>
+            soloReduceRiesgo(limpia(anterior), limpia(nueva)),
+        }
+      : {}),
     validate(cfg: BotConfig, market: MarketSpec) {
-      const propia = s.validate.call(envuelta, cfg, market);
-      return toResult(
-        fusionar(propia.issues, validateMeta(cfg, camposEfectivos(s.meta.fields, cfg, market))),
-      );
+      const c = limpia(cfg);
+      const meta = validateMeta(c, camposEfectivos(s.meta.fields, c, market));
+      let propios: ValidationIssue[];
+      try {
+        propios = s.validate.call(envuelta, c, market).issues;
+      } catch (e) {
+        // Con un obligatorio vacío o fuera de rango la validación propia puede
+        // reventar: lo que importa es devolver los errores genéricos, no el
+        // 500. Con una configuración que la genérica da por buena, reventar es
+        // un fallo de la estrategia, y tiene que verse.
+        if (!meta.some((i) => i.severity === 'ERROR')) throw e;
+        propios = [];
+      }
+      return toResult(fusionar(propios, meta));
     },
     preview(cfg: BotConfig, market: MarketSpec, refPrice: string) {
-      const meta = validateMeta(cfg, camposEfectivos(s.meta.fields, cfg, market));
-      if (meta.length === 0) return s.preview.call(envuelta, cfg, market, refPrice);
+      const c = limpia(cfg);
+      const meta = validateMeta(c, camposEfectivos(s.meta.fields, c, market));
+      if (meta.length === 0) return s.preview.call(envuelta, c, market, refPrice);
       let propios: ValidationIssue[] = [];
       try {
-        propios = s.validate.call(envuelta, cfg, market).issues;
+        propios = s.validate.call(envuelta, c, market).issues;
       } catch {
         // Con la configuracion rota, la validacion propia puede reventar: lo
         // que importa es devolver los errores genericos, no el 500.
       }
       return invalidPreview(fusionar(propios, meta));
     },
+    plan(ctx: BotContext) {
+      return s.plan.call(envuelta, { ...ctx, config: limpia(ctx.config) });
+    },
+    ...(s.onFill
+      ? {
+          onFill(ctx: BotContext, fill: Fill, cycle: CycleState) {
+            return s.onFill!.call(envuelta, { ...ctx, config: limpia(ctx.config) }, fill, cycle);
+          },
+        }
+      : {}),
   };
   return envuelta;
 }

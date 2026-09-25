@@ -21,3 +21,4 @@ export * from './ui-liq-meter.component';
 export * from './ui-margin-sheet.component';
 export * from './ui-meter.component';
 export * from './ui-pair-sheet.component';
+export * from './ui-preview-side.component';

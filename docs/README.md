@@ -38,7 +38,7 @@ poco riesgo (configuraciones A/B/C con sus números, checklist, señales de alar
 | Documento | Qué cubre |
 |---|---|
 | [Buenas prácticas](./buenas-practicas.md) | El camino obligatorio, mínimos, apalancamiento, stop, funding, comisiones, cuándo no usar cada bot, bitácora, Lighter, checklist |
-| [Riesgo y liquidación](./riesgo-y-liquidacion.md) | Fórmula de liquidación, aislado/cruzado, semáforo 25/10 % y regla del 5 %, la regla por stop del canal con IA y de la operación de un agente, límites de la cuenta, guardas del motor, el stop-loss, peor caso por estrategia, funding |
+| [Riesgo y liquidación](./riesgo-y-liquidacion.md) | Los % sobre el margen, la fórmula exacta de la liquidación por lado, aislado/cruzado, semáforo 25/10 % y regla del 5 %, el stop frente a la liquidación, la regla por stop del canal con IA y de la operación de un agente, límites de la cuenta, guardas del motor, el stop-loss, peor caso por estrategia, funding |
 | [Venues y mínimos](./venues-y-minimos.md) | Cupos de peticiones, mínimos y retículas por venue, la credencial de cada venue y qué pasa cuando caduca, testnet frente a mainnet, límites de Lighter, qué hace el motor con una orden que no cumple |
 | [Simulación y backtest](./simulacion-y-backtest.md) | La cuenta «Simulación», qué simula y qué no, el backtest y sus avisos, y las cifras por setup y por tramos del canal con IA |
 | [Comandos, guardas y eventos](./comandos-guardas-y-eventos.md) | Los trece comandos y qué conservan el stop, en caliente/tibio/frío, las guardas, cada evento con qué hacer (también los del Modo IA, los del canal con IA y los de los agentes), la nota del bot |
@@ -52,6 +52,9 @@ poco riesgo (configuraciones A/B/C con sus números, checklist, señales de alar
 ## Convenciones
 
 - **Coma decimal** y puntos de millar a la española: 1.191,72 USDC. **bps** = puntos básicos: 100 bps = 1 %.
+- **Los % de resultado son del margen; las distancias, del precio** (spec 080). Stop loss, take profit,
+  objetivo del seguimiento y TP satélite: % del margen de la posición (a 2×, un 10 % del margen es un 5 %
+  del precio). Separaciones, retrocesos, descuentos y bps: % del precio. Cada rótulo lo dice.
 - **Mutabilidad**: 🔥 en caliente (se aplica en la siguiente revisión) · 🌤️ en tibio (cancela y recoloca
   órdenes; la posición sigue) · ❄️ en frío (hay que crear otro bot).
 - **Los números de los ejemplos** salen de ejecutar `validate()` y `preview()` del propio código sobre las

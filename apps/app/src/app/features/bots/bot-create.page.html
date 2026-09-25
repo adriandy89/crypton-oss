@@ -217,7 +217,7 @@
       <ui-capital-header
         [snapshot]="capital()"
         [pair]="pairLabel()"
-        [mark]="mark()"
+        [mark]="ultimoPrecio()"
         [changePct]="changePct()"
         [priceDecimals]="market()?.price_decimals ?? null"
         (refresh)="refreshWallet()"
@@ -286,6 +286,8 @@
                 [field]="f"
                 [value]="value(f.key)"
                 [error]="errorFor(f.key)"
+                [hint]="hintFor(f.key)"
+                [suggestion]="suggestionFor(f.key)"
                 [showMutability]="true"
                 (valueChange)="setValue(f.key, $event)"
               />
@@ -325,6 +327,8 @@
                     [field]="f"
                     [value]="value(f.key)"
                     [error]="errorFor(f.key)"
+                    [hint]="hintFor(f.key)"
+                    [suggestion]="suggestionFor(f.key)"
                     [showMutability]="true"
                     (valueChange)="setValue(f.key, $event)"
                   />
@@ -376,7 +380,13 @@
   @if (step() === 'preview' && preview(); as p) {
     <div class="pad">
       <h2 class="title">{{ textos().titulo }}</h2>
-      <p class="hint">{{ textos().nota }}</p>
+      <p class="hint">
+        {{ textos().nota }}
+        @if (ultimoPrecio(); as ultimo) {
+          Los % «desde el último precio» se miden contra el último negociado,
+          {{ price(ultimo, decimales()) }}.
+        }
+      </p>
 
       @if (showQuotePreview()) {
         <ui-card class="qprev">
@@ -387,14 +397,15 @@
       <div class="ladder">
         @for (lv of p.levels; track lv.index) {
           <div class="lvl" [class.bad]="lv.violations.length > 0" [class.sell]="lv.side === 'SELL'">
-            <span class="kind">{{ lv.kind }}#{{ lv.index }}</span>
+            <span class="kind">{{ nivel(lv.kind, lv.index) }}</span>
             <span class="price num">{{ price(lv.price, decimales()) }}</span>
             <span class="qty num">{{ qty(lv.qty, decimalesQty()) }}</span>
             <span class="dist num">{{ pct(lv.distancePct) }}</span>
             <!-- El acumulado hasta este nivel es «el numero que importa de
                  verdad» segun el propio contrato, y no se pintaba. En una
                  martingala de doce niveles es lo unico que dice cuanto habra
-                 puesto si se llena hasta aqui. -->
+                 puesto si se llena hasta aqui. Es el de SU lado: compras y
+                 ventas de una rejilla neutral no se suman (079/F-11). -->
             <p class="cum num">
               hasta aquí: {{ money(lv.cumulativeNotional) }} de exposición ·
               {{ money(lv.cumulativeMargin) }} de margen
@@ -406,37 +417,40 @@
         }
       </div>
 
-      <!-- El peor caso es LA cifra que hay que leer antes de arrancar. -->
+      <!-- La posición de cada lado y sus salidas, como la confirmación de un
+           exchange: es LA cifra que hay que leer antes de arrancar. -->
       <div class="worst">
         <h3>{{ textos().peor }}</h3>
-        <div class="wgrid">
-          <div>
-            <span class="k">Exposición total</span>
-            <span class="v">{{ money(p.worstCaseNotional) }}</span>
+        @if (totalesAparte(p)) {
+          <div class="wgrid">
+            <div>
+              <span class="k">Nocional de todas las órdenes</span>
+              <span class="v">{{ money(p.worstCaseNotional) }}</span>
+            </div>
+            <div>
+              <span class="k">Margen de todas las órdenes</span>
+              <span class="v">{{ money(p.worstCaseMargin) }}</span>
+            </div>
           </div>
-          <div>
-            <span class="k">Margen usado</span>
-            <span class="v">{{ money(p.worstCaseMargin) }}</span>
-          </div>
-          <div>
-            <span class="k">Precio medio</span>
-            <span class="v">{{ p.worstCaseAverageEntry ?? '—' }}</span>
-          </div>
-          <div>
-            <span class="k">Liquidación estimada</span>
-            <span class="v danger">{{ p.estimatedLiquidationPrice ?? '—' }}</span>
-          </div>
-          <div>
-            <span class="k">Aguanta un movimiento de</span>
-            <span class="v">{{
-              p.liquidationDistancePct ? p.liquidationDistancePct + ' %' : '—'
-            }}</span>
-          </div>
-          <div>
-            <span class="k">Objetivo de beneficio</span>
-            <span class="v">{{ p.takeProfitPrice ?? '—' }}</span>
-          </div>
-        </div>
+        }
+        @for (s of p.sides; track s.direction) {
+          <ui-preview-side
+            [side]="s"
+            [leverage]="p.leverage"
+            [marginMode]="p.marginMode"
+            [decimals]="decimales()"
+            [qtyDecimals]="decimalesQty()"
+            [base]="market()?.base ?? ''"
+            [quote]="market()?.quote ?? 'USDC'"
+            [cutLabel]="cutLabel(p, s)"
+          />
+        }
+        <!-- Sin comisiones, como la calculadora de un exchange (P-8): el
+             resultado es cantidad × diferencia de precio. -->
+        <p class="nocom">
+          Resultados sin comisiones ni financiación. El % del margen es el resultado sobre el margen
+          de la posición, como el ROI de un exchange.
+        </p>
       </div>
 
       @if (p.issues.length) {
@@ -540,10 +554,7 @@
       @if (!simulando()) {
         <div class="realwarn">
           <ion-icon name="warning-outline" />
-          <span>
-            Este bot operará con <strong>dinero real</strong>. Puedes perder todo el margen
-            asignado.
-          </span>
+          <span> Este bot operará con <strong>dinero real</strong>. {{ avisoDineroReal() }} </span>
         </div>
       }
 

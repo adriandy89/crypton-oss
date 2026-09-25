@@ -172,3 +172,35 @@ export const BASE_CONFIG = {
   marginMode: 'ISOLATED' as const,
   totalInvestment: '1000',
 };
+
+/**
+ * Lo que cada estrategia necesita, además de `BASE_CONFIG` y de sus valores de
+ * fábrica, para validar: `{ ...BASE_CONFIG, ...s.defaults(), ...CONFIG_MINIMA[kind] }`.
+ * Las que no aparecen validan solo con sus valores de fábrica.
+ */
+export const CONFIG_MINIMA: Record<string, Record<string, unknown>> = {
+  GRID_CLASSIC: { lowerPrice: '90', upperPrice: '110', gridLevels: 5 },
+  NEUTRAL_GRID: {
+    lowerPrice: '90',
+    upperPrice: '110',
+    anchorPrice: '100',
+    gridLevels: 5,
+    // Holgado hasta 3×: la Revisión aplica el tope como el plan, y uno menor
+    // que una línea dejaría la retícula sin ninguna orden (es un error).
+    maxExposure: '2000',
+  },
+  TDCA: { amountPerBuy: '25' },
+  MARKET_MAKER: { orderSizePerSide: '50', maxBotPositionValue: '500' },
+  MARKET_MAKER_V2: { orderSizePerSide: '50', maxBotPositionValue: '500', feeEstimateBps: '2' },
+  // La operación de un agente no tiene valores de fábrica para su plan: los
+  // pone el agente (spec 074). Estos son los de un largo cualquiera.
+  AGENT_TRADE: {
+    entryLimitPrice: '100',
+    stopPrice: '98',
+    tp1Price: '104',
+    quantity: '0.5',
+    riskAmount: '1.1',
+    entryDeadline: 2_000_000_000_000,
+    agentProposalId: 'propuesta-1',
+  },
+};

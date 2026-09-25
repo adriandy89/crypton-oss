@@ -82,6 +82,19 @@ export interface FieldMeta {
    * rechaza la revisión mientras haya inventario del ciclo.
    */
   reshapes?: boolean;
+  /**
+   * El % es un RESULTADO sobre el margen (ROI), no una distancia de precio
+   * (spec 080): `BENEFICIO` para los objetivos, `PERDIDA` para el stop. El
+   * formulario enseña al lado su equivalente en precio y en dinero, y
+   * `camposEfectivos` escala su máximo con el apalancamiento.
+   */
+  roi?: 'BENEFICIO' | 'PERDIDA';
+  /**
+   * Tope en % de PRECIO de un campo `roi`. El máximo que ve el usuario es este
+   * por el apalancamiento: así el tope económico de siempre no cambia al pasar
+   * el campo a % sobre el margen.
+   */
+  maxPrecioPct?: number;
 }
 
 export interface StrategyMeta {
@@ -96,6 +109,12 @@ export interface ValidationIssue {
   field: string | null;
   message: string;
   severity: 'ERROR' | 'WARNING';
+  /**
+   * Un valor que resuelve el problema, para que el formulario lo ofrezca con un
+   * botón (spec 080): el stop más ancho que la liquidación deja. Se propone, no
+   * se aplica: el número lo decide el usuario.
+   */
+  suggestedValue?: string;
 }
 
 export interface ValidationResult {

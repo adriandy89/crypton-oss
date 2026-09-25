@@ -132,6 +132,40 @@ describe('trendFollow.plan — la entrada', () => {
   });
 });
 
+describe('trendFollow.plan — el stop frente a la liquidación (spec 080, 079/F-01)', () => {
+  // La ruptura a 130 deja un ATR de unos 4,9: el stop, a 2,5 ATR, queda a un
+  // 10,2 % de 120. A 10× el largo se liquida con un 8,86 % (mantenimiento del
+  // 1,25 %): ese stop no saltaría nunca.
+  it('en aislado no entra si el stop queda detrás de la liquidación, y lo dice', () => {
+    const r = plan(
+      { entryEfficiency: '0', leverage: 10, marginMode: 'ISOLATED' },
+      { candles: conRuptura(130) },
+    );
+    expect(r.orders).toHaveLength(0);
+    expect(r.note).toContain('Ruptura descartada');
+    expect(r.note).toContain('detrás de la liquidación a 10× (8.86 %)');
+  });
+
+  it('en cruzado entra: la liquidación real queda más lejos', () => {
+    const r = plan(
+      { entryEfficiency: '0', leverage: 10, marginMode: 'CROSS' },
+      { candles: conRuptura(130) },
+    );
+    expect(entrada(r)).toBeDefined();
+  });
+
+  it('si cabe pero con poca holgura, entra y lo anota', () => {
+    // A 8× se liquida con un 11,39 %: el stop del 10,2 % salta antes, pero la
+    // deja a menos de medio stop detrás.
+    const r = plan(
+      { entryEfficiency: '0', leverage: 8, marginMode: 'ISOLATED' },
+      { candles: conRuptura(130) },
+    );
+    expect(entrada(r)).toBeDefined();
+    expect(r.note).toContain('a menos de medio stop de la liquidación a 8×');
+  });
+});
+
 describe('trendFollow.plan — el tamano sale del riesgo', () => {
   const qtyCon = (extra: Record<string, unknown>, velas = conRuptura(130)) =>
     Number(entrada(plan({ entryEfficiency: '0', ...extra }, { candles: velas }))!.qty);
@@ -329,6 +363,41 @@ describe('trendFollow.validate y preview', () => {
   it('avisa de un riesgo por operacion alto', () => {
     const r = estrategia.validate(cfg({ riskPerTradePct: '4' }), makeMarket());
     expect(r.issues.some((i) => i.field === 'riskPerTradePct')).toBe(true);
+  });
+
+  describe('el stop por ATR frente a la liquidación, con el ATR de la estimación (spec 080)', () => {
+    // BTC con mantenimiento del 1,25 %: a 15× el largo se liquida con un
+    // 5,49 %. Con un ATR del 2 %, a 2,5 ATR el stop queda a un 5 %; a 3 ATR, a
+    // un 6 %, detrás: solo cabe mientras el ATR sea menor que 5,49 / 3.
+    const aviso = (extra: Record<string, unknown>) =>
+      estrategia
+        .validate(cfg({ leverage: 15, marginMode: 'ISOLATED', ...extra }), makeMarket())
+        .issues.filter((i) => i.field === 'atrStopMultiplier');
+
+    it('detrás de la liquidación: el bot descartará esas rupturas', () => {
+      const [i] = aviso({ atrStopMultiplier: '3' });
+      expect(i.severity).toBe('WARNING');
+      expect(i.message).toContain('menor que un 1.83 % del precio');
+      expect(i.message).toContain('detrás de ella: el bot descartará esas rupturas');
+    });
+
+    it('delante pero con poca holgura, también se avisa', () => {
+      expect(aviso({ atrStopMultiplier: '2.5' })[0].message).toContain(
+        'a menos de medio stop de ella',
+      );
+    });
+
+    it('a 2×, o en cruzado, nada que decir', () => {
+      expect(aviso({ leverage: 2 })).toEqual([]);
+      expect(aviso({ marginMode: 'CROSS', atrStopMultiplier: '3' })).toEqual([]);
+    });
+
+    it('en Neutral mide el corto, y lo dice', () => {
+      // A 15× el corto se liquida con un 5,35 %, antes que el largo (5,49 %).
+      expect(aviso({ direction: 'NEUTRAL', atrStopMultiplier: '3' })[0].message).toContain(
+        'A 15× la liquidación llega en corto con un 5.35 % en contra',
+      );
+    });
   });
 
   it('la vista previa ensena la entrada y dice que el tamano es estimado', () => {

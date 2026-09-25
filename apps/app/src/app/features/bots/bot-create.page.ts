@@ -35,12 +35,18 @@ import {
   warningOutline,
 } from 'ionicons/icons';
 import {
+  D,
   MAX_APALANCAMIENTO_POR_STOP,
   esEstrategiaDeAgente,
   esEstrategiaSoloAdmin,
+  isFiniteNum,
   type BotConfig,
+  type Decimal,
   type FieldMeta,
+  type Numeric,
   type PreviewResult,
+  type PreviewSide,
+  type ValidationIssue,
 } from '@crypton/shared';
 import { camposEfectivos, getStrategy } from '@crypton/strategy-core';
 import {
@@ -71,6 +77,7 @@ import {
   money,
   parseHttpError,
   pct,
+  pistaRoi,
   price,
   qty,
   strategyBlurb,
@@ -88,11 +95,13 @@ import {
   UiFieldComponent,
   UiNoticeComponent,
   UiPairSheetComponent,
+  UiPreviewSideComponent,
   UiQuotePreviewComponent,
   UiRecommendationsComponent,
   UiRiskMeterComponent,
   UiStrategyHelpComponent,
 } from '../../shared/ui';
+import { levelTitle } from '../../shared/chart/bot-overlay';
 // El Modo IA (spec 053), por ruta como el resto de lo de administración.
 import {
   AdminBotsService,
@@ -124,7 +133,7 @@ const CAPITAL_FIELD = 'totalInvestment';
 const WALLET_POLL_MS = 30_000;
 
 /**
- * Un tope de riesgo en numero, o `null` si el usuario no puso ninguno.
+ * Un tope de riesgo en `Decimal`, o `null` si el usuario no puso ninguno.
  *
  * Existe por un fallo concreto: `Number(null)` en JavaScript devuelve **0**, no
  * `NaN`. Aqui se comprobaba con `Number.isFinite()`, que da `true` para el cero,
@@ -136,12 +145,19 @@ const WALLET_POLL_MS = 30_000;
  *
  * El servidor nunca habria devuelto ese 403: comprueba con `!= null`. Era la app
  * bloqueando por una regla que se inventaba ella sola.
+ *
+ * En `Decimal` y no en `number`, como el servidor: son dinero (079/F-25).
  */
-const topeOno = (v: string | null): number | null => {
-  if (v === null) return null;
-  const n = Number(v);
-  return Number.isFinite(n) ? n : null;
-};
+const topeOno = (v: string | null): Decimal | null => decimalONulo(v);
+
+/**
+ * Un número del formulario o de la API en `Decimal`, o `null` si no lo es
+ * (todavía). `isFiniteNum` ya descarta el nulo, el vacío y lo que no se lee.
+ */
+function decimalONulo(v: unknown): Decimal | null {
+  // Solo llegan aquí cadenas y números: es lo que `isFiniteNum` acepta.
+  return isFiniteNum(v) ? D(v as Numeric) : null;
+}
 
 type Step = 'venue' | 'strategy' | 'params' | 'preview';
 
@@ -155,28 +171,110 @@ const CONSENTIMIENTOS: Partial<Record<StrategyKind, string>> = {
     'una IA decide cada entrada dentro de los límites que he puesto.',
 };
 
-/**
- * Los rótulos del cálculo previo. En el canal con IA no hay escalera: lo que se
- * calcula son los límites y una operación de ejemplo (spec 059).
- */
-const TEXTOS_ESCALERA = {
+/** Los rótulos del cálculo previo y de la Revisión de una familia de estrategias. */
+interface TextosRevision {
+  calcular: string;
+  recalcular: string;
+  titulo: string;
+  nota: string;
+  /** El título del bloque con la posición y sus salidas. */
+  peor: string;
+}
+
+const MISMO_CODIGO =
+  'Calculado con el mismo código que ejecutará el motor. Si alguna orden es inválida en este ' +
+  'mercado, el bot no se crea.';
+
+const ESCALERA: TextosRevision = {
   calcular: 'Calcular la escalera',
   recalcular: 'Vuelve a calcular la escalera: has cambiado algún parámetro.',
-  titulo: 'Esto es lo que se colocará',
-  nota:
-    'Calculado con el mismo código que ejecutará el motor. Si algún nivel es inválido en este ' +
-    'mercado, el bot no se crea.',
+  titulo: 'La escalera que se colocará',
+  nota: MISMO_CODIGO,
   peor: 'Si se ejecuta la escalera entera',
 };
 
-const TEXTOS_CANAL: typeof TEXTOS_ESCALERA = {
-  calcular: 'Calcular los límites',
-  recalcular: 'Vuelve a calcular los límites: has cambiado algún parámetro.',
-  titulo: 'Esto es lo que puede arriesgar',
+const REJILLA: TextosRevision = {
+  calcular: 'Calcular la rejilla',
+  recalcular: 'Vuelve a calcular la rejilla: has cambiado algún parámetro.',
+  titulo: 'Las líneas de la rejilla',
+  nota: MISMO_CODIGO,
+  peor: 'Si el precio recorre la rejilla entera',
+};
+
+const COTIZACIONES: TextosRevision = {
+  calcular: 'Calcular las cotizaciones',
+  recalcular: 'Vuelve a calcular las cotizaciones: has cambiado algún parámetro.',
+  titulo: 'Las cotizaciones de salida',
   nota:
-    'Una operación de ejemplo con el stop más ancho que admites, calculada con el mismo código ' +
-    'que el motor. Cada operación real saca su tamaño y su apalancamiento de su propio stop.',
-  peor: 'La operación más grande que admite',
+    'Las primeras que pondría con el inventario a cero, calculadas con el mismo código que el ' +
+    'motor. Luego se mueven con el precio y con lo que vaya ejecutando.',
+  peor: 'Si se llenan todas las capas de un lado',
+};
+
+/**
+ * Los rótulos de cada estrategia, sin excepción: el `Record` obliga a que una
+ * nueva traiga los suyos. Antes había dos juegos, el de la escalera y el del
+ * canal, y un seguimiento de una sola orden decía «si se ejecuta la escalera
+ * entera» y una tendencia, que no coloca nada al crearse, «esto es lo que se
+ * colocará» (079/F-20).
+ */
+const TEXTOS_REVISION: Record<StrategyKind, TextosRevision> = {
+  GRID_CLASSIC: REJILLA,
+  NEUTRAL_GRID: REJILLA,
+  MARTINGALE: ESCALERA,
+  GRIDMART: { ...ESCALERA, titulo: 'La escalera y la rejilla de ventas' },
+  TDCA: {
+    calcular: 'Calcular las compras',
+    recalcular: 'Vuelve a calcular las compras: has cambiado algún parámetro.',
+    titulo: 'Las compras del ciclo',
+    // Es el recorrido MÁS CORTO en el que caben todas: cada compra en cuanto se
+    // cumple la condición. Decía «hasta dónde puede llegar el ciclo», que es lo
+    // contrario (encontrado al rehacer la guía del DCA).
+    nota:
+      'Una proyección: cada compra en cuanto el precio mejora la media en la mejora mínima que ' +
+      'pides, que es lo más arriba que puede entrar cada una y deja la media más alta posible. Si el ' +
+      'precio cae más, entran más abajo con el mismo tamaño. Los topes de posición se aplican como en ' +
+      'el motor.',
+    peor: 'Si se hacen todas las compras del ciclo',
+  },
+  MARKET_MAKER: COTIZACIONES,
+  MARKET_MAKER_V2: COTIZACIONES,
+  TREND_FOLLOW: {
+    calcular: 'Calcular una entrada de ejemplo',
+    recalcular: 'Vuelve a calcular la entrada de ejemplo: has cambiado algún parámetro.',
+    titulo: 'Una entrada de ejemplo',
+    nota:
+      'El bot no coloca nada al crearse: entra cuando el precio rompe el canal. El tamaño y el ' +
+      'stop saldrán de la volatilidad de ese momento; aquí van con una supuesta.',
+    peor: 'La entrada de ejemplo',
+  },
+  TRAILING_PROFIT: {
+    calcular: 'Calcular la entrada',
+    recalcular: 'Vuelve a calcular la entrada: has cambiado algún parámetro.',
+    titulo: 'La entrada',
+    nota: MISMO_CODIGO,
+    peor: 'La posición y sus salidas',
+  },
+  // En el canal con IA no hay escalera: lo que se calcula son los límites y una
+  // operación de ejemplo (spec 059).
+  AI_CHANNEL: {
+    calcular: 'Calcular los límites',
+    recalcular: 'Vuelve a calcular los límites: has cambiado algún parámetro.',
+    titulo: 'Esto es lo que puede arriesgar',
+    nota:
+      'Una operación de ejemplo con el stop más ancho que admites, calculada con el mismo código ' +
+      'que el motor. Cada operación real saca su tamaño y su apalancamiento de su propio stop.',
+    peor: 'La operación más grande que admite',
+  },
+  // No se crea desde aquí (nace de una propuesta aprobada), pero el `Record` es
+  // de todas.
+  AGENT_TRADE: {
+    calcular: 'Calcular la operación',
+    recalcular: 'Vuelve a calcular la operación: has cambiado algún parámetro.',
+    titulo: 'La operación del agente',
+    nota: MISMO_CODIGO,
+    peor: 'La operación',
+  },
 };
 
 @Component({
@@ -208,6 +306,7 @@ const TEXTOS_CANAL: typeof TEXTOS_ESCALERA = {
     UiFieldComponent,
     UiNoticeComponent,
     UiPairSheetComponent,
+    UiPreviewSideComponent,
     UiQuotePreviewComponent,
     UiRecommendationsComponent,
     UiRiskMeterComponent,
@@ -382,10 +481,14 @@ export class BotCreatePage implements OnInit, OnDestroy {
   });
   readonly conforme = signal(false);
 
-  /** Los rótulos del cálculo previo de la estrategia elegida. */
-  readonly textos = computed(() =>
-    this.strategyKind() === 'AI_CHANNEL' ? TEXTOS_CANAL : TEXTOS_ESCALERA,
-  );
+  /**
+   * Los rótulos del cálculo previo de la estrategia elegida. Sin estrategia no
+   * se pinta ninguno: los pasos que los usan vienen después de elegirla.
+   */
+  readonly textos = computed(() => {
+    const kind = this.strategyKind();
+    return kind ? TEXTOS_REVISION[kind] : ESCALERA;
+  });
 
   /** Por qué el Modo IA elegido no se puede mandar todavía, o vacío. */
   readonly iaBloqueo = computed<string>(() => {
@@ -419,7 +522,7 @@ export class BotCreatePage implements OnInit, OnDestroy {
    */
   readonly recoStale = computed(() => {
     const set = this.recommendations();
-    const ahora = Number(this.mark() ?? 0);
+    const ahora = Number(this.ultimoPrecio() ?? 0);
     const entonces = Number(set?.refPrice ?? 0);
     if (!set || !(ahora > 0) || !(entonces > 0)) return false;
     return Math.abs((ahora - entonces) / entonces) * 100 > 1.5;
@@ -511,6 +614,7 @@ export class BotCreatePage implements OnInit, OnDestroy {
    * lote. La vista previa del servidor recibe este mismo numero como
    * `refPrice`, asi que panel y servidor calculan la escalera sobre el mismo
    * precio; solo al CREAR el bot toma el servidor la marca del venue (001/F-66).
+   * Se llamaba `mark` sin serlo, y la Revisión lo rotula como lo que es (079/F-25).
    *
    * Que devuelva el string y no el objeto del ticker es deliberado y es lo que
    * hace viable el panel en vivo: `tickerOf()` construye un objeto nuevo en
@@ -518,7 +622,7 @@ export class BotCreatePage implements OnInit, OnDestroy {
    * la escalera entera a ese ritmo. Las señales deduplican con `Object.is`, asi
    * que con el string solo se recalcula cuando el precio cambia de verdad.
    */
-  readonly mark = computed<string | null>(() => {
+  readonly ultimoPrecio = computed<string | null>(() => {
     const account = this.account();
     const symbol = this.symbol();
     if (!account || !symbol) return null;
@@ -592,6 +696,40 @@ export class BotCreatePage implements OnInit, OnDestroy {
     const kind = this.strategyKind();
     return !!kind && isMarketMaker(kind);
   });
+
+  /** El rótulo de un nivel, el mismo del gráfico y del detalle del bot (spec 002, F-09). */
+  nivel(kind: string, index: number): string {
+    return levelTitle({ level_kind: kind, level_index: index });
+  }
+
+  /** El nivel donde se corta el recorrido de un lado, con el rótulo de la lista. */
+  cutLabel(p: PreviewResult, side: PreviewSide): string | null {
+    const c = side.cutAt;
+    const lv = c ? p.levels.find((l) => l.index === c.level) : undefined;
+    return lv ? this.nivel(lv.kind, lv.index) : null;
+  }
+
+  /**
+   * Lo que comprometen todas las órdenes, cuando no es lo mismo que la posición
+   * del único lado: con dos lados (rejilla neutral, market maker) o con un
+   * recorrido cortado. Repetirlo con un solo lado entero sería decir dos veces
+   * la misma cifra con dos nombres.
+   */
+  totalesAparte(p: PreviewResult): boolean {
+    return p.sides.length !== 1 || p.sides[0].notional !== p.worstCaseNotional;
+  }
+
+  /**
+   * El aviso de dinero real, cierto en los dos modos de margen. «Puedes perder
+   * todo el margen asignado» era falso en cruzado: ahí la liquidación usa el
+   * saldo libre de la cuenta y se puede perder más (079/F-17).
+   */
+  readonly avisoDineroReal = computed(() =>
+    this.config()['marginMode'] === 'CROSS'
+      ? 'En margen cruzado una liquidación no se queda en el margen asignado: puede llevarse el ' +
+        'saldo libre de la cuenta que respalda la posición.'
+      : 'En margen aislado lo más que se pierde en una liquidación es el margen asignado.',
+  );
 
   /**
    * ¿Este grupo está apagado por su propio interruptor?
@@ -741,6 +879,26 @@ export class BotCreatePage implements OnInit, OnDestroy {
   }
 
   /**
+   * La validación de la configuración en curso, UNA vez por cambio: los errores
+   * por campo, los avisos y las propuestas salen de aquí. `null` si todavía no
+   * hay estrategia o mercado.
+   *
+   * `validate()` es puro y defensivo, pero la config viene de un formulario a
+   * medio escribir: si algun dia una rama se saltara una guarda, es preferible
+   * quedarse sin marcas en linea que tumbar la pantalla entera.
+   */
+  private readonly validacion = computed<ValidationIssue[] | null>(() => {
+    const kind = this.strategyKind();
+    const market = this.market();
+    if (!kind || !market) return null;
+    try {
+      return getStrategy(kind).validate(this.fullConfig(), toMarketSpec(market)).issues;
+    } catch {
+      return null;
+    }
+  });
+
+  /**
    * Errores por campo, ya en castellano.
    *
    * Solo los de severidad ERROR: los WARNING son advertencias legitimas —un
@@ -749,24 +907,77 @@ export class BotCreatePage implements OnInit, OnDestroy {
    */
   readonly issuesByField = computed<Map<string, string>>(() => {
     const out = new Map<string, string>();
-    const kind = this.strategyKind();
-    const market = this.market();
-    if (!kind || !market) return out;
-
-    // `validate()` es puro y defensivo, pero la config viene de un formulario a
-    // medio escribir: si algun dia una rama se saltara una guarda, es preferible
-    // quedarse sin marcas en linea que tumbar la pantalla entera.
-    try {
-      const result = getStrategy(kind).validate(this.fullConfig(), toMarketSpec(market));
-      for (const issue of result.issues) {
-        if (issue.severity !== 'ERROR' || !issue.field) continue;
-        if (!out.has(issue.field)) out.set(issue.field, issue.message);
-      }
-    } catch {
-      return new Map();
+    for (const issue of this.validacion() ?? []) {
+      if (issue.severity !== 'ERROR' || !issue.field) continue;
+      if (!out.has(issue.field)) out.set(issue.field, issue.message);
     }
     return out;
   });
+
+  /**
+   * Lo que la validación propone para cada campo, con el texto del botón que
+   * lo aplica: hoy, el stop más ancho que deja la liquidación medio stop
+   * detrás, tanto si el stop es un error como si solo está cerca (spec 080,
+   * D-4). Al subir el apalancamiento el stop puede quedar detrás de la
+   * liquidación, y el botón está justo debajo de él.
+   */
+  readonly sugerencias = computed<Map<string, { value: string; label: string }>>(() => {
+    const out = new Map<string, { value: string; label: string }>();
+    for (const issue of this.validacion() ?? []) {
+      if (!issue.field || issue.suggestedValue === undefined || out.has(issue.field)) continue;
+      const valor = money(issue.suggestedValue, 1);
+      out.set(issue.field, {
+        value: issue.suggestedValue,
+        label:
+          issue.field === 'stopLossPct'
+            ? `Usar el stop más ancho válido: ${valor} %`
+            : `Usar ${valor}`,
+      });
+    }
+    return out;
+  });
+
+  /**
+   * La equivalencia en vivo de cada campo de % sobre el margen (spec 080, D-4):
+   * lo que es en precio y, con la previsualización en vivo, dónde queda y
+   * cuánto es en dinero en cada lado. Con la escalera, en el peor caso.
+   *
+   * El stop común no se pinta en las estrategias que ponen el suyo: ahí el
+   * campo no se usa, y una equivalencia diría lo contrario.
+   */
+  readonly pistas = computed<Map<string, string>>(() => {
+    const out = new Map<string, string>();
+    const kind = this.strategyKind();
+    if (!kind) return out;
+    const stopPropio = getStrategy(kind).stopPropio === true;
+    const config = this.config();
+    const lados = this.livePreview()?.sides ?? [];
+    for (const f of this.fields()) {
+      if (!f.roi || (f.roi === 'PERDIDA' && stopPropio)) continue;
+      const salidas = lados.flatMap((s) => {
+        const exit = f.roi === 'PERDIDA' ? s.stopLoss : s.takeProfit;
+        return exit ? [{ lado: s.direction, precio: exit.price, pnl: exit.pnl }] : [];
+      });
+      const texto = pistaRoi({
+        roiPct: config[f.key],
+        apalancamiento: config['leverage'],
+        salidas,
+        decimales: this.decimales(),
+        quote: this.market()?.quote,
+        nota: salidas.length && lados.some((s) => s.entries > 1) ? 'en el peor caso.' : undefined,
+      });
+      if (texto) out.set(f.key, texto);
+    }
+    return out;
+  });
+
+  hintFor(key: string): string {
+    return this.pistas().get(key) ?? '';
+  }
+
+  suggestionFor(key: string): { value: string; label: string } | null {
+    return this.sugerencias().get(key) ?? null;
+  }
 
   /**
    * Errores que apuntan a un campo que esta pantalla NO pinta.
@@ -789,17 +1000,8 @@ export class BotCreatePage implements OnInit, OnDestroy {
 
   /** Avisos que NO bloquean, para pintarlos sin matar el boton. */
   readonly warnings = computed<string[]>(() => {
-    const kind = this.strategyKind();
-    const market = this.market();
-    if (!kind || !market || this.missingRequired().length > 0) return [];
-    try {
-      return getStrategy(kind)
-        .validate(this.fullConfig(), toMarketSpec(market))
-        .issues.filter((i) => i.severity === 'WARNING')
-        .map((i) => i.message);
-    } catch {
-      return [];
-    }
+    if (this.missingRequired().length > 0) return [];
+    return (this.validacion() ?? []).filter((i) => i.severity === 'WARNING').map((i) => i.message);
   });
 
   /**
@@ -817,7 +1019,7 @@ export class BotCreatePage implements OnInit, OnDestroy {
   readonly livePreview = computed<PreviewResult | null>(() => {
     const kind = this.strategyKind();
     const market = this.market();
-    const ref = this.mark();
+    const ref = this.ultimoPrecio();
     if (!kind || !market || !ref) return null;
     try {
       return getStrategy(kind).preview(this.fullConfig(), toMarketSpec(market), ref);
@@ -828,7 +1030,7 @@ export class BotCreatePage implements OnInit, OnDestroy {
 
   /** Por que el panel de riesgo no puede enseñar nada todavia. */
   readonly riskEmptyText = computed(() => {
-    if (!this.mark()) return 'Esperando el precio del par para calcular el riesgo.';
+    if (!this.ultimoPrecio()) return 'Esperando el precio del par para calcular el riesgo.';
     if (this.missingRequired().length > 0) {
       return 'Rellena los campos obligatorios para ver la exposición y la liquidación.';
     }
@@ -850,18 +1052,19 @@ export class BotCreatePage implements OnInit, OnDestroy {
   readonly limitIssues = computed<{ message: string; severity: 'ERROR' | 'WARNING' }[]>(() => {
     const out: { message: string; severity: 'ERROR' | 'WARNING' }[] = [];
     const snapshot = this.capital();
-    const leverage = Number(this.config()['leverage']);
-    const investment = Number(this.config()[CAPITAL_FIELD]);
-    if (!snapshot || !Number.isFinite(leverage) || !Number.isFinite(investment)) return out;
+    const apalancamiento = decimalONulo(this.config()['leverage']);
+    const investment = decimalONulo(this.config()[CAPITAL_FIELD]);
+    if (!snapshot || !apalancamiento || !investment) return out;
+    const leverage = apalancamiento.toNumber();
 
     // La estrategia puede declarar su nocional: en el canal con IA sale del
-    // capital, el riesgo y los topes, no del apalancamiento (spec 058). El
-    // servidor usa el mismo (`nocionalMaximo`), así que el aviso y el 403 dicen
-    // lo mismo.
+    // capital, el riesgo y los topes, y en un market maker de su tope de
+    // posición, no del apalancamiento (specs 058 y 080). El servidor usa el
+    // mismo (`nocionalMaximo`), así que el aviso y el 403 dicen lo mismo.
     const kind = this.strategyKind();
     const estrategia = kind ? getStrategy(kind) : null;
     const declarado = this.nocionalDeclarado();
-    const notional = declarado ?? investment * leverage;
+    const notional = declarado ?? investment.mul(apalancamiento);
     const limits = snapshot.limits;
 
     if (limits.maxLeverage !== null && leverage > limits.maxLeverage) {
@@ -872,14 +1075,14 @@ export class BotCreatePage implements OnInit, OnDestroy {
     }
 
     const perBot = topeOno(limits.maxNotionalPerBot);
-    if (perBot !== null && notional > perBot) {
+    if (perBot !== null && notional.gt(perBot)) {
       out.push({
         message:
           (declarado !== null
-            ? `Una operación de este bot podría mover hasta ${money(notional)}`
-            : `El bot movería ${money(notional)} (${money(investment)} de capital × ${leverage} de ` +
-              'apalancamiento)') +
-          `, por encima de tu límite por bot de ${money(perBot)}. ` +
+            ? `Este bot puede llegar a mover ${money(notional.toFixed(2))}`
+            : `El bot movería ${money(notional.toFixed(2))} (${money(investment.toFixed(2))} de ` +
+              `capital × ${leverage} de apalancamiento)`) +
+          `, por encima de tu límite por bot de ${money(perBot.toFixed(2))}. ` +
           `Puedes cambiarlo en Cuenta › Límites de riesgo.`,
         severity: 'ERROR',
       });
@@ -887,13 +1090,14 @@ export class BotCreatePage implements OnInit, OnDestroy {
 
     const total = topeOno(limits.maxTotalNotional);
     if (total !== null) {
-      const enMarcha = Number(limits.currentTotalNotional) || 0;
-      const projected = enMarcha + notional;
-      if (projected > total) {
+      const enMarcha = decimalONulo(limits.currentTotalNotional) ?? D(0);
+      const projected = enMarcha.plus(notional);
+      if (projected.gt(total)) {
         out.push({
           message:
-            `Con este bot llegarías a ${money(projected)} en total entre todos tus bots, por ` +
-            `encima de tu límite de ${money(total)}. Ahora mismo tienes ${money(enMarcha)} en marcha.`,
+            `Con este bot llegarías a ${money(projected.toFixed(2))} en total entre todos tus ` +
+            `bots, por encima de tu límite de ${money(total.toFixed(2))}. Ahora mismo tienes ` +
+            `${money(enMarcha.toFixed(2))} en marcha.`,
           severity: 'ERROR',
         });
       }
@@ -915,19 +1119,11 @@ export class BotCreatePage implements OnInit, OnDestroy {
       return out;
     }
 
-    // La misma cota que aplica el servidor: por debajo del 5 % de distancia a
-    // liquidacion, rechaza. Se calcula igual —sobre precio unidad—, asi que es
-    // puramente una funcion del apalancamiento.
-    if (leverage > 0) {
-      const distance = (1 / leverage - 0.005) * 100;
-      if (distance < 5) {
-        out.push({
-          message: `A ${leverage}× la liquidación llega con un movimiento adverso de solo ${distance.toFixed(1)} %. Baja el apalancamiento.`,
-          severity: 'ERROR',
-        });
-      }
-    }
-
+    // La regla del 5 % hasta la liquidación NO se repite aquí: la trae
+    // `validateCommon` en el error del campo, con el mantenimiento del mercado
+    // y la liquidación exacta del lado, igual que el servidor. Aquí había una
+    // copia con un 0,5 % plano que decía «se calcula igual» y no lo hacía:
+    // bloqueaba lo que el servidor aceptaba (079/F-08).
     return out;
   });
 
@@ -938,13 +1134,11 @@ export class BotCreatePage implements OnInit, OnDestroy {
    * no declara ninguno. Con un formulario a medio escribir puede no calcularse:
    * entonces se cae a capital por apalancamiento, como antes.
    */
-  private readonly nocionalDeclarado = computed<number | null>(() => {
+  private readonly nocionalDeclarado = computed<Decimal | null>(() => {
     const kind = this.strategyKind();
     if (!kind) return null;
     try {
-      const n = getStrategy(kind).nocionalMaximo?.(this.fullConfig());
-      const valor = n === null || n === undefined ? Number.NaN : Number(n);
-      return Number.isFinite(valor) ? valor : null;
+      return decimalONulo(getStrategy(kind).nocionalMaximo?.(this.fullConfig()));
     } catch {
       return null;
     }
@@ -1015,6 +1209,9 @@ export class BotCreatePage implements OnInit, OnDestroy {
     const problemas = new Set([
       ...this.missingRequired().map((f) => f.key),
       ...this.issuesByField().keys(),
+      // Un campo con una propuesta pendiente también: el botón que la aplica
+      // no puede quedarse plegado (spec 080).
+      ...this.sugerencias().keys(),
     ]);
     return this.advancedGroups().some((g) => g.fields.some((f) => problemas.has(f.key)));
   });
@@ -1094,14 +1291,6 @@ export class BotCreatePage implements OnInit, OnDestroy {
         this.startWalletPolling();
       });
     });
-
-    // Cambio de lente a media creacion: se vuelve al paso 1.
-    //
-    // La cuenta elegida puede haber desaparecido de la lista —esta filtrada por
-    // red— y los mercados cargados son los de la red anterior. Seguir adelante
-    // dejaria el asistente montando un bot sobre una cuenta que ya no se ve y
-    // un par que quiza no exista en su libro. Es brusco a proposito: cambiar de
-    // red mientras se crea un bot es una decision, no un desliz.
 
     // Cambio de lente a media creacion: se vuelve al paso 1.
     //
@@ -1374,7 +1563,7 @@ export class BotCreatePage implements OnInit, OnDestroy {
         // del venue y el panel el ultimo negociado —en Lighter son precios
         // distintos— y cerca del minimo con `sizingMode: BASE` podian discrepar
         // en un nivel (001/F-66).
-        refPrice: this.mark() ?? undefined,
+        refPrice: this.ultimoPrecio() ?? undefined,
       });
       this.preview.set(result);
       this.step.set('preview');

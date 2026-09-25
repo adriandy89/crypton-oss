@@ -1617,8 +1617,57 @@ describe('DryRunAdapter', () => {
     await sim.getTicker('BTC');
 
     const [pos] = await sim.getPositions();
-    // 100 x (1 - 1/10 + 0,005)
-    expect(Number(pos.liquidationPrice)).toBeCloseTo(90.5, 6);
+    // La exacta (spec 080): 100 x (1 - 1/10) / (1 - 0,005) = 90,4522…
+    expect(Number(pos.liquidationPrice)).toBeCloseTo(90.452261, 6);
+  });
+
+  it('liquida con el mantenimiento del MERCADO, el mismo que enseña la app (spec 080, P-6)', async () => {
+    // BTC a 40x: 1/(2·40) = 1,25 %. Con el 0,5 % plano la simulación liquidaba
+    // más lejos de lo que la Revisión había enseñado antes de crear el bot.
+    const source = new StubSource();
+    source.getMarkets = async () => [
+      {
+        venue: Venue.HYPERLIQUID,
+        symbol: 'BTC',
+        canonical: 'BTC/USDC',
+        base: 'BTC',
+        quote: 'USDC',
+        tickSize: '0.1',
+        stepSize: '0.001',
+        minNotional: '10',
+        minQty: null,
+        maxQty: null,
+        maxLeverage: 40,
+        priceDecimals: 1,
+        qtyDecimals: 3,
+        active: true,
+      },
+    ];
+    const sim = new DryRunAdapter(source);
+    await sim.getTicker('BTC');
+    await sim.setLeverage('BTC', 10, 'ISOLATED');
+    await sim.placeOrder(order({ price: '100', qty: '1' }));
+    source.move('99', '100');
+    await sim.getTicker('BTC');
+
+    const [pos] = await sim.getPositions();
+    // 100 x (1 - 1/10) / (1 - 0,0125) = 91,1392…
+    expect(Number(pos.liquidationPrice)).toBeCloseTo(91.139241, 5);
+  });
+
+  it('el mantenimiento que fija quien lo construye manda sobre el del mercado', async () => {
+    const source = new StubSource();
+    source.getMarkets = () => Promise.reject(new Error('no debería preguntar'));
+    const sim = new DryRunAdapter(source, { maintenanceMarginRate: 0.02 });
+    await sim.getTicker('BTC');
+    await sim.setLeverage('BTC', 10, 'ISOLATED');
+    await sim.placeOrder(order({ price: '100', qty: '1' }));
+    source.move('99', '100');
+    await sim.getTicker('BTC');
+
+    const [pos] = await sim.getPositions();
+    // 100 x 0,9 / 0,98 = 91,8367…
+    expect(Number(pos.liquidationPrice)).toBeCloseTo(91.836735, 5);
   });
 
   it('liquida la posicion cuando la marca cruza su precio de liquidacion', async () => {
@@ -1678,19 +1727,21 @@ describe('DryRunAdapter', () => {
 
     const [pos] = await sim.getPositions();
     const liq = Number(pos.liquidationPrice);
-    // 100 x (1 - 20/100 + 0,005): con 20 de caja sobre 100 de notional.
-    expect(liq).toBeCloseTo(80.5, 6);
+    // 100 x (1 - 20/100) / (1 - 0,005) = 80,4020…: con 20 de caja sobre 100 de
+    // notional, y la liquidación exacta (spec 080).
+    expect(liq).toBeCloseTo(80.40201, 5);
 
     const antes = Number(sim.stats().realizedPnl);
     source.move(String(liq - 1), String(liq - 0.9));
     await sim.getTicker('BTC');
     expect(await sim.getPositions()).toHaveLength(0);
 
-    // Pierde la caja de la posicion (20) menos el colchon de mantenimiento
-    // (0,5), mas la comision del cierre forzoso. Ni un centimo mas.
+    // Pierde la caja de la posicion (20) menos el colchon de mantenimiento al
+    // precio de liquidacion (0,005 x 80,40 = 0,40), mas la comision del cierre
+    // forzoso (0,04): 19,64. Ni un centimo mas.
     const perdida = antes - Number(sim.stats().realizedPnl);
-    expect(perdida).toBeGreaterThan(19.5);
-    expect(perdida).toBeLessThan(19.6);
+    expect(perdida).toBeGreaterThan(19.6);
+    expect(perdida).toBeLessThan(19.65);
   });
 
   it('una posicion CRUZADA la respalda la cuenta entera, no su margen inicial', async () => {
@@ -1731,9 +1782,9 @@ describe('DryRunAdapter', () => {
     source.move('99', '100');
     await sim.getTicker('BTC');
 
-    // Caja 80 sobre 100 de notional: 100 x (1 - 80/100 + 0,005).
+    // Caja 80 sobre 100 de notional: 100 x (1 - 80/100) / (1 - 0,005) = 20,12.
     const [sola] = await sim.getPositions();
-    expect(Number(sola.liquidationPrice)).toBeCloseTo(20.5, 1);
+    expect(Number(sola.liquidationPrice)).toBeCloseTo(20.12, 1);
 
     // Una aislada en otro simbolo se lleva 50 del saldo comun.
     await sim.setLeverage('ETH', 2, 'ISOLATED');
@@ -1741,7 +1792,7 @@ describe('DryRunAdapter', () => {
     source.current = { ...source.current, symbol: 'ETH', bid: '99', ask: '100' };
     await sim.getTicker('ETH');
 
-    // A la cruzada le quedan ~30: 100 x (1 - 30/100 + 0,005).
+    // A la cruzada le quedan ~30: 100 x (1 - 30/100) / (1 - 0,005) = 70,35.
     const btc = (await sim.getPositions('BTC'))[0];
     expect(Number(btc.liquidationPrice)).toBeCloseTo(70.5, 0);
   });
@@ -1759,7 +1810,7 @@ describe('DryRunAdapter', () => {
     await sim.getTicker('BTC');
 
     const [sola] = await sim.getPositions('BTC');
-    expect(Number(sola.liquidationPrice)).toBeCloseTo(20.5, 1);
+    expect(Number(sola.liquidationPrice)).toBeCloseTo(20.12, 1);
 
     // Una segunda cruzada del mismo tamaño se lleva la mitad de la caja.
     await sim.setLeverage('ETH', 10, 'CROSS');
@@ -1767,9 +1818,9 @@ describe('DryRunAdapter', () => {
     source.current = { ...source.current, symbol: 'ETH', bid: '99', ask: '100' };
     await sim.getTicker('ETH');
 
-    // A cada una le tocan ~40 de los 80: 100 x (1 - 40/100 + 0,005).
+    // A cada una le tocan ~40 de los 80: 100 x (1 - 40/100) / (1 - 0,005) = 60,30.
     const btc = (await sim.getPositions('BTC'))[0];
-    expect(Number(btc.liquidationPrice)).toBeCloseTo(60.5, 0);
+    expect(Number(btc.liquidationPrice)).toBeCloseTo(60.3, 0);
   });
 
   it('la ejecucion de una liquidacion va MARCADA', async () => {

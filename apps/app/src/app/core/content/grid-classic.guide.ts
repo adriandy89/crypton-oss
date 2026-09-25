@@ -39,7 +39,7 @@ export const GRID_CLASSIC_GUIDE: StrategyGuide<GridClassicConfig> = {
         { label: 'Espaciado', value: 'Aritmético' },
       ],
       outcome:
-        'Cada línea queda a unos 737 USDC de la siguiente, un 0,9 % del precio, y mueve 60 USDC de posición. Con el precio en 78.910 hay unas diez compras vivas por debajo. Cada vaivén completo entre dos líneas deja alrededor de 0,55 USDC menos comisiones. Si BTC pierde los 72.000, te quedas con las veinte compras hechas y 1.200 USDC de posición larga esperando a que vuelva.',
+        'Cada línea queda a unos 737 USDC de la siguiente, un 0,9 % del precio, y mueve 60 USDC de posición. Con el precio en 78.910 hay diez compras vivas por debajo. Cada vaivén completo entre dos líneas deja entre 0,56 y 0,61 USDC brutos, y Lighter no cobra comisión a las cuentas estándar. Si BTC pierde los 72.000, te quedas con las veinte compras hechas y casi 1.200 USDC de posición larga esperando a que vuelva.',
     },
     {
       title: 'Acumular SOL sin apalancamiento',
@@ -54,7 +54,7 @@ export const GRID_CLASSIC_GUIDE: StrategyGuide<GridClassicConfig> = {
         { label: 'Parar al salir del rango', value: 'Si' },
       ],
       outcome:
-        'Sin apalancamiento no hay precio de liquidación: el peor caso es quedarte con 500 USDC en SOL comprado a una media cercana a 140. Cada línea mueve 20 USDC, por encima del mínimo de 10 USDC del par y de los 0,1 SOL de cantidad mínima. Con 1,67 USDC entre líneas, cada ciclo cerrado deja un 1,2 % bruto.',
+        'Sin apalancamiento y en largo no hay precio de liquidación —el precio tendría que llegar a cero—: el peor caso es quedarte con 500 USDC en SOL comprado a una media de 138,96. En corto sí la hay, aunque sea a 1x: cuando el precio casi se duplica. Cada línea mueve 20 USDC, por encima del mínimo de 10 USDC del par y de los 0,1 SOL de cantidad mínima. Con 1,67 USDC entre líneas, cada ciclo cerrado deja un 1,2 % bruto.',
     },
     {
       title: 'Rejilla corta sobre un techo',
@@ -69,7 +69,7 @@ export const GRID_CLASSIC_GUIDE: StrategyGuide<GridClassicConfig> = {
         { label: 'Apalancamiento', value: '3x' },
       ],
       outcome:
-        'En corto todo se invierte: el bot vende en las líneas por encima del precio y recompra un escalón más abajo. Gana mientras ETH siga rebotando bajo los 2.800. El riesgo también se invierte: si rompe por arriba acumulas un corto de 1.200 USDC, y a 3x la liquidación queda en torno a un 33 % por encima de tu media.',
+        'En corto todo se invierte: el bot vende en las líneas por encima del precio y recompra un escalón más abajo. Gana mientras ETH siga rebotando bajo los 2.800. El riesgo también se invierte: si rompe por arriba acumulas un corto de 1.200 USDC, y a 3x la liquidación exacta queda en torno a un 31 % por encima de tu media: algo menos que el 33 % de 1/3, porque el mantenimiento se come una parte.',
     },
   ],
   options: {
@@ -94,7 +94,7 @@ export const GRID_CLASSIC_GUIDE: StrategyGuide<GridClassicConfig> = {
     gridSpacing: {
       what: 'Cómo se reparten las líneas. Aritmético deja la misma distancia en USDC entre todas; geométrico deja el mismo porcentaje.',
       affects:
-        'En aritmético, un salto de 700 USDC es un 0,9 % arriba del rango y casi un 1 % abajo. En geométrico todas las líneas rinden el mismo porcentaje, así que abajo quedan más juntas en dinero y arriba más separadas.',
+        'En aritmético, el salto de 737 USDC del primer ejemplo es un 0,86 % arriba del rango y un 1,02 % abajo. En geométrico todas las líneas rinden el mismo porcentaje, así que abajo quedan más juntas en dinero y arriba más separadas.',
       tip: 'Aritmético se lee más fácil. Geométrico compensa mejor en rangos muy amplios, donde el extremo inferior y el superior se diferencian mucho.',
     },
     stopOnRangeExit: {
@@ -108,6 +108,12 @@ export const GRID_CLASSIC_GUIDE: StrategyGuide<GridClassicConfig> = {
       affects:
         'En valor nocional todas las líneas mueven el mismo dinero, así que abajo compras más monedas que arriba y tu precio medio mejora solo. En cantidad, todas compran las mismas monedas y las líneas de abajo comprometen menos dinero.',
       tip: 'Valor nocional es lo habitual en una rejilla, y es lo que viene por defecto.',
+    },
+    maxNotionalCap: {
+      what: 'Tope del valor de la posición. En la rejilla clásica el motor lo consulta al tender las compras.',
+      affects:
+        'Tiende las compras de la línea más cercana al precio hacia fuera mientras la posición abierta más ellas quepan, y corta ahí, sin huecos. La Revisión lo aplica igual al peor caso: recorre la rejilla como si el precio la barriera entera y corta en la primera línea cuya posición, valorada a su precio, ya no cabe.',
+      tip: 'Tiene que caber al menos una línea: en valor nocional, un tope menor que capital × apalancamiento / niveles es un error. Mira en la Revisión dónde corta.',
     },
   },
 };

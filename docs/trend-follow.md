@@ -106,12 +106,15 @@ cantidad          = (capital × riesgo% / 100) / distancia_al_stop
 ```
 
 **El tamaño sale del riesgo, no del capital.** Con el mercado nervioso la posición es pequeña; con
-el mercado quieto, grande. En las dos arriesgas **exactamente lo mismo** si el stop salta.
+el mercado quieto, grande. En las dos arriesgas **exactamente lo mismo** si el stop salta. El
+`riesgo%` es **Riesgo por operación (sobre el capital)**: un % del capital asignado, no del margen de
+la posición, y el apalancamiento no entra en la cuenta.
 
 > **Con un techo.** Esa división se dispara en un mercado muy tranquilo —un ATR pequeño en el
 > denominador—, así que el tamaño se recorta al menor de: tu **tope de exposición**, tu **capital
 > asignado × apalancamiento** y el **margen disponible × apalancamiento**. Cuando recorta,
-> arriesgas **menos** del porcentaje que pediste, y la nota del bot lo dice.
+> arriesgas **menos** del porcentaje que pediste, y la nota del bot lo dice. La Revisión aplica el
+> mismo techo, salvo el margen disponible, que antes de crear el bot no se conoce.
 
 Es lo que hace comparables dos operaciones separadas por meses, y lo que permite decir «arriesgo el
 1 %» y que sea verdad.
@@ -140,16 +143,37 @@ Y no se recoloca por cualquier cosa: solo cuando se ha movido más de `stopRepri
 que se reescribe cada quince segundos son dos peticiones al exchange cada quince segundos para no
 cambiar nada.
 
+**Y tiene que saltar antes que la liquidación.** En margen aislado, antes de entrar el bot compara la
+distancia del stop (`k × ATR / precio`) con la de la liquidación exacta del lado de la entrada. Si el stop
+quedaría en ella o detrás, no saltaría nunca, y no entra:
+
+> `Ruptura descartada: el stop, a 2.5 ATR, quedaría a un 5.75 %, detrás de la liquidación a 15× (5.49 %): no saltaría nunca. Baja el apalancamiento o el multiplicador del stop.`
+
+Si cabe pero la deja a menos de medio stop detrás, entra y lo añade a la nota: `El stop queda a menos de
+medio stop de la liquidación a 15× (5.49 %).` Son las dos notas de una ruptura al alza en BTC de
+Hyperliquid a 15×: con un ATR del 2,30 % del precio la descarta, y con uno del 2,18 % entra con el aviso.
+En cruzado entra siempre: la liquidación real queda más lejos, con el resto de la cuenta detrás.
+
 ---
 
 ## 3. Cómo configurarlo con poco riesgo
 
 ### Las cuatro reglas
 
-1. **El riesgo por operación es el mando que importa.** 1 % es lo estándar. Con 2 %, cinco pérdidas
-   seguidas —que son normales— se llevan un 10 % de tu capital.
+1. **El riesgo por operación es el mando que importa.** Es un % del **capital**. 1 % es lo estándar.
+   Con 2 %, cinco pérdidas seguidas —que son normales— se llevan un 10 % de tu capital. Por encima del
+   2 % la app avisa.
 2. **Apalancamiento bajo.** El stop es amplio a propósito. Con apalancamiento alto, la liquidación
-   del exchange queda **por dentro** del stop y te saca él antes que tu estrategia.
+   del exchange queda **por dentro** del stop, o pegada detrás. En aislado el bot lo comprueba al entrar,
+   con el ATR de ese momento, y deja pasar las rupturas cuyo stop no saltaría (Paso 5): el apalancamiento
+   alto te quita entradas. Al crear el bot, la app avisa con el ATR supuesto de la Revisión, un 2 % del
+   precio: con 2,5 ATR el stop queda a un 5 %, y en BTC de Hyperliquid (mantenimiento del 1,25 %), con
+   Lados en Neutral, el aviso sale desde 12×, donde la liquidación del corto está a un 7,00 %:
+   `A 12× la liquidación llega en corto con un 7.00 % en contra, y el stop, a 2.5 ATR, solo salta antes
+   mientras el ATR sea menor que un 2.80 % del precio. Con un ATR del 2 % quedaría a un 5.00 %, a menos
+   de medio stop de ella. Baja el apalancamiento o el multiplicador del stop.` A 2× esa liquidación está a un 48,15 %, a
+   10× a un 8,64 %, y a 15× —el máximo que admite la regla del 5 % en Neutral— a un 5,35 %. En cruzado no
+   se avisa ni se descarta nada.
 3. **El stop nunca por debajo de 1,5 ATR.** Más pegado no es prudencia: es salirse en el primer
    respiro del mercado, una y otra vez, pagando comisión cada vez. La app lo avisa.
 4. **Deja la eficiencia mínima en 0,35 o más.** Con 0, el bot entra en cada ruptura, y en un
@@ -163,16 +187,18 @@ cambiar nada.
 | Lados que opera | **Neutral** (los dos) |
 | Capital asignado | **200 USDC** |
 | Apalancamiento | **1x** · Margen aislado |
-| Resolución | **4 h** |
-| Canal de ruptura | 20 velas (unos 3 días) |
-| ATR | 14 velas |
-| Stop | **2,5 ATR** |
-| Riesgo por operación | **0,5 %** |
-| Eficiencia mínima | **0,4** |
+| Resolución de las velas | **4 h** |
+| Velas del canal de ruptura | 20 (unos 3 días) |
+| Velas del ATR | 14 |
+| Stop, en ATR | **2,5** |
+| Riesgo por operación (sobre el capital) | **0,5 %** |
+| Eficiencia mínima para entrar | **0,4** |
 
 Con 200 USDC y 0,5 %, cada operación arriesga **1 USDC**. Es poco a propósito: lo que se quiere
 aquí es ver cuántas veces entra, cuántas veces el stop salta enseguida, y si eso te resulta
-soportable.
+soportable. En BTC de Hyperliquid, a 78.910 y con el ATR supuesto del 2 %, la Revisión enseña una
+entrada de ejemplo de 0,00025 BTC (19,73 USDC) con el stop estimado en 74.965, un 5 % por debajo, y
+−0,99 USDC si salta. No enseña liquidación: a 1× y en largo no la hay.
 
 ### Configuración B — «Uso normal»
 
@@ -180,17 +206,24 @@ soportable.
 | --- | --- |
 | Capital asignado | 1.000 USDC |
 | Apalancamiento | **2x** |
-| Resolución | 4 h · Canal 20 · ATR 14 |
-| Stop | 2,5 ATR |
-| Riesgo por operación | **1 %** |
-| Eficiencia mínima | 0,35 |
-| Stop loss (%) | **vacío** — esta estrategia pone el suyo |
+| Velas | resolución 4 h · canal de ruptura 20 · ATR 14 |
+| Stop, en ATR | 2,5 |
+| Riesgo por operación (sobre el capital) | **1 %** |
+| Eficiencia mínima para entrar | 0,35 |
+| Stop loss (sobre el margen) | **vacío** — esta estrategia pone el suyo |
+
+**Qué enseña la Revisión** (BTC en Hyperliquid, a 78.910). Con el ATR supuesto del 2 %, el stop queda
+a 2,5 × 2 % = 5 % y la posición sale de `1.000 × 1 % / 5 %` = 200 USDC: **0,00253 BTC** (199,64 USDC
+tras redondear) con **99,82 USDC de margen** a 2×. Si el stop estimado salta, en 74.965, pierdes **9,98
+USDC**: el 1 % del capital, que la Revisión enseña como un **−10 % del margen**, porque la posición solo
+usa unos 100 de los 1.000. La liquidación del largo queda en 39.955, un 49,37 % por debajo. Los 900 USDC
+que no usa no están de adorno: son la base del riesgo y, con el apalancamiento, el techo de la posición.
 
 ### Configuración C — «Lenta»
 
-Cambia solo dos cosas sobre la B: **resolución 1d** y **canal 20** (unas tres semanas). Opera
-mucho menos y cada operación dura mucho más. Es la forma clásica de esto, y la que peor se lleva
-con mirar la pantalla todos los días.
+Cambia una sola cosa sobre la B: **resolución 1d**. Con el mismo canal de 20 velas, el canal cubre
+unas tres semanas. Opera mucho menos y cada operación dura mucho más. Es la forma clásica de esto, y
+la que peor se lleva con mirar la pantalla todos los días.
 
 ### Checklist antes de arrancar
 
@@ -198,8 +231,11 @@ con mirar la pantalla todos los días.
       de humor?
 - [ ] ¿Apalancamiento en 1x o 2x?
 - [ ] ¿El **stop** está en 2 ATR o más?
-- [ ] ¿He dejado el **stop loss por porcentaje** vacío? (Esta estrategia pone el suyo; la app
-      avisa si pones los dos.)
+- [ ] ¿He dejado vacío el **Stop loss (sobre el margen)**? (Esta estrategia pone el suyo y ese no
+      se usa; la app avisa si lo rellenas.)
+- [ ] ¿He mirado en la Revisión el stop estimado y la liquidación, y hay distancia de sobra entre los
+      dos? (en aislado, si la app avisa en «Stop, en ATR», el bot dejará pasar las rupturas en cuanto
+      el ATR suba del máximo que dice)
 - [ ] ¿Entiendo que la mayoría de los días no va a pasar nada, y que la mayoría de las operaciones
       van a perder?
 
@@ -209,11 +245,11 @@ con mirar la pantalla todos los días.
 
 | Campo | Realidad |
 | --- | --- |
-| **Stop loss (%)** | ⚠️ **No se usa.** La estrategia emite su propio stop, calculado con el ATR y en movimiento. La app avisa si lo rellenas |
+| **Stop loss (sobre el margen)** | ⚠️ **No se usa.** La estrategia emite su propio stop, calculado con el ATR y en movimiento, y el motor no añade el común encima. La app avisa si lo rellenas, y el campo no enseña equivalente en precio |
 | **Espera entre ciclos** | Sin efecto: cada operación es un ciclo y el siguiente empieza cuando haya otra ruptura |
 
-Sí funcionan, aplicados por el motor: **Pérdida diaria máxima**, **Tope de exposición** y **Al
-acercarse la liquidación**.
+Sí funcionan: **Pérdida diaria máxima (sobre el capital)** y **Al acercarse la liquidación**,
+aplicados por el motor, y el **Tope de exposición**, que recorta el tamaño de la entrada (Paso 4).
 
 ---
 
@@ -245,5 +281,9 @@ bot real por par y cuenta.
   una Tendencia de 1h). Si no lo divide, no hay velas con las que decidir y no opera. Además, las
   primeras 25 velas del rango (con los valores de fábrica) se gastan en calentar el canal y el ATR
   ([simulación y backtest](./simulacion-y-backtest.md)).
-- **La vista previa estima el tamaño con un ATR del 2 % del precio**, porque antes de crear el bot
-  no hay velas que mirar. El real lo calculará el bot con el ATR de verdad del par.
+- **La Revisión estima el tamaño y el stop con un ATR del 2 % del precio**, porque antes de crear el
+  bot no hay velas que mirar: el stop sale rotulado «Stop · estimado». Los reales los calculará el bot
+  con el ATR de verdad del par: con un mercado más nervioso, la posición será menor y el stop más
+  ancho, y el riesgo en dinero el mismo. Con **Lados que opera** en Neutral enseña solo el largo; el
+  corto es su espejo, salvo la liquidación, algo más cercana (a 2× en BTC de Hyperliquid, un 48,15 %
+  por encima frente a un 49,37 % por debajo).

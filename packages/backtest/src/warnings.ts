@@ -36,9 +36,9 @@ export function fidelityWarnings(opts: {
       'market maker).',
 
     // 3. Y esta hace el resultado OPTIMISTA, que es la dirección peligrosa.
-    'Margen de mantenimiento plano (≈0,5 %) en lugar de la escala por tramos que ' +
-      'aplica cada venue. Los tramos altos son peores, así que una posición grande ' +
-      'revienta ANTES en el venue que aquí.',
+    'Margen de mantenimiento del primer tramo del mercado, sin la escala por tramos ' +
+      'que aplica cada venue a las posiciones grandes. Los tramos altos son peores, así ' +
+      'que una posición grande revienta ANTES en el venue que aquí.',
 
     // 4. La que el usuario elige y quizá no dimensiona.
     `Los precios son de ${opts.source} (${opts.sourceSymbol}), no de ${opts.venue}. ` +

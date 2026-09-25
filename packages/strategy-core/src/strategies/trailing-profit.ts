@@ -54,6 +54,7 @@ import {
   px,
   qy,
   toResult,
+  validarObjetivoRoi,
   validateCommon,
   warn,
   type RawLevel,
@@ -65,6 +66,7 @@ import {
   camposTrailing,
   trailingVigente,
   validarTrailing,
+  type ObjetivoDelSeguimiento,
   type TrailingConfig,
 } from '../trailing-take-profit';
 import type { Strategy } from '../types';
@@ -72,11 +74,12 @@ import { activationGate } from './mm-shared';
 
 export interface TrailingProfitConfig extends CommonBotConfig, TrailingConfig {
   /**
-   * Beneficio al que EMPIEZA a seguir al máximo, sobre el precio de entrada.
+   * Beneficio al que EMPIEZA a seguir al máximo, en % del MARGEN desde el precio
+   * de entrada (spec 080): a 15×, un 30 % es un 2 % del precio.
    *
    * No es el precio al que sale: es el precio a partir del cual la salida deja
    * de ser fija. Lo que cobra es, como mínimo,
-   * `entrada × (1 + objetivo) × (1 − retroceso)`.
+   * `entrada × (1 + objetivo/L) × (1 − retroceso)`, con el retroceso en precio.
    */
   takeProfitPct: string;
   /** Cuándo entra: ya, o al cruzar un precio. Las mismas claves que el MM V2. */
@@ -114,10 +117,14 @@ const TRAILING_PROFIT_FIELDS: readonly FieldMeta[] = [
     labelKey: 'strategy.trailing.takeProfitPct',
     helpKey: 'strategy.trailing.takeProfitPctHelp',
     min: 0.1,
-    max: 500,
+    // % del MARGEN desde el spec 080; el tope de siempre, un 500 % del precio.
+    maxPrecioPct: 500,
+    roi: 'BENEFICIO',
     step: 0.1,
     required: true,
-    default: 15,
+    // El 15 % del precio de antes al apalancamiento de fábrica (2×): a 2× el
+    // bot empieza a seguir exactamente donde empezaba.
+    default: 30,
     group: 'levels',
   },
   // Los dos del mecanismo, SIN el interruptor: aquí el seguimiento no se apaga.
@@ -134,9 +141,12 @@ const TRAILING_PROFIT_FIELDS: readonly FieldMeta[] = [
  *
  * Se cambian aquí y no solo en `defaults()` para que el número que el usuario
  * ve en la casilla sea el que el bot va a usar (spec 043 R-5 y R-7).
+ *
+ * El stop es un % del MARGEN desde el spec 080: el 10 % es el 5 % del precio de
+ * antes al apalancamiento de fábrica (2×).
  */
 const COMUNES = commonFieldsWith([
-  comunCon('stopLossPct', { default: 5 }),
+  comunCon('stopLossPct', { default: 10 }),
   comunCon('cooldownMinutes', { default: 60 }),
 ]);
 
@@ -163,8 +173,11 @@ function techoNocional(cfg: TrailingProfitConfig, availableBalance: string): Dec
   return topes.reduce((a, b) => (b.lt(a) ? b : a));
 }
 
-/** La config tal y como la ve el mecanismo del 042: aquí siempre encendido. */
-const conSeguimiento = (cfg: TrailingProfitConfig): TrailingConfig => ({
+/**
+ * La config tal y como la ve el mecanismo del 042: aquí siempre encendido, con
+ * el objetivo para medir el suelo de lo que cobra.
+ */
+const conSeguimiento = (cfg: TrailingProfitConfig): TrailingConfig & ObjetivoDelSeguimiento => ({
   ...cfg,
   trailingTakeProfit: true,
 });
@@ -188,7 +201,8 @@ export const trailingProfit: Strategy<TrailingProfitConfig> = {
       leverage: 2,
       marginMode: 'ISOLATED',
       activationMode: ActivationMode.NONE,
-      takeProfitPct: '15',
+      // % del margen (spec 080): el 15 % del precio de antes, a 2×.
+      takeProfitPct: '30',
       // Los dos mandos, SIN el interruptor: aquí el seguimiento no se puede
       // apagar, así que el campo no está en `meta.fields` — y `diffConfig` trata
       // como COLD todo campo que la estrategia no declare. Dejarlo en la
@@ -203,7 +217,9 @@ export const trailingProfit: Strategy<TrailingProfitConfig> = {
       // Por debajo del objetivo el seguimiento no protege nada —no hay nada que
       // asegurar todavía— y esa ventana es TODA la operación hasta que llega.
       // Dejarla sin red sería vender la parte bonita y callar la otra.
-      stopLossPct: '5',
+      //
+      // Un 10 % del MARGEN (spec 080): el 5 % del precio de antes, a 2×.
+      stopLossPct: '10',
       // Una hora, para que no encadene operaciones en el mismo minuto: al
       // cerrarse la posición se cierra el ciclo y el bot vuelve a entrar.
       cooldownMinutes: 60,
@@ -212,11 +228,11 @@ export const trailingProfit: Strategy<TrailingProfitConfig> = {
 
   validate(cfg: TrailingProfitConfig, market: MarketSpec): ValidationResult {
     const issues: ValidationIssue[] = validateCommon(cfg, market);
+    const lev = Number(cfg.leverage) || 1;
 
-    const tp = D(cfg.takeProfitPct ?? 0);
-    if (!tp.isFinite() || tp.lte(0)) {
-      issues.push(err('takeProfitPct', 'El objetivo tiene que ser mayor que cero.'));
-    }
+    issues.push(
+      ...validarObjetivoRoi('takeProfitPct', 'El objetivo', cfg.takeProfitPct, lev, cfg.direction),
+    );
 
     issues.push(...validarTrailing(conSeguimiento(cfg)));
 
@@ -231,7 +247,7 @@ export const trailingProfit: Strategy<TrailingProfitConfig> = {
 
     // Sin stop, esta estrategia no tiene NADA hasta que llega al objetivo. En
     // las demás el aviso sería ruido; aquí es el riesgo principal.
-    if (cfg.stopLossPct == null || D(cfg.stopLossPct).lte(0)) {
+    if (cfg.stopLossPct == null || cfg.stopLossPct === '' || !D(cfg.stopLossPct).gt(0)) {
       issues.push(
         warn(
           'stopLossPct',
@@ -241,19 +257,8 @@ export const trailingProfit: Strategy<TrailingProfitConfig> = {
       );
     }
 
-    // El suelo de lo que se cobra, en el propio formulario: es el número que
-    // más gente se lleva de sorpresa.
-    const cb = D(cfg.trailingCallbackPct ?? TRAILING_DEFAULTS.trailingCallbackPct);
-    if (tp.gt(0) && cb.gt(0) && cb.gte(tp)) {
-      issues.push(
-        warn(
-          'trailingCallbackPct',
-          'Con un retroceso igual o mayor que el objetivo, el disparador nace por debajo del ' +
-            'precio de entrada: la operación puede cerrarse en pérdida nada más activarse.',
-        ),
-      );
-    }
-
+    // El suelo de lo que cobra lo mide `validarTrailing`, arriba, igual que en
+    // la martingala y el DCA con el seguimiento encendido (079/F-16).
     return toResult(issues);
   },
 
@@ -268,8 +273,12 @@ export const trailingProfit: Strategy<TrailingProfitConfig> = {
     // pantalla donde el usuario decide comprometer dinero (spec 044 R-3).
     //
     // `refPrice` se sigue pasando a `buildPreview` como referencia de MERCADO,
-    // así que «distancia al precio actual» y «distancia a liquidación» se siguen
-    // midiendo contra hoy, que es lo correcto.
+    // así que la distancia desde el precio de hoy se sigue midiendo contra hoy.
+    //
+    // Pero solo si la condición espera DE VERDAD: si el precio de hoy ya la
+    // cumple, `activationGate` arma en el acto y el bot entra a mercado al
+    // precio de hoy, no al de disparo (079/F-05).
+    const hoy = D(refPrice);
     const disparo = cfg.activationPrice ? D(cfg.activationPrice) : null;
     const condicionada =
       cfg.activationMode != null &&
@@ -277,16 +286,25 @@ export const trailingProfit: Strategy<TrailingProfitConfig> = {
       disparo != null &&
       disparo.isFinite() &&
       disparo.gt(0);
-    const precio = condicionada && disparo ? disparo : D(refPrice);
+    const armaYa =
+      condicionada &&
+      disparo != null &&
+      (cfg.activationMode === ActivationMode.PRICE_ABOVE ? hoy.gte(disparo) : hoy.lte(disparo));
+    const espera = condicionada && !armaYa;
+    const precio = espera && disparo ? disparo : hoy;
 
     // Sin `availableBalance` —no existe antes de crear el bot— se usa solo la
     // parte del techo que sale de la configuración, igual que en tendencia.
     const techo = techoNocional(cfg, String(cfg.totalInvestment ?? 0));
     const qty = precio.gt(0) ? techo.div(precio) : D(0);
-    const activacion = takeProfitPrice(precio, cfg.takeProfitPct, cfg.direction);
+    // Los dos, en la retícula y redondeados como los manda el motor: son los
+    // números que el usuario va a comparar con la Revisión.
+    const salida = exitSide(cfg.direction);
+    const bruta = takeProfitPrice(precio, cfg.takeProfitPct, cfg.leverage, cfg.direction);
+    const activacion = px(market, bruta, salida);
     const cb = D(cfg.trailingCallbackPct ?? TRAILING_DEFAULTS.trailingCallbackPct).div(100);
     const largo = cfg.direction !== 'SHORT';
-    const suelo = activacion.mul(largo ? D(1).minus(cb) : D(1).plus(cb));
+    const suelo = px(market, bruta.mul(largo ? D(1).minus(cb) : D(1).plus(cb)), salida);
 
     const levels: RawLevel[] = [
       {
@@ -295,7 +313,6 @@ export const trailingProfit: Strategy<TrailingProfitConfig> = {
         side: entrySide(cfg.direction),
         price: precio,
         qty,
-        margin: D(cfg.leverage ?? 1).gt(0) ? techo.div(D(cfg.leverage ?? 1)) : techo,
         isEntry: true,
       },
     ];
@@ -307,20 +324,23 @@ export const trailingProfit: Strategy<TrailingProfitConfig> = {
       direction: cfg.direction,
       leverage: cfg.leverage,
       marginMode: cfg.marginMode,
-      // El objetivo se pinta como take profit porque es donde EMPIEZA a seguir,
-      // y el aviso de abajo explica que lo que se cobra no es exactamente eso.
-      takeProfitPct: cfg.takeProfitPct,
+      // El objetivo es donde EMPIEZA a seguir al máximo, y la Revisión lo dice;
+      // el aviso de abajo da lo mínimo que cobra.
+      objetivo: { roiPct: cfg.takeProfitPct, activacion: true },
+      stopLossRoiPct: cfg.stopLossPct,
       issues: [
         ...validacion.issues,
         warn(
           null,
-          (condicionada
+          (espera
             ? `Calculado sobre el precio de entrada (${precio.toFixed(market.priceDecimals)}), ` +
               'no sobre el de ahora: el bot espera a que la marca lo cruce. '
-            : '') +
-            `El objetivo de ${activacion.toFixed(market.priceDecimals)} no es el precio al que ` +
-            'sale: es donde empieza a seguir al máximo. Lo mínimo que cobra es ' +
-            `${suelo.toFixed(market.priceDecimals)}, y puede ser mucho más si el precio sigue.`,
+            : armaYa
+              ? 'El precio de hoy ya cumple la condición de entrada: el bot entra a mercado al ' +
+                'crearse, y todo está calculado sobre el precio de hoy. '
+              : '') +
+            `El objetivo de ${activacion} no es el precio al que sale: es donde empieza a seguir ` +
+            `al máximo. Lo mínimo que cobra es ${suelo}, y puede ser mucho más si el precio sigue.`,
         ),
       ],
     });
@@ -334,7 +354,13 @@ export const trailingProfit: Strategy<TrailingProfitConfig> = {
 
     // ── Con posición: solo la salida, que sigue al máximo ─────────────
     if (pos.gt(0) && ctx.position) {
-      const activacion = takeProfitPrice(ctx.position.entryPrice, cfg.takeProfitPct, cfg.direction);
+      // Un % del MARGEN desde la entrada real (spec 080).
+      const activacion = takeProfitPrice(
+        ctx.position.entryPrice,
+        cfg.takeProfitPct,
+        cfg.leverage,
+        cfg.direction,
+      );
       const t = trailingVigente({
         scratch: ctx.cycle.scratch,
         extremos: ctx.extremos,
@@ -427,7 +453,8 @@ export const trailingProfit: Strategy<TrailingProfitConfig> = {
       immediate: [],
       note:
         `Abriendo ${cfg.direction === 'SHORT' ? 'corto' : 'largo'} a mercado. ` +
-        `Empezará a seguir al máximo con un ${D(cfg.takeProfitPct).toFixed()} % de beneficio.`,
+        `Empezará a seguir al máximo con un ${D(cfg.takeProfitPct).toFixed()} % de beneficio ` +
+        'sobre el margen.',
       ...(puerta.patch ? { scratchPatch: puerta.patch } : {}),
     };
   },

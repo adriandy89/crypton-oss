@@ -13,6 +13,7 @@ import {
   SourceMarketType,
   candleSpanMs,
   esEstrategiaDeAgente,
+  liquidationDistancePct,
   operacionCanalDe,
   type AvisoEstrategia,
   type BotConfig,
@@ -49,7 +50,6 @@ import {
 } from '@crypton/exchange-core';
 import {
   getStrategy,
-  liquidationDistancePct,
   makeCoid,
   reconcile,
   revisarOrden,
@@ -1271,6 +1271,11 @@ export class BotRunner {
         const delPlan = await this.aplicarOperacion(desired);
         if (!delPlan) return;
         desired = delPlan;
+      } else {
+        // Las demás estrategias también pueden traer avisos: el del stop, cuando
+        // el venue tiene la posición más apalancada que la configuración
+        // (spec 080). Solo los emitían el canal y los agentes.
+        await this.emitirAvisos(desired.avisos);
       }
 
       const plan = reconcile({
@@ -3445,6 +3450,9 @@ export class BotRunner {
       cycleSeq,
       market: this.market,
       stopLossPct: this.config.stopLossPct,
+      // El stop es un % del margen (spec 080): con el apalancamiento que este
+      // motor fija en el venue (`syncLeverage`).
+      leverage: Number(this.config.leverage ?? 1),
     });
   }
 

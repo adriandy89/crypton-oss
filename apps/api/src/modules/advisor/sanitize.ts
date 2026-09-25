@@ -1,4 +1,12 @@
-import type { FieldMeta, MarketSpec } from '@crypton/shared';
+import {
+  distanciaLiquidacion,
+  ladoMasEstrecho,
+  maintenanceMarginRateOf,
+  maxApalancamientoConDistancia,
+  type FieldMeta,
+  type MarketSpec,
+  type PositionSide,
+} from '@crypton/shared';
 
 /**
  * Recorte y reparacion de una configuracion propuesta.
@@ -17,21 +25,40 @@ import type { FieldMeta, MarketSpec } from '@crypton/shared';
  *     fallo de validacion es adivinar.
  */
 
+/** El lado cuya liquidacion manda para una direccion que llega como valor libre. */
+const ladoDe = (direction: unknown): PositionSide =>
+  ladoMasEstrecho(direction === 'LONG' || direction === 'SHORT' ? direction : 'NEUTRAL');
+
 /**
- * Apalancamiento maximo que el servidor va a aceptar de verdad.
+ * Apalancamiento maximo que el servidor va a aceptar de verdad en ESTE mercado.
  *
  * NO es el 50 del descriptor ni el que admita el venue. `RiskService` rechaza
- * con 403 toda configuracion cuya distancia a liquidacion baje del 5 %, y con la
- * tasa de mantenimiento del 0,5 % esa distancia es `100/lev - 0,5`:
+ * con 403 toda configuracion cuya liquidacion quede a menos del 5 %, medida con
+ * la formula EXACTA del lado y la tasa de mantenimiento del mercado. Sin este
+ * tope, un perfil «agresivo» se veria perfecto en pantalla, pasaria la
+ * validacion local y moriria en un 403 al pulsar «Crear bot».
  *
- *     17x -> 5,382 %  pasa        19x -> 4,763 %  403
- *     18x -> 5,056 %  pasa        20x -> 4,500 %  403
- *
- * De ahi el 18. Sin este tope, un perfil «agresivo» a 20x se veria perfecto en
- * pantalla, pasaria la validacion local y moriria en un 403 al pulsar «Crear
- * bot», despues de que el usuario lo hubiera revisado todo.
+ * Era una constante, 18, sacada de un mantenimiento plano del 0,5 %: en BTC
+ * (1,25 %) el servidor rechaza desde 16× en largo y 15× en corto, y en un par
+ * con el mantenimiento mas bajo se quedaba corto (079/F-08).
  */
-export const MAX_SAFE_LEVERAGE = 18;
+export function maxApalancamientoSeguro(market: MarketSpec, direction: unknown): number {
+  return maxApalancamientoConDistancia(maintenanceMarginRateOf(market), ladoDe(direction));
+}
+
+/**
+ * Distancia de la entrada a la liquidacion exacta, en %, del lado que manda.
+ * Es una estadistica para dimensionar la escalera, no un precio de orden.
+ */
+export function distanciaLiquidacionPct(
+  leverage: number,
+  market: MarketSpec,
+  direction: unknown,
+): number {
+  return distanciaLiquidacion(leverage, maintenanceMarginRateOf(market), ladoDe(direction))
+    .mul(100)
+    .toNumber();
+}
 
 /** Margen que se le deja a la cobertura de la escalera frente a la liquidacion. */
 const COVERAGE_TARGET = 0.85;
@@ -155,7 +182,7 @@ export function enforceCouplings(
   const c = { ...config };
 
   // ── Apalancamiento: el mas bajo de los cuatro topes ──
-  const topes = [MAX_SAFE_LEVERAGE, market.maxLeverage];
+  const topes = [maxApalancamientoSeguro(market, c['direction']), market.maxLeverage];
   if (maxLeverageUsuario != null) topes.push(maxLeverageUsuario);
   const lev = Math.max(1, Math.min(num(c['leverage']) ?? 1, ...topes));
   c['leverage'] = Math.floor(lev);
@@ -167,10 +194,12 @@ export function enforceCouplings(
     const stepScale = num(c['stepScale']) ?? 1;
     let separacion = num(c['initialSeparationPct']) ?? 0;
     if (niveles > 0 && separacion > 0) {
-      // `100/lev` es la distancia a liquidacion; se apunta al 85 % de ella para
-      // dejar colchon, porque la tasa de mantenimiento con la que se estima esa
-      // liquidacion esta documentada como OPTIMISTA: la real llega antes.
-      const objetivo = (100 / (c['leverage'] as number)) * COVERAGE_TARGET;
+      // La distancia a la liquidacion EXACTA del lado, con el mantenimiento del
+      // mercado; se apunta al 85 % de ella para que los ultimos niveles no
+      // queden pegados a la liquidacion. Era `100/lev`, que no cuenta el
+      // mantenimiento y dejaba la escalera mas cerca de lo que decia (079/F-08).
+      const objetivo =
+        distanciaLiquidacionPct(c['leverage'] as number, market, c['direction']) * COVERAGE_TARGET;
       const cobertura = ladderCoveragePct(niveles, separacion, stepScale);
       if (cobertura > objetivo) {
         // Se encoge la separacion inicial en proporcion. Es el campo que menos

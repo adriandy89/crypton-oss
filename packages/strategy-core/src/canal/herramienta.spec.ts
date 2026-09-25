@@ -11,7 +11,7 @@ import {
   TipoStop,
   Veredicto,
   maintenanceMarginRateOf,
-  precioLiquidacionAislada,
+  precioLiquidacion,
   tramoDeApalancamiento,
   type EleccionOperacion,
   type NivelApalancamiento,
@@ -868,7 +868,7 @@ describe('herramientaCanal: propiedades sobre 10.000 casos', () => {
           if (n.div(L).gt(margenMax))
             throw new Error(fallo(`margen ${n.div(L).toFixed()} > ${margenMax.toFixed()}`));
           // 2. La liquidación, lejos y detrás del stop.
-          const liq = precioLiquidacionAislada(tope, L, tramo.mantenimiento, c.lado);
+          const liq = precioLiquidacion(tope, L, tramo.mantenimiento, c.lado);
           if (liq) {
             const dLiq = tope.minus(liq).abs().div(tope);
             if (dLiq.lt(necesaria))

@@ -19,6 +19,7 @@ import {
 import { makeCoid, parseCoid } from '../client-order-id';
 import {
   commonFieldsWith,
+  comunCon,
   buildPreview,
   err,
   invalidPreview,
@@ -145,18 +146,33 @@ const NEUTRAL_DIRECTION: FieldMeta = {
   control: 'segment',
 };
 
+/**
+ * El tope de exposición de la retícula: el propio (`maxExposure`) y el común
+ * (`maxNotionalCap`), que aquí no se leía (001/F-12), tienen la misma semántica
+ * y manda el menor. null = sin tope. Lo comparten `plan()` y la Revisión.
+ */
+function topeDeExposicion(cfg: NeutralGridConfig): Decimal | null {
+  const topes = [cfg.maxExposure, cfg.maxNotionalCap]
+    .map((t) => (t ? D(t) : D(0)))
+    .filter((t) => t.gt(0));
+  return topes.length ? Decimal.min(...topes) : null;
+}
+
 const META: StrategyMeta = {
   kind: StrategyKind.NEUTRAL_GRID,
   labelKey: 'strategy.neutral.label',
   descriptionKey: 'strategy.neutral.description',
-  fields: [...commonFieldsWith([NEUTRAL_DIRECTION]), ...NEUTRAL_FIELDS],
+  // Cruzado, como `defaults()`: los dos lados de la rejilla comparten margen.
+  fields: [
+    ...commonFieldsWith([NEUTRAL_DIRECTION, comunCon('marginMode', { default: 'CROSS' })]),
+    ...NEUTRAL_FIELDS,
+  ],
 };
 
 interface GridLine {
   index: number;
   price: Decimal;
   qty: Decimal;
-  margin: Decimal;
   /** BUY para las líneas por debajo del ancla; SELL para las de arriba. */
   side: 'BUY' | 'SELL';
 }
@@ -243,7 +259,6 @@ function buildLines(cfg: NeutralGridConfig): GridLine[] {
     return {
       index: r.i,
       price: r.p,
-      margin,
       qty: r.p.gt(0) ? notional.div(r.p) : D(0),
       side: r.below ? ('BUY' as const) : ('SELL' as const),
     };
@@ -270,7 +285,15 @@ export const neutralGrid: Strategy<NeutralGridConfig> = {
   },
 
   validate(cfg: NeutralGridConfig, market: MarketSpec): ValidationResult {
-    const issues = validateCommon(cfg, market);
+    // La dirección no cambia la retícula, así que la regla del 5 % y la del stop
+    // se miden siempre contra el corto, que liquida antes. Con la del campo, en
+    // Largo medían el largo aunque la rejilla acabe corta: un stop del 62 %
+    // avisaba en Neutral y no en Largo (encontrado al rehacer la guía del 080).
+    // El aviso común del tope tampoco vale aquí: compara con el capital por el
+    // apalancamiento, y cada lado solo lleva una parte; va abajo, por lado.
+    const issues = validateCommon({ ...cfg, direction: 'NEUTRAL' }, market, {
+      topeDeExposicion: false,
+    });
     const lower = D(cfg.lowerPrice ?? 0);
     const upper = D(cfg.upperPrice ?? 0);
     const anchor = D(cfg.anchorPrice ?? 0);
@@ -296,14 +319,55 @@ export const neutralGrid: Strategy<NeutralGridConfig> = {
     }
 
     // Sin tope de exposición, una retícula neutral acumula posición sin freno
-    // en cuanto el precio se va a un extremo del rango y se queda ahí.
-    if (!cfg.maxExposure) {
+    // en cuanto el precio se va a un extremo del rango y se queda ahí. Cuenta
+    // cualquiera de los dos: el común también frena (001/F-12).
+    const tope = topeDeExposicion(cfg);
+    if (!tope) {
       issues.push(
         warn(
           'maxExposure',
           'Sin tope de exposición: si el precio se pega a un extremo, la posición neta crece hasta agotar el margen.',
         ),
       );
+    } else if (!issues.some((i) => i.severity === 'ERROR')) {
+      // Con tope, si muerde: contra lo que suman las líneas de UN lado, que es
+      // lo más que la posición puede cargar hacia ese extremo.
+      // Con cada línea ya en la retícula del venue, como la tiende el plan y la
+      // enseña la Revisión: con los nominales, el aviso decía 866,67 al lado de
+      // un lado que la Revisión suma en 865,02.
+      const lineas = buildLines(cfg);
+      const delLado = (s: 'BUY' | 'SELL') => lineas.filter((l) => l.side === s);
+      const nocional = (l: GridLine) => D(px(market, l.price, l.side)).mul(D(qy(market, l.qty)));
+      const lado = (s: 'BUY' | 'SELL') => delLado(s).reduce((a, l) => a.plus(nocional(l)), D(0));
+      const mayor = Decimal.max(lado('BUY'), lado('SELL'));
+      // La más cercana al ancla de cada lado: la última compra y la primera venta.
+      const compras = delLado('BUY');
+      const cercanas = [compras[compras.length - 1], delLado('SELL')[0]]
+        .filter((l) => l !== undefined)
+        .map(nocional);
+      const menor = cercanas.length ? Decimal.min(...cercanas) : null;
+      if (menor && tope.lt(menor)) {
+        // Un bot que no pone ninguna orden no es una configuración prudente: es
+        // una que no hace nada, y el usuario creería que opera.
+        issues.push(
+          err(
+            cfg.maxExposure && D(cfg.maxExposure).eq(tope) ? 'maxExposure' : 'maxNotionalCap',
+            `El tope de exposición (${tope.toFixed(2)}) no deja tender ni la línea más cercana ` +
+              `al ancla (${menor.toFixed(2)}): el bot no pondría ninguna orden.`,
+          ),
+        );
+      } else if (tope.lt(mayor)) {
+        const campo =
+          cfg.maxExposure && D(cfg.maxExposure).eq(tope) ? 'maxExposure' : 'maxNotionalCap';
+        issues.push(
+          warn(
+            campo,
+            `El tope de exposición (${tope.toFixed(2)}) es menor que lo que suman las líneas de ` +
+              `un lado (${mayor.toFixed(2)}): cada lado se tiende desde el ancla hasta donde ` +
+              'quepa.',
+          ),
+        );
+      }
     }
     // `plan()` no lee la dirección: la retícula es la misma en los tres casos y
     // la guía in-app prometía un sesgo que no existe (001/F-12).
@@ -331,7 +395,6 @@ export const neutralGrid: Strategy<NeutralGridConfig> = {
       side: l.side,
       price: l.price,
       qty: l.qty,
-      margin: l.margin,
       // Ambos lados abren posición en una retícula neutral: las dos mitades
       // consumen margen y las dos cuentan para el peor caso.
       isEntry: true,
@@ -341,12 +404,19 @@ export const neutralGrid: Strategy<NeutralGridConfig> = {
       levels,
       market,
       refPrice,
-      direction: cfg.direction === 'SHORT' ? 'SHORT' : 'LONG',
+      // `plan()` no lee `direction`: la retícula es neutral siempre, y la vista
+      // previa enseña los dos lados, cada uno con su posición y su liquidación
+      // (001/F-14). Con `direction: SHORT` se aplicaba la fórmula del corto a
+      // la media de las COMPRAS y la liquidación salía del lado equivocado
+      // (079/F-10).
+      direction: 'NEUTRAL',
       leverage: cfg.leverage,
       marginMode: cfg.marginMode,
-      // `plan()` no lee `direction`: la retícula es neutral siempre, y la
-      // vista previa enseña las dos liquidaciones (001/F-14).
-      neutral: true,
+      stopLossRoiPct: cfg.stopLossPct,
+      // El mismo tope que `plan()`, cada lado por su cuenta y de la línea más
+      // cercana hacia fuera. La Revisión enseñaba los dos lados enteros aunque
+      // el bot se fuera a parar en el tope.
+      topeNocional: topeDeExposicion(cfg)?.toFixed() ?? null,
       issues: validation.issues,
     });
   },
@@ -388,12 +458,7 @@ export const neutralGrid: Strategy<NeutralGridConfig> = {
 
     const posQty = ctx.position ? D(ctx.position.qty) : D(0);
     const exposure = posQty.abs().mul(mark);
-    // Dos topes con la misma semántica: el propio (`maxExposure`) y el común
-    // (`maxNotionalCap`), que aquí no se leía (001/F-12). Manda el menor.
-    const topes = [cfg.maxExposure, cfg.maxNotionalCap]
-      .map((t) => (t ? D(t) : D(0)))
-      .filter((t) => t.gt(0));
-    const cap = topes.length ? topes.reduce((a, b) => (a.lt(b) ? a : b)) : null;
+    const cap = topeDeExposicion(cfg);
 
     // El tope acota lo que se TIENDE, no solo lo que ya está abierto.
     //
@@ -409,28 +474,33 @@ export const neutralGrid: Strategy<NeutralGridConfig> = {
     // primera que no quepa —igual que la clásica—, porque son las que antes se
     // van a ejecutar: cortar por el otro extremo dejaría fuera justo las que el
     // mercado va a tocar primero.
+    //
+    // Y cada lado con su presupuesto. Con la posición a cero, compras y ventas
+    // la aumentan todas, pero nunca juntas: si el precio baja se llenan las
+    // compras y las ventas de arriba no se tocan. Contarlas en un solo
+    // presupuesto tendía media retícula por lado al arrancar y tras cada cruce
+    // del cero, y la nota decía «solo órdenes que reducen posición» sin posición
+    // que reducir (encontrado al rehacer la guía del 080). Con posición, solo
+    // aumenta el lado que la agranda, y parte de lo ya abierto.
     const admitidas = new Set<number>();
-    if (cap != null && cap.gt(0)) {
-      const aumentan = lines
-        .filter((l) => l.qty.gt(0) && lados[l.price.toFixed()] !== 'CRUZADA')
-        .filter((l) => {
-          const isBuy = lados[l.price.toFixed()] === 'BUY';
-          return (isBuy && posQty.gte(0)) || (!isBuy && posQty.lte(0));
-        })
-        .sort((a, b) => a.price.minus(mark).abs().cmp(b.price.minus(mark).abs()));
-
-      let proyectado = exposure;
-      for (const l of aumentan) {
-        const isBuy = lados[l.price.toFixed()] === 'BUY';
-        // Con el precio y la cantidad YA redondeados a la retícula del venue, no
-        // con los nominales: el redondeo de un precio de venta va hacia arriba,
-        // así que una línea que «cabía» por céntimos deja de caber al mandarse.
-        const notional = D(px(ctx.market, l.price, isBuy ? 'BUY' : 'SELL')).mul(
-          D(qy(ctx.market, l.qty)),
-        );
-        if (proyectado.plus(notional).gt(cap)) break;
-        proyectado = proyectado.plus(notional);
-        admitidas.add(l.index);
+    if (cap != null) {
+      for (const lado of ['BUY', 'SELL'] as const) {
+        const aumenta = lado === 'BUY' ? posQty.gte(0) : posQty.lte(0);
+        if (!aumenta) continue;
+        const candidatas = lines
+          .filter((l) => l.qty.gt(0) && lados[l.price.toFixed()] === lado)
+          .sort((a, b) => a.price.minus(mark).abs().cmp(b.price.minus(mark).abs()));
+        let proyectado = exposure;
+        for (const l of candidatas) {
+          // Con el precio y la cantidad YA redondeados a la retícula del venue,
+          // no con los nominales: el redondeo de un precio de venta va hacia
+          // arriba, así que una línea que «cabía» por céntimos deja de caber al
+          // mandarse.
+          const notional = D(px(ctx.market, l.price, lado)).mul(D(qy(ctx.market, l.qty)));
+          if (proyectado.plus(notional).gt(cap)) break;
+          proyectado = proyectado.plus(notional);
+          admitidas.add(l.index);
+        }
       }
     }
     /**
@@ -441,11 +511,11 @@ export const neutralGrid: Strategy<NeutralGridConfig> = {
      * tendiera la retícula entera o no. Un aviso que miente siempre enseña a
      * ignorar los avisos, que es peor que no avisar.
      */
-    const hayTope = cap != null && cap.gt(0);
+    const hayTope = cap != null;
 
     const orders: DesiredOrder[] = [];
-    /** El tope ha dejado FUERA alguna línea de verdad. Eso sí es noticia. */
-    let topeMordio = false;
+    /** Las líneas que el tope ha dejado FUERA de verdad. Eso sí es noticia. */
+    let fuera = 0;
 
     for (const line of lines) {
       if (line.qty.lte(0)) continue;
@@ -459,7 +529,7 @@ export const neutralGrid: Strategy<NeutralGridConfig> = {
       if (hayTope) {
         const wouldIncrease = (isBuy && posQty.gte(0)) || (!isBuy && posQty.lte(0));
         if (wouldIncrease && !admitidas.has(line.index)) {
-          topeMordio = true;
+          fuera++;
           continue;
         }
       }
@@ -480,8 +550,18 @@ export const neutralGrid: Strategy<NeutralGridConfig> = {
       });
     }
 
+    // Cuántas deja fuera, y no «solo órdenes que reducen posición»: con la
+    // posición a cero no hay nada que reducir, y con posición el tope aún puede
+    // admitir las líneas más cercanas del lado que la agranda.
     let note = 'Retícula neutral: ' + orders.length + ' órdenes activas.';
-    if (topeMordio) note = 'Tope de exposición alcanzado: solo órdenes que reducen posición.';
+    if (fuera > 0) {
+      note =
+        'Retícula neutral: ' +
+        orders.length +
+        ' órdenes activas; el tope de exposición deja fuera ' +
+        fuera +
+        (fuera === 1 ? ' línea.' : ' líneas.');
+    }
 
     // Espera entre ciclos (001/F-12): al volver a plano se cierra el ciclo y, si
     // hay espera configurada, la retícula no vuelve a tenderse hasta que pase.

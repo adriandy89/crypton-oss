@@ -114,6 +114,10 @@ export const AGENT_TRADE_GUIDE: StrategyGuide<AgentTradeConfig> = {
       what: 'El margen aislado de la operación.',
       affects: 'Es lo más que se perdería si el precio saltara más allá de la liquidación.',
     },
+    stopLossPct: {
+      what: 'No se usa: la operación lleva su propio stop, el precio que calculó el agente.',
+      affects: 'Si lo rellenas, el bot solo avisa de que no lo usa.',
+    },
     leverage: {
       what: 'El apalancamiento de la operación, fijo.',
       affects:

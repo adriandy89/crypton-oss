@@ -67,6 +67,7 @@ import {
   esElegible,
   inicioDelCanal,
   perdidaHoyPct,
+  riesgoDisponible,
 } from '../canal/herramienta';
 import { juezDeReglas } from '../canal/juez';
 import { makeCoid } from '../client-order-id';
@@ -1620,7 +1621,10 @@ export const aiChannel: Strategy<AiChannelConfig> = {
       mantenimiento: mmr,
       topes: [25, c.apalancamientoTope, market.maxLeverage],
     });
-    const riesgo = c.capital.mul(Decimal.min(c.riesgoPct, c.topeDiarioPct)).div(100);
+    // Con la MISMA regla que el plan, al empezar el día: el riesgo pedido, sin
+    // pasar de la parte del tope diario que se deja usar. Era
+    // `min(riesgo, diario)`, que no es la cuenta del bot (079/F-23).
+    const riesgo = riesgoDisponible(c, { realizadoHoy: '0' });
     const costes = D(c.costes.takerBps).mul(2).plus(c.costes.deslizamientoBps).div(10_000);
     const techo = nocionalMaximoDe(c);
     const maxMargen = c.capital.mul(c.maxMargenPct).div(100);
@@ -1636,7 +1640,6 @@ export const aiChannel: Strategy<AiChannelConfig> = {
         side: largo ? 'BUY' : 'SELL',
         price: precio,
         qty,
-        margin: qty.mul(precio).div(palanca),
         isEntry: true,
       },
     ];
@@ -1648,6 +1651,12 @@ export const aiChannel: Strategy<AiChannelConfig> = {
       direction: largo ? 'LONG' : 'SHORT',
       leverage: palanca,
       marginMode: config.marginMode,
+      // El stop de la operación de ejemplo, el más ancho que se admite: la
+      // Revisión enseña lo que se pierde en él y dónde queda la liquidación.
+      stopPropio: {
+        precio: largo ? precio.mul(D(1).minus(s)) : precio.mul(D(1).plus(s)),
+        estimado: true,
+      },
       issues: [
         ...validation.issues,
         warn(

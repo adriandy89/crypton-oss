@@ -19,7 +19,9 @@ decide lo que hace el motor al recargar la configuración.
 Dos avisos que las guías repiten porque importan:
 
 - El **apalancamiento** es en tibio y no en caliente porque el venue puede rechazar el cambio con
-  posición abierta y, aunque lo acepte, **mueve el precio de liquidación**.
+  posición abierta y, aunque lo acepte, **mueve el precio de liquidación**. Desde el spec 080, además,
+  **con posición abierta no se puede cambiar**: la API responde 409 (`LEVERAGE_WITH_POSITION`), porque el
+  stop y los objetivos son un % del margen y se moverían con él. Cámbialo con la posición en cero.
 - Cambiar la **forma de una escalera con inventario** (rango, niveles, separaciones) se **rechaza** (409):
   las salidas de lo comprado dejarían de corresponder a sus líneas. Hazlo con el ciclo limpio (posición en
   cero); con inventario, la API te dice exactamente qué campos son los que redibujan.
@@ -30,24 +32,24 @@ Dos avisos que las guías repiten porque importan:
 
 | Comando | Qué hace | Órdenes del bot | Stop-loss | Posición | Estado final | ¿Pide confirmación? |
 |---|---|---|---|---|---|---|
-| **Arrancar** (`START`) | Adopta el bot y empieza a planificar | — | — | — | Operando | No |
+| **Arrancar** (`START`) | Vuelve a validar la configuración contra el mercado y tus límites de ese día y, si vale, adopta el bot y empieza a planificar | — | — | — | Operando | No |
 | **Pausar** (`PAUSE`) | Deja de planificar. «Pausar no es cerrar.» | Se cancelan | **Se conserva** | Intacta | Pausado | No |
 | **Reanudar** (`RESUME`) | Vuelve a tender la escalera y rearma el aviso de liquidación | Se recolocan | — | — | Operando | No |
-| **Cancelar órdenes** (`CANCEL_ALL_ORDERS`) | Retira todas las órdenes del bot y sigue operando | Se cancelan | **Se cancela también** | Intacta | Operando | No |
-| **Parar manteniendo posición** (`STOP_KEEP_POSITION`) | Para el bot y deja la posición abierta | Se cancelan | **Se conserva** | Intacta | Parado | Sí |
+| **Cancelar todas las órdenes** (`CANCEL_ALL_ORDERS`) | Retira todas las órdenes del bot y sigue operando | Se cancelan | **Se cancela también** | Intacta | Operando | No |
+| **Parar conservando la posición** (`STOP_KEEP_POSITION`) | Para el bot y deja la posición abierta | Se cancelan | **Se conserva** | Intacta | Parado | Sí |
 | **Parar y cerrar** (`STOP_AND_CLOSE`) | Retira la escalera, cierra la posición **a mercado** y, con el cierre fuera, cancela también el stop. Si el exchange no acepta el cierre: el stop se queda, el bot pasa a **Pausado** y lo dice en CRITICAL (`ACTION_FAILED`) | Se cancelan | Se cancela **tras** el cierre | Se cierra | Parado (Pausado si el cierre falla) | Sí |
 | **Pánico** (`PANIC`) | Lo mismo que «Parar y cerrar», con evento propio | Se cancelan | Se cancela tras el cierre | Se cierra | Parado (Pausado si falla) | Sí |
-| **Cerrar ahora** (`CLOSE_NOW`) | Cierra la posición a mercado y **el bot sigue operando** (abrirá otro ciclo si la estrategia lo pide) | Se mantienen | Se recoloca solo si vuelve a haber posición | Se cierra | Operando | Sí |
-| **Recoger beneficio** (`TAKE_PROFIT_NOW`) | Igual que «Cerrar ahora», con otro motivo en la bitácora | Se mantienen | ídem | Se cierra | Operando | Sí |
+| **Cerrar posición ya** (`CLOSE_NOW`) | Cierra la posición a mercado y **el bot sigue operando** (abrirá otro ciclo si la estrategia lo pide) | Se mantienen | Se recoloca solo si vuelve a haber posición | Se cierra | Operando | Sí |
+| **Tomar beneficio ya** (`TAKE_PROFIT_NOW`) | Igual que «Cerrar posición ya», con otro motivo en la bitácora | Se mantienen | ídem | Se cierra | Operando | Sí |
 | **Aportar / retirar margen** (`ADJUST_MARGIN`) | Mueve colateral de la cuenta a la posición aislada (o al revés). El único comando con argumentos y el único que aleja la liquidación sin tocar la posición | — | — | Intacta | Operando | No |
 | **Recentrar la retícula** (`REANCHOR_GRID`) | Olvida el ancla y los niveles ya ejecutados; la escalera se vuelve a colgar del precio actual | Se cancelan | **Se conserva** | Intacta | Operando | No |
-| **Resincronizar** (`REPAIR`) | Relee posición, órdenes y ejecuciones del exchange y recalcula el ciclo. **No cancela ni cierra nada** | Se mantienen | Se mantiene | Intacta | Operando | No |
-| **Adelantar seguridad** (`ADD_SAFETY_NOW`) | Ejecuta **a mercado** la siguiente orden de seguridad de la escalera | Se mantienen | Se mantiene | Crece | Operando | Sí |
+| **Reparar** (`REPAIR`) | Relee posición, órdenes y ejecuciones del exchange y recalcula el ciclo. **No cancela ni cierra nada** | Se mantienen | Se mantiene | Intacta | Operando | No |
+| **Adelantar orden de seguridad** (`ADD_SAFETY_NOW`) | Ejecuta **a mercado** la siguiente orden de seguridad de la escalera | Se mantienen | Se mantiene | Crece | Operando | Sí |
 
 
 > **Un administrador solo puede pedir dos de estos trece**: «Pausar» y «Parar conservando la
-> posición». Son los que no tocan la posición y conservan el stop-loss. En particular «Cancelar
-> órdenes» **no** está a su alcance, precisamente por la columna de esta tabla que dice que el stop
+> posición». Son los que no tocan la posición y conservan el stop-loss. En particular «Cancelar todas
+> las órdenes» **no** está a su alcance, precisamente por la columna de esta tabla que dice que el stop
 > «se cancela también». Ver [Administración](./administracion.md).
 
 Reglas comunes:
@@ -60,22 +62,27 @@ Reglas comunes:
 - **Confirmación**: la piden los que cierran posición a mercado (irreversibles: realizan la pérdida al
   instante) y «Recentrar la retícula» (compromete margen nuevo sobre la posición abierta). `REPAIR` no la
   pide porque no toca nada.
+- **Arrancar valida otra vez** (spec 080): la configuración pasa de nuevo la validación de su
+  estrategia y tus límites, con el mercado de ese día. Antes solo se miraba al crear y al editar, y un
+  bot parado hace semanas arrancaba con un mantenimiento que había subido, un tope tuyo que había bajado
+  o un stop que ya quedaba detrás de la liquidación. Si no vale, la API no lo arranca y dice qué
+  corregir.
 
 ### Qué comando aplica a cada estrategia
 
 | Comando | Rejilla clásica | Rejilla neutral | DCA temporizado | Martingala | GridMart | Market makers |
 |---|---|---|---|---|---|---|
 | Recentrar la retícula | Rechazado: las líneas salen del rango (edítalo) | Rechazado: edita «Precio ancla» | Rechazado: no hay ancla | ✅ Pide confirmación: rearma toda la escalera bajo el precio actual y el aviso anota el margen que compromete | Igual que Martingala | Rechazado: no hay ancla |
-| Adelantar seguridad | Inerte («No queda ninguna orden de seguridad») | Inerte | Inerte | ✅ A mercado al precio actual; anuncia lo que dijo el acuse | ✅ Igual que Martingala | Inerte |
-| Cerrar ahora / Recoger beneficio | ✅ Cierra el inventario; la rejilla sigue | ✅ | ✅ Cierra y empieza otro ciclo | ✅ Cierra el ciclo | ✅ | ✅ |
+| Adelantar orden de seguridad | Inerte («No queda ninguna orden de seguridad») | Inerte | Inerte | ✅ A mercado al precio actual; anuncia lo que dijo el acuse | ✅ Igual que Martingala | Inerte |
+| Cerrar posición ya / Tomar beneficio ya | ✅ Cierra el inventario; la rejilla sigue | ✅ | ✅ Cierra y empieza otro ciclo | ✅ Cierra el ciclo | ✅ | ✅ |
 | Aportar margen | Solo en aislado | — (cruzado por defecto) | Solo en aislado | Solo en aislado | Solo en aislado | — (cruzado por defecto) |
 
-El menú de la app ofrece «Adelantar seguridad» y «Recentrar la retícula» solo en Martingala y GridMart; si
+El menú de la app ofrece «Adelantar orden de seguridad» y «Recentrar la retícula» solo en Martingala y GridMart; si
 un comando llega por otra vía a una estrategia en la que no aplica, la API lo rechaza al instante y el motor,
 si le llegara, lo veta con `ACTION_FAILED` y el motivo.
 
 En **Tendencia** y **Seguimiento de beneficio** tampoco aplican ninguno de los dos: no tienen ancla ni
-seguridades. «Cerrar ahora» y «Recoger beneficio» sí cierran la posición. Hasta el spec 057 (F-11), un
+seguridades. «Cerrar posición ya» y «Tomar beneficio ya» sí cierran la posición. Hasta el spec 057 (F-11), un
 «Recentrar» que llegara al motor en estas dos estrategias se anunciaba como hecho y borraba los niveles del
 ciclo.
 
@@ -83,7 +90,7 @@ En el **Canal con IA** ([guía](./ai-channel.md)) cuatro comandos se comportan d
 
 - **Pausar** cancela los objetivos y deja **solo el stop**. Mientras dure la pausa no hay salidas por
   tiempo ni por invalidación.
-- **Cancelar órdenes** pide una revisión en el acto, y el stop propio vuelve al libro sin esperar al latido.
+- **Cancelar todas las órdenes** pide una revisión en el acto, y el stop propio vuelve al libro sin esperar al latido.
 - **Retirar margen** se rechaza: acercaría la liquidación al stop que calculó la operación. Aportar, sí.
 - **Recentrar** no aplica.
 
@@ -100,7 +107,7 @@ solo la de liquidación puede cerrar, y solo si tú se lo pediste en «Al acerca
 | Guarda | Se dispara cuando |
 |---|---|
 | Apalancamiento por encima de tu límite | siempre, haya posición o no; con el tope vigente, releído cada minuto |
-| Notional del bot / total de tus bots por encima del límite | con posición |
+| Notional del bot / total de tus bots por encima del límite | con posición. El total suma el nocional máximo que declara cada bot —en los market makers, su valor máximo de posición (spec 080)— o, si no declara ninguno, capital × apalancamiento |
 | Liquidación a menos del % de aviso (10 por defecto) | con posición; aviso CRITICAL con enfriamiento; acción según `liquidationAction` |
 | Pérdida acumulada del bot ≥ kill-switch (%) | sobre el capital asignado; es un tope de pérdida, no un drawdown desde máximo |
 | Pérdida diaria de la cuenta o del bot | PnL realizado de hoy |
@@ -157,6 +164,7 @@ a más viejo**. Cada evento tiene una severidad: **INFO** (sin borde), **WARN** 
 | `INSUFFICIENT_FUNDS` (ERROR) | Fondos insuficientes | No hay margen para un nivel; la escalera queda incompleta. | Baja el capital asignado o aporta fondos a la cuenta. |
 | `CLOSE_SKIPPED` | Cierre omitido | No había posición que cerrar. | Nada. |
 | `LEVERAGE_SKIPPED` · `POSITION_MODE_SKIPPED` | Apalancamiento / modo de posición no aplicado | El venue no aceptó el ajuste (posición abierta, o no lo soporta). | El bot sigue con el valor que tenga la cuenta: compruébalo en el exchange. |
+| `LEVERAGE_SKIPPED` (WARN) sobre el stop | Apalancamiento no aplicado | El exchange tiene la posición **más apalancada** que la configuración. El stop es un % del margen, así que se calcula con el apalancamiento del exchange, que lo deja más cerca, para que no quede detrás de la liquidación. Se avisa una vez (spec 080). | Mira el apalancamiento en el exchange. Para volver al de la configuración, con la posición en cero detén el bot y arráncalo de nuevo: al arrancar, el motor lo vuelve a fijar. |
 | `MARKET_SPEC_CHANGED` | El mercado cambió sus reglas | El venue cambió tick, paso o mínimo. | Revisa que tus niveles sigan por encima del mínimo. |
 
 ### Precio de referencia (market makers anclados a Binance)
@@ -207,7 +215,7 @@ cambiar»:
 
 ```text
 🤖 mi bot (ETH) · simulado — El supervisor propone cambiar 2 parámetros (cadencia: mucho más):
-• Retroceso para salir: 1.4 → 1 %
+• Retroceso para salir (del precio): 1.4 → 1 %
 • Umbral para mover el disparador: 20 → 14 bps
 Motivo: …
 ```
@@ -274,11 +282,12 @@ bot). Es la frase que te dice en qué estado cree estar:
 | Estrategia | Ejemplos de nota |
 |---|---|
 | Rejilla clásica | «Precio fuera del rango: sin entradas nuevas, salidas activas.» · «Tope de notional alcanzado: sin entradas nuevas.» |
-| Rejilla neutral | «Retícula neutral: 18 órdenes activas.» · «Tope de exposición alcanzado: solo órdenes que reducen posición.» · «Desvío del ancla 11,2 %: procede recentrar.» |
-| DCA temporizado | «Comprando (3/20).» · «Sin comprar: faltan 812 s para la siguiente compra; el precio no mejora el medio en el margen exigido.» |
+| Rejilla neutral | «Retícula neutral: 18 órdenes activas.» · «Retícula neutral: 12 órdenes activas; el tope de exposición deja fuera 8 líneas.» · «Espera entre ciclos: 43 s sin órdenes.» |
+| DCA temporizado | «Comprando (3/20).» · «Sin comprar: faltan 812 s para la siguiente compra; el precio no mejora la media en la mejora mínima exigida.» |
 | Martingala | «Abriendo ciclo.» · «Ciclo abierto: 4 seguridades pendientes.» · «En cooldown, 43 s para el próximo ciclo.» |
 | GridMart | «Núcleo 0,0501, satélite 0,0671.» · «GridMart Classic: TP satélite en 79.856,9.» |
 | Market makers | «Inventario 312.40 (62 % del tope), 6 cotizaciones.» · «Esperando a que el precio baje a 0.004.» |
+| Tendencia | «Sin ruptura. Eficiencia 0.21.» · «Ruptura descartada: el stop, a 2.5 ATR, quedaría a un 10.27 %, detrás de la liquidación a 10× (8.86 %): no saltaría nunca. Baja el apalancamiento o el multiplicador del stop.» |
 | Canal con IA | «Tope diario alcanzado (6.02 % de 6 %): sin entradas hasta las 00:00 UTC.» · «Espera tras el último stop: 12 min.» · «Solo observar: habría entrado en largo (REB-L-H…) con 31.257 a 25x, stop 99.84.» |
 
 ---
@@ -304,7 +313,7 @@ El spec `009-protecciones-y-cierre` (septiembre de 2026) corrigió el orden de �
 dos fallos de contabilidad de órdenes: una orden aceptada por el venue ya no puede acabar marcada como
 rechazada porque falle la base (F-36), y una fila pendiente sin acuse **vence a los cinco minutos** y el
 nivel se vuelve a intentar con un aviso `ORDER_RETRY` (F-37). El spec `010-comandos-y-ciclo` dejó
-«Recentrar la retícula» solo en las escaleras y con confirmación, hizo que «Adelantar seguridad» salga al
+«Recentrar la retícula» solo en las escaleras y con confirmación, hizo que «Adelantar orden de seguridad» salga al
 precio actual y anuncie según el acuse, y que «Espera entre ciclos» se pueda cambiar en caliente. El spec
 `011-margen-y-modo-posicion` hizo que «Aportar margen» llegue de verdad al exchange, que el capital
 asignado suba solo con el acuse, que el modo cobertura quede vetado en Aster y que ningún comando que

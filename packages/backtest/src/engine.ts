@@ -805,6 +805,8 @@ export async function runReplay(opts: ReplayOptions): Promise<ReplayOutput> {
       cycleSeq: seq,
       market,
       stopLossPct: config.stopLossPct,
+      // El stop es un % del margen (spec 080), igual que en el motor.
+      leverage: Number(config.leverage ?? 1),
     });
 
     if (desired.scratchPatch) {

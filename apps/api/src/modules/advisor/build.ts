@@ -1,6 +1,12 @@
-import type { MarketSpec } from '@crypton/shared';
+import {
+  ladoMasEstrecho,
+  maintenanceMarginRateOf,
+  maxApalancamientoConDistancia,
+  stopMaximoRoi,
+  type MarketSpec,
+} from '@crypton/shared';
 import type { MarketFeatures } from './market-features';
-import { MAX_SAFE_LEVERAGE, ladderCoveragePct } from './sanitize';
+import { distanciaLiquidacionPct, ladderCoveragePct, maxApalancamientoSeguro } from './sanitize';
 
 /**
  * De perillas a configuracion completa.
@@ -55,9 +61,24 @@ export interface BuildContext {
   /** Tope de apalancamiento del usuario, si lo tiene configurado. */
   maxLeverageUsuario: number | null;
   direction: 'LONG' | 'SHORT' | 'NEUTRAL';
+  /**
+   * El apalancamiento con el que se expresan los % de RESULTADO —objetivos y
+   * stop, en % del margen desde el spec 080—. Sin el, el que genera el perfil.
+   *
+   * Lo pasa el supervisor con el del bot: genera dos configuraciones, antes y
+   * despues de mover una perilla, y traslada su diferencia. Con cada una en su
+   * propio apalancamiento, esa diferencia mezclaria el cambio de precio con el
+   * de apalancamiento y hasta el ruido del redondeo, y mover solo la perilla
+   * del apalancamiento movia el objetivo.
+   */
+  apalancamientoDeResultados?: number;
 }
 
 const clamp = (v: number, min: number, max: number): number => Math.min(Math.max(v, min), max);
+
+/** El apalancamiento con el que se expresan los % de resultado. Ver `BuildContext`. */
+const levDeResultados = (ctx: BuildContext, lev: number): number =>
+  ctx.apalancamientoDeResultados ?? lev;
 
 /** Factor de cada banda: el centro es 1 y los extremos se alejan simetricamente. */
 const FACTOR: Record<Band, number> = {
@@ -91,7 +112,7 @@ const ceilToTick = (precio: number, tick: number): number =>
  * banda solo escala una base que ya tiene en cuenta cuanto respira el mercado.
  *
  * Encima van tres topes duros:
- *   - el tope real del servidor (ver `MAX_SAFE_LEVERAGE`),
+ *   - el tope real del servidor en este mercado (ver `maxApalancamientoSeguro`),
  *   - el del venue,
  *   - y el del propio usuario si lo ha puesto.
  *
@@ -113,12 +134,24 @@ export function leverageFor(k: Knobs, ctx: BuildContext, techoEstrategia: number
   // siguen atados a cuanto respira el par.
   const volDiaria = Math.max(ctx.features.volAnnualPct, 10) / Math.sqrt(365);
   const sesiones = 8 / FACTOR[k.leverage];
-  let lev = Math.round(clamp(100 / (sesiones * volDiaria), 1, MAX_SAFE_LEVERAGE));
+  const seguro = maxApalancamientoSeguro(ctx.market, ctx.direction);
+  let lev = Math.round(clamp(100 / (sesiones * volDiaria), 1, seguro));
 
+  // El peor día, contra la distancia EXACTA del lado: era `100/(3·peorDía)`,
+  // que no cuenta el mantenimiento y dejaba pasar un punto más de la cuenta.
   const peorDia = Math.abs(ctx.features.worstDayPct);
-  if (peorDia > 0.5) lev = Math.min(lev, Math.floor(100 / (3 * peorDia)));
+  if (peorDia > 0.5) {
+    lev = Math.min(
+      lev,
+      maxApalancamientoConDistancia(
+        maintenanceMarginRateOf(ctx.market),
+        ladoMasEstrecho(ctx.direction),
+        3 * peorDia,
+      ),
+    );
+  }
 
-  const topes = [MAX_SAFE_LEVERAGE, ctx.market.maxLeverage, techoEstrategia];
+  const topes = [seguro, ctx.market.maxLeverage, techoEstrategia];
   if (ctx.maxLeverageUsuario != null) topes.push(ctx.maxLeverageUsuario);
   return Math.max(1, Math.min(lev, ...topes));
 }
@@ -181,16 +214,31 @@ export function shiftBand(band: Band, pasos: number): Band {
  * Escalera de seguridad: martingala y GridMart.
  *
  * La restriccion que lo gobierna todo es que la escalera QUEPA antes de la
- * liquidacion: si la cobertura acumulada llega a `100/apalancamiento`, los
- * ultimos niveles no se ejecutarian jamas y el bot muere con la escalera a
- * medio tender. Se apunta al 85 % de esa distancia y no al 100 % porque la
- * liquidacion con la que se compara esta estimada con una tasa de mantenimiento
- * documentada como OPTIMISTA: la real llega antes.
+ * liquidacion: si la cobertura acumulada llega a la distancia exacta hasta
+ * ella, los ultimos niveles no se ejecutarian jamas y el bot muere con la
+ * escalera a medio tender. Se apunta al 85 % de esa distancia y no al 100 %
+ * para que los ultimos niveles no queden pegados a la liquidacion.
+ *
+ * El take profit sale de la volatilidad en % del PRECIO —es lo que el par se
+ * mueve— y se entrega en % del MARGEN, que es como lo lee la estrategia desde el
+ * spec 080: el precio por el apalancamiento.
  *
  * Por eso la separacion inicial se DESPEJA en vez de elegirse. Como la cobertura
  * es una serie geometrica de razon `stepScale`, hay una unica separacion que da
  * la cobertura objetivo, y salir de ahi es o desperdiciar recorrido o no caber.
  */
+/**
+ * El take profit de la escalera, en % del PRECIO: por encima del coste de
+ * cruzar el libro —un beneficio menor que la comision no es beneficio— y atado
+ * al recorrido de una hora del par. Lo comparten la martingala y GridMart, que
+ * con el hace su TP satelite y sus separaciones de venta.
+ */
+function tpDeEscaleraPrecio(k: Knobs, ctx: BuildContext): number {
+  const f = ctx.features;
+  const sueloTp = (4 * f.tickBps) / 100 + 0.1;
+  return clamp(f.atrPct1h * 1.5 * (2 - FACTOR[k.cadence]), sueloTp, 50);
+}
+
 function buildLadder(k: Knobs, ctx: BuildContext): Record<string, unknown> {
   const f = ctx.features;
 
@@ -211,7 +259,7 @@ function buildLadder(k: Knobs, ctx: BuildContext): Record<string, unknown> {
 
   // Cuanto recorrido adverso se quiere cubrir, atado a lo que este par se mueve
   // de verdad y acotado por lo que cabe antes de la liquidacion.
-  const distanciaLiq = 100 / lev;
+  const distanciaLiq = distanciaLiquidacionPct(lev, ctx.market, ctx.direction);
   const deseada = Math.max(2 * f.atrPct1d, 0.6 * f.rangePct30) * FACTOR[k.coverage];
   const objetivo = clamp(deseada, distanciaLiq * 0.35, distanciaLiq * 0.85);
 
@@ -219,10 +267,7 @@ function buildLadder(k: Knobs, ctx: BuildContext): Record<string, unknown> {
   const suma = ladderCoveragePct(niveles, 1, stepScale);
   const separacion = clamp(objetivo / suma, 0.05, 20);
 
-  // El objetivo no puede quedar por debajo del coste de cruzar el libro: un
-  // beneficio menor que la comision no es beneficio.
-  const sueloTp = (4 * f.tickBps) / 100 + 0.1;
-  const tp = clamp(f.atrPct1h * 1.5 * (2 - FACTOR[k.cadence]), sueloTp, 50);
+  const tp = tpDeEscaleraPrecio(k, ctx);
 
   return {
     leverage: lev,
@@ -230,7 +275,14 @@ function buildLadder(k: Knobs, ctx: BuildContext): Record<string, unknown> {
     initialSeparationPct: stepped(separacion, 0.05, 20, 0.05, 2),
     stepScale: stepped(stepScale, 1, 3, 0.05, 2),
     volumeScale: stepped(volumeScale, 1, 5, 0.1, 1),
-    takeProfitPct: stepped(tp, 0.05, 50, 0.05, 2),
+    // % del MARGEN (spec 080): el del precio por el apalancamiento.
+    takeProfitPct: stepped(
+      tp * levDeResultados(ctx, lev),
+      0.05,
+      50 * levDeResultados(ctx, lev),
+      0.05,
+      2,
+    ),
     baseOrderType: k.profile === 'PRUDENTE' ? 'LIMIT' : 'MARKET',
     tpMode: 'LIMIT',
     cooldownMinutes: Math.round(clamp(10 / FACTOR[k.cadence], 0, 10080)),
@@ -240,11 +292,18 @@ function buildLadder(k: Knobs, ctx: BuildContext): Record<string, unknown> {
 /** GridMart: la escalera de martingala mas su rejilla de ventas. */
 function buildGridMart(k: Knobs, ctx: BuildContext): Record<string, unknown> {
   const base = buildLadder(k, ctx);
-  const tp = Number(base['takeProfitPct']);
+  // GridMart no tiene take profit de escalera ni su modo: sale por el TP
+  // satelite y la rejilla del nucleo (spec 080, P-7).
+  delete base['takeProfitPct'];
+  delete base['tpMode'];
+  const levR = levDeResultados(ctx, Number(base['leverage']));
+  // Las separaciones de venta y la recompra son DISTANCIAS: en % del precio. El
+  // TP satelite es un resultado: en % del margen (spec 080).
+  const tp = tpDeEscaleraPrecio(k, ctx);
   return {
     ...base,
     classicMode: false,
-    satelliteTpPct: stepped(tp * 0.6, 0.05, 20, 0.05, 2),
+    satelliteTpPct: stepped(tp * 0.6 * levR, 0.05, 20 * levR, 0.05, 2),
     gridSellCount: Math.round(clamp(4 * FACTOR[k.coverage], 1, 20)),
     gridSellInitialSeparationPct: stepped(tp, 0.05, 20, 0.05, 2),
     gridSellDistanceMultiplier: stepped(clamp(1.1 * FACTOR[k.spread], 1, 3), 1, 3, 0.05, 2),
@@ -371,10 +430,12 @@ function buildDca(k: Knobs, ctx: BuildContext): Record<string, unknown> {
     intervalMinutes: minutos,
     buyOnlyIfImprovesAverage: true,
     marginBelowAveragePct: stepped(clamp(0.5 / FACTOR[k.cadence], 0, 100), 0, 100, 0.1, 1),
+    // Sale del recorrido del par en % del PRECIO y se entrega en % del MARGEN
+    // (spec 080): el del precio por el apalancamiento.
     takeProfitPct: stepped(
-      clamp(f.atrPct1d * 2 * (2 - FACTOR[k.cadence]), 0.05, 100),
+      clamp(f.atrPct1d * 2 * (2 - FACTOR[k.cadence]), 0.05, 100) * levDeResultados(ctx, lev),
       0.05,
-      100,
+      100 * levDeResultados(ctx, lev),
       0.05,
       2,
     ),
@@ -666,15 +727,27 @@ function buildTrailing(k: Knobs, ctx: BuildContext): Record<string, unknown> {
   // peor sesion del periodo para que no salte con una normal.
   const stop = clamp(Math.max(Math.abs(f.worstDayPct), f.atrPct1d * 2), 1, 30);
 
+  // Objetivo y stop salen en % del PRECIO —lo que el par se mueve— y la
+  // estrategia los lee en % del MARGEN desde el spec 080: por el apalancamiento.
+  // Y el stop nunca detras de la liquidacion con su holgura: un 30 % del precio
+  // a 3× en un par de mantenimiento alto quedaba detras de ella (079/F-01).
+  const levR = levDeResultados(ctx, lev);
+  const stopMaximo = stopMaximoRoi(
+    levR,
+    maintenanceMarginRateOf(ctx.market),
+    ladoMasEstrecho(ctx.direction),
+  ).toNumber();
+  const stopRoi = Math.min(stop * levR, stopMaximo);
+
   return {
     leverage: lev,
     activationMode: 'NONE',
-    takeProfitPct: stepped(objetivo, 0.1, 500, 0.1, 1),
+    takeProfitPct: stepped(objetivo * levR, 0.1, 500 * levR, 0.1, 1),
     trailingCallbackPct: stepped(retroceso, 0.1, 10, 0.1, 1),
     trailingRepriceBps: stepped(clamp(20 / FACTOR[k.cadence], 1, 200), 1, 200, 1, 0),
     // Sin `trailingTakeProfit`: la estrategia no lo declara en su meta y aqui
     // el seguimiento esta siempre encendido (spec 044 R-4).
-    stopLossPct: stepped(stop, 0.1, 90, 0.1, 1),
+    stopLossPct: stepped(stopRoi, 0.1, 90 * levR, 0.1, 1),
     maxNotionalCap: dec(ctx.totalInvestment * lev, 2),
   };
 }

@@ -27,13 +27,14 @@ import {
   D,
   Decimal,
   EventoOperacionAgente,
+  HOLGURA_LIQUIDACION,
   LevelKind,
   MAX_APALANCAMIENTO_POR_STOP,
   Mutability,
   StrategyKind,
   maintenanceMarginRateOf,
   mismoValorDeConfig,
-  precioLiquidacionAislada,
+  precioLiquidacion,
   tramoDeApalancamiento,
   type AvisoEstrategia,
   type BotConfig,
@@ -67,7 +68,6 @@ import {
 import {
   ESPERA_ENTRE_CIERRES_MS,
   ESPERA_MAXIMA_LLENADO_MS,
-  HOLGURA_LIQUIDACION,
   MAX_INTENTOS_CIERRE,
   cierreAMercado,
   entradaEnCurso,
@@ -1079,7 +1079,7 @@ export const agentTrade: Strategy<AgentTradeConfig> = {
         // La liquidación, detrás del stop y con holgura: con menos, la salida
         // de seguridad cerraría la operación nada más abrirla.
         const distancia = entrada.minus(stop).abs().div(entrada);
-        const liq = precioLiquidacionAislada(
+        const liq = precioLiquidacion(
           entrada,
           c.apalancamiento,
           maintenanceMarginRateOf(market),
@@ -1144,7 +1144,6 @@ export const agentTrade: Strategy<AgentTradeConfig> = {
         side: c.largo ? 'BUY' : 'SELL',
         price: entrada,
         qty: cantidad,
-        margin: cantidad.mul(entrada).div(c.apalancamiento),
         isEntry: true,
       },
     ];
@@ -1156,6 +1155,16 @@ export const agentTrade: Strategy<AgentTradeConfig> = {
       direction: c.largo ? 'LONG' : 'SHORT',
       leverage: c.apalancamiento,
       marginMode: config.marginMode,
+      // Sus números reales: el primer objetivo con la parte que sale por él, y
+      // su stop. La Revisión pintaba «—» con objetivos de verdad y una
+      // liquidación distinta de la que mide su validación (079/F-23).
+      objetivo: c.tp1
+        ? {
+            precio: c.tp1,
+            ...(c.tp2 ? { qty: cantidad.mul(c.fraccionTp1) } : {}),
+          }
+        : null,
+      stopPropio: c.stop ? { precio: c.stop } : null,
       issues: [
         ...validacion.issues,
         warn(

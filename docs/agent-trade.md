@@ -139,7 +139,7 @@ Todos los pone el generador del agente (`configDeOperacion`) a partir del plan a
 **❄️ en frío** no cambian en su vida; los **🔥 en caliente** son los que el seguimiento —o tú, en
 Ajustes— puede tocar, y solo en el sentido de reducir el riesgo.
 
-#### Conexión · `exchangeAccountId` · ❄️ en frío
+#### Conexión de exchange · `exchangeAccountId` · ❄️ en frío
 
 La cuenta del agente.
 
@@ -167,13 +167,15 @@ El margen aislado. Es lo más que se perdería si el precio saltara más allá d
 
 #### Tope de exposición · `maxNotionalCap` · 🔥 en caliente
 
-El común de todas las estrategias. La operación no lo necesita: su tamaño es fijo desde que nace.
+El que comparten casi todas las estrategias (los market makers no lo tienen). La operación no lo
+necesita: su tamaño es fijo desde que nace.
 
-#### Stop loss (%) · `stopLossPct` · 🔥 en caliente
+#### Stop loss (sobre el margen) · `stopLossPct` · 🔥 en caliente
 
-**No se usa**: la operación lleva su propio stop (`stopPrice`). Si se pone, la validación avisa.
+**No se usa**: la operación lleva su propio stop (`stopPrice`), un precio, y no un % del margen. Si
+se pone, la validación avisa.
 
-#### Pérdida diaria máxima (%) · `maxDailyLossPct` · 🔥 en caliente
+#### Pérdida diaria máxima (sobre el capital) · `maxDailyLossPct` · 🔥 en caliente
 
 El común de todas las estrategias. La pérdida del día que cuenta es la del **agente**, que se pausa
 al tocarla.
@@ -196,9 +198,10 @@ El peor precio de la entrada, con una holgura de 0,2 R sobre el libro del moment
 Sale de tu riesgo por operación y de la distancia al stop: con el stop más lejos, menos cantidad
 para la misma pérdida.
 
-#### Riesgo (1 R) · `riskAmount` · ❄️ en frío
+#### Pérdida al stop · `riskAmount` · ❄️ en frío
 
-Lo que se pierde si salta el stop, con comisiones y deslizamiento. El resultado se cuenta en R con él.
+Es 1 R: lo que se pierde si salta el stop, con comisiones y deslizamiento. El resultado se cuenta en R
+con él.
 
 #### Stop · `stopPrice` · 🔥 en caliente · ⚠️ campo de riesgo
 
@@ -213,7 +216,7 @@ Una orden límite reduce-only.
 
 Opcional. Con él, la posición sale en dos partes; sin él, entera en el primero.
 
-#### Parte del primer objetivo (%) · `tp1Fraction` · 🔥 en caliente · por defecto **50**
+#### Parte en el primer objetivo (de la posición) · `tp1Fraction` · 🔥 en caliente · por defecto **50**
 
 Con dos objetivos, la parte que sale en el primero.
 
@@ -225,9 +228,9 @@ Lo que queda ya no puede perder, a cambio de salir si el precio vuelve a la entr
 
 El stop sigue al mejor precio y nunca retrocede.
 
-#### Distancia del seguimiento (%) · `trailCallbackPct` · 🔥 en caliente · por defecto **1**
+#### Distancia del seguimiento (del precio) · `trailCallbackPct` · 🔥 en caliente · por defecto **1**
 
-A qué distancia del mejor precio va ese stop.
+A qué distancia del mejor precio va ese stop, en % del precio.
 
 #### Tope de posición · `positionCap` · 🔥 en caliente
 
@@ -253,7 +256,7 @@ La propuesta de la que nace: enlaza la operación con su plan, su seguimiento y 
 | Campo | Por defecto | Quién lo decide |
 |---|---|---|
 | Modo de margen | Aislado | Fijo |
-| Parte del primer objetivo | 50 % | «Parte del primer objetivo» del agente |
+| Parte en el primer objetivo | 50 % de la posición | «Parte del primer objetivo» del agente |
 | Stop a la entrada tras el primer objetivo | Sí | Límites del agente |
 | Seguir al precio tras el primer objetivo | No | — |
 | Duración máxima | 24 velas del intervalo | «Duración máxima» del agente |

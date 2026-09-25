@@ -1,13 +1,22 @@
 import {
   D,
+  type AvisoEstrategia,
   type DesiredState,
   type Direction,
   type MarketSpec,
+  type Numeric,
   type Position,
 } from '@crypton/shared';
 import { makeCoid } from './client-order-id';
 import { exitSide, px, qy } from './common';
 import { stopLossPrice } from './ladder';
+
+/**
+ * Diferencia de apalancamiento que se da por ruido. Los venues lo informan
+ * entero, pero Lighter lo deduce de su fracción de margen inicial y el
+ * simulador lo calcula; una centésima no es un cambio de apalancamiento.
+ */
+const TOLERANCIA_APALANCAMIENTO = D('0.01');
 
 /**
  * Añade el nivel de STOP_LOSS al plan si la configuración lo pide.
@@ -35,7 +44,10 @@ export function withStopLoss(
     botId: string;
     cycleSeq: number;
     market: MarketSpec;
+    /** % del MARGEN que se está dispuesto a perder (spec 080). */
     stopLossPct?: string | number | null;
+    /** El apalancamiento de la configuración, el que el motor fija en el venue. */
+    leverage: Numeric;
   },
 ): DesiredState {
   const pct = ctx.stopLossPct;
@@ -51,12 +63,48 @@ export function withStopLoss(
   const propio = [...desired.orders, ...desired.immediate];
   if (propio.some((o) => o.levelKind === 'STOP_LOSS')) return desired;
 
+  // El stop es un % del MARGEN, así que depende del apalancamiento (spec 080).
+  // Manda el de la configuración, que es el que conocen la Revisión, el
+  // backtest y la validación; salvo que el venue tenga la posición MÁS
+  // apalancada —el cambio no se pudo aplicar con la posición abierta, o se tocó
+  // a mano en el exchange—: entonces se usa el del venue, que da el stop más
+  // estrecho, y se avisa. Al revés no: un apalancamiento efectivo menor (un
+  // margen aportado a mano) movería el stop cada vez que alguien aporta
+  // colateral.
+  const configurado = D(ctx.leverage ?? 1);
+  const delVenue =
+    Number.isFinite(position.leverage) && position.leverage > 0 ? D(position.leverage) : null;
+  const venueMayor = delVenue != null && delVenue.minus(configurado).gt(TOLERANCIA_APALANCAMIENTO);
+  const apalancamiento = venueMayor && delVenue ? delVenue : configurado;
+
   const direction: Direction = qty.gt(0) ? 'LONG' : 'SHORT';
   const side = exitSide(direction);
-  const price = px(ctx.market, stopLossPrice(position.entryPrice, pct, direction), side);
+  const price = px(
+    ctx.market,
+    stopLossPrice(position.entryPrice, pct, apalancamiento, direction),
+    side,
+  );
+
+  const avisos: AvisoEstrategia[] =
+    venueMayor && delVenue
+      ? [
+          ...(desired.avisos ?? []),
+          {
+            clave: `stop-apalancamiento-${delVenue.toFixed()}`,
+            tipo: 'LEVERAGE_SKIPPED',
+            severidad: 'WARN',
+            mensaje:
+              `El exchange tiene la posición a ${delVenue.toFixed()}× y la configuración dice ` +
+              `${configurado.toFixed()}×: el stop del ${D(pct).toFixed()} % del margen se ` +
+              `calcula con ${delVenue.toFixed()}×, el más estrecho, para que no quede detrás de ` +
+              'la liquidación.',
+          },
+        ]
+      : (desired.avisos ?? []);
 
   return {
     ...desired,
+    ...(avisos.length > 0 ? { avisos } : {}),
     orders: [
       ...desired.orders,
       {

@@ -230,6 +230,13 @@
   }
 }
 
+.nocom {
+  margin: var(--space-3) 0 0;
+  font-size: 11px;
+  line-height: 1.45;
+  color: var(--text-3);
+}
+
 .wgrid {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
@@ -253,10 +260,6 @@
     font-weight: 600;
     letter-spacing: -0.015em;
     font-variant-numeric: tabular-nums;
-
-    &.danger {
-      color: var(--pnl-down);
-    }
   }
 }
 
@@ -470,10 +473,6 @@
     display: grid;
     grid-template-columns: repeat(2, minmax(0, 1fr));
     align-items: start;
-  }
-
-  .wgrid {
-    grid-template-columns: repeat(3, minmax(0, 1fr));
   }
 }
 

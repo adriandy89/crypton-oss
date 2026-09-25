@@ -3,10 +3,12 @@ import {
   D,
   MAX_APALANCAMIENTO_POR_STOP,
   MIN_LIQUIDATION_DISTANCE_PCT,
+  ladoMasEstrecho,
   maintenanceMarginRateOf,
-  maxLeverageWithinDistance,
+  maxApalancamientoConDistancia,
   startOfDay,
   type BotConfig,
+  type Direction,
   type MarketSpec,
   type Numeric,
 } from '@crypton/shared';
@@ -30,11 +32,24 @@ export interface OpcionesDeRiesgo {
   nocional?: string | null;
 }
 
-/** El apalancamiento más alto que admite la regla de liquidación en ese mercado. */
-function topeDeLaRegla(market: MarketSpec, regla: OpcionesDeRiesgo['reglaLiquidacion']): number {
+/**
+ * El apalancamiento más alto que admite la regla de liquidación en ese mercado.
+ *
+ * Por lado y con la liquidación exacta, como `validateCommon`: la lineal dejaba
+ * pasar 16× en corto en BTC con la liquidación a un 4,94 % (079/F-07). Sin
+ * dirección conocida se mide contra el corto, que es el que liquida antes.
+ */
+function topeDeLaRegla(
+  market: MarketSpec,
+  regla: OpcionesDeRiesgo['reglaLiquidacion'],
+  direction: Direction | undefined,
+): number {
   return regla === 'POR_STOP'
     ? Math.min(MAX_APALANCAMIENTO_POR_STOP, market.maxLeverage)
-    : maxLeverageWithinDistance(maintenanceMarginRateOf(market));
+    : maxApalancamientoConDistancia(
+        maintenanceMarginRateOf(market),
+        ladoMasEstrecho(direction ?? 'NEUTRAL'),
+      );
 }
 
 /**
@@ -125,12 +140,12 @@ export class RiskService {
     // prohibía 19× en todos los pares y ningún formulario lo decía (001/F-44,
     // F-93). Con la regla por stop, la distancia la pone cada operación y lo que
     // queda es el techo (spec 058).
-    const tope = topeDeLaRegla(market, opts.reglaLiquidacion);
+    const tope = topeDeLaRegla(market, opts.reglaLiquidacion, config.direction);
     if (leverage > tope) {
       throw new ForbiddenException(
         opts.reglaLiquidacion === 'POR_STOP'
           ? `El apalancamiento de esta estrategia llega como mucho a ${tope}× en ${market.symbol}, y has pedido ${leverage}×.`
-          : `A ${leverage}× la liquidación estimada llega con menos del ${MIN_LIQUIDATION_DISTANCE_PCT} % de movimiento adverso en ${market.symbol}: el máximo aquí es ${tope}×.`,
+          : `A ${leverage}× la liquidación llega con menos del ${MIN_LIQUIDATION_DISTANCE_PCT} % de movimiento en contra en ${market.symbol}: el máximo aquí es ${tope}×.`,
       );
     }
 
@@ -156,11 +171,13 @@ export class RiskService {
     userId: string,
     investment: Numeric,
     market: MarketSpec,
-    opts: Pick<OpcionesDeRiesgo, 'excludeBotId' | 'reglaLiquidacion'> = {},
+    opts: Pick<OpcionesDeRiesgo, 'excludeBotId' | 'reglaLiquidacion'> & {
+      direction?: Direction;
+    } = {},
   ): Promise<number> {
     const limits = await this.get(userId);
     const inversion = D(investment);
-    const topes: number[] = [topeDeLaRegla(market, opts.reglaLiquidacion)];
+    const topes: number[] = [topeDeLaRegla(market, opts.reglaLiquidacion, opts.direction)];
     if (limits.max_leverage != null) topes.push(limits.max_leverage);
 
     // Sin inversión no hay notional que limitar: dividir por cero daría infinito

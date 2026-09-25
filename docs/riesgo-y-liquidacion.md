@@ -5,46 +5,73 @@
 
 ---
 
-## 1. Las cuatro cifras que importan
+## 1. Las cinco cifras que importan
 
 | Cifra | Qué es | Dónde la ves |
 |---|---|---|
 | **Capital asignado** (`totalInvestment`) | El **margen** que el bot puede usar. No sale de tu cuenta ni se transfiere a ningún sitio: es el techo que el bot se autoimpone al repartir sus órdenes. | Formulario del bot · tarjeta del bot |
-| **Notional** (exposición) | Cantidad × precio. Con apalancamiento `L`, una escalera completa mueve **capital × L** de notional. | Vista previa («Exposición total») · resumen del bot |
-| **Peor caso** | Todos los niveles ejecutados: notional, margen consumido, precio medio resultante y liquidación estimada. | Vista previa, antes de crear el bot |
-| **Distancia a liquidación** | Cuánto puede moverse el precio **en contra** antes de que el exchange cierre la posición por ti. En %. | Vista previa · lista de bots · cartera · detalle · gráfico (el mismo número en todas) |
+| **Notional** (exposición) | Cantidad × precio. Con apalancamiento `L`, una escalera completa mueve **capital × L** de notional. | Vista previa (el tamaño de cada lado y, aparte, lo que suman todas las órdenes) · resumen del bot |
+| **Peor caso** | Todos los niveles ejecutados, **lado a lado**: la posición de cada lado —entrada media, tamaño y margen— y sus tres salidas, el objetivo, el stop y la liquidación. | Vista previa, antes de crear el bot |
+| **% sobre el margen** (ROI) | Lo que ganas o pierdes sobre el margen de la posición, como el TP/SL por ROI de un exchange. El stop, los take profit, el objetivo del seguimiento y el satélite de GridMart se miden así. | Formulario (con su equivalente en precio y en USDC) · vista previa |
+| **Distancia a liquidación** | Cuánto puede moverse el precio **en contra** antes de que el exchange cierre la posición por ti. En %. | Vista previa (desde la entrada y desde el último precio) · lista de bots · cartera · detalle · gráfico |
 
 Regla que hay que interiorizar: **el apalancamiento no cambia cuánto pones, cambia cuánto pierdes por cada
 punto que el precio se mueve en contra, y acerca la liquidación**. Dos bots con 500 USDC de capital, uno a
 1× y otro a 5×, arriesgan los mismos 500 USDC; el segundo los pierde con una caída cinco veces menor.
 
+**Los % de resultado van sobre el margen; las distancias, sobre el precio** (spec 080). Un stop del 10 %
+es perder el 10 % del margen de la posición, sea cual sea el apalancamiento:
+
+```
+precio de salida = precio medio × (1 ± ROI / (100 · L))      (+ a favor del largo, − del corto)
+```
+
+A 2× un stop del 10 % está a un 5 % del precio; a 10×, a un 1 %. Es la fórmula de la calculadora de
+futuros de Binance. Las **distancias** —separación de la escalera, retroceso del seguimiento, descuento
+de recompra, mejora mínima del DCA, bps de un market maker, stop ATR de la tendencia— siguen en % del
+precio, también como en Binance, donde el «callback rate» del trailing es un % del precio. Hasta el
+spec 080 los % de resultado eran del precio: a 15×, un «objetivo del 15 %» era un +225 % del margen sin
+que ninguna pantalla lo dijera.
+
 ---
 
-## 2. La fórmula de la liquidación (estimada)
+## 2. La fórmula de la liquidación
 
-Antes de que exista posición, la app y la API estiman la liquidación con la fórmula de una posición
-**aislada** ([`liquidation.ts:23-37`](../packages/shared/src/liquidation.ts)):
+Antes de que exista posición, la app, la API, el asesor, el simulador y el backtest calculan la
+liquidación con **una sola** fórmula, la exacta de una posición **aislada** (la que documenta
+Hyperliquid), en `precioLiquidacion` y `distanciaLiquidacion` de
+[`liquidation.ts`](../packages/shared/src/liquidation.ts):
 
 ```
-LARGO : liquidación ≈ precio_medio × (1 − 1/apalancamiento + 0,005)
-CORTO : liquidación ≈ precio_medio × (1 + 1/apalancamiento − mmr)
+LARGO : liquidación = precio_medio × (1 − 1/L) / (1 − mmr)
+CORTO : liquidación = precio_medio × (1 + 1/L) / (1 + mmr)
 
-distancia ≈ 1/apalancamiento − mmr          (en fracción; × 100 para el %)
+distancia (largo) = (1/L − mmr) / (1 − mmr)
+distancia (corto) = (1/L − mmr) / (1 + mmr)        (en fracción; × 100 para el %)
 ```
 
-`mmr` es la **tasa de margen de mantenimiento del mercado**: la mitad del margen inicial a su
-apalancamiento máximo (BTC a 40× en Hyperliquid → 1,25 %; ETH a 25× → 2 %; DOGE a 10× → 5 %). Lighter
-publica la suya y la ficha del mercado la trae. Traducido a una tabla, con BTC en Hyperliquid (1,25 %):
+La del corto es siempre la más estrecha. Hasta el spec 080 convivía con una aproximación lineal
+(`1/L − mmr`) que en el corto salía optimista, y la misma pantalla enseñaba tres distancias distintas.
 
-| Apalancamiento | Distancia estimada a la liquidación | Lectura |
-|---|---|---|
-| 1× | ≈ 98,8 % | En la práctica, sin liquidación: el precio tendría que irse a cero |
-| 2× | ≈ 48,8 % | El precio tiene que moverse a la mitad |
-| 3× | ≈ 32,1 % | |
-| 5× | ≈ 18,8 % | Ya es una caída «normal» de una altcoin en una semana mala |
-| 10× | ≈ 8,8 % | Un día volátil |
-| 16× | ≈ 5,0 % | El **máximo que la API acepta en BTC** (ver §4) |
-| 17× | ≈ 4,6 % | La API lo rechaza |
+`mmr` es la **tasa de margen de mantenimiento del mercado**: la que publica el venue si la ficha la
+trae (Lighter), y si no, la mitad del margen inicial a su apalancamiento máximo (BTC a 40× en
+Hyperliquid → 1,25 %; ETH a 25× → 2 %; DOGE a 10× → 5 %). Traducido a una tabla, con BTC en
+Hyperliquid (1,25 %):
+
+| Apalancamiento | Distancia a la liquidación (largo · corto) | Margen perdido al llegar | Lectura |
+|---|---|---|---|
+| 1× | sin liquidación · 97,5 % | — · 97,5 % | En largo el precio tendría que llegar a cero; en corto, casi duplicarse |
+| 2× | 49,4 % · 48,1 % | 98,7 % · 96,3 % | El precio tiene que moverse a la mitad |
+| 3× | 32,5 % · 31,7 % | 97,5 % · 95,1 % | |
+| 5× | 19,0 % · 18,5 % | 94,9 % · 92,6 % | Ya es una caída «normal» de una altcoin en una semana mala |
+| 10× | 8,9 % · 8,6 % | 88,6 % · 86,4 % | Un día volátil |
+| 15× | 5,5 % · 5,35 % | 82,3 % · 80,2 % | El **máximo en corto** que la API acepta en BTC (ver §4) |
+| 16× | 5,06 % · 4,94 % | 81,0 % · — | El **máximo en largo**; en corto, rechazado |
+| 17× | 4,69 % · 4,58 % | — | Rechazado en los dos lados |
+
+La tercera columna es lo que se ha perdido del margen cuando el precio llega a la liquidación (la
+distancia por el apalancamiento): el resto es el mantenimiento, que el venue se queda al liquidar. Es
+el número que manda sobre el stop (§7): un stop que pierde más que eso no salta nunca.
 
 > ⚠️ **Sigue siendo una estimación.** El exchange aplica una escala de margen de mantenimiento **por
 > tramos**: cuanto mayor es la posición, mayor la tasa; la ficha usa el tramo más bajo. Por eso la app
@@ -64,16 +91,21 @@ vez con el precio de liquidación **real** del exchange y el precio de marca del
 | **Cruzado** (`CROSS`) | Toda la caja libre de la cuenta, repartida entre las posiciones abiertas en proporción a su notional | Llega **más lejos** | Una posición perdedora **arrastra el saldo de los demás bots de esa cuenta** |
 
 El modo es ❄️ **en frío**: no se puede cambiar con el bot creado. Ojo con los valores de fábrica:
-**Rejilla neutral, Market Maker y Market Maker V2 vienen en cruzado**; las otras cuatro en aislado. La vista
-previa te lo recuerda: en cruzado avisa de que la liquidación estimada es una **cota** (la real depende del
-saldo de toda la cuenta y de las demás posiciones), y en la rejilla neutral enseña la liquidación del lado
-largo y, en un aviso, la del lado corto.
+**Rejilla neutral, Market Maker y Market Maker V2 vienen en cruzado**; el resto, en aislado. La vista
+previa te lo recuerda: en cruzado rotula la liquidación como **cota** (la real depende del saldo de toda
+la cuenta y de las demás posiciones), y en la rejilla neutral y los market makers enseña **cada lado con
+su propia liquidación**: las compras son un largo y las ventas un corto, nunca la misma posición.
+
+El aviso de dinero real de la Revisión lo dice según el modo: en aislado, lo más que se pierde en una
+liquidación es el margen asignado; en cruzado, una liquidación puede llevarse el saldo libre de la cuenta.
 
 ---
 
 ## 4. El semáforo y la regla del 5 %
 
-La distancia a liquidación se pinta igual en las cuatro pantallas ([`risk.ts:14-16`](../apps/app/src/app/core/utils/risk.ts)):
+La distancia a liquidación se pinta igual en todas las pantallas, también en el medidor del formulario y
+en las configuraciones sugeridas (`LIQ_WARN_PCT` y `LIQ_DANGER_PCT` en
+[`risk.ts`](../apps/app/src/app/core/utils/risk.ts)):
 
 | Distancia | Color | Qué significa |
 |---|---|---|
@@ -84,15 +116,31 @@ La distancia a liquidación se pinta igual en las cuatro pantallas ([`risk.ts:14
 
 La barra **satura al 40 %**: por encima de eso la distancia deja de ser información y la barra sale llena.
 
-**La regla del 5 %.** Al crear o editar un bot, la API calcula la distancia estimada con la fórmula de §2
-y **rechaza la configuración si queda por debajo del 5 %** ([`risk.service.ts:86-93`](../apps/api/src/modules/risk/risk.service.ts)):
+**La regla del 5 %.** Al crear, editar o arrancar un bot, la distancia exacta de §2 **del lado que
+manda** tiene que ser del 5 % o más; si no, la configuración se rechaza (`validateCommon` en
+[`common.ts`](../packages/strategy-core/src/common.ts) y `topeDeApalancamiento` en
+[`risk.service.ts`](../apps/api/src/modules/risk/risk.service.ts)):
 
-> «A 17× la liquidación estimada llega con menos del 5 % de movimiento adverso en BTC: el máximo aquí es 16×.»
+> «A 17× la liquidación llega con un 4.69 % de movimiento en contra (mantenimiento del 1.25 %), por
+> debajo del mínimo del 5 %: el máximo aquí es 16×.»
 
-El tope depende de la tasa de mantenimiento del par: 16× en BTC de Hyperliquid (1,25 %), 14× en ETH
-(2 %), 10× en DOGE (5 %). El formulario aplica **la misma regla con la misma tasa** y te dice el tope de
-ese mercado antes de crear el bot; la API la repite al guardar. No es un fallo del formulario: es la red
-de la cuenta.
+El tope depende de la tasa de mantenimiento del par y del lado, porque el corto liquida antes:
+
+| Par (mantenimiento) | Máximo en largo | Máximo en corto |
+|---|---|---|
+| BTC en Hyperliquid (1,25 %) | 16× | 15× |
+| ETH (2 %) | 14× | 14× |
+| DOGE (5 %) | 10× | 9× |
+
+Una dirección NEUTRAL puede acabar en corto, así que se mide contra el corto. El formulario aplica **la
+misma regla con la misma tasa** y te dice el tope de ese mercado antes de crear el bot; la API la repite
+al guardar y **al arrancar**, contra el mercado de ese día. Por encima de 10× la app avisa con la
+distancia exacta y lo que se habrá perdido del margen al llegar: «A 12× la liquidación llega con un
+7.17 % de movimiento en contra, cuando la pérdida alcanza el 86.1 % del margen».
+
+Con la posición abierta **no se puede cambiar el apalancamiento** (la API responde 409,
+`LEVERAGE_WITH_POSITION`): con el stop y los objetivos en % del margen, cambiarlo movería en silencio los
+precios de las salidas de una posición viva.
 
 ### La regla por stop (el Canal con IA y la Operación IA)
 
@@ -126,9 +174,12 @@ Al crear o editar, la API y el formulario aplican aquí el tope y no el 5 %: «E
 estrategia llega como mucho a 25× en este par».
 
 **Recomendación de la casa:** 1× o 2× en todo lo que retenga inventario (rejillas, DCA, escaleras) y
-nunca por encima de 3× en las estrategias que promedian a la baja (la propia app avisa en el DCA
-temporizado por encima de 3×; en Martingala y GridMart rechaza la escalera si cubre más recorrido que la
-distancia a la liquidación).
+nunca por encima de 3× en las estrategias que promedian en contra (la propia app avisa en el DCA
+temporizado por encima de 3×). En Martingala y GridMart la app recorre la escalera **nivel a nivel**,
+con la media de lo ya comprado y la liquidación exacta de esa media: si la liquidación llega antes que
+una seguridad, rechaza la configuración en aislado (en cruzado, avisa), porque esa seguridad no se
+ejecutaría jamás; si el que llega antes es el stop, avisa; y si la escalera cabe pero cubre menos de la
+mitad del camino hasta la liquidación, también avisa.
 
 ---
 
@@ -255,9 +306,16 @@ su agente, que se pausa entero al tocar su pérdida diaria —contando al stop l
 
 ## 7. El stop-loss
 
-Si rellenas **Stop loss (%)**, el motor —no la estrategia— añade al plan una orden **condicional nativa
-del exchange** (`withStopLoss`, [`stop-loss.ts`](../packages/strategy-core/src/stop-loss.ts)):
+Si rellenas **Stop loss (sobre el margen)**, el motor —no la estrategia— añade al plan una orden
+**condicional nativa del exchange** (`withStopLoss`, [`stop-loss.ts`](../packages/strategy-core/src/stop-loss.ts)):
 
+- Es un **% del margen** de la posición (spec 080): el disparo va a `media × (1 ∓ stop/(100·L))`. A 2×
+  un stop del 10 % está a un 5 % del precio; a 10×, a un 1 %. El formulario enseña junto al campo su
+  equivalente en precio y en USDC.
+- `L` es el apalancamiento de la configuración, que es el que el motor fija en el venue. Si la posición
+  del venue tiene uno **mayor** —la cuenta ya lo tenía puesto, u otro cliente lo cambió—, el stop se
+  calcula con ese, que da el disparo más cerca, y el bot avisa una vez (`LEVERAGE_SKIPPED`, WARN) de que
+  no coinciden.
 - Se calcula sobre el **precio medio real** de la posición, en la dirección del **signo de la posición**
   (no de la dirección declarada: un market maker o una rejilla neutral cambian de lado solos).
 - Se redondea **un tick hacia la entrada**: salta antes, nunca después.
@@ -269,20 +327,50 @@ del exchange** (`withStopLoss`, [`stop-loss.ts`](../packages/strategy-core/src/s
   CRITICAL.
 - **Tendencia, el Canal con IA y la Operación IA ponen su propio stop** y no leen este campo: el de
   Tendencia sigue al precio por ATR, el del canal sale del extremo del toque y el de la operación de
-  un agente es el de su plan, que **solo se ciñe**. En los tres, «Stop loss (%)» no hace nada.
+  un agente es el de su plan, que **solo se ciñe**. En los tres, «Stop loss (sobre el margen)» no hace nada.
 - Si el exchange lo **rechaza**, el evento es CRITICAL una vez por forma de orden y el motor lo
   reintenta en cada revisión (no entra en cuarentena como el resto de órdenes). Un fallo **pasajero** al
   colocarlo (un corte de red) se reintenta en el mismo instante y, si tampoco sale, es CRITICAL.
 - Su tamaño mínimo se mide sobre la **posición al precio de marca**, no al precio de disparo: un stop al
   −10 % de una posición de 10,5 USDC cabe aunque al disparo valiera 9,45.
-- La API rechaza un `stopLossPct` fuera de (0, 100) y una pérdida diaria máxima no positiva, igual que el
-  formulario.
+- La API rechaza un stop no positivo o por encima del 90 % del precio (el 90·L % del margen) y una
+  pérdida diaria máxima no positiva, igual que el formulario. Vacío es «sin stop».
 - En el simulador es una condicional en reposo que se dispara con el precio de marca, igual que en un
   venue real.
 
-**Dónde ponerlo.** En las escaleras (Martingala, GridMart), **por debajo del último escalón**: si lo
-pones por encima, cierra el ciclo antes de haber terminado de promediar. En una rejilla, por debajo del
-precio inferior del rango. En un DCA, donde estés dispuesto a reconocer que la tesis falló.
+### El stop frente a la liquidación
+
+Un stop más ancho que la distancia a la liquidación **no salta nunca**: el venue liquida antes y se
+pierde el margen entero, con el usuario creyendo que tenía una pérdida máxima. Desde el spec 080 la app
+y la API lo comprueban con la distancia exacta de §2 (`validarStopFrenteALiquidacion`):
+
+| Situación | En aislado | En cruzado |
+|---|---|---|
+| El stop queda en la liquidación o detrás | **Error**: no se crea | Aviso: la real queda más lejos, pero no se puede contar con ello |
+| La liquidación queda a menos de **medio stop** detrás del stop | Aviso: un deslizamiento o una mecha pueden liquidar antes de que salga | Aviso |
+| En largo, un stop del 100 % del precio o más | Error: llevaría el disparo a cero | Error |
+
+Los tres proponen **el stop más ancho que deja medio stop de holgura** —la misma regla que usan desde
+los specs 058 y 074 el canal con IA y los agentes—, y el formulario lo aplica con un toque («Usar el stop
+más ancho válido»). Con el corto a 15× en BTC del caso que dio pie al spec 079:
+
+> «A 15× la liquidación llega con un 5.35 % de movimiento en contra, al perder el 80.2 % del margen: un
+> stop del 90 % no saltaría nunca, el venue liquida antes. El más ancho que deja medio stop de holgura es
+> 53.4 %.»
+
+No se mide así en las estrategias que ponen su propio stop, pero tampoco se les escapa. El Canal con IA
+y la Operación IA eligen el apalancamiento de cada operación con su stop, y la liquidación queda siempre
+a tres stops o más. La Tendencia no sabe su stop hasta la ruptura, porque sale del ATR de ese momento:
+en aislado, **no entra** si ese stop quedaría en la liquidación o detrás («Ruptura descartada: el stop,
+a 2.5 ATR, quedaría a un 10.27 %, detrás de la liquidación a 10× (8.86 %)…»), y si cabe con menos de
+medio stop de holgura entra y lo anota. Al crearla, la app avisa con el ATR de la estimación (un 2 % del
+precio) y dice a partir de qué volatilidad ese apalancamiento deja de caber.
+
+**Dónde ponerlo.** En las escaleras (Martingala, GridMart), que su precio quede **más allá del último
+escalón**: si salta antes, cierra el ciclo sin haber terminado de promediar, y la app te dice qué
+seguridad no llegaría. En una rejilla, más allá del extremo del rango. En un DCA, donde estés dispuesto
+a reconocer que la tesis falló. En todos, por delante de la liquidación con holgura: la app no te deja
+otra cosa en aislado.
 
 Al recolocarse (cambió la posición o la media) se cancela el viejo y se pone el nuevo; la ventana entre
 ambos dura una llamada al venue. Ponerlo **antes** de cancelar exigiría un id distinto por encarnación
@@ -292,18 +380,31 @@ del stop y queda para un spec posterior.
 
 ## 8. El peor caso de cada estrategia
 
-Lo que la vista previa llama «peor caso» es **todos los niveles ejecutados**. Cómo se calcula en cada una:
+Lo que la vista previa llama «peor caso» es **todos los niveles ejecutados**, lado a lado: cada lado
+recorre sus entradas en el orden en que el precio las tocaría yendo en contra, con la media de lo ya
+lleno, y se **corta** donde el stop o la liquidación de esa media llegan antes que el nivel siguiente, o
+donde el **Tope de exposición** no deja tender el nivel —la Revisión dice en qué nivel y por qué—. El
+tope se aplica como en el motor: un nivel entra si la posición que deja, valorada a su propio precio,
+cabe en él (lo abierto vale menos cuanto más se ha ido el precio). Lo que el tope no deja tender tampoco
+cuenta en los totales «de todas las órdenes»; lo que cortan el stop o la liquidación sí, porque se
+coloca aunque no llegue a llenarse. Sobre la posición resultante enseña el objetivo, el stop y la
+liquidación con su precio, el movimiento desde la entrada y desde el último precio, el resultado en USDC
+**sin comisiones** y el % sobre el margen, más la relación beneficio/riesgo.
+
+El margen es siempre lo que el venue retiene por cada orden: su notional, ya redondeado a la retícula del
+par, entre el apalancamiento. Por eso sale un poco por debajo del capital: redondear cada cantidad hacia
+abajo deja algo sin usar. Cómo se calcula en cada una:
 
 | Estrategia | Peor caso (notional) | Margen en el peor caso | Lo que hay que saber |
 |---|---|---|---|
-| Rejilla clásica | **capital × apalancamiento** (todas las líneas compradas) | capital | La vista previa cuenta **todas** las líneas: basta con que el precio suba por encima del rango y lo recorra entero hacia abajo. |
-| Rejilla neutral | capital × apalancamiento en **un** lado (largo si cae, corto si sube) | capital | `Exposición máxima` es el freno que corta antes. |
+| Rejilla clásica | **capital × apalancamiento** (todas las líneas compradas) | ≈ capital | La vista previa cuenta **todas** las líneas: basta con que el precio suba por encima del rango y lo recorra entero hacia abajo. Con `Tope de exposición`, las que caben, de la más alta hacia abajo; y un tope menor que una sola línea es un error, porque la rejilla no pondría ninguna orden. |
+| Rejilla neutral | La suma de las líneas de **un** lado —las compras si cae, las ventas si sube—: más o menos la mitad de capital × apalancamiento. La Revisión enseña cada lado aparte | ≈ capital en total (todas las órdenes, de los dos lados); cada lado, el suyo | `Exposición máxima` —o el tope común, el menor de los dos— acota **cada lado por separado**, de la línea más cercana al ancla hacia fuera, y la Revisión enseña cada lado cortado ahí. Un tope que no deja tender ni la línea más cercana es un error. |
 | DCA temporizado | `importe × compras máximas × apalancamiento` | `importe × compras máximas` (≤ capital, la app lo exige) | Un DCA que dura días paga **funding** todo ese tiempo (§9). |
-| Martingala | Σ de los escalones = **capital × apalancamiento** | capital | `Tope de exposición` corta la escalera en el escalón en que se alcanza. El último escalón suele ser el mayor de todos. |
-| GridMart | Igual que Martingala | capital | La rejilla de ventas no añade exposición: vende trozos de lo comprado. |
-| Market Maker (V1 y V2) | **Valor máximo de la posición**, en cualquiera de los dos sentidos | Ese valor ÷ apalancamiento | `capital asignado` **no** dimensiona nada aquí: solo es el denominador de la pérdida diaria. |
-| Tendencia | `riesgo por operación / (multiplicador × ATR)` en cantidad, **acotado** por `capital × apalancamiento`, el margen disponible y el `Tope de exposición` | Ese notional ÷ apalancamiento | Lo que se arriesga **no** es el notional: es el `riesgo por operación`, porque el stop está puesto desde el primer momento. Si el tope recorta, se arriesga **menos** de lo declarado y la nota del bot lo dice. |
-| Seguimiento de beneficio | **capital × apalancamiento** en una sola posición, acotado por el margen disponible y el `Tope de exposición` | capital | No hay escalera: la posición entera existe desde el primer minuto. Y hasta llegar al objetivo la única red es el `stop loss`, que por eso viene puesto de fábrica (5 %). Al cerrarse **vuelve a abrir** pasada la espera. |
+| Martingala | Σ de los escalones = **capital × apalancamiento** | ≈ capital | `Tope de exposición` corta la escalera en el escalón que ya no cabe, y la Revisión la enseña cortada ahí, o antes si el stop o la liquidación llegan antes que un escalón. El último escalón suele ser el mayor de todos. |
+| GridMart | Igual que Martingala | ≈ capital | La rejilla de ventas no añade exposición: vende trozos de lo comprado. |
+| Market Maker (V1 y V2) | **Valor máximo de la posición**, en cualquiera de los dos sentidos. Es también el nocional que cuenta en tus límites | Ese valor ÷ apalancamiento | `capital asignado` **no** dimensiona nada aquí: es la base del ROI y de la pérdida diaria. Y no tienen `Tope de exposición`: su tope es el valor máximo de la posición. |
+| Tendencia | `riesgo por operación / (multiplicador × ATR)` en cantidad, **acotado** por `capital × apalancamiento`, el margen disponible y el `Tope de exposición` | Ese notional ÷ apalancamiento | Lo que se arriesga **no** es el notional: es el `riesgo por operación`, porque el stop está puesto desde el primer momento. Si el tope recorta, se arriesga **menos** de lo declarado y la nota del bot lo dice. En aislado, una ruptura cuyo stop quedaría en la liquidación o detrás no se opera. |
+| Seguimiento de beneficio | **capital × apalancamiento** en una sola posición, acotado por el margen disponible y el `Tope de exposición` | ≈ capital | No hay escalera: la posición entera existe desde el primer minuto. Y hasta llegar al objetivo la única red es el `stop loss`, que por eso viene puesto de fábrica (10 % del margen, un 5 % del precio a 2×). Al cerrarse **vuelve a abrir** pasada la espera. |
 | Canal con IA | `riesgo / (distancia al stop + costes)`, acotado por `capital × nocional máximo`, `capital × apalancamiento` y el `Tope de exposición`. Es lo que cuenta como notional del bot en tus límites | notional ÷ apalancamiento, como mucho el `margen máximo` (25 % del capital) | Lo que se arriesga es el `riesgo por operación`: el stop está en el libro desde el llenado. En un hueco que salte el stop, lo más que se pierde es el margen de la operación. |
 | Operación IA | La cantidad de su plan: `riesgo / (distancia al stop + costes)` sobre el capital del **agente**, con sus topes de margen y de apalancamiento | El de su plan, como mucho el `margen por operación` del agente (25 % de fábrica) | Como en el canal: lo que se arriesga es 1R, y en un hueco, el margen. **Una sola vez**: al cerrarse no vuelve a abrir. Un agente abre como mucho sus `operaciones a la vez` (2 de fábrica), y su pérdida diaria cuenta lo abierto al stop. |
 
@@ -335,6 +436,15 @@ la recolocación del stop (F-35), el mínimo al disparo (F-91), la acotación de
 `019-validacion-y-parametros-muertos` cerró el resto de F-13 (la API acota lo que el formulario acota), la
 tasa de mantenimiento por mercado (F-93), el tope de apalancamiento explicado (F-44), el doble cómputo del
 propio bot al editarlo (F-42) y la medianoche de la pérdida diaria (F-43).
+
+El spec `080-roi-y-revision-profesional` (revisión en el `079`) pasó los % de resultado a % del margen,
+dejó una sola fórmula de liquidación —la exacta, por lado—, añadió la regla del stop frente a la
+liquidación, comprueba la escalera nivel a nivel, enseña la Revisión por lados, vuelve a validar al
+arrancar, bloquea el cambio de apalancamiento con posición y hace que el simulador use el mantenimiento
+de cada mercado (079/F-01 a F-29). Al rehacer las guías con él salieron y se cerraron F-30 a F-37: la
+Revisión aplica el tope de exposición como el motor, la rejilla neutral lo aplica por lado, la tendencia no
+entra con el stop detrás de la liquidación y el margen de cada nivel es su nocional entre el
+apalancamiento.
 
 El spec `057-stops-velas-y-simulador` corrigió dos cosas del stop:
 - **Ya no se recoloca en cada revisión (057/F-01).** El motor comparaba el precio de ejecución que

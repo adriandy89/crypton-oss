@@ -230,6 +230,23 @@ export const gridClassic: Strategy<GridClassicConfig> = {
           ),
         );
       }
+      // Un tope menor que una sola línea deja la rejilla sin ninguna orden de
+      // entrada: el bot correría sin hacer nada. En «cantidad de moneda» cada
+      // línea mueve según el precio de referencia, que aquí no se conoce, y
+      // basta con el aviso común.
+      const tope = cfg.maxNotionalCap ? D(cfg.maxNotionalCap) : null;
+      const porLinea = D(cfg.totalInvestment ?? 0)
+        .mul(cfg.leverage ?? 1)
+        .div(levels);
+      if (cfg.sizingMode !== 'BASE' && tope && tope.gt(0) && tope.lt(porLinea)) {
+        issues.push(
+          err(
+            'maxNotionalCap',
+            `El tope de exposición (${tope.toFixed(2)}) es menor que una sola línea ` +
+              `(${porLinea.toFixed(2)}): la rejilla no pondría ninguna orden de entrada.`,
+          ),
+        );
+      }
       const stepPct = step.div(lower).mul(100);
       if (stepPct.lt(0.05)) {
         issues.push(
@@ -255,9 +272,11 @@ export const gridClassic: Strategy<GridClassicConfig> = {
     const prices = gridPrices(cfg);
     const ref = D(refPrice);
     const levels: RawLevel[] = [];
-    const perLevelMargin = D(cfg.totalInvestment).div(prices.length);
     const isLong = cfg.direction !== 'SHORT';
 
+    // El margen de cada línea lo pone `buildPreview`: su nocional ya en la
+    // retícula entre el apalancamiento. Era el capital entre las líneas, que en
+    // modo «cantidad de moneda» no es lo que la línea mueve (079/F-13).
     prices.forEach((p, i) => {
       const qty = levelQty(cfg, p, ref);
       // La línea que queda del lado de la entrada es la que se tenderá primero.
@@ -268,7 +287,6 @@ export const gridClassic: Strategy<GridClassicConfig> = {
         side: isEntryLine ? entrySide(cfg.direction) : exitSide(cfg.direction),
         price: p,
         qty,
-        margin: perLevelMargin,
         // TODAS las líneas cuentan para el peor caso: basta con que el precio
         // suba por encima del rango y lo recorra entero hacia abajo para que
         // cada una se compre. Contar solo las que hoy quedan del lado de la
@@ -284,6 +302,10 @@ export const gridClassic: Strategy<GridClassicConfig> = {
       direction: cfg.direction,
       leverage: cfg.leverage,
       marginMode: cfg.marginMode,
+      stopLossRoiPct: cfg.stopLossPct,
+      // El tope acota las líneas de entrada de la más cercana hacia fuera, como
+      // en `plan()` (001/F-87).
+      topeNocional: cfg.maxNotionalCap,
       issues: validation.issues,
     });
   },

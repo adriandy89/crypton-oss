@@ -21,7 +21,23 @@ import {
   type ValidationIssue,
   type VenueOrder,
 } from '@crypton/shared';
-import { warn } from '../common';
+import { commonFieldsWith, comunCon, warn } from '../common';
+
+/**
+ * Los campos comunes de un market maker, con lo que es cierto para él.
+ *
+ * - Sin `maxNotionalCap`: no lo lee. Su tope de posición es
+ *   `maxBotPositionValue`, y un «tope de exposición» que no hace nada es un
+ *   número que parece mandar y no manda (spec 080, 079/F-19 y F-27).
+ * - `totalInvestment` con su propia ayuda: no dimensiona ninguna orden, es el
+ *   capital contra el que se miden el resultado y la pérdida diaria.
+ */
+export function camposComunesMm(propios: readonly FieldMeta[]): FieldMeta[] {
+  return commonFieldsWith([
+    ...propios,
+    comunCon('totalInvestment', { helpKey: 'strategy.mm.totalInvestmentHelp' }),
+  ]).filter((f) => f.key !== 'maxNotionalCap');
+}
 
 export const BPS = D(10_000);
 
@@ -128,11 +144,12 @@ export function desequilibrio(ticker: Ticker): Decimal | null {
  * El sesgo es el único mando que pelea eso, y funciona: encendido en 1 la
  * pérdida realizada baja un 44 %; con el de tamaño también, un 54 %.
  *
- * ── Por qué un aviso y no un valor de fábrica distinto ──
+ * ── Por qué un aviso, si ya viene encendido ──
  *
- * La V1 lo trae encendido desde siempre y la V2 apagado. Cambiar el de la V2
- * movería dónde cotiza cada bot V2 que ya está en marcha, y eso no se hace sin
- * decisión de su dueño (spec 071). Callarlo, en cambio, no hacía falta.
+ * Las dos versiones lo traen encendido de fábrica (la V2 desde el spec 071),
+ * pero sigue siendo un mando del usuario y se puede apagar. Apagarlo no es un
+ * error —hay quien cotiza sin sesgo a propósito—, pero quien lo hace tiene que
+ * saber lo que cuesta, y un bot guardado sin las claves también cotiza sin él.
  *
  * Las DOS formas de tenerlo apagado cuentan: el interruptor en false, y el
  * interruptor en true con el factor en cero — que no hace nada porque
@@ -941,6 +958,22 @@ export interface ActivationGate {
   patch?: Record<string, unknown>;
   /** Qué mostrar en la app mientras espera. */
   note?: string;
+}
+
+/**
+ * El nocional máximo de un market maker: su tope de posición.
+ *
+ * Un market maker no lee `totalInvestment`: su tamaño sale de la cantidad por
+ * lado y su inventario se corta en `maxBotPositionValue`. Sin declararlo, la API
+ * medía sus límites de nocional —por bot y total— con capital × apalancamiento,
+ * un número que el bot no puede abrir, y la guarda miraba una cifra falsa
+ * (spec 080, 079/F-03).
+ */
+export function nocionalMaximoMm(config: { maxBotPositionValue?: string | null }): string | null {
+  const tope = config.maxBotPositionValue;
+  if (tope == null || tope === '') return null;
+  const valor = D(tope);
+  return valor.isFinite() && valor.gt(0) ? valor.toFixed() : null;
 }
 
 /**

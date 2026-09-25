@@ -1,11 +1,10 @@
 import { BadRequestException, Injectable, Logger } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import type { Venue } from '@crypton/db';
-import { getStrategy } from '@crypton/strategy-core';
+import { camposEfectivos, getStrategy } from '@crypton/strategy-core';
 import {
+  distanciaDesdeHoyALiquidacion,
   esEstrategiaSoloAdmin,
-  maintenanceMarginRateOf,
-  maxLeverageWithinDistance,
   type BotConfig,
   type PreviewResult,
   type StrategyKind,
@@ -25,7 +24,7 @@ import {
 import { OpenRouterClient } from './openrouter.client';
 import { featuresBucket, type MarketFeatures } from './market-features';
 import { PROMPT_VERSION } from './prompt';
-import { coerceConfig, enforceCouplings } from './sanitize';
+import { coerceConfig, enforceCouplings, maxApalancamientoSeguro } from './sanitize';
 
 /** Los topes del usuario, ya leidos y en numeros. */
 interface RiskLimits {
@@ -48,6 +47,11 @@ export interface RecommendedProfile {
     leverage: number;
     worstCaseMargin: string;
     worstCaseNotional: string;
+    /**
+     * Cuánto puede ir el precio en contra desde el de hoy antes de la
+     * liquidación más cercana, en % (`distanciaDesdeHoyALiquidacion`). null si
+     * no se liquida.
+     */
     liquidationDistancePct: string | null;
     levels: number;
   };
@@ -262,8 +266,15 @@ export class AdvisorService {
     const generado = buildConfig(kind, knobs, ctx);
 
     // 2. Recortar contra el descriptor. Manda el `FieldMeta`, no `validate()`:
-    //    en varios campos el descriptor es mas estricto.
-    let config = coerceConfig(fields, strategy.defaults(), generado);
+    //    en varios campos el descriptor es mas estricto. El EFECTIVO, con el
+    //    apalancamiento generado: los % sobre el margen tienen su tope en % del
+    //    precio por el apalancamiento (spec 080), y con el descriptor estatico
+    //    no tendrian ninguno.
+    let config = coerceConfig(
+      camposEfectivos(fields, generado, ctx.market),
+      strategy.defaults(),
+      generado,
+    );
 
     // 3. Imponer los acoplamientos que ninguna validacion deduce mirando un
     //    campo aislado. Se repara siempre hacia MENOS riesgo.
@@ -316,7 +327,7 @@ export class AdvisorService {
         leverage: Number(config['leverage'] ?? 1),
         worstCaseMargin: preview.worstCaseMargin,
         worstCaseNotional: preview.worstCaseNotional,
-        liquidationDistancePct: preview.liquidationDistancePct,
+        liquidationDistancePct: distanciaDesdeHoyALiquidacion(preview.sides),
         levels: preview.levels.length,
       },
       // Lo que dijo el modelo, si lo dijo; si no, la explicacion por reglas.
@@ -440,9 +451,10 @@ export class AdvisorService {
     const lev = Number(config['leverage'] ?? 1);
     if (limites.maxLeverage != null && lev > limites.maxLeverage) return false;
 
-    // La distancia a liquidacion, con la misma cuenta que hace el servidor y la
-    // tasa de mantenimiento del mercado (001/F-44, F-93).
-    if (lev > maxLeverageWithinDistance(maintenanceMarginRateOf(ctx.market))) return false;
+    // La distancia a liquidacion, con la misma cuenta que hace el servidor: la
+    // tasa de mantenimiento del mercado (001/F-44, F-93) y la formula exacta del
+    // lado (079/F-07).
+    if (lev > maxApalancamientoSeguro(ctx.market, config['direction'])) return false;
 
     const notional = ctx.totalInvestment * lev;
     if (limites.maxNotionalPerBot != null && notional > limites.maxNotionalPerBot) return false;

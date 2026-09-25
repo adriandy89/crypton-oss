@@ -14,6 +14,9 @@
 import {
   D,
   Decimal,
+  // La liquidación tiene que quedar al menos a medio stop detrás del stop.
+  // Vive en `shared` desde el spec 080: la mide también el stop común.
+  HOLGURA_LIQUIDACION,
   LevelKind,
   type BotContext,
   type DesiredOrder,
@@ -34,8 +37,6 @@ export const MAX_INTENTOS_CIERRE = 12;
 export const ESPERA_ENTRE_CIERRES_MS = 30_000;
 /** El stop no saltó: el precio lo ha pasado en más de esta fracción del stop. */
 export const STOP_NO_SALTO = 0.5;
-/** La liquidación del venue tiene que quedar al menos a medio stop detrás del stop. */
-export const HOLGURA_LIQUIDACION = 0.5;
 
 export interface CierreEnCurso {
   motivo: string;

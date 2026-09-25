@@ -11,7 +11,9 @@ import type {
   PortfolioEquityPoint,
   PortfolioEquitySeries,
   PortfolioRange,
+  PreviewExit,
   PreviewResult,
+  PreviewSide,
   StrategyMeta,
   VenueCapabilities,
 } from '@crypton/shared';
@@ -39,7 +41,9 @@ export type {
   PortfolioEquityPoint,
   PortfolioEquitySeries,
   PortfolioRange,
+  PreviewExit,
   PreviewResult,
+  PreviewSide,
   StrategyMeta,
   VenueCapabilities,
 };
@@ -315,6 +319,11 @@ export interface RecommendedProfile {
     leverage: number;
     worstCaseMargin: string;
     worstCaseNotional: string;
+    /**
+     * Cuánto puede ir el precio en contra desde el de hoy antes de la
+     * liquidación más cercana, en % (`distanciaDesdeHoyALiquidacion`, spec 080).
+     * null si no se liquida.
+     */
     liquidationDistancePct: string | null;
     levels: number;
   };

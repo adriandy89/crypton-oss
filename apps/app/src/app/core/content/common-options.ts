@@ -8,7 +8,7 @@ import type { OptionDoc } from './types';
  * campo, el panel enseña esta. La razón de que sea un respaldo y no la única
  * verdad es que varios comunes cambian de sentido según donde caen: el ejemplo
  * claro es `maxNotionalCap`, que unas estrategias aplican al tender la escalera,
- * otras como segundo tope junto al suyo, y los market makers ni lo leen.
+ * otras como segundo tope junto al suyo, y los market makers ni lo tienen.
  */
 export const COMMON_OPTION_DOCS: Record<keyof CommonBotConfig, OptionDoc> = {
   exchangeAccountId: {
@@ -32,8 +32,8 @@ export const COMMON_OPTION_DOCS: Record<keyof CommonBotConfig, OptionDoc> = {
   leverage: {
     what: 'Cuántas veces multiplica el exchange el margen que le das. Con 5x, 100 USDC de margen mueven 500 USDC de posición.',
     affects:
-      'Multiplica por igual la ganancia y la pérdida, y acerca el precio de liquidación. A 2x necesitas una caída cercana al 50 % para liquidarte; a 10x, cercana al 10 %.',
-    tip: 'Empieza en 1x o 2x. Por encima de 10x la app te avisa, y el límite real lo pone el par: 20x en Lighter, hasta 50x en Aster.',
+      'Multiplica por igual la ganancia y la pérdida, y acerca el precio de liquidación. Con el mantenimiento de BTC en Hyperliquid (1,25 %), a 2x la liquidación llega con una caída del 49,4 % en largo o una subida del 48,1 % en corto; a 10x, con un 8,9 % o un 8,6 %. El stop y los objetivos van en % de tu margen: con más apalancamiento, el mismo % queda más cerca en precio. Con la posición abierta no se puede cambiar.',
+    tip: 'Empieza en 1x o 2x. Por encima de 10x la app te avisa, y hay dos techos: el del par en el exchange y el que deja la liquidación a un 5 % o más del precio, que en BTC de Hyperliquid es 16x en largo y 15x en corto.',
   },
   marginMode: {
     what: 'Aislado reserva el margen solo para esta posición. Cruzado deja que use todo el saldo libre de la cuenta.',
@@ -56,20 +56,20 @@ export const COMMON_OPTION_DOCS: Record<keyof CommonBotConfig, OptionDoc> = {
   maxNotionalCap: {
     what: 'Tope del valor de la posición. Martingala, GridMart y la rejilla clásica lo aplican al tender, cortando en el escalón o la línea que lo superaría.',
     affects:
-      'En la rejilla clásica acota lo que se tiende: posición abierta más compras vivas, de la línea más cercana al precio hacia fuera. La rejilla neutral, el DCA temporizado y los market makers no lo leen: cada una tiene su propio freno.',
-    tip: 'En escaleras, ponlo por debajo de capital por apalancamiento si quieres recortar los últimos escalones. En el resto, usa el freno propio de la estrategia y deja este vacío.',
+      'En la rejilla clásica acota lo que se tiende: posición abierta más compras vivas, de la línea más cercana al precio hacia fuera. La rejilla neutral y el DCA temporizado lo aplican como segundo tope junto al suyo, y el seguimiento y la tendencia entran, como mucho, por este valor.',
+    tip: 'En escaleras, ponlo por debajo de capital por apalancamiento si quieres recortar los últimos escalones.',
   },
   stopLossPct: {
-    what: 'Pérdida máxima tolerada sobre el precio medio de entrada. Al tocarla, el bot cierra la posición.',
+    what: 'Pérdida máxima sobre tu margen, medida desde el precio medio de entrada, como el SL por ROI de un exchange: a 10x, un 20 % del margen es un 2 % del precio. Al tocarla, el bot cierra la posición.',
     affects:
-      'El motor coloca una orden de disparo nativa en el propio exchange, así que se ejecuta aunque la plataforma se caiga. La dirección sale del signo de la posición real, no de la que declaraste.',
-    tip: 'Sin stop, la única salida por abajo es la liquidación. Déjalo vacio solo si el tope de exposición ya te protege.',
+      'El motor coloca una orden de disparo nativa en el propio exchange, así que se ejecuta aunque la plataforma se caiga. La dirección sale del signo de la posición real, no de la que declaraste. Tiene que saltar antes que la liquidación: en margen aislado, un stop en la liquidación o detrás es un error, y uno que la deja a menos de medio stop, un aviso; los dos te proponen el más ancho que cabe.',
+    tip: 'Sin stop, la única salida en contra es la liquidación. Déjalo vacío solo si el tope de exposición ya te protege.',
   },
   maxDailyLossPct: {
-    what: 'Pérdida acumulada en un día a partir de la cual el bot se detiene.',
+    what: 'Pérdida de un día, con lo ya cerrado y en % del capital asignado, a partir de la cual el bot se pausa.',
     affects:
       'No cierra la posición: deja de abrir nuevas y para. Es el freno para un día malo, no para una operación mala.',
-    tip: 'Útil sobre todo en las estrategias que promedian a la baja, donde un mal día encadena varias entradas.',
+    tip: 'Útil sobre todo en las estrategias que promedian en contra, donde un mal día encadena varias entradas.',
   },
   cooldownMinutes: {
     what: 'Espera entre el final de un ciclo y el comienzo del siguiente. La respetan las estrategias con ciclos: rejillas, DCA, Martingala y GridMart. Los market makers no cierran ciclos, así que ahí no aplica.',
@@ -95,15 +95,19 @@ export const COMMON_OPTION_DOCS: Record<keyof CommonBotConfig, OptionDoc> = {
       'Solo avisar manda una notificación y no toca nada. Pausar detiene el bot dejando la posición abierta. Cerrar todo la cierra a mercado antes de que lo haga el exchange.',
     tip: 'Una liquidación del exchange se lleva el margen entero. Cerrar antes duele, pero duele menos.',
   },
+  // Solo lo tienen los market makers, y sus guías lo redefinen; esta ficha
+  // dice lo mismo que `priceBand`: cada límite bloquea solo el lado que
+  // abriría posición en su sentido.
   priceFloor: {
-    what: 'Suelo de precio. Por debajo de el, el bot deja de abrir posición nueva; las salidas siguen vivas.',
+    what: 'Por debajo de este precio el bot no abre cortos nuevos.',
     affects:
-      'Corta la sangria cuando el precio se va por debajo de donde tu tesis tenía sentido, sin cerrar lo que ya tienes.',
-    tip: 'Déjalo vacio si ya usas rango o stop loss: dos frenos para lo mismo se estorban.',
+      'Sigue comprando, y sigue vendiendo para reducir un largo: bajo el suelo el bot aún puede acumular.',
+    tip: 'Para dejar de comprar caro, lo que sirve es el techo.',
   },
   priceCeiling: {
-    what: 'Techo de precio. Por encima de el, el bot deja de abrir posición nueva; las salidas siguen vivas.',
-    affects: 'El espejo del suelo, útil sobre todo en bots cortos y en cotizaciones a dos lados.',
-    tip: 'Déjalo vacio si ya usas rango o stop loss.',
+    what: 'Por encima de este precio el bot no abre largos nuevos.',
+    affects:
+      'Sigue vendiendo, y sigue comprando para cerrar un corto: sobre el techo el bot aún puede quedarse corto.',
+    tip: 'Es el freno para no acumular inventario caro con un sesgo largo.',
   },
 };

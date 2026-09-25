@@ -12,11 +12,13 @@ import {
   SourceMarketType,
   candleSpanMs,
   esEstrategiaDeAgente,
+  maintenanceMarginRateOf,
   type BacktestParams,
   type BacktestResult,
   type BotConfig,
   type Candle,
   type CandleInterval,
+  type MarketSpec,
   type StrategyKind,
 } from '@crypton/shared';
 import {
@@ -283,7 +285,7 @@ export class BacktestsService {
             })
           : null;
 
-      const params = this.paramsOf(dto, bot);
+      const params = this.paramsOf(dto, bot, market);
       const out = await runReplay({
         botId: bot.id,
         strategy: bot.strategy,
@@ -417,6 +419,7 @@ export class BacktestsService {
       margin_mode: string;
       total_investment: { toString(): string };
     },
+    market: MarketSpec,
   ): BacktestParams {
     return {
       startingBalance: dto.startingBalance ?? bot.total_investment.toString(),
@@ -426,7 +429,11 @@ export class BacktestsService {
       makerFeeRate: dto.makerFeeRate ?? '0.0002',
       takerFeeRate: dto.takerFeeRate ?? '0.0005',
       slippageRate: dto.slippageRate ?? '0.0005',
-      maintenanceMarginRate: dto.maintenanceMarginRate ?? 0.005,
+      // El mantenimiento del mercado, el mismo con el que la app calcula la
+      // liquidación antes de crear el bot. Con el 0,5 % plano el backtest
+      // liquidaba más tarde que la Revisión, y en BTC un 60 % más lejos de la
+      // cuenta (079/F-07).
+      maintenanceMarginRate: dto.maintenanceMarginRate ?? maintenanceMarginRateOf(market),
       spreadBps: dto.spreadBps ?? 2,
       barPath: dto.barPath ?? BarPath.NEAREST_FIRST,
     };

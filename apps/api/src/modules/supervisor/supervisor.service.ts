@@ -7,6 +7,7 @@ import {
   EventSeverity,
   isFiniteNum,
   resumenDeCiclos,
+  type Direction,
   type FieldMeta,
   type MarketFeatures,
   type Numeric,
@@ -1191,6 +1192,8 @@ export class SupervisorService {
     const topeLeverage = await this.risk
       .topeDeApalancamiento(bot.user_id, isFiniteNum(capital) ? (capital as Numeric) : 0, mercado, {
         excludeBotId: bot.id,
+        // El corto liquida antes: el tope depende del lado (079/F-07).
+        direction: vigenteBruto['direction'] as Direction | undefined,
       })
       .catch(() => null);
     const ciclo = await this.db.botCycle.findFirst({

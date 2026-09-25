@@ -323,6 +323,7 @@ porque su distancia la pone cada operación.
 | Libro | 100,00 / 100,02 |
 | ATR de 15 min / de 1 h | 0,40 / 0,80 |
 | Toque del soporte | 99,95 |
+| Mercado | tick 0,01, paso 0,001, máximo 50x y mantenimiento del 1 % |
 | Comisiones | las de Hyperliquid (taker 4,5 bps, maker 1,5, deslizamiento 2) |
 
 - **Stop ajustado** en 99,84; entrada como mucho a **100,05**.
@@ -334,6 +335,28 @@ porque su distancia la pone cada operación.
 - **Objetivos**: la media en 101,40 paga unas **4 veces** lo arriesgado, y el borde opuesto
   (102,45), unas **7**.
 - Con el stop normal o el amplio, menos cantidad (23,817 y 16,136) y la misma pérdida máxima.
+
+La liquidación es la exacta de una posición aislada, la misma que usan todas las pantallas: a 25x,
+`100,05 × (1 − 1/25) / (1 − 0,01)` = 97,02.
+
+### Lo que enseña la Revisión
+
+Al crear el bot no hay escalera que enseñar: la Revisión («Esto es lo que puede arriesgar») calcula
+la operación más grande que admiten tus límites, con el stop más ancho que permites y un ATR de 1 h
+supuesto del 1 %, y la pinta como cualquier posición: entrada, tamaño, margen, el stop —rotulado
+**estimado**— y la liquidación, cada uno con su precio, lo que se pierde en USDC sin comisiones y su
+% del margen. Con 1.000 USDC y los valores de fábrica en BTC de Hyperliquid (a 78.910, mantenimiento
+del 1,25 %):
+
+| Dato | Valor |
+|---|---|
+| Apalancamiento | 17x: la regla exige la liquidación a un 4,5 % o más (tres stops de 1,5 %) |
+| Tamaño | 0,00787 BTC, 621,02 USDC de nocional y 36,53 de margen |
+| Stop estimado | 77.727 (−1,50 %): −9,31 USDC, el −25,49 % del margen. Con la ida y vuelta de comisiones y deslizamiento, 10,00 USDC: el 1 % de riesgo |
+| Liquidación | 75.209 (−4,69 %): −29,13 USDC, el −79,73 % del margen |
+
+Cada operación real calcula los suyos con su stop: con uno más estrecho, más apalancamiento y la
+misma pérdida al stop.
 
 ---
 
@@ -461,6 +484,14 @@ crear otro bot).
 
 ### Base
 
+#### Conexión de exchange · `exchangeAccountId` · ❄️
+La cuenta en la que opera, real o de simulación. Un solo bot real por par y cuenta; los simulados quedan
+fuera de esa regla.
+
+#### Par · `symbol` · ❄️
+Fija el mínimo de orden, el paso de cantidad, el apalancamiento máximo y los tramos de mantenimiento con
+los que se mide la liquidación de cada operación (ver «La regla del apalancamiento por stop»).
+
 #### Lados que opera · `direction` · 🔥 · por defecto **Ambas**
 Los dos, solo largos o solo cortos. Cambia solo las entradas nuevas.
 
@@ -547,7 +578,7 @@ y el bot dispone otra vez de todo el margen.
 #### Al acercarse la liquidación · `liquidationAction` · 🔥 · por defecto **Cerrar todo**
 Con la regla por stop, el aviso salta a dos tercios del camino hasta la liquidación.
 
-#### Stop loss (%) · `stopLossPct`
+#### Stop loss (sobre el margen) · `stopLossPct`
 **No se usa**: cada operación pone el suyo. Si lo rellenas, el bot solo avisa.
 
 ### Límites del día y horario (UTC)

@@ -246,10 +246,11 @@ Lo que **no**, pase lo que pase:
 - **Mover más de dos perillas a la vez.** Una perilla arrastra los parámetros que dependen de ella
   —el diferencial de un market maker V2 son siete— y se mueven juntos. Lo que hace atribuible un
   resultado es cuántas decisiones se toman a la vez, no cuántos parámetros cambian.
-- **Con una posición abierta, subir el riesgo o tocar lo que podría cerrarla.** El apalancamiento,
-  los tamaños y los topes no suben, el modo defensivo de un market maker no se retrasa, y el stop,
-  el objetivo o el retroceso no se mueven. Tampoco baja por debajo de lo ya expuesto el tope de un
-  market maker que cierra al tocarlo.
+- **Con una posición abierta, subir el riesgo o tocar lo que podría cerrarla.** El apalancamiento no
+  se mueve, ni para arriba ni para abajo: el stop y el objetivo son un % del margen y se desplazarían
+  con él (spec 080). Los tamaños y los topes no suben, el modo defensivo de un market maker no se
+  retrasa, y el stop, el objetivo o el retroceso no se mueven. Tampoco baja por debajo de lo ya
+  expuesto el tope de un market maker que cierra al tocarlo.
 - **Recolocar la escalera con escalones ya ejecutados**, ni tocar un bot que no esté operando.
 - **Recolocar las órdenes dos veces en seis horas.** Un cambio que cancela y vuelve a tender las
   órdenes espera seis horas desde el anterior del supervisor. Si lo apruebas tú desde Telegram, no.
@@ -265,7 +266,9 @@ pusiste**. Todo lo que el supervisor no mueva se queda exactamente como lo dejas
 mueve se **desplaza** desde tu valor: si subiste a mano la distancia de compra a 12 bps y el
 supervisor ensancha, pasa a 14, no al valor que él habría puesto desde cero. Los importes se mueven
 en proporción, y todo dentro de esa banda de un cuarto por escalón. Subir y volver a bajar te deja
-**donde estabas**.
+**donde estabas**. Los % de resultado —el stop y el objetivo del seguimiento— van sobre el margen
+(spec 080): si la perilla del apalancamiento lo mueve, el % se queda como estaba y es su precio el que
+se acerca o se aleja.
 
 Y si tocas el bot mientras el supervisor está pensando —tarda unos segundos en decidir—, **gana lo
 tuyo**: su cambio se calculó sobre la configuración que leyó, así que al ver que ya no es la misma
@@ -310,11 +313,11 @@ Los nombres son los del formulario de Ajustes.
 | Tendencia | apalancamiento | apalancamiento y tope de exposición |
 | | cobertura | velas del canal de ruptura y eficiencia mínima para entrar |
 | | diferencial | stop, en ATR |
-| | crecimiento del tamaño | riesgo por operación |
+| | crecimiento del tamaño | riesgo por operación (sobre el capital) |
 | | cadencia | movimiento mínimo del stop |
 | Seguimiento de beneficio | apalancamiento | apalancamiento y tope de exposición |
-| | cobertura | beneficio al que empieza a seguir |
-| | cadencia | retroceso para salir y umbral para mover el disparador |
+| | cobertura | beneficio al que empieza a seguir (sobre el margen) |
+| | cadencia | retroceso para salir (del precio) y umbral para mover el disparador |
 | | diferencial y crecimiento del tamaño | nada: esta estrategia no los usa |
 
 Dos lecturas que no son obvias:
@@ -325,11 +328,18 @@ Dos lecturas que no son obvias:
   apalancamiento: «apalancamiento menos» puede quitar una capa y dejar cada orden **más grande**,
   aunque la exposición total baje.
 
-**Reparaciones.** Con cualquier perilla pueden llegar además tres reparaciones, que el aviso lista
+**Reparaciones.** Con cualquier perilla pueden llegar además cuatro reparaciones, que el aviso lista
 igual que el resto:
 
-- **El apalancamiento baja** al menor de tus topes, el del exchange y 18x. Pasa si lo bajaste
-  después de encender el Modo IA. Sin esa reparación, el servidor rechazaría cualquier cambio.
+- **El apalancamiento baja** al menor de tus topes, el del exchange y el que deja la liquidación a un
+  5 % o más en su lado —en BTC de Hyperliquid, 16x en largo y 15x en corto; una dirección neutral,
+  que puede acabar en corto, se mide contra el corto—. Pasa si lo bajaste después de encender el
+  Modo IA. Sin esa reparación, el servidor rechazaría cualquier cambio. Hasta el spec 080 ese último
+  tope era un 18x fijo, calculado con un mantenimiento plano del 0,5 %.
+- **El stop se estrecha** al más ancho que deja medio stop de holgura si, con el apalancamiento de la
+  decisión, quedaría en la liquidación o detrás (spec 080). Solo en margen aislado —en cruzado la
+  liquidación real queda más lejos y la validación solo avisa—, y solo en ese caso: un stop que dejaste
+  en la zona del aviso, por delante de la liquidación, no se toca.
 - **En el market maker (V1), la distancia mínima permitida baja** hasta la menor de las dos
   distancias: allí no puede quedar por encima. En el **V2 no se toca** (spec 055): si la pusiste por
   encima de las distancias, es tu suelo, y se queda donde lo pusiste.
@@ -353,7 +363,9 @@ donde están (spec 055).
 - el capital, el par, la cuenta y la dirección;
 - el perfil y todo lo que se deriva de él: la acción al alcanzar el límite, el perfil de riesgo, el
   comportamiento, «ajustar distancia automáticamente» y «usar tamaño normal hasta el máximo»;
-- el stop loss, la pérdida diaria máxima y los límites de inventario largo y corto;
+- el stop loss, la pérdida diaria máxima y los límites de inventario largo y corto (desde el spec 080
+  el stop tiene una excepción, la reparación de arriba que lo estrecha si quedaría detrás de la
+  liquidación);
 - la fuente de precio, la condición de activación, la resolución de las velas, los lados que opera
   una tendencia y los demás campos que exigen crear otro bot;
 - en el market maker V2, la estimación de comisión, el buffer de seguridad, el margen mínimo de

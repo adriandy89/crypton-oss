@@ -1,13 +1,9 @@
-import {
-  D,
-  estimateLiquidationPrice,
-  liquidationDistancePct,
-  normalizeOrder,
-} from '@crypton/shared';
+import { D, normalizeOrder } from '@crypton/shared';
 import {
   arithmeticPrices,
   geometricPrices,
   geometricWeights,
+  recorridoPeorCaso,
   scaledLadder,
   stopLossPrice,
   takeProfitPrice,
@@ -128,35 +124,128 @@ describe('weightedAverage', () => {
   });
 });
 
-describe('takeProfitPrice / stopLossPrice', () => {
-  it('LONG sale por encima y para pérdidas por debajo', () => {
-    expect(takeProfitPrice(100, 2, 'LONG').toNumber()).toBe(102);
-    expect(stopLossPrice(100, 5, 'LONG').toNumber()).toBe(95);
+describe('takeProfitPrice / stopLossPrice (% del margen, spec 080)', () => {
+  it('a 1× el % del margen es el % del precio', () => {
+    expect(takeProfitPrice(100, 2, 1, 'LONG').toNumber()).toBe(102);
+    expect(stopLossPrice(100, 5, 1, 'LONG').toNumber()).toBe(95);
+  });
+
+  it('a 5× un 10 % del margen es un 2 % del precio', () => {
+    expect(takeProfitPrice(100, 10, 5, 'LONG').toNumber()).toBe(102);
+    expect(stopLossPrice(100, 10, 5, 'LONG').toNumber()).toBe(98);
   });
 
   it('SHORT es el espejo exacto', () => {
-    expect(takeProfitPrice(100, 2, 'SHORT').toNumber()).toBe(98);
-    expect(stopLossPrice(100, 5, 'SHORT').toNumber()).toBe(105);
+    expect(takeProfitPrice(100, 10, 5, 'SHORT').toNumber()).toBe(98);
+    expect(stopLossPrice(100, 10, 5, 'SHORT').toNumber()).toBe(102);
+  });
+
+  it('el caso del spec 079: corto a 15× desde 84601, con los valores de fábrica nuevos', () => {
+    // Objetivo 30 % del margen = 2 % del precio; stop 10 % = 0,667 %.
+    expect(takeProfitPrice('84601', 30, 15, 'SHORT').toFixed(2)).toBe('82908.98');
+    expect(stopLossPrice('84601', 10, 15, 'SHORT').toFixed(2)).toBe('85165.01');
   });
 });
 
-describe('estimateLiquidationPrice', () => {
-  it('a 2x un LONG liquida cerca del 50 % de caída', () => {
-    expect(estimateLiquidationPrice(100, 2, 'LONG', 0.005)!.toNumber()).toBeCloseTo(50.5, 9);
+describe('recorridoPeorCaso', () => {
+  // Largo desde 100 con cuatro niveles iguales cada 10 %.
+  const niveles = [100, 90, 80, 70].map((p) => ({ price: p, qty: 1 }));
+
+  it('a 1× sin stop se llena entera', () => {
+    const r = recorridoPeorCaso(niveles, 'LONG', 1, 0.01);
+    expect(r.llenos).toBe(4);
+    expect(r.corte).toBeNull();
+    expect(r.media?.toNumber()).toBe(85);
   });
 
-  it('a 5x un SHORT liquida cerca del 20 % de subida', () => {
-    expect(estimateLiquidationPrice(100, 5, 'SHORT', 0.005)!.toNumber()).toBeCloseTo(119.5, 9);
+  it('la liquidación de la media corta la escalera antes de un nivel', () => {
+    // A 10× con mantenimiento del 1 %: tras llenar 100, 95 y 90 la media es 95
+    // y liquida en 95·0,9/0,99 = 86,36, por encima del nivel de 85. Con la media
+    // de antes (97,5) aún pasaba por 90: la liquidación se mueve con la media.
+    const escalonada = [100, 95, 90, 85].map((p) => ({ price: p, qty: 1 }));
+    const r = recorridoPeorCaso(escalonada, 'LONG', 10, 0.01);
+    expect(r.llenos).toBe(3);
+    expect(r.corte).toEqual({ nivel: 3, por: 'LIQUIDACION' });
   });
 
-  it('sin apalancamiento válido no inventa un número', () => {
-    expect(estimateLiquidationPrice(100, 0, 'LONG')).toBeNull();
-    expect(estimateLiquidationPrice(0, 2, 'LONG')).toBeNull();
+  it('un stop que salta antes que el siguiente nivel también la corta', () => {
+    // A 2× un stop del 10 % del margen es un 5 % del precio: desde 100 salta en
+    // 95, antes del nivel de 90.
+    const r = recorridoPeorCaso(niveles, 'LONG', 2, 0.01, '10');
+    expect(r.llenos).toBe(1);
+    expect(r.corte).toEqual({ nivel: 1, por: 'STOP' });
   });
 
-  it('la distancia a liquidación es siempre positiva', () => {
-    expect(liquidationDistancePct(100, 50.5).toNumber()).toBeCloseTo(49.5, 9);
-    expect(liquidationDistancePct(100, 119.5).toNumber()).toBeCloseTo(19.5, 9);
+  it('entre stop y liquidación manda el que el precio toca primero', () => {
+    // A 10× desde 100 la liquidación queda en 90,91 (un 9,09 %). Un stop del
+    // 90 % del margen (9 % del precio, en 91) salta antes que ella; uno del
+    // 95 % (9,5 %, en 90,5) queda detrás, y quien corta es la liquidación.
+    expect(recorridoPeorCaso(niveles, 'LONG', 10, 0.01, '90').corte?.por).toBe('STOP');
+    expect(recorridoPeorCaso(niveles, 'LONG', 10, 0.01, '95').corte?.por).toBe('LIQUIDACION');
+  });
+
+  it('en corto recorre hacia arriba', () => {
+    // Tras 100, 105 y 110 la media es 105 y liquida en 105·1,1/1,01 = 114,36,
+    // antes del nivel de 115.
+    const cortos = [100, 105, 110, 115].map((p) => ({ price: p, qty: 1 }));
+    const r = recorridoPeorCaso(cortos, 'SHORT', 10, 0.01);
+    expect(r.llenos).toBe(3);
+    expect(r.corte).toEqual({ nivel: 3, por: 'LIQUIDACION' });
+  });
+
+  describe('el tope de exposición, como lo aplica el plan', () => {
+    // El plan tiende un nivel si lo abierto, valorado al precio de AHORA, más
+    // el nocional del nivel caben en el tope. Cuanto más cae el precio, menos
+    // vale lo abierto: lo más tarde que puede tenderse el nivel k es justo
+    // encima de su precio, y entonces la condición es que la posición que deja,
+    // valorada a ese precio, quepa. Es la cota del peor caso.
+    it('un nivel entra si la posición que deja, a su precio, cabe en el tope', () => {
+      // 1×100 = 100; 2×90 = 180; 3×80 = 240; 4×70 = 280. Con un tope de 250
+      // entran tres, aunque sus nocionales sumen 270: al llegar a 80, lo
+      // comprado a 100 y a 90 ya solo vale 160.
+      const r = recorridoPeorCaso(niveles, 'LONG', 1, 0.01, null, { nocional: '250' });
+      expect(r.llenos).toBe(3);
+      expect(r.corte).toEqual({ nivel: 3, por: 'TOPE' });
+      expect(r.qty.toNumber()).toBe(3);
+    });
+
+    it('desde qué nivel manda: la base de una escalera entra sin mirarlo', () => {
+      const conBase = recorridoPeorCaso(niveles, 'LONG', 1, 0.01, null, {
+        nocional: '50',
+        desde: 1,
+      });
+      expect(conBase.llenos).toBe(1);
+      expect(conBase.corte).toEqual({ nivel: 1, por: 'TOPE' });
+      const sinBase = recorridoPeorCaso(niveles, 'LONG', 1, 0.01, null, { nocional: '50' });
+      expect(sinBase.llenos).toBe(0);
+      expect(sinBase.media).toBeNull();
+    });
+
+    it('un nivel que el tope no deja tender no existe: la liquidación no lo corta', () => {
+      // A 10× la liquidación llega antes que el nivel 3 (85). Con un tope de
+      // 300, ese nivel no se tiende (4×85 = 340): el corte es del tope, y la
+      // validación no rechaza una escalera que el tope ya acorta.
+      const escalonada = [100, 95, 90, 85].map((p) => ({ price: p, qty: 1 }));
+      expect(
+        recorridoPeorCaso(escalonada, 'LONG', 10, 0.01, null, { nocional: '300' }).corte,
+      ).toEqual({ nivel: 3, por: 'TOPE' });
+      // Si el tope lo deja, manda la liquidación.
+      expect(
+        recorridoPeorCaso(escalonada, 'LONG', 10, 0.01, null, { nocional: '1000' }).corte,
+      ).toEqual({ nivel: 3, por: 'LIQUIDACION' });
+    });
+
+    it('en corto, con la posición valorada al precio de cada nivel hacia arriba', () => {
+      // 100, 2×105 = 210, 3×110 = 330: con un tope de 300 se queda en dos.
+      const cortos = [100, 105, 110, 115].map((p) => ({ price: p, qty: 1 }));
+      const r = recorridoPeorCaso(cortos, 'SHORT', 1, 0.01, null, { nocional: '300' });
+      expect(r.corte).toEqual({ nivel: 2, por: 'TOPE' });
+    });
+
+    it('sin tope o con tope cero, nada cambia', () => {
+      expect(recorridoPeorCaso(niveles, 'LONG', 1, 0.01, null, null).llenos).toBe(4);
+      expect(recorridoPeorCaso(niveles, 'LONG', 1, 0.01, null, { nocional: '0' }).llenos).toBe(4);
+    });
   });
 });
 

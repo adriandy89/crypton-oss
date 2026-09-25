@@ -740,7 +740,12 @@
         <h3 class="section"><ui-mutability-badge level="HOT" /> Se aplica en el próximo ciclo</h3>
         <ui-card flush class="fields">
           @for (f of hotBasic(); track f.key) {
-            <ui-field [field]="f" [value]="value(f.key)" (valueChange)="setValue(f.key, $event)" />
+            <ui-field
+              [field]="f"
+              [value]="value(f.key)"
+              [hint]="hintFor(f.key)"
+              (valueChange)="setValue(f.key, $event)"
+            />
           }
           @if (hotAdvanced().length) {
             <ui-collapsible title="Más parámetros" [count]="hotAdvanced().length">
@@ -748,6 +753,7 @@
                 <ui-field
                   [field]="f"
                   [value]="value(f.key)"
+                  [hint]="hintFor(f.key)"
                   (valueChange)="setValue(f.key, $event)"
                 />
               }
@@ -762,7 +768,12 @@
         </p>
         <ui-card flush class="fields">
           @for (f of warmBasic(); track f.key) {
-            <ui-field [field]="f" [value]="value(f.key)" (valueChange)="setValue(f.key, $event)" />
+            <ui-field
+              [field]="f"
+              [value]="value(f.key)"
+              [hint]="hintFor(f.key)"
+              (valueChange)="setValue(f.key, $event)"
+            />
           }
           @if (warmAdvanced().length) {
             <ui-collapsible title="Más parámetros" [count]="warmAdvanced().length">
@@ -770,6 +781,7 @@
                 <ui-field
                   [field]="f"
                   [value]="value(f.key)"
+                  [hint]="hintFor(f.key)"
                   (valueChange)="setValue(f.key, $event)"
                 />
               }

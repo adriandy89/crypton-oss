@@ -24,6 +24,7 @@ import {
   aplicarDesplazamientos,
   BLOQUEADOS_CON_POSICION,
   CAMPOS_DE_RIESGO,
+  conStopDelanteDeLaLiquidacion,
   conStopQueSoloSeEstrecha,
   conTopeDeApalancamiento,
   decidirCambio,
@@ -1045,13 +1046,16 @@ describe('apply — guardaDePosicion, probada directamente', () => {
     ).toBeNull();
   });
 
-  it('subir el apalancamiento es RIESGO; bajarlo, no', () => {
+  it('con la posición abierta el apalancamiento no se mueve, ni para arriba ni para abajo', () => {
+    // Spec 080, P-3: el stop es un % del margen y se desplazaría con él, igual
+    // que la liquidación de lo ya abierto. Antes subirlo era RIESGO y bajarlo
+    // pasaba.
     expect(guardaDePosicion('MARKET_MAKER', cfg(mmBase), { ...mmBase, leverage: 4 }, abierta)).toBe(
-      'RIESGO',
+      'CIERRE',
     );
-    expect(
-      guardaDePosicion('MARKET_MAKER', cfg(mmBase), { ...mmBase, leverage: 2 }, abierta),
-    ).toBeNull();
+    expect(guardaDePosicion('MARKET_MAKER', cfg(mmBase), { ...mmBase, leverage: 2 }, abierta)).toBe(
+      'CIERRE',
+    );
   });
 
   it('bajar el sesgo de inventario es RIESGO: descarga mas tarde', () => {
@@ -1478,7 +1482,7 @@ describe('apply — los topes que la matriz no ejercita', () => {
     // El tope del usuario manda sobre el salto.
     expect(conTopeDeApalancamiento({ leverage: 9 }, vigente, market, 2)['leverage']).toBe(2);
     // Lo que esta funcion promete es acotar el SALTO, no el valor absoluto: de
-    // eso ya se ocupa `enforceCouplings` antes, con el menor de MAX_SAFE_LEVERAGE,
+    // eso ya se ocupa `enforceCouplings` antes, con el menor de `maxApalancamientoSeguro`,
     // el del venue y el del usuario. Por eso un valor que no sube no se toca, y
     // por eso el orden de la cadena importa.
     const quieto = { leverage: 999 } as unknown as BotConfig;
@@ -2168,5 +2172,38 @@ describe('apply — el diferencial va en el sentido pedido (spec 055, 054/H-02)'
     }
     expect(total).toBeGreaterThan(10);
     expect(ensancha).toBeGreaterThan(total / 2);
+  });
+});
+
+describe('conStopDelanteDeLaLiquidacion (spec 080, 079/F-01)', () => {
+  // BTC a 40× de máximo: mantenimiento 1,25 %. A 15× en corto la liquidación
+  // queda a un 5,35 % (un 80,2 % del margen) y el stop más ancho con medio stop
+  // de holgura es un 53,4 % del margen.
+  const btc = { maxLeverage: 40 } as MarketSpec;
+  const corto = { leverage: 15, direction: 'SHORT', marginMode: 'ISOLATED' };
+
+  it('en aislado, un stop detrás de la liquidación se estrecha al más ancho válido', () => {
+    const r = conStopDelanteDeLaLiquidacion({ ...corto, stopLossPct: '90' }, btc);
+    expect(r['stopLossPct']).toBe('53.4');
+  });
+
+  it('conserva el tipo: un número sigue siendo un número', () => {
+    const r = conStopDelanteDeLaLiquidacion({ ...corto, stopLossPct: 90 }, btc);
+    expect(r['stopLossPct']).toBe(53.4);
+  });
+
+  it('un stop en la zona del aviso, por delante de la liquidación, no se toca', () => {
+    const config = { ...corto, stopLossPct: '75' };
+    expect(conStopDelanteDeLaLiquidacion(config, btc)).toBe(config);
+  });
+
+  it('en cruzado no se toca: la liquidación real queda más lejos', () => {
+    const config = { ...corto, marginMode: 'CROSS', stopLossPct: '90' };
+    expect(conStopDelanteDeLaLiquidacion(config, btc)).toBe(config);
+  });
+
+  it('sin stop no hace nada', () => {
+    const config = { ...corto, stopLossPct: null };
+    expect(conStopDelanteDeLaLiquidacion(config, btc)).toBe(config);
   });
 });

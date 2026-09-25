@@ -74,21 +74,28 @@ describe('mensajes — cada linea', () => {
   });
 
   it('la unidad que el nombre lleva entre parentesis no se repite', () => {
-    expect(linea(TRAILING, 'takeProfitPct', '4.8', '6')).toBe(
-      '• Beneficio al que empieza a seguir: 4.8 → 6 %',
-    );
-    expect(linea(TRAILING, 'trailingCallbackPct', '1.2', '1')).toBe(
-      '• Retroceso para salir: 1.2 → 1 %',
-    );
     expect(linea(TRAILING, 'trailingRepriceBps', 20, 25)).toBe(
       '• Umbral para mover el disparador: 20 → 25 bps',
     );
   });
 
-  it('un porcentaje sin unidad declarada lleva «%»', () => {
-    // `riskPerTradePct` es `percent` y ni su descriptor ni su nombre dicen la
-    // unidad: «Riesgo por operación: 1 → 1.2» se leeria como un importe.
-    expect(linea(TREND, 'riskPerTradePct', '1', '1.2')).toBe('• Riesgo por operación: 1 → 1.2 %');
+  it('la base del porcentaje se dice, y un porcentaje sin unidad declarada lleva «%» (spec 080)', () => {
+    // Los % de resultado son sobre el margen y las distancias, sobre el precio:
+    // el nombre lo dice. Ni el descriptor ni el nombre llevan la unidad, y
+    // «4.8 → 6» se leeria como un importe: el «%» sale del tipo del campo.
+    expect(linea(TRAILING, 'takeProfitPct', '4.8', '6')).toBe(
+      '• Beneficio al que empieza a seguir (sobre el margen): 4.8 → 6 %',
+    );
+    expect(linea(TRAILING, 'trailingCallbackPct', '1.2', '1')).toBe(
+      '• Retroceso para salir (del precio): 1.2 → 1 %',
+    );
+  });
+
+  it('un porcentaje con la unidad declarada la lleva una sola vez', () => {
+    // `riskPerTradePct` la declara desde el spec 080 (079/F-22).
+    expect(linea(TREND, 'riskPerTradePct', '1', '1.2')).toBe(
+      '• Riesgo por operación (sobre el capital): 1 → 1.2 %',
+    );
   });
 
   it('un campo sin unidad sale sin ella', () => {

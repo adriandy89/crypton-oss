@@ -4,3 +4,4 @@ export * from './labels';
 export * from './field-labels';
 export * from './market-spec';
 export * from './config-text';
+export * from './pista-roi';

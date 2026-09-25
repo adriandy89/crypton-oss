@@ -148,12 +148,30 @@ import { UiMutabilityBadgeComponent } from './ui-mutability-badge.component';
         </div>
       }
 
+      <!-- La equivalencia en vivo va aparte de la ayuda y del error: dice lo
+           que vale ESTE numero, y con el error delante es justo lo que hace
+           falta para entenderlo (spec 080). -->
+      @if (hint()) {
+        <p class="pista num">{{ hint() }}</p>
+      }
+
       <!-- El error SUSTITUYE a la ayuda: apilar los dos deja al usuario
            leyendo una explicacion generica encima del motivo concreto. -->
       @if (error()) {
         <p class="err">{{ error() }}</p>
       } @else if (help()) {
         <p class="help">{{ help() }}</p>
+      }
+
+      @if (suggestion(); as s) {
+        <button
+          type="button"
+          class="sug"
+          [disabled]="disabled()"
+          (click)="valueChange.emit(s.value)"
+        >
+          {{ s.label }}
+        </button>
       }
     }
   `,
@@ -321,6 +339,27 @@ import { UiMutabilityBadgeComponent } from './ui-mutability-badge.component';
         color: var(--pnl-down);
       }
 
+      .pista {
+        margin: 6px 0 0;
+        font-size: 11.5px;
+        line-height: 1.45;
+        color: var(--brand-2);
+      }
+
+      .sug {
+        margin-top: 8px;
+        padding: 6px 10px;
+        border: 1px solid rgba(var(--brand-rgb), 0.45);
+        border-radius: var(--radius-sm);
+        background: rgba(var(--brand-rgb), 0.1);
+        color: var(--brand-2);
+        font: inherit;
+        font-size: 12px;
+        font-weight: 600;
+        text-align: left;
+        cursor: pointer;
+      }
+
       :host([data-disabled='true']) {
         opacity: 0.55;
       }
@@ -341,6 +380,17 @@ export class UiFieldComponent {
    * igual que antes.
    */
   readonly error = input<string>('');
+  /**
+   * Lo que vale el número en otra unidad, en vivo: en un % sobre el margen, su
+   * equivalente en precio y en dinero (spec 080, D-4). Opcional, como `error`.
+   */
+  readonly hint = input<string>('');
+  /**
+   * Un valor que la validación propone, con el texto del botón que lo aplica:
+   * el stop más ancho que deja la liquidación detrás (spec 080, D-4). Emite el
+   * valor por `valueChange`, igual que teclearlo.
+   */
+  readonly suggestion = input<{ value: string; label: string } | null>(null);
   readonly valueChange = output<unknown>();
 
   readonly label = computed(() => fieldLabel(this.field()));

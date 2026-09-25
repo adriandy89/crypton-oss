@@ -129,13 +129,22 @@ export const TRAILING_DEFAULTS = {
   ...TRAILING_KNOBS_DEFAULTS,
 } as const;
 
+/** El objetivo que activa el seguimiento, para medir el suelo de lo que cobra. */
+export interface ObjetivoDelSeguimiento {
+  /** % del MARGEN desde la entrada (spec 080). */
+  takeProfitPct?: Numeric | null;
+  leverage?: Numeric | null;
+  direction?: Direction;
+}
+
 /**
  * Lo que hay que decirle al usuario antes de dejarle encenderlo.
  *
  * Compartida por las estrategias que lo ofrecen: dos copias de la misma regla
- * acaban avisando de cosas distintas para el mismo número.
+ * acaban avisando de cosas distintas para el mismo número. Con el objetivo, mide
+ * además el suelo de lo que cobra.
  */
-export function validarTrailing(cfg: TrailingConfig): ValidationIssue[] {
+export function validarTrailing(cfg: TrailingConfig & ObjetivoDelSeguimiento): ValidationIssue[] {
   if (!cfg.trailingTakeProfit) return [];
 
   const cb = D(cfg.trailingCallbackPct ?? 0);
@@ -146,19 +155,55 @@ export function validarTrailing(cfg: TrailingConfig): ValidationIssue[] {
     return [err('trailingCallbackPct', 'El retroceso no puede pasar del 10 %.')];
   }
 
+  const issues: ValidationIssue[] = [];
   // Un trailing NO es una mejora gratis: en marcos cortos baja la tasa de
   // acierto, porque los retrocesos normales del 1-3 % de una cripto lo disparan
   // antes de tiempo. Medio punto es ya el primer respiro del par.
   if (cb.lt('0.5')) {
-    return [
+    issues.push(
       warn(
         'trailingCallbackPct',
         'Un retroceso por debajo del 0,5 % te saca en el primer respiro del par: ' +
           'muchas criptos se mueven un 1-3 % al día sin cambiar de tendencia.',
       ),
-    ];
+    );
   }
-  return [];
+  issues.push(...sueloEnPerdida(cfg, cb.div(100)));
+  return issues;
+}
+
+/**
+ * El suelo de lo que se cobra, en el propio formulario: es el número que más
+ * gente se lleva de sorpresa.
+ *
+ * La activación queda a `t = objetivo/L` del precio y el retroceso `c` se mide
+ * desde el extremo. En largo el suelo es `(1 + t)(1 − c)` y cae en pérdida con
+ * `c ≥ t/(1 + t)`; en corto, `(1 − t)(1 + c)`, con `c ≥ t/(1 − t)`. Se
+ * comparaba `c ≥ objetivo` a secas, y solo en el seguimiento de beneficio: callaba
+ * casos en largo, avisaba de más en corto, en corto decía «por debajo» (079/F-16),
+ * y la martingala y el DCA con el seguimiento encendido no avisaban nunca. Con
+ * los valores de fábrica de la martingala —2 % del margen a 2×, un 1 % del
+ * precio, y un 1 % de retroceso— el suelo cae en pérdida.
+ */
+function sueloEnPerdida(cfg: ObjetivoDelSeguimiento, cb: Decimal): ValidationIssue[] {
+  if (cfg.takeProfitPct == null || cfg.takeProfitPct === '') return [];
+  const objetivo = D(cfg.takeProfitPct);
+  const lev = D(cfg.leverage ?? 1);
+  if (!objetivo.isFinite() || !lev.isFinite() || !lev.gt(0)) return [];
+  const t = objetivo.div(lev).div(100);
+  const corto = cfg.direction === 'SHORT';
+  if (!t.gt(0) || (corto && t.gte(1))) return [];
+  const umbral = corto ? t.div(D(1).minus(t)) : t.div(D(1).plus(t));
+  if (cb.lt(umbral)) return [];
+  return [
+    warn(
+      'trailingCallbackPct',
+      `Con un retroceso del ${cb.mul(100).toFixed()} % y la activación a un ` +
+        `${t.mul(100).toFixed(2)} % del precio, lo mínimo que cobra queda ` +
+        `${corto ? 'por encima' : 'por debajo'} del precio de entrada: la operación puede ` +
+        'cerrarse en pérdida nada más activarse.',
+    ),
+  ];
 }
 
 /**

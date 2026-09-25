@@ -132,7 +132,7 @@ El **perfil de riesgo** multiplica distancia y tamaño a la vez:
 | Equilibrado | × 1 (tus números tal cual) | × 1                 |
 | Agresivo    | × 0,7 (más cerca)          | × 1,3 (más grande)  |
 
-Antes de colocar cada capa comprueba que **cabe** dentro del tope. En la V1 es **todo o nada**: si la capa no cabe entera, no se coloca. (La V2 sí puede recortarla.)
+Antes de colocar cada capa comprueba que **cabe** dentro del tope de su lado: el **Límite de inventario largo/corto** si lo has puesto y, si no, el **Valor máximo de la posición**. En la V1 es **todo o nada**: si la capa no cabe entera, no se coloca. (La V2 sí puede recortarla.) La vista previa aplica lo mismo con el inventario a cero (§3).
 
 ### Paso 7 — Guardas finales
 
@@ -185,13 +185,13 @@ Para entender qué hace el bot arriesgando lo mínimo: distancias amplias, poco 
 | Diferencial dinámico            | Sí                                   |
 | Ajuste de precio por inventario | Sí                                   |
 
-**Qué hace esto con BTC a 100.000 USDC.** El perfil Conservador multiplica la distancia por 1,5 y el tamaño por 0,7:
+**Qué hace esto con BTC a 100.000 USDC** (ficha de BTC en Lighter). El perfil Conservador multiplica la distancia por 1,5 y el tamaño por 0,7:
 
 - Capa 1: 30 × 1,5 = **45 bps** → compra en **99.550**, venta en **100.450**
 - Capa 2: 30 × 1,5 × 1,5 = **67,5 bps** → compra en **99.325**, venta en **100.675**
-- Cada capa mueve 25 × 0,7 = **17,5 USDC**. Total comprometido: **35 USDC por lado**.
+- Cada capa mueve 25 × 0,7 = **17,5 USDC**. Total comprometido: **35 USDC por lado**. La Revisión enseña algo menos, **33,81 USDC** de margen en el largo: lo que retienen de verdad las dos compras a 1x, con la cantidad ya redondeada al paso del par.
 
-Una vuelta completa en la capa 1 deja **90 bps brutos (0,9 %)** sobre 17,5 USDC ≈ **0,16 USDC**, menos comisiones. Es poco, y es intencionado: aquí el objetivo es ver el bot funcionar, no ganar.
+Una vuelta completa en la capa 1 son **90 bps (0,9 %)**. La cantidad se redondea hacia abajo al paso del par, así que cada orden lleva 0,00017 BTC: comprar a 99.550 y vender a 100.450 deja 900 × 0,00017 ≈ **0,15 USDC** brutos, menos comisiones. Es poco, y es intencionado: aquí el objetivo es ver el bot funcionar, no ganar.
 
 Los frenos entran pronto: a **75 USDC** de exposición (50 % de 150) pasa a defensivo; a **112,5 USDC** deja de añadir del todo.
 
@@ -215,7 +215,7 @@ Cuando ya entiendes el comportamiento y quieres que el bot trabaje de verdad.
 | Modo defensivo / alto riesgo | 70 % / 90 %                        |
 | Acción al alcanzar el límite | Pausar entradas                    |
 
-**Con ETH a 3.000 USDC:**
+**Con ETH a 3.000 USDC** (ficha de ETH en Lighter):
 
 - Capas a 20, 30 y 45 bps → compras en **2.994**, **2.991** y **2.986,50**; ventas en **3.006**, **3.009** y **3.013,50**.
 - 3 × 50 = **150 USDC comprometidos por lado**, cómodos frente al tope de 500.
@@ -225,13 +225,34 @@ Cuando ya entiendes el comportamiento y quieres que el bot trabaje de verdad.
 
 Igual que la B, más límites de precio para que el bot no acumule fuera de donde tu tesis tiene sentido:
 
-| Campo añadido           | Valor de ejemplo (ETH a 3.000) |
-| ----------------------- | ------------------------------ |
-| No operar por debajo de | **2.600**                      |
-| No operar por encima de | **3.400**                      |
-| Stop loss (%)           | **8 %**                        |
+| Campo añadido               | Valor de ejemplo (ETH a 3.000)           |
+| --------------------------- | ---------------------------------------- |
+| No abrir cortos por debajo de | **2.600**                              |
+| No abrir largos por encima de | **3.400**                              |
+| Stop loss (sobre el margen) | **16 %** (a 2x, un 8 % del precio)       |
 
 Por debajo de 2.600 el bot **deja de vender en corto** pero mantiene sus compras; por encima de 3.400 deja de comprar pero mantiene sus ventas. Nunca se corta el lado que te saca de la posición.
+
+El stop se mide sobre el margen y desde el precio medio de **cada lado**: con las tres capas llenas, la Revisión lo pone en **2.751,26** para el largo y en **3.250,25** para el corto, un 8 % de precio y unos 12 USDC de pérdida en cada lado (−16 % de su margen: 74,91 en el largo y 74,79 en el corto). Hasta el spec 080 este campo era un % del precio: el «8 %» de antes es este 16 % a 2x.
+
+### Qué enseña la vista previa
+
+La vista previa (el paso **Revisión** al crear el bot) pinta las cotizaciones que el bot pondría con el inventario a cero, calculadas con el mismo código que el motor. Desde el spec 080 aplica las tres reglas que `plan()` aplicaba y ella se saltaba:
+
+- **El suelo de la Distancia mínima permitida.** Con el perfil Agresivo, 10 bps × 0,7 son 7, pero con un suelo de 8 el bot cotiza a 8, y eso es lo que sale: con BTC a 100.000, compra en 99.920 y venta en 100.080. Antes enseñaba 7.
+- **Los topes.** Una capa que no cabe entera en el tope de su lado —el **Límite de inventario largo/corto**, o el **Valor máximo de la posición** si no hay límite propio— no sale. Con 3 capas de 50 USDC y un límite largo de 100, salen dos compras y tres ventas.
+- **Los precios repetidos.** Dos capas que la retícula del par redondea al mismo precio salen una sola vez, como en el libro.
+
+Debajo, en **«Si se llenan todas las capas de un lado»**, describe cada lado por separado: las compras son un **largo** y las ventas un **corto**. Un largo y un corto no conviven, así que no se suman ni se mezcla su precio medio, que es lo que hacía la vista previa hasta el spec 080. De cada lado enseña la entrada media, el tamaño (cantidad y nocional) y el margen, y sus salidas: el **stop**, si lo has puesto, y la **liquidación exacta** de esa media, cada una con su precio, el movimiento desde la entrada, la distancia desde el último precio, el resultado en USDC sin comisiones y el % sobre el margen. No hay objetivo: la salida de un market maker son las cotizaciones del otro lado.
+
+Con la Configuración B (ETH a 3.000 en Lighter, mantenimiento del 2,5 %, a 2x y en cruzado, el modo de fábrica):
+
+| Lado                 | Entrada media | Tamaño                   | Margen  | Liquidación («cota», por ser cruzado)                            |
+| -------------------- | ------------- | ------------------------ | ------- | ---------------------------------------------------------------- |
+| Largo: las 3 compras | 2.990,50      | 0,0501 ETH · 149,82 USDC | 75 USDC | 1.533,59: −48,72 % de precio, −72,99 USDC, −97,44 % del margen   |
+| Corto: las 3 ventas  | 3.009,49      | 0,0497 ETH · 149,57 USDC | 75 USDC | 4.404,13: +46,34 % de precio, −69,31 USDC, −92,68 % del margen   |
+
+Aparte sale el nocional de todas las órdenes (299,40 USDC): lo que tienes colgado en el libro, no una posición. Y a 1x (Configuración A) el largo no tiene liquidación —el precio tendría que llegar a cero— y el corto sí: con sus dos ventas llenas, en 196.219,5, un 95,12 % por encima de su media.
 
 ### Checklist antes de arrancar
 
@@ -243,7 +264,7 @@ Por debajo de 2.600 el bot **deja de vender en corto** pero mantiene sus compras
 - [ ] ¿La distancia que cotizo cubre la comisión de ida y vuelta? _(Si no sabes calcularlo, usa la [V2](./market-maker-v2.md): lo calcula ella.)_
 - [ ] ¿**Solo post-only** activado?
 - [ ] ¿Umbral defensivo **menor** que el de alto riesgo?
-- [ ] ¿He mirado la vista previa antes de crear el bot?
+- [ ] ¿He mirado la vista previa antes de crear el bot? _(cada lado con su liquidación y, si llevo stop, el stop por delante)_
 
 ### Señales de alarma cuando ya está funcionando
 
@@ -264,15 +285,16 @@ El bot escribe una nota en cada revisión, del estilo:
 
 ## 4. Lo que este bot NO mira (importante)
 
-Tres campos comunes que salen en el formulario y **no hacen lo que esperarías** en esta estrategia:
+Dos campos comunes que salen en el formulario y **no hacen lo que esperarías** en esta estrategia:
 
-| Campo                                       | Realidad                                                                                                                                                                                                 |
-| ------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| **Tope de exposición** (`maxNotionalCap`)   | ⚠️ **Esta estrategia lo ignora.** Solo lo respetan Rejilla clásica, GridMart y Martingala. Aquí el tope real y único es **Valor máximo de la posición**.                                                 |
-| **Capital asignado** (`totalInvestment`)    | No dimensiona órdenes. Aquí el tamaño lo mandan **Tamaño por compra/venta** y **Capas**. Sí se usa como denominador de la **Pérdida diaria máxima**.                                                     |
-| **Espera entre ciclos** (`cooldownMinutes`) | Pensado para estrategias con ciclos que abren y cierran. Un market maker cotiza de forma continua y **no cierra ciclo al quedar plano** (el ciclo dura lo que dura el bot): usa **Espera tras un fill**. |
+| Campo                                       | Realidad                                                                                                                                                                                                                  |
+| ------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **Capital asignado** (`totalInvestment`)    | No dimensiona órdenes: el tamaño lo mandan **Tamaño por compra/venta** y **Capas**. Es la base del resultado del bot y de la **Pérdida diaria máxima**. Para tus límites de nocional cuenta el **Valor máximo de la posición**. |
+| **Espera entre ciclos** (`cooldownMinutes`) | Pensado para estrategias con ciclos que abren y cierran. Un market maker cotiza de forma continua y **no cierra ciclo al quedar plano** (el ciclo dura lo que dura el bot): usa **Espera tras un fill**.                  |
 
-Sí funcionan con normalidad, aplicados por el motor: **Stop loss**, **Pérdida diaria máxima** y **Al acercarse la liquidación**. El stop loss se coloca como orden condicional **nativa en el exchange** (sigue vivo aunque la plataforma se caiga) y su dirección se calcula del **signo de la posición real**, no de la dirección declarada — que es lo correcto para un bot que cambia de lado solo.
+El **Tope de exposición** común (`maxNotionalCap`) ya no sale en el formulario (spec 080): esta estrategia no lo leía, y un tope que parece mandar y no manda es peor que ninguno. Su tope es el **Valor máximo de la posición**.
+
+Sí funcionan con normalidad, aplicados por el motor: **Stop loss**, **Pérdida diaria máxima** y **Al acercarse la liquidación**. El stop loss se coloca como orden condicional **nativa en el exchange** (sigue vivo aunque la plataforma se caiga), es un **% del margen** medido desde el precio medio de la posición y su dirección se calcula del **signo de la posición real**, no de la dirección declarada — que es lo correcto para un bot que cambia de lado solo.
 
 ---
 
@@ -311,7 +333,8 @@ Lo que se pone en **cada orden, en cada lado**. Con varias capas es el tamaño d
 
 - De él se calculan **en porcentaje** los umbrales defensivo y de alto riesgo.
 - Al alcanzarlo entra en juego la **Acción al alcanzar el límite**.
-- **Consejo**: aquí manda este campo, **no** el "Tope de exposición" genérico (que se ignora). Sin holgura frente a `capas × tamaño`, el bot vive permanentemente en modo defensivo.
+- Es el **nocional** del bot para tus límites de riesgo, el de cada bot y el total: desde el spec 080 la API lo mide con este campo, que es lo que el bot puede abrir de verdad, y no con capital × apalancamiento.
+- **Consejo**: sin holgura frente a `capas × tamaño`, el bot vive permanentemente en modo defensivo.
 
 #### Perfil de riesgo · `riskProfile` · 🔥 en caliente · por defecto **Equilibrado**
 
@@ -372,7 +395,7 @@ El espejo, **por encima** del centro. Las dos juntas forman el diferencial que c
 
 #### Distancia mínima permitida · `minAllowedDistanceBps` · 🔥 en caliente · 1–500 bps · por defecto **8**
 
-**Suelo duro**: el bot no cotiza nunca más cerca del precio que esto, pase lo que pase con el sesgo, el diferencial dinámico o el ajuste automático.
+**Suelo duro**: ninguna capa cotiza más cerca del centro de la cotización que esto, pase lo que pase con el perfil, el diferencial dinámico, el modo de riesgo o el ajuste automático. La vista previa aplica el mismo suelo (§3). Lo que sí se mueve es el propio centro —sesgo por inventario, funding—, y contra cruzar el libro la red es otra: la orden se pega al toque (§2, paso 7).
 
 > Doble función en la V1: también es el umbral de deriva que dispara una recotización anticipada. Ponerlo muy bajo hace que el bot recotice sin parar.
 
@@ -403,7 +426,7 @@ Ensancha **el lado que añade** a medida que crece el inventario: `× (1 + ocupa
 
 Desplaza el **centro** de la cotización en contra del inventario. Con posición larga baja el centro: la venta queda más cerca y la compra más lejos.
 
-**Consejo**: activado, que es como viene. **No lo apagues.** Ningún market maker lee el precio de entrada de la posición: las dos cotizaciones salen del precio de mercado, así que sin este ajuste la venta se planta por debajo de tu coste medio en cuanto el precio se va. Medido sobre la V2 —que lo trae apagado— con ocho pares y veinte días: el **48 %** de los cierres cae por debajo del coste y cada uno pesa **1,7 veces** lo que pesa uno bueno; encendiéndolo, la pérdida realizada baja un **44 %**.
+**Consejo**: activado, que es como viene. **No lo apagues.** Ningún market maker lee el precio de entrada de la posición: las dos cotizaciones salen del precio de mercado, así que sin este ajuste la venta se planta por debajo de tu coste medio en cuanto el precio se va. Medido sobre la V2 con el ajuste apagado —así venía de fábrica hasta el spec 071— con ocho pares y veinte días: el **48 %** de los cierres cae por debajo del coste y cada uno pesa **1,7 veces** lo que pesa uno bueno; encendiéndolo, la pérdida realizada baja un **44 %**.
 
 #### Sesgo por inventario · `inventorySkewFactor` · 🔥 en caliente · 0–3 · por defecto **1**
 
@@ -484,7 +507,8 @@ Topes **específicos** por lado, en USDC. Permiten ser asimétrico: dejar que el
 
 Si los dejas vacíos (o a 0), ambos lados usan el **Valor máximo de la posición**. Un tope por lado alcanzado
 cuenta como tope: dispara la **Acción al alcanzar el límite** y la nota dice «Tope largo alcanzado» o «Tope
-corto alcanzado». Un tope tan pequeño que no cabe ni una cotización se rechaza al guardar.
+corto alcanzado». Un tope tan pequeño que no cabe ni una cotización se rechaza al guardar. La vista previa
+ya los aplica: una capa que no cabe entera en el límite de su lado no aparece (§3).
 
 ### 5.6 Precio
 
@@ -496,13 +520,17 @@ corto alcanzado». Un tope tan pequeño que no cabe ni una cotización se rechaz
 
 **Consejo**: déjalo vacío salvo que sepas exactamente por qué lo quieres, y revísalo si el precio se mueve.
 
-#### No operar por debajo de · `priceFloor` · 🔥 en caliente · opcional
+#### No abrir cortos por debajo de · `priceFloor` · 🔥 en caliente · opcional
 
-Por debajo de este precio el bot **solo reduce, no abre**: desactiva el lado que abriría posición corta nueva.
+Por debajo de este precio el bot **no abre cortos nuevos**: desactiva las ventas que abrirían o
+agrandarían un corto. Sigue comprando —bajo el suelo el bot aún puede acumular— y sigue vendiendo para
+reducir un largo.
 
-#### No operar por encima de · `priceCeiling` · 🔥 en caliente · opcional
+#### No abrir largos por encima de · `priceCeiling` · 🔥 en caliente · opcional
 
-Por encima de este precio el bot **solo reduce, no abre**: desactiva el lado que abriría posición larga nueva.
+Por encima de este precio el bot **no abre largos nuevos**: desactiva las compras que abrirían o
+agrandarían un largo. Sigue vendiendo y sigue comprando para cerrar un corto. Es el freno para no
+acumular inventario caro en un bot con sesgo largo.
 
 > Las bandas cortan **solo el lado que abre**. El lado que te saca de la posición sigue siempre vivo — cortar los dos te dejaría atrapado con inventario y sin nadie que lo deshaga.
 
@@ -613,16 +641,16 @@ Cómo cuenta el exchange una venta cuando ya tienes un largo abierto.
 
 #### Apalancamiento · `leverage` · 🌤️ en tibio · 1–50x · por defecto **2** · ⚠️ campo de riesgo
 
-Multiplica por igual la ganancia y la pérdida, y acerca el precio de liquidación. A 2x necesitas un movimiento adverso cercano al 50 % para liquidarte; a 10x, cercano al 10 %.
+Multiplica por igual la ganancia y la pérdida, y acerca el precio de liquidación. Con la fórmula exacta y BTC en Hyperliquid (mantenimiento del 1,25 %), a 2x el largo se liquida con un 49,37 % en contra y el corto con un 48,15 %; a 10x, con un 8,86 % y un 8,64 % ([riesgo §2](./riesgo-y-liquidacion.md#2-la-fórmula-de-la-liquidación)). En dirección Neutral el bot puede acabar en cualquiera de los dos lados, así que la regla del 5 % se mide contra el corto, que liquida antes: en ese par, **15x como mucho** ([riesgo §4](./riesgo-y-liquidacion.md#4-el-semáforo-y-la-regla-del-5-)). La API la repite al arrancar, con el mercado de ese día.
 
-Es **en tibio** y no en caliente porque el venue puede rechazar el cambio con posición abierta y, aunque lo acepte, mueve el precio de liquidación.
+Es **en tibio** y no en caliente porque mueve la liquidación y el stop de lo que ya está abierto. Por eso, con la posición abierta, la API no deja cambiarlo (409, `LEVERAGE_WITH_POSITION`): el stop es un % del margen y se movería con él.
 
-**Consejo**: **1x o 2x** en esta estrategia. Por encima de 10x la app te avisa.
+**Consejo**: **1x o 2x** en esta estrategia. Por encima de 10x la app te avisa con la distancia exacta y lo que se habrá perdido del margen al llegar.
 
-#### Modo de margen · `marginMode` · ❄️ en frío
+#### Modo de margen · `marginMode` · ❄️ en frío · por defecto **Cruzado**
 
-- **Aislado**: lo máximo que puedes perder en este bot es el margen que le asignaste; la liquidación llega antes.
-- **Cruzado**: la liquidación está más lejos, pero una posición perdedora puede arrastrar el saldo del resto de bots de esa cuenta.
+- **Aislado**: lo máximo que puedes perder en este bot es el margen que le asignaste; la liquidación llega antes, y la app rechaza un stop que quede en ella o detrás.
+- **Cruzado**: la liquidación está más lejos —la Revisión la rotula como «cota»— y la regla del stop solo avisa, pero una posición perdedora puede arrastrar el saldo del resto de bots de esa cuenta.
 
 **Consejo**: **Aislado** si quieres que el peor caso de este bot no toque a los demás.
 
@@ -647,17 +675,21 @@ Fija tick, paso y mínimo. Con el perfil Conservador el tamaño baja al 70 % y l
 
 #### Capital asignado · `totalInvestment` · 🌤️ en tibio · mínimo 10 · ⚠️ campo de riesgo
 
-**No dimensiona órdenes** (lo hacen Tamaño por compra/venta y Capas). Es el denominador de la Pérdida diaria máxima y del kill-switch por pérdida acumulada, y lo que la API compara con tus límites al crear el bot.
+El capital del bot: contra él se miden su resultado, la **Pérdida diaria máxima** y la pérdida acumulada del kill-switch de tu cuenta. **No dimensiona ninguna orden** (lo hacen Tamaño por compra/venta y Capas), y desde el spec 080 tampoco es lo que cuenta en tus límites de nocional: ahí cuenta el **Valor máximo de la posición**. Antes la API los medía con capital × apalancamiento, un número que este bot no lee.
 
-#### Tope de exposición · `maxNotionalCap` · 🔥 en caliente · opcional
+**Consejo**: lo que estás dispuesto a comprometer. Una referencia natural es el margen del tope lleno, Valor máximo ÷ apalancamiento: 500 ÷ 2 = 250 USDC en la Configuración B.
 
-> ⚠️ **Esta estrategia lo ignora** (§4). El tope real es **Valor máximo de la posición**.
+#### Stop loss (sobre el margen) · `stopLossPct` · 🔥 en caliente · 0,1–90·L · ⚠️ campo de riesgo
 
-#### Stop loss (%) · `stopLossPct` · 🔥 en caliente · 0,1–90 · ⚠️ campo de riesgo
+Un **% del margen** de la posición, medido desde su **precio medio**, como el SL por ROI de un exchange: el disparo va a `media × (1 ∓ stop/(100·L))`, con `L` el apalancamiento. A 2x, el de fábrica, un 10 % del margen es un 5 % del precio: con la media en 100.000, 95.000 en un largo y 105.000 en un corto. El máximo es un 90 % del precio, es decir 90·L sobre el margen: 180 a 2x.
 
-Orden condicional nativa sobre el precio medio, con la dirección del **signo de la posición real** ([riesgo §7](./riesgo-y-liquidacion.md#7-el-stop-loss)). Convive con la **Acción al alcanzar el límite**: el aplanado usa su propio id, así que «Cerrar todo» y «Apagar» salen aunque haya stop.
+Es una orden condicional nativa del exchange, con la dirección del **signo de la posición real** ([riesgo §7](./riesgo-y-liquidacion.md#7-el-stop-loss)). Si la posición del venue lleva más apalancamiento que la configuración, el stop se calcula con el mayor —queda más cerca— y el bot avisa una vez (`LEVERAGE_SKIPPED`). Convive con la **Acción al alcanzar el límite**: el aplanado usa su propio id, así que «Cerrar todo» y «Apagar» salen aunque haya stop.
 
-#### Pérdida diaria máxima (%) · `maxDailyLossPct` · 🔥 en caliente · 0,1–100
+**Frente a la liquidación.** Con dirección Neutral se mide contra el corto, que liquida antes. En aislado es un error que el stop quede en la liquidación o detrás, y un aviso que la deje a menos de medio stop detrás; en cruzado, el modo de fábrica, las dos cosas son aviso. Cada uno de esos mensajes propone el stop más ancho que no avisa: a 2x en BTC de Hyperliquid el corto se liquida con un 48,15 % en contra, y la propuesta es **64,1 %** del margen (un 32 % del precio). Bajo el campo, el formulario enseña su equivalente en precio y, con la vista previa, dónde queda y cuánto pierdes en cada lado; el botón «Usar el stop más ancho válido» aplica la propuesta.
+
+**Consejo**: no viene puesto, y la app avisa al crear el bot sin él. Un stop cierra la posición pero **no para el bot**, que vuelve a cotizar: ponlo holgado, como corte ante un movimiento brusco.
+
+#### Pérdida diaria máxima (sobre el capital) · `maxDailyLossPct` · 🔥 en caliente · 0,1–100
 
 Pérdida realizada hoy por este bot, en % del capital asignado, a partir de la cual se pausa conservando el stop.
 
@@ -691,7 +723,7 @@ Solo avisar / Pausar el bot / Cerrar todo cuando la distancia a la liquidación 
 
 **Elige la V1 si**: quieres control directo y predecible del diferencial, y prefieres menos mandos.
 
-**Elige la V2 si**: quieres que el bot se adapte solo al ritmo del mercado, y sobre todo si te importa **asegurar que cada vuelta completa deja beneficio limpio después de comisiones**.
+**Elige la V2 si**: quieres que el bot se adapte solo al ritmo del mercado, y sobre todo si te importa **asegurar que cada vuelta completa alrededor del mismo precio deja beneficio limpio después de comisiones**.
 
 ---
 

@@ -1,7 +1,9 @@
 import { Component, computed, input } from '@angular/core';
 import { IonIcon } from '@ionic/angular/standalone';
+import { distanciaDesdeHoyALiquidacion } from '@crypton/shared';
 import type { PreviewResult } from '../../core/models';
-import { money, price } from '../../core/utils';
+import { money, pct, price, signed } from '../../core/utils';
+import { LIQ_DANGER_PCT, LIQ_SATURATION_PCT, LIQ_WARN_PCT, liqNum } from '../../core/utils/risk';
 import { UiBadgeComponent } from './ui-badge.component';
 
 /**
@@ -20,11 +22,11 @@ import { UiBadgeComponent } from './ui-badge.component';
  * volumen, y el peor caso es varias veces esa cuenta—, que son justo las dos
  * estrategias marcadas como riesgo alto.
  *
- * La liquidacion va SIEMPRE etiquetada como estimacion, y la insignia vive
- * dentro de este componente en vez de en quien lo usa para que no se pueda
- * olvidar al reutilizarlo: `liquidation.ts` documenta que su tasa de
- * mantenimiento del 0,5 % es OPTIMISTA y exige presentarla asi. Ningun venue
- * expone hoy su tabla real en este repositorio.
+ * La liquidacion es la EXACTA de cada lado, con el mantenimiento del mercado
+ * (spec 080), y aun asi va etiquetada como estimacion: el venue puede aplicar
+ * un tramo de mantenimiento mas alto a una posicion grande, y en cruzado es
+ * solo una cota. Junto a ella, el stop, que antes no se veia: con 15× y el 5 %
+ * de fabrica quedaba a un 0,4 % de la liquidacion (079/F-09).
  */
 @Component({
   selector: 'ui-risk-meter',
@@ -39,7 +41,7 @@ import { UiBadgeComponent } from './ui-badge.component';
     @if (preview(); as p) {
       <div class="grid">
         <div>
-          <span class="k">Exposición total</span>
+          <span class="k">Nocional de las órdenes</span>
           <span class="v num">{{ money(p.worstCaseNotional) }}</span>
         </div>
         <div>
@@ -48,23 +50,33 @@ import { UiBadgeComponent } from './ui-badge.component';
             {{ money(p.worstCaseMargin) }}
           </span>
         </div>
-        <div>
-          <span class="k">Precio medio</span>
-          <span class="v num">{{ price(p.worstCaseAverageEntry, decimals()) }}</span>
-        </div>
-        <div>
-          <span class="k">Liquidación</span>
-          <span class="v num danger">
-            {{ price(p.estimatedLiquidationPrice, decimals()) }}
-          </span>
-        </div>
+        @for (s of p.sides; track s.direction) {
+          <div>
+            <span class="k">Liquidación{{ sufijo(s.direction) }}</span>
+            @if (s.liquidation; as liq) {
+              <span class="v num danger">{{ price(liq.price, decimals()) }}</span>
+              <span class="s num">{{ signed(liq.pnl) }} · {{ pct(liq.roiPct) }} del margen</span>
+            } @else {
+              <span class="v">no se liquida</span>
+            }
+          </div>
+          <div>
+            <span class="k">Stop{{ sufijo(s.direction) }}</span>
+            @if (s.stopLoss; as sl) {
+              <span class="v num">{{ price(sl.price, decimals()) }}</span>
+              <span class="s num">{{ signed(sl.pnl) }} · {{ pct(sl.roiPct) }} del margen</span>
+            } @else {
+              <span class="v">sin stop</span>
+            }
+          </div>
+        }
       </div>
 
       @if (distance() !== null) {
         <div class="bar">
           <div class="line">
-            <span class="k">Aguanta un movimiento adverso de</span>
-            <span class="v num" [class]="tone()">{{ distance()!.toFixed(2) }} %</span>
+            <span class="k">Aguanta en contra desde el último precio</span>
+            <span class="v num" [class]="tone()">{{ pct(distance()) }}</span>
           </div>
           <div class="track">
             <i [class]="tone()" [style.width.%]="fill()"></i>
@@ -78,8 +90,8 @@ import { UiBadgeComponent } from './ui-badge.component';
         <p class="over-note">
           <ion-icon name="warning-outline" />
           <span>
-            La escalera completa pide más margen del que tienes libre: los últimos niveles se
-            quedarían sin colocar.
+            Todas las órdenes juntas piden más margen del que tienes libre: las últimas se quedarían
+            sin colocar.
           </span>
         </p>
       }
@@ -138,6 +150,11 @@ import { UiBadgeComponent } from './ui-badge.component';
         line-height: 1.25;
         color: var(--text-1);
         overflow-wrap: anywhere;
+      }
+
+      .s {
+        font-size: 10.5px;
+        color: var(--text-3);
       }
 
       .v.danger {
@@ -218,18 +235,30 @@ import { UiBadgeComponent } from './ui-badge.component';
 export class UiRiskMeterComponent {
   readonly preview = input<PreviewResult | null>(null);
   readonly decimals = input<number | null>(null);
-  /** Margen libre, para avisar si la escalera entera no cabe. */
+  /** Margen libre, para avisar si todas las órdenes no caben. */
   readonly available = input<string | null>(null);
   /** Por que no hay nada que enseñar todavia. */
   readonly emptyText = input<string>('Rellena los parámetros para ver el riesgo.');
 
   readonly money = money;
+  readonly pct = pct;
   readonly price = price;
+  readonly signed = signed;
 
-  readonly distance = computed(() => {
-    const d = Number(this.preview()?.liquidationDistancePct);
-    return Number.isFinite(d) ? d : null;
-  });
+  /** Con dos lados, cada cifra dice de cuál es. */
+  sufijo(direction: string): string {
+    if ((this.preview()?.sides.length ?? 0) < 2) return '';
+    return direction === 'SHORT' ? ' del corto' : ' del largo';
+  }
+
+  /**
+   * Lo que el precio puede ir en contra desde el último antes de la liquidación
+   * más cercana, con su lado (spec 080). Era un valor absoluto que no decía de
+   * qué lado quedaba la liquidación (079/F-07).
+   */
+  readonly distance = computed(() =>
+    liqNum(distanciaDesdeHoyALiquidacion(this.preview()?.sides ?? [])),
+  );
 
   /**
    * Cuanto se pinta de la barra.
@@ -241,15 +270,15 @@ export class UiRiskMeterComponent {
   readonly fill = computed(() => {
     const d = this.distance();
     if (d === null) return 0;
-    return Math.min(100, Math.max(2, (d / 40) * 100));
+    return Math.min(100, Math.max(2, (d / LIQ_SATURATION_PCT) * 100));
   });
 
-  /** Verde por encima del 25 %, ámbar entre 10 y 25, rojo por debajo de 10. */
+  /** Los umbrales de toda la app (`core/utils/risk.ts`). */
   readonly tone = computed(() => {
     const d = this.distance();
     if (d === null) return 'safe';
-    if (d < 10) return 'danger';
-    if (d < 25) return 'warn';
+    if (d < LIQ_DANGER_PCT) return 'danger';
+    if (d < LIQ_WARN_PCT) return 'warn';
     return 'safe';
   });
 
