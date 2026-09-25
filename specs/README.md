@@ -198,5 +198,5 @@ ante un 429 se paran sin reintentar. A `findings.md` va solo la evidencia resumi
 
 | Nº | Spec | Tipo | Estado | Rama |
 |---|---|---|---|---|
-| oss-001 | [Lo que el `0_init` de esta edicion perdio](oss-001-objetos-perdidos-del-init/spec.md) | correccion | en curso | `spec/oss-001-objetos-perdidos-del-init` |
+| oss-001 | [Lo que el `0_init` de esta edicion perdio](oss-001-objetos-perdidos-del-init/spec.md) | correccion | hecho (los cinco objetos que el esquema no declara, entre ellos el indice unico de un solo bot real por par y conexion, vuelven con una migracion que no toca datos y aborta con su mensaje si alguno los rompe) | `spec/oss-001-objetos-perdidos-del-init` |
 

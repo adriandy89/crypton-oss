@@ -1,6 +1,6 @@
 # oss-001 — Lo que el `0_init` de esta edición perdió
 
-Estado: `en curso` · Tipo: `corrección` · Rama: `spec/oss-001-objetos-perdidos-del-init` · Solo en
+Estado: `hecho` · Tipo: `corrección` · Rama: `spec/oss-001-objetos-perdidos-del-init` · Solo en
 esta edición
 
 ## Objetivo

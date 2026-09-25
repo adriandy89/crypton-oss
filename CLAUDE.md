@@ -97,6 +97,7 @@ En Windows, jest se ejecuta desde Git Bash, no desde PowerShell: allí `2>&1` fa
 - **NUNCA `down -v` sobre `docker/docker-compose.infra.yml`**: borra credenciales e histórico. `pnpm stack:down` es seguro por diseño.
 - **NUNCA `pnpm setup --force`** con datos: cambia la clave maestra y las credenciales guardadas dejan de descifrarse.
 - Prisma 7: `prisma migrate diff --from-schema … --to-schema … --script` genera el SQL de una migración sin tocar la base; `pnpm prisma:deploy` la aplica. `migrate dev` sobre una base con datos puede proponer un reset: no se usa.
+- Lo que el esquema no declara —índices parciales, `CHECK`— vive solo en migraciones escritas a mano, y compararlas con el esquema no lo echa de menos: así perdió `0_init` cinco objetos (spec oss-001), que ahora vigila `apps/api/src/libs/db/objetos-a-mano.spec.ts`. Una migración escrita a mano va **sin `BEGIN`/`COMMIT`**: Prisma ya la ejecuta en una transacción implícita, y los explícitos tapan su mensaje de error con «current transaction is aborted».
 - Lighter tier Standard = **60 peticiones/min por IP**; al pasarse devuelve una página CAPTCHA de AWS WAF durante 60 s. De ahí la cuenta de servicio `LIGHTER_SERVICE_*` y `WORKER_EGRESS_ID`.
 - El SDK de Lighter devuelve los errores como tupla `[…, error]` y NO lanza; `signedWrite` mira la tupla antes de darla por buena.
 - `BUILDER_ADDRESS` solo se adjunta si `builder_approved`; ponerlo «por si acaso» hace que el venue rechace la orden **entera**.
