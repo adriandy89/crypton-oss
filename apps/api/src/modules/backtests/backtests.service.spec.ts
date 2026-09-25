@@ -153,6 +153,12 @@ describe('BacktestsService — validación', () => {
     await expect(svc().run(dto(), 'admin')).rejects.toThrow(/simulación/);
   });
 
+  it('la operación de un agente no se reproduce: se mide con su tarjeta (spec 074)', async () => {
+    db.bot.findFirst.mockResolvedValue({ ...bot, strategy: 'AGENT_TRADE' });
+    await expect(svc().run(dto(), 'admin')).rejects.toThrow(/tarjeta de su agente/);
+    expect(db.botConfigRevision.findFirst).not.toHaveBeenCalled();
+  });
+
   it('un rango invertido se rechaza', async () => {
     const ahora = Date.now();
     await expect(svc().run(dto({ fromMs: ahora, toMs: ahora - SPAN_1H }), 'admin')).rejects.toThrow(

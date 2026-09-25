@@ -23,7 +23,6 @@ import {
   type PlanOperacion,
   type RespuestaModeloCanal,
 } from './ia-canal';
-import { AccionTrader, BucketObjetivo, BucketStop, type VeredictoTrader } from './ia-trader';
 import { D } from './money';
 
 /**
@@ -238,26 +237,6 @@ export function eleccionDe(json: unknown): EleccionOperacion | null {
   if (!enLista<TamanoOperacion>(tamano, valores(TamanoOperacion))) return null;
   if (!enLista<NivelConfianza>(confianza, valores(NivelConfianza))) return null;
   return { veredicto, opcion, stop, objetivo, apalancamiento, tamano, confianza };
-}
-
-/**
- * El veredicto del «Bot de IA» guardado en `decision`, o null (spec 069).
- *
- * Hermano de `eleccionDe` y con su misma doctrina: viene de una columna JSON,
- * así que no se da por bueno sin mirar. Lo que no encaja se lee como «sin
- * elección», y sin elección la estrategia no opera — que es exactamente lo que
- * tiene que pasar cuando la respuesta de un proveedor externo llega rara.
- */
-export function veredictoDe(json: unknown): VeredictoTrader | null {
-  if (!esObjeto(json)) return null;
-  const { accion, confianza, acuerdo, stop, objetivo, tamano } = json;
-  if (!enLista<AccionTrader>(accion, valores(AccionTrader))) return null;
-  if (!enLista<NivelConfianza>(confianza, valores(NivelConfianza))) return null;
-  if (typeof acuerdo !== 'boolean') return null;
-  if (!enLista<BucketStop>(stop, valores(BucketStop))) return null;
-  if (!enLista<BucketObjetivo>(objetivo, valores(BucketObjetivo))) return null;
-  if (!enLista<TamanoOperacion>(tamano, valores(TamanoOperacion))) return null;
-  return { accion, confianza, acuerdo, stop, objetivo, tamano };
 }
 
 /**

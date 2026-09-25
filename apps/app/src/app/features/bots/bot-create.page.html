@@ -157,7 +157,7 @@
   @if (step() === 'strategy' && !busy()) {
     <div class="pad">
       <div class="cards">
-        @for (s of strategies(); track s.kind) {
+        @for (s of seleccionables(); track s.kind) {
           <!-- El icono de ayuda va FUERA de la tarjeta: la tarjeta ya es un
                <button> y anidar botones es HTML invalido, ademas de dejar sin
                salida a un lector de pantalla. Asi se puede leer que hace la

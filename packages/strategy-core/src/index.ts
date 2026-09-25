@@ -37,7 +37,7 @@ export type { MarketMakerV2Config } from './strategies/market-maker-v2';
 export type { TrendFollowConfig } from './strategies/trend-follow';
 export type { TrailingProfitConfig } from './strategies/trailing-profit';
 export type { AiChannelConfig } from './strategies/ai-channel';
-export type { AiTraderConfig } from './strategies/ai-trader';
+export type { AgentTradeConfig } from './strategies/agent-trade';
 // El primer índice de los cierres a mercado de la operación: el motor lo lee
 // para contar por qué terminó (spec 059).
 export { INDICE_CIERRE } from './strategies/ai-channel';
@@ -90,6 +90,71 @@ export { etiquetarTripleBarrera, resumirTasas, type Etiqueta } from './canal/tas
 export { serieNumerica, type SerieNumerica } from './canal/numeros';
 export { serieFresca, ultimaCerradaEsperada } from './canal/velas';
 
+// El motor de los agentes de IA (spec 074). Nombres explícitos, como el del
+// canal: la API solo necesita la entrada, la salida y la medición.
+export {
+  DEFAULTS_AGENTE,
+  MAX_PENDIENTES_AGENTE,
+  NOMBRES_LIMITES as NOMBRES_LIMITES_AGENTE,
+  RANGOS_AGENTE,
+  dimensionadoDeAgente,
+  leerLimites as leerLimitesAgente,
+  peorDia as peorDiaAgente,
+  validarLimites as validarLimitesAgente,
+  type ErrorLimite as ErrorLimiteAgente,
+} from './agentes/limites';
+export { MIN_VELAS_AGENTE, VELAS_AGENTE, atrLiquidacionDe } from './agentes/mercado';
+export {
+  barreraDelDia,
+  esElegibleAgente,
+  herramientaAgente,
+  huellaAgente,
+  ofertaAgente,
+  usoDelDia,
+  type EntradaAgente,
+  type HistorialAgente,
+  type ParAgente,
+  type PuestoOferta,
+} from './agentes/herramienta';
+export { juezAgente } from './agentes/juez';
+export { juezSeguimiento } from './agentes/juez-seguimiento';
+export {
+  INDICE_REDUCCION,
+  configDeOperacion,
+  leerOperacionAgente,
+  soloReduceRiesgo,
+  type OperacionAgente,
+} from './strategies/agent-trade';
+export {
+  MOVIMIENTO_MAXIMO_STOPS,
+  construirPropuesta,
+  recalcularPropuesta,
+  type ContextoPropuesta,
+  type DatosFrescos,
+  type ResultadoPropuesta,
+  type ResultadoRecalculo,
+} from './agentes/propuesta';
+export {
+  estadoOperacion,
+  eventoSeguimiento,
+  huellaSeguimiento,
+  ofreciblesSegun,
+  opcionesSeguimiento,
+  type EntradaSeguimiento,
+  type OperacionViva,
+} from './agentes/seguimiento';
+export {
+  MUESTRA_MINIMA,
+  estadisticaR,
+  planMedibleDe,
+  planMedibleDePlan,
+  resultadoHipotetico,
+  tarjetaAgente,
+  type FilaCandidato,
+  type FilaPropuesta,
+  type PlanMedible,
+} from './agentes/medicion';
+
 // Los indicadores que puede pintar el grafico de la app (spec 061): envuelven la
 // estadistica del canal, que no se exporta cruda por la colision de nombres de
 // arriba.
@@ -104,33 +169,3 @@ export {
   type PanelIndicador,
   type PuntoIndicador,
 } from './indicadores-vista';
-
-// ── El «Bot de IA» (spec 068) ──
-export {
-  DEFAULTS_TRADER,
-  RespaldoMedio,
-  leerConfigTrader,
-  type ConfigTrader,
-} from './trader/config';
-export { senalTrader, type Banda, type EntradaSenal, type ParametrosSenal } from './trader/senal';
-export {
-  ATR_POR_BUCKET,
-  BUCKETS_OBJETIVO,
-  BUCKETS_STOP,
-  FRACCION_POR_BUCKET,
-  celdaDe,
-  espacioTrader,
-  type EntradaEspacio,
-} from './trader/esqueletos';
-export { construirOperacionTrader, cuantiza, type ResultadoConstruir } from './trader/construir';
-export { juezTrader } from './trader/juez';
-export { estadoTrader, type EstadoTrader } from './trader/estado';
-export {
-  CASCADA_POR_DEFECTO,
-  detectarCascada,
-  rasgosCascada,
-  type FlujoAgresor,
-  type ParametrosCascada,
-  type RasgosCascada,
-} from './trader/cascada';
-export { dimensionar, tramosOrdenados, type Dimension } from './dimension';

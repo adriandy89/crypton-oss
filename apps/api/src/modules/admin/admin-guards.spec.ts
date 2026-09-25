@@ -1,6 +1,7 @@
 import { ROLES_KEY } from '../auth/decorators/roles.decorator';
 import { JwtAuthGuard, RolesGuard } from '../auth/guards';
 import { AdminAiChannelController } from './admin-ai-channel.controller';
+import { AdminAiDeskController } from './admin-ai-desk.controller';
 import { AdminAiController } from './admin-ai.controller';
 import { AdminBotsController } from './admin-bots.controller';
 import { AdminMaintenanceController } from './admin-maintenance.controller';
@@ -30,6 +31,8 @@ describe('la consola de administracion esta cerrada por rol', () => {
     // El canal con IA (spec 059). Corta o abre las entradas de todos los bots
     // del canal a la vez.
     ['AdminAiChannelController', AdminAiChannelController],
+    // Los agentes de IA (spec 074). Crean bots que operan con dinero real.
+    ['AdminAiDeskController', AdminAiDeskController],
   ] as const;
 
   it.each(controladores)('%s exige el rol ADMIN', (_nombre, clase) => {

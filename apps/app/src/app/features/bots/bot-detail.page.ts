@@ -127,6 +127,7 @@ import { ModoIaAccionesService } from '../../shared/bot/modo-ia-acciones.service
 import { ModoIaPanelComponent } from '../../shared/bot/modo-ia-panel.component';
 import { CanalIaService } from '../../core/services/canal-ia.service';
 import { CanalIaPanelComponent } from '../../shared/bot/canal-ia-panel.component';
+import { OperacionIaPanelComponent } from '../../shared/ia/operacion-ia-panel.component';
 
 type Tab = 'resumen' | 'escalera' | 'ordenes' | 'ajustes' | 'eventos';
 
@@ -184,6 +185,7 @@ type LadderRow =
     UiStrategyHelpComponent,
     ModoIaPanelComponent,
     CanalIaPanelComponent,
+    OperacionIaPanelComponent,
   ],
   templateUrl: './bot-detail.page.html',
   styleUrl: './bot-detail.page.scss',
@@ -249,6 +251,14 @@ export class BotDetailPage implements OnInit {
 
   /** El panel del canal con IA: solo sus bots, y solo para un administrador. */
   readonly esCanalIa = computed(() => this.esAdmin() && this.bot()?.strategy === 'AI_CHANNEL');
+
+  /**
+   * La operación de un agente de IA (spec 074): una sola vez, así que ni se
+   * vuelve a arrancar ni se publica en el ranking —su histórico es una sola
+   * operación elegida por una IA, y nadie podría copiarla—. Su panel, solo para
+   * un administrador.
+   */
+  readonly esOperacionIa = computed(() => this.bot()?.strategy === 'AGENT_TRADE');
 
   /**
    * La configuración de la que nació el borrador de Ajustes, y su versión.

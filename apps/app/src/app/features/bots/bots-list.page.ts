@@ -83,6 +83,10 @@ type Orden = 'RIESGO' | 'RESULTADO' | 'ROI';
 /** Estados en los que un bot está bajo el control del motor. */
 const VIVOS = ['STARTING', 'RUNNING', 'PAUSED'];
 
+/** Una operación de un agente de IA que ya terminó: no vuelve a arrancar (spec 074). */
+const esOperacionIaTerminada = (b: BotSummary): boolean =>
+  b.strategy === 'AGENT_TRADE' && (b.status === 'STOPPED' || b.status === 'LIQUIDATED');
+
 @Component({
   selector: 'app-bots-list',
   standalone: true,
@@ -416,6 +420,18 @@ const VIVOS = ['STARTING', 'RUNNING', 'PAUSED'];
         </div>
       }
 
+      <!-- Las operaciones terminadas de los agentes de IA (spec 074) no se
+           listan aquí: un agente abre una por idea y en unas semanas llenarían
+           la pestaña. Viven en IA, con su resultado. -->
+      @if (operacionesIaOcultas() > 0) {
+        <p class="ia-nota">
+          {{ operacionesIaOcultas() }}
+          {{ operacionesIaOcultas() === 1 ? 'operación terminada' : 'operaciones terminadas' }}
+          de agentes de IA:
+          <a routerLink="/tabs/ia" [queryParams]="{ vista: 'operaciones' }">verlas en IA</a>
+        </p>
+      }
+
       <ion-fab slot="fixed" vertical="bottom" horizontal="end">
         <ion-fab-button routerLink="/bots/new">
           <ion-icon name="add-outline" />
@@ -464,8 +480,18 @@ export class BotsListPage implements OnInit {
    * tampoco mueve un euro. Cortando por `paper` se quedaría en «Activos»,
    * mezclado con los de verdad, que es justo lo que aquí se viene a separar.
    */
-  private readonly reales = computed(() => this.bots.bots().filter((b) => !b.dryRun));
-  readonly simulados = computed(() => this.bots.bots().filter((b) => b.dryRun));
+  private readonly reales = computed(() => this.listables().filter((b) => !b.dryRun));
+  readonly simulados = computed(() => this.listables().filter((b) => b.dryRun));
+
+  /**
+   * Todos menos las operaciones TERMINADAS de los agentes de IA (spec 074): son
+   * de una sola vez, un agente abre una por idea, y aquí solo estorban. Las
+   * vivas sí se listan: tienen dinero dentro y su riesgo se mira aquí.
+   */
+  private readonly listables = computed(() =>
+    this.bots.bots().filter((b) => !esOperacionIaTerminada(b)),
+  );
+  readonly operacionesIaOcultas = computed(() => this.bots.bots().length - this.listables().length);
 
   private readonly filtrados = computed(() => {
     if (this.filter() === 'SIM') return this.simulados();

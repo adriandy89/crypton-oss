@@ -16,7 +16,7 @@ import {
   type MarketSpec,
   type NivelApalancamiento,
   type SalidaHerramienta,
-  type ResumenTasas,
+  type TasasBase,
   type Ticker,
 } from '@crypton/shared';
 import { calidadSuficiente, detectarCanal, nivelTexto, type CanalEvaluado } from './canales';
@@ -68,7 +68,7 @@ interface Estructura {
   regimen: Regimen;
   evaluado: CanalEvaluado;
   candidatos: CandidatoBase[];
-  tasas: ReadonlyMap<string, ResumenTasas>;
+  tasas: ReadonlyMap<string, TasasBase>;
   atr5m: number;
   atr15m: number;
   atr1h: number;
@@ -212,7 +212,7 @@ function calcularEstructura(e: EntradaAnalisis): Estructura {
     : [];
 
   // Las tasas cuestan: solo cuando hay algo que ofrecer.
-  let tasas: ReadonlyMap<string, ResumenTasas> = new Map();
+  let tasas: ReadonlyMap<string, TasasBase> = new Map();
   if (candidatos.length > 0) {
     const porClave = tasasBase(estructura, atrE, giros, {
       ventana: cfg.ventanaCanal,
@@ -225,7 +225,7 @@ function calcularEstructura(e: EntradaAnalisis): Estructura {
       lados,
       inclinadoSoloAFavor: cfg.inclinadoSoloAFavor,
     });
-    const porCandidato = new Map<string, ResumenTasas>();
+    const porCandidato = new Map<string, TasasBase>();
     for (const c of candidatos) {
       const t = porClave.get(claveTasas(c.setup, c.lado));
       if (t) porCandidato.set(c.id, t);

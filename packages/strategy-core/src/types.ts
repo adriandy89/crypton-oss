@@ -158,6 +158,16 @@ export interface Strategy<C extends CommonBotConfig = BotConfig> {
    */
   readonly nocionalMaximo?: (config: C) => string | null;
 
+  /**
+   * ¿Solo reduce el riesgo este cambio de configuración? (spec 074). Un cambio
+   * así se aplica aunque el resto de la configuración ya no pase la validación
+   * ni los topes de riesgo del usuario, como el que solo apaga (spec 062,
+   * F-52): un tope bajado después no puede impedir ceñir un stop ni reducir una
+   * posición. La operación de un agente lo declara con su regla del
+   * seguimiento: solo el stop hacia el precio y el tope de posición a la baja.
+   */
+  readonly soloReduceRiesgo?: (anterior: C, nueva: C) => boolean;
+
   /** Valores por defecto sensatos para un usuario que empieza. */
   defaults(): Record<string, unknown>;
 

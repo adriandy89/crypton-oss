@@ -1,4 +1,5 @@
 import 'reflect-metadata';
+import { BadRequestException } from '@nestjs/common';
 import { plainToInstance } from 'class-transformer';
 import { validateSync } from 'class-validator';
 import { BotsController } from './bots.controller';
@@ -43,6 +44,26 @@ describe('UpdateBotConfigDto — la version esperada', () => {
     // version del bot: un 409 que nadie sabria explicar (misma trampa que el
     // 053, H-04).
     expect(errores({ ...valido, expectedVersion: null })).toEqual(['expectedVersion']);
+  });
+});
+
+describe('BotsController — la operación de un agente no se crea por aquí (spec 074, R-6)', () => {
+  it('responde 400 y no llega al servicio', () => {
+    const bots = { create: jest.fn() };
+    const controller = new BotsController(bots as never, {} as never, {} as never);
+    const dto = { strategy: 'AGENT_TRADE', exchangeAccountId: 'a', symbol: 'BTC', config: {} };
+    expect(() => controller.create({ id: 'u-1' } as never, dto as never)).toThrow(
+      BadRequestException,
+    );
+    expect(bots.create).not.toHaveBeenCalled();
+  });
+
+  it('cualquier otra estrategia pasa al servicio', () => {
+    const bots = { create: jest.fn().mockResolvedValue({ id: 'b-1' }) };
+    const controller = new BotsController(bots as never, {} as never, {} as never);
+    const dto = { strategy: 'GRID_CLASSIC', exchangeAccountId: 'a', symbol: 'BTC', config: {} };
+    void controller.create({ id: 'u-1' } as never, dto as never);
+    expect(bots.create).toHaveBeenCalledWith('u-1', dto);
   });
 });
 

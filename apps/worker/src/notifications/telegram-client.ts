@@ -3,7 +3,7 @@ import { Logger } from '@nestjs/common';
 /**
  * Cliente mínimo de la API de bots de Telegram.
  *
- * Se escribe a mano en lugar de traer una librería: solo hacen falta tres
+ * Se escribe a mano en lugar de traer una librería: solo hacen falta unos pocos
  * métodos, y una dependencia más en el proceso que descifra claves de firma
  * tiene un coste que no compensa por ahorrar cuarenta líneas.
  */
@@ -107,6 +107,29 @@ export class TelegramClient {
       return res.ok === true;
     } catch (e) {
       this.logger.warn(`No se pudo contestar a un botón: ${(e as Error).message}`);
+      return false;
+    }
+  }
+
+  /**
+   * Quita los botones de un mensaje ya enviado (spec 074).
+   *
+   * `editMessageReplyMarkup` sin `reply_markup`: el teclado se cambia por
+   * ninguno. Se usa al pulsar un botón de agente, para que no quede colgando
+   * un «✅ Ejecutar» que ya no hace nada. Es estético —el vale es de un solo
+   * uso y la segunda pulsación ya no sirve—, así que traga los fallos como
+   * `sendMessage`.
+   */
+  async quitarTeclado(chatId: string, messageId: number): Promise<boolean> {
+    if (!this.enabled) return false;
+    try {
+      const res = await this.call('editMessageReplyMarkup', {
+        chat_id: chatId,
+        message_id: messageId,
+      });
+      return res.ok === true;
+    } catch (e) {
+      this.logger.debug(`No se pudieron quitar los botones de un mensaje: ${(e as Error).message}`);
       return false;
     }
   }

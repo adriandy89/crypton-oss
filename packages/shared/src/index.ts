@@ -23,4 +23,6 @@ export * from './activity';
 export * from './market-features';
 export * from './ia-canal';
 export * from './ia-canal-vistas';
-export * from './ia-trader';
+export * from './ia-agentes';
+export * from './ia-agentes-vistas';
+export * from './ia-agentes-api';

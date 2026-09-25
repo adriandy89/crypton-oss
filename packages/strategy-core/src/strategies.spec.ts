@@ -1450,35 +1450,32 @@ describe('registro de estrategias', () => {
     expect(conVelas).toEqual([StrategyKind.TREND_FOLLOW]);
   });
 
-  it('solo los dos bots de IA piden series y llevan su contrato (specs 058 y 068)', () => {
+  it('solo el canal lleva el contrato del canal, y piden series él y la V2 (specs 058 y 071)', () => {
     // `series` es `candles` en plural: cada serie declarada es un sondeo más
-    // contra el cupo del venue. Los demás flags cambian cómo el motor fija el
-    // apalancamiento, mide la liquidación y lleva el tope diario: ninguna otra
-    // estrategia puede verse afectada por ellos.
-    //
-    // El «Bot de IA» del spec 068 entra en la lista a propósito y con su coste
-    // dicho en alto: pide tres series (5 min, 15 min y 1 h) y compite por el
-    // mismo depósito por IP que el canal. Por eso comparte con él la reserva de
-    // cupo por venue que construyó el spec 065; sin eso se repite el incidente
-    // de `TICK_SLOW`. Ampliar esta lista es una decisión, no un trámite.
+    // contra el cupo del venue. Ampliar esta lista es una decisión, no un
+    // trámite.
     const con = (flag: keyof ReturnType<typeof getStrategy>) =>
       listStrategies()
         .filter((s) => s[flag] !== undefined)
         .map((s) => s.kind);
 
-    // Los cinco flags que cambian como el motor fija el apalancamiento, mide la
-    // liquidacion y lleva el tope diario siguen siendo SOLO de los dos bots de
-    // IA: ninguna otra estrategia puede verse afectada por ellos.
+    // El tope diario que se reabre solo y las decisiones de la IA son SOLO del
+    // canal: ninguna otra estrategia puede verse afectada por ellos.
+    for (const flag of ['topeDiarioReanuda', 'consumeDecisionesIa'] as const) {
+      expect({ flag, kinds: con(flag) }).toEqual({ flag, kinds: [StrategyKind.AI_CHANNEL] });
+    }
+    // Los tres que cambian como el motor fija el apalancamiento, mide la
+    // liquidacion y cuenta el nocional los comparte la operacion de un agente
+    // (spec 074): tambien pide su apalancamiento en cada entrada y mide la
+    // liquidacion contra su stop. Nadie mas.
     for (const flag of [
       'apalancamientoPorOperacion',
       'reglaLiquidacion',
-      'topeDiarioReanuda',
-      'consumeDecisionesIa',
       'nocionalMaximo',
     ] as const) {
       expect({ flag, kinds: con(flag) }).toEqual({
         flag,
-        kinds: [StrategyKind.AI_CHANNEL, StrategyKind.AI_TRADER],
+        kinds: [StrategyKind.AI_CHANNEL, StrategyKind.AGENT_TRADE],
       });
     }
 
@@ -1491,11 +1488,7 @@ describe('registro de estrategias', () => {
     // mientras la puerta este apagada —que es como se entrega—, asi que un bot
     // que no la use no pide ni una vela. Hay un test que lo fija en
     // `mm-regimen.spec.ts`; si alguien lo rompe, esta lista deja de ser segura.
-    expect(con('series')).toEqual([
-      StrategyKind.MARKET_MAKER_V2,
-      StrategyKind.AI_CHANNEL,
-      StrategyKind.AI_TRADER,
-    ]);
+    expect(con('series')).toEqual([StrategyKind.MARKET_MAKER_V2, StrategyKind.AI_CHANNEL]);
   });
 
   it('comunCon revienta al cargar si la clave no existe', () => {
@@ -1698,6 +1691,17 @@ describe('registro de estrategias', () => {
       GRIDMART: {},
       MARKET_MAKER: { orderSizePerSide: '50', maxBotPositionValue: '500' },
       MARKET_MAKER_V2: { orderSizePerSide: '50', maxBotPositionValue: '500', feeEstimateBps: '2' },
+      // La operacion de un agente no tiene valores de fabrica para su plan: los
+      // pone el agente (spec 074). Estos son los de un largo cualquiera.
+      AGENT_TRADE: {
+        entryLimitPrice: '100',
+        stopPrice: '98',
+        tp1Price: '104',
+        quantity: '0.5',
+        riskAmount: '1.1',
+        entryDeadline: 2_000_000_000_000,
+        agentProposalId: 'propuesta-1',
+      },
     };
     const malos: [string, string][] = [
       ['stopLossPct', '150'],

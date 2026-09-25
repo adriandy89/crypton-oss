@@ -62,6 +62,8 @@ model User {
   telegram_link     TelegramLink?
   bot_shares        BotShare[]
   portfolio_snapshots PortfolioSnapshot[]
+  /// Agentes de IA (spec 074): solo de administradores.
+  ai_desk_agents      AiDeskAgent[]
 
   @@index([email], map: "idx_user_email")
   @@index([disabled])
@@ -169,6 +171,8 @@ model ExchangeAccount {
   updated_at DateTime? @updatedAt @db.Timestamptz(6)
 
   bots Bot[]
+  /// Los agentes de IA que operan con ella (spec 074).
+  ai_desk_agents AiDeskAgent[]
 
   /// La RED forma parte de la clave: sin ella, llamar «Principal» a la cuenta de
   /// mainnet impedia llamar «Principal» a la de testnet del mismo venue, con un
@@ -302,8 +306,8 @@ enum StrategyKind {
   TRAILING_PROFIT
   // Canal con IA (spec 058): solo administradores.
   AI_CHANNEL
-  // Bot de IA (spec 068): motor propio de banda, solo administradores.
-  AI_TRADER
+  // Operación de un agente de IA (spec 074): solo la crea un agente.
+  AGENT_TRADE
 }
 
 enum BotStatus {
@@ -400,6 +404,8 @@ model Bot {
   /// Canal con IA (spec 058): sus intenciones de operación y el estado de su lazo.
   ai_intents   BotAiIntent[]
   ai_loop      BotAiLoop?
+  /// La propuesta de un agente de la que nace, si es una `AGENT_TRADE` (spec 074).
+  ai_desk_proposal AiDeskProposal?
   /// Backtests lanzados sobre su configuración. Ver `BacktestRun`.
   backtests    BacktestRun[]
 
@@ -1103,6 +1109,297 @@ model BotAiLoop {
   updated_at DateTime? @updatedAt @db.Timestamptz(6)
 
   @@map("bot_ai_loops")
+}
+
+// ═══════════════════════════════════════════════════════════════
+// AGENTES DE IA (spec 074)
+// ═══════════════════════════════════════════════════════════════
+//
+// Un agente mira unos pares de una cuenta cada intervalo, propone operaciones
+// de una sola vez, las ejecuta como bots `AGENT_TRADE` al aprobarse y les da
+// seguimiento. Todo lo que decide queda aquí, también lo que no se toma: la
+// tarjeta de resultados se calcula con estas filas.
+//
+// Tres índices únicos PARCIALES viven solo en la migración, porque Prisma no
+// los expresa:
+//   uq_ai_desk_round_entrada     una ronda de intervalo por agente y vela;
+//   uq_ai_desk_round_seguimiento una por operación, vela y disparador;
+//   uq_ai_desk_proposal_viva     una operación viva por agente y par;
+//   uq_ai_desk_action_pendiente  una acción pendiente por operación.
+// Y uno parcial de consulta: idx_ai_desk_candidate_pendiente, los candidatos
+// que aún no se han medido.
+
+/// Calca `EstadoAgente` de shared.
+enum AiDeskAgentState {
+  ACTIVO
+  PAUSADO
+  ARCHIVADO
+}
+
+/// Calca `TipoRondaAgente` de shared.
+enum AiDeskRoundKind {
+  ENTRADA
+  SEGUIMIENTO
+}
+
+/// Calca `EstadoRondaAgente` de shared.
+enum AiDeskRoundState {
+  EN_CURSO
+  COMPLETADA
+  SALTADA
+  FALLIDA
+}
+
+/// Calca `EstadoPropuestaAgente` de shared.
+enum AiDeskProposalState {
+  PROPUESTA
+  APROBANDO
+  EJECUTANDO
+  ABIERTA
+  CERRADA
+  SIN_ENTRADA
+  RECHAZADA
+  CADUCADA
+  DESCARTADA
+  FALLIDA
+  SOMBRA
+}
+
+/// Calca `EstadoAccionAgente` de shared.
+enum AiDeskActionState {
+  PROPUESTA
+  APLICANDO
+  APLICADA
+  RECHAZADA
+  CADUCADA
+  DESCARTADA
+  FALLIDA
+  SOMBRA
+}
+
+/// Un agente de IA. Solo de administradores; cada uno ve y toca los suyos.
+model AiDeskAgent {
+  id      String @id @default(uuid())
+  user_id String
+  user    User   @relation(fields: [user_id], references: [id], onDelete: Cascade)
+
+  /// La cuenta y su venue: fijos tras crearlo.
+  exchange_account_id String
+  exchange_account    ExchangeAccount @relation(fields: [exchange_account_id], references: [id], onDelete: Cascade)
+  venue               Venue
+
+  name         String           @db.VarChar(64)
+  state        AiDeskAgentState @default(ACTIVO)
+  /// `MotivoPausaAgente`, mientras está en pausa.
+  pause_reason String?          @db.VarChar(32)
+
+  /// Lo que mira: pares, intervalo, familias y lados.
+  symbols       String[]
+  interval      String   @db.VarChar(8)
+  families      String[]
+  sides         String[]
+  /// IA | REGLAS.
+  decision_mode String   @default("IA") @db.VarChar(8)
+  /// `LimitesAgente` de shared, validados juntos al guardar.
+  limits        Json
+
+  /// La autonomía de cada clase de acción, con el `AiMode` de siempre.
+  auto_entry  AiMode @default(MANUAL)
+  auto_reduce AiMode @default(AUTO)
+  auto_close  AiMode @default(MANUAL)
+
+  /// La próxima ronda de entrada; el planificador la reclama con una escritura condicional.
+  next_round_at DateTime? @db.Timestamptz(6)
+
+  /// Fallos seguidos del modelo, y hasta cuándo no se le consulta.
+  failures       Int       @default(0)
+  sleeping_until DateTime? @db.Timestamptz(6)
+  last_error     String?   @db.Text
+
+  /// El día UTC al que se refieren los dos contadores de uso.
+  usage_day   DateTime? @db.Date
+  calls_today Int       @default(0)
+  cost_today  Decimal   @default(0) @db.Decimal(38, 18)
+
+  /// Sube con cada edición: quien guarda dice sobre qué versión editó.
+  version Int @default(1)
+
+  created_at  DateTime  @default(now()) @db.Timestamptz(6)
+  updated_at  DateTime? @updatedAt @db.Timestamptz(6)
+  archived_at DateTime? @db.Timestamptz(6)
+
+  rounds    AiDeskRound[]
+  proposals AiDeskProposal[]
+
+  @@index([user_id], map: "idx_ai_desk_agent_user")
+  /// El barrido del planificador: los activos a los que ya les toca.
+  @@index([state, next_round_at], map: "idx_ai_desk_agent_ronda")
+  @@map("ai_desk_agents")
+}
+
+/// Una ronda: la de entrada mira los pares; la de seguimiento, una operación viva.
+model AiDeskRound {
+  id       String      @id @default(uuid())
+  agent_id String
+  agent    AiDeskAgent @relation(fields: [agent_id], references: [id], onDelete: Cascade)
+
+  kind        AiDeskRoundKind
+  /// Apertura de la vela del intervalo en la que se basa.
+  bar_t       DateTime        @db.Timestamptz(6)
+  /// `DisparadorSeguimiento`; en las de entrada, INTERVALO o MANUAL.
+  trigger     String          @db.VarChar(16)
+  /// La operación que sigue, en las de seguimiento.
+  proposal_id String?
+  proposal    AiDeskProposal? @relation("SeguimientoDeOperacion", fields: [proposal_id], references: [id], onDelete: Cascade)
+
+  state         AiDeskRoundState @default(EN_CURSO)
+  /// `MotivoRonda`: la barrera que la paró, o en qué acabó.
+  reason        String?          @db.VarChar(32)
+  /// IA | REGLAS, como estaba el agente al correrla.
+  decision_mode String           @db.VarChar(8)
+  huella        String?          @db.VarChar(2048)
+
+  /// Lo que vio: la herramienta o el estado de la operación. Se vacía con la retención.
+  snapshot Json?
+  /// La elección, la respuesta del modelo, la del juez y el fallo si lo hubo.
+  decision Json?
+
+  model          String?  @db.VarChar(64)
+  prompt_version String?  @db.VarChar(64)
+  latency_ms     Int?
+  cost           Decimal? @db.Decimal(38, 18)
+
+  created_at  DateTime  @default(now()) @db.Timestamptz(6)
+  finished_at DateTime? @db.Timestamptz(6)
+
+  candidates AiDeskCandidate[]
+  proposals  AiDeskProposal[]  @relation("PropuestasDeRonda")
+  actions    AiDeskAction[]
+
+  @@index([agent_id, created_at(sort: Desc)], map: "idx_ai_desk_round_agent_fecha")
+  @@map("ai_desk_rounds")
+}
+
+/// Cada operación posible de una ronda de entrada, se ofreciera o no: con ella
+/// se mide si quien elige distingue lo bueno de lo malo.
+model AiDeskCandidate {
+  id       String      @id @default(uuid())
+  round_id String
+  round    AiDeskRound @relation(fields: [round_id], references: [id], onDelete: Cascade)
+  agent_id String
+
+  /// `CandidatoAgente.id`: `<símbolo>|<familia>|<lado>|<vela>`.
+  candidate_key String    @db.VarChar(128)
+  symbol        String    @db.VarChar(32)
+  family        String    @db.VarChar(16)
+  side          Direction
+  /// La letra con la que se ofreció, si entró en la oferta.
+  letter        String?   @db.VarChar(2)
+  eligible      Boolean
+  /// Lo eligió quien decidía: la IA, o el juez en modo reglas.
+  chosen        Boolean   @default(false)
+  /// Lo habría elegido el juez: la línea base con la que se compara a la IA.
+  judge_choice  Boolean   @default(false)
+  /// `PlanMedible`: con qué se mide.
+  measurable    Json?
+  /// `ResultadoHipotetico`, cuando las velas lo resuelven.
+  outcome       Json?
+  measured_at   DateTime? @db.Timestamptz(6)
+
+  created_at DateTime @default(now()) @db.Timestamptz(6)
+
+  @@index([agent_id, created_at(sort: Desc)], map: "idx_ai_desk_candidate_agent_fecha")
+  @@map("ai_desk_candidates")
+}
+
+/// Una propuesta de entrada y, si se aprueba, la operación que nace de ella.
+model AiDeskProposal {
+  id       String       @id @default(uuid())
+  agent_id String
+  agent    AiDeskAgent  @relation(fields: [agent_id], references: [id], onDelete: Cascade)
+  round_id String?
+  round    AiDeskRound? @relation("PropuestasDeRonda", fields: [round_id], references: [id], onDelete: SetNull)
+
+  candidate_key String    @db.VarChar(128)
+  symbol        String    @db.VarChar(32)
+  family        String    @db.VarChar(16)
+  side          Direction
+
+  state  AiDeskProposalState @default(PROPUESTA)
+  /// `MotivoPropuestaAgente`.
+  reason String?             @db.VarChar(32)
+
+  /// `PlanAgente` al proponer y, al aprobar, recalculado con el precio de entonces.
+  plan       Json
+  final_plan Json?
+  /// Lo que eligió el modelo o el juez, con sus motivos.
+  decision   Json?
+
+  /// La cuenta era de simulación cuando se propuso.
+  dry_run    Boolean
+  expires_at DateTime  @db.Timestamptz(6)
+  /// APP | TELEGRAM | AUTO.
+  decided_by String?   @db.VarChar(16)
+  decided_at DateTime? @db.Timestamptz(6)
+
+  /// El bot de la operación: uno por propuesta.
+  bot_id String? @unique(map: "uq_ai_desk_proposal_bot")
+  bot    Bot?    @relation(fields: [bot_id], references: [id], onDelete: SetNull)
+
+  opened_at    DateTime? @db.Timestamptz(6)
+  closed_at    DateTime? @db.Timestamptz(6)
+  /// `SalidaOperacionAgente`.
+  exit         String?   @db.VarChar(20)
+  /// Lo realizado con comisiones, y en R sobre la pérdida al stop del plan.
+  realized_pnl Decimal?  @db.Decimal(38, 18)
+  r_real       Decimal?  @db.Decimal(20, 8)
+  /// `ResultadoHipotetico` con el plan de la propuesta, se tomara o no.
+  outcome      Json?
+  measured_at  DateTime? @db.Timestamptz(6)
+
+  created_at DateTime  @default(now()) @db.Timestamptz(6)
+  updated_at DateTime? @updatedAt @db.Timestamptz(6)
+
+  actions         AiDeskAction[]
+  followup_rounds AiDeskRound[]  @relation("SeguimientoDeOperacion")
+
+  @@index([agent_id, created_at(sort: Desc)], map: "idx_ai_desk_proposal_agent_fecha")
+  /// Los barridos de caducidad y de conciliación.
+  @@index([state, expires_at], map: "idx_ai_desk_proposal_estado_vence")
+  @@map("ai_desk_proposals")
+}
+
+/// Una acción de seguimiento sobre una operación viva: solo reduce el riesgo.
+model AiDeskAction {
+  id          String         @id @default(uuid())
+  proposal_id String
+  proposal    AiDeskProposal @relation(fields: [proposal_id], references: [id], onDelete: Cascade)
+  agent_id    String
+  round_id    String?
+  round       AiDeskRound?   @relation(fields: [round_id], references: [id], onDelete: SetNull)
+
+  /// `AccionSeguimiento` y su `ClaseAccion`.
+  action       String            @db.VarChar(24)
+  action_class String            @db.VarChar(12)
+  state        AiDeskActionState @default(PROPUESTA)
+  reason       String?           @db.VarChar(32)
+
+  /// El cambio de configuración: solo `stopPrice` y `positionCap`.
+  change   Json
+  decision Json?
+
+  expires_at      DateTime  @db.Timestamptz(6)
+  decided_by      String?   @db.VarChar(16)
+  decided_at      DateTime? @db.Timestamptz(6)
+  /// La versión de configuración que dejó al aplicarse.
+  applied_version Int?
+
+  created_at DateTime  @default(now()) @db.Timestamptz(6)
+  updated_at DateTime? @updatedAt @db.Timestamptz(6)
+
+  @@index([proposal_id, created_at(sort: Desc)], map: "idx_ai_desk_action_proposal_fecha")
+  @@index([state, expires_at], map: "idx_ai_desk_action_estado_vence")
+  @@map("ai_desk_actions")
 }
 
 /// Contadores propios de market making, uno por bot.

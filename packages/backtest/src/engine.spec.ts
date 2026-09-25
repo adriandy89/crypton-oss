@@ -96,6 +96,21 @@ const run = (candles: Candle[], over: Record<string, unknown> = {}, params = PAR
   });
 
 describe('runReplay', () => {
+  it('una operación de un agente no se reproduce (spec 074)', async () => {
+    await expect(
+      runReplay({
+        botId: '1a2b3c4d-0000-4000-8000-000000000000',
+        strategy: StrategyKind.AGENT_TRADE,
+        config: GRID,
+        venue: Venue.HYPERLIQUID,
+        market: TEST_MARKET,
+        interval: '15m',
+        candles: plano(50, '100'),
+        params: PARAMS,
+      }),
+    ).rejects.toThrow(/tarjeta de su agente/);
+  });
+
   it('un mercado plano no ejecuta nada y no gasta comisiones', async () => {
     const r = await run(plano(50, '100'));
 

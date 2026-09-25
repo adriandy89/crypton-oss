@@ -45,12 +45,11 @@ export const StrategyKind = {
    */
   AI_CHANNEL: 'AI_CHANNEL',
   /**
-   * El «Bot de IA» (spec 068): toques del borde de una banda de Bollinger, con
-   * motor propio y el apalancamiento que permite el stop. El motor calcula una
-   * matriz de nueve operaciones y quien decide elige entre ellas. Solo para
-   * administradores.
+   * Una operación de un agente de IA (spec 074): entra una vez, con stop nativo
+   * y uno o dos objetivos, y se detiene al cerrarse. Solo la crea un agente, y
+   * solo para administradores.
    */
-  AI_TRADER: 'AI_TRADER',
+  AGENT_TRADE: 'AGENT_TRADE',
 } as const;
 export type StrategyKind = (typeof StrategyKind)[keyof typeof StrategyKind];
 
@@ -64,23 +63,19 @@ export type StrategyKind = (typeof StrategyKind)[keyof typeof StrategyKind];
  */
 export const ESTRATEGIAS_SOLO_ADMIN: readonly StrategyKind[] = [
   StrategyKind.AI_CHANNEL,
-  StrategyKind.AI_TRADER,
+  StrategyKind.AGENT_TRADE,
 ];
 
 /**
- * Las estrategias que deciden por el lazo de intenciones (`bot_ai_intents`).
- *
- * Comparten el tope de bots por venue, porque lo escaso es el cupo de
- * peticiones por IP y no la estrategia: repartirlo por estrategia sería volver
- * al incidente de caudal del spec 065 por otro camino.
+ * Estrategias que no se crean por la API de bots ni desde el asistente: solo
+ * las crea su dueño por otro camino (spec 074). Una operación de un agente nace
+ * de una propuesta aprobada, con su plan recalculado; crearla a mano sería una
+ * operación sin propuesta, sin seguimiento y sin medida.
  */
-export const ESTRATEGIAS_CON_INTENCIONES: readonly StrategyKind[] = [
-  StrategyKind.AI_CHANNEL,
-  StrategyKind.AI_TRADER,
-];
+export const ESTRATEGIAS_SOLO_DE_AGENTE: readonly StrategyKind[] = [StrategyKind.AGENT_TRADE];
 
-export const esEstrategiaConIntenciones = (kind: string): boolean =>
-  (ESTRATEGIAS_CON_INTENCIONES as readonly string[]).includes(kind);
+export const esEstrategiaDeAgente = (kind: string): boolean =>
+  (ESTRATEGIAS_SOLO_DE_AGENTE as readonly string[]).includes(kind);
 
 export const esEstrategiaSoloAdmin = (kind: string): boolean =>
   (ESTRATEGIAS_SOLO_ADMIN as readonly string[]).includes(kind);

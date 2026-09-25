@@ -4,9 +4,14 @@ import { createClient, type RedisClientType } from 'redis';
 import {
   ACCION_PAUSAR_CANAL,
   PREFIJO_BOTON_CANAL,
+  PULSACION_AGENTE,
   PULSACION_PAUSA_CANAL,
+  VerboAgente,
+  claveValeAgente,
   claveValeCanal,
   esValeCanal,
+  leerCallbackAgente,
+  type ValeAgente,
 } from '@crypton/shared';
 import { BUS_CHANNELS, BusService, DbService } from '../libs';
 import { LeaseService } from '../engine';
@@ -155,7 +160,10 @@ export class TelegramPollerService implements OnModuleInit, OnApplicationShutdow
       partes[0] === PREFIJO_BOTON_CANAL &&
       partes[2] === ACCION_PAUSAR_CANAL &&
       esValeCanal(partes[1]);
-    if (!chatId || partes.length !== 3 || !(esModoIa || esPausaCanal)) {
+    // Un botón de un agente de IA (spec 074): `ag:<vale>:si|no|cierra`.
+    const deAgente = leerCallbackAgente(cb.data);
+    const reconocido = deAgente !== null || (partes.length === 3 && (esModoIa || esPausaCanal));
+    if (!chatId || !reconocido) {
       await this.client.answerCallbackQuery(cb.id);
       return;
     }
@@ -169,6 +177,11 @@ export class TelegramPollerService implements OnModuleInit, OnApplicationShutdow
       // Neutro a proposito, como el canje de codigos: confirmar que el vale
       // existe le diria a quien prueba que ha acertado uno.
       await this.client.answerCallbackQuery(cb.id, 'No se ha podido procesar.');
+      return;
+    }
+
+    if (deAgente) {
+      await this.onBotonAgente(cb, chatId, link.user_id, deAgente.vale, deAgente.verbo);
       return;
     }
 
@@ -210,6 +223,48 @@ export class TelegramPollerService implements OnModuleInit, OnApplicationShutdow
       cb.id,
       verbo === 'si' ? 'Aplicando…' : 'Sugerencia descartada.',
     );
+  }
+
+  /**
+   * Un botón de un agente de IA (spec 074): ejecutar o descartar una
+   * propuesta, aplicar o descartar una acción de seguimiento, o cerrar la
+   * operación. Mensajero, como con los demás: el vale lo canjea la API, que es
+   * quien crea el bot o le cambia la configuración, con un `GETDEL` que hace
+   * que dos pulsaciones cuenten una vez.
+   *
+   * Lo propio de estos es quitar los botones al pulsar: el vale sirve una vez,
+   * y un «✅ Ejecutar» que se queda en el chat invita a pulsar otra vez para
+   * nada. También si el vale ya no existe, por lo mismo.
+   */
+  private async onBotonAgente(
+    cb: NonNullable<TelegramUpdate['callback_query']>,
+    chatId: string,
+    userId: string,
+    vale: string,
+    verbo: VerboAgente,
+  ): Promise<void> {
+    // Se mira antes de contestar, como la pausa del canal (spec 062, F-14): un
+    // vale caducado o ya gastado no puede contestar «Ejecutando…». Un fallo
+    // leyendo no frena nada: la API lo canjea igual y es ella quien decide.
+    const guardado = await this.bus
+      .cacheGet<ValeAgente>(claveValeAgente(vale))
+      .catch(() => undefined);
+    const mensaje = cb.message?.message_id;
+
+    if (guardado === null) {
+      await this.client.answerCallbackQuery(cb.id, 'Ya no está pendiente: míralo en la app.');
+    } else {
+      await this.bus
+        .publish(BUS_CHANNELS.BOT_EVENTS, {
+          userId,
+          type: PULSACION_AGENTE,
+          data: { vale, verbo, chatId },
+        })
+        .catch(() => undefined);
+      const esAccion = guardado === undefined ? null : guardado.accionId != null;
+      await this.client.answerCallbackQuery(cb.id, respuestaAgente(verbo, esAccion));
+    }
+    if (mensaje !== undefined) await this.client.quitarTeclado(chatId, mensaje);
   }
 
   /**
@@ -327,4 +382,19 @@ export class TelegramPollerService implements OnModuleInit, OnApplicationShutdow
 
     this.logger.log(`Telegram vinculado al usuario ${link.user_id}`);
   }
+}
+
+/**
+ * Lo que se contesta al pulsar un botón de agente. `esAccion` es null si no se
+ * pudo leer el vale: entonces no se sabe si era una propuesta o una acción, y
+ * se contesta sin decirlo.
+ */
+export function respuestaAgente(verbo: VerboAgente, esAccion: boolean | null): string {
+  if (verbo === VerboAgente.CIERRA) return 'Cerrando la operación…';
+  if (verbo === VerboAgente.NO) {
+    if (esAccion === null) return 'Descartando…';
+    return esAccion ? 'Acción descartada.' : 'Propuesta descartada.';
+  }
+  if (esAccion === null) return 'Procesando…';
+  return esAccion ? 'Aplicando…' : 'Ejecutando…';
 }

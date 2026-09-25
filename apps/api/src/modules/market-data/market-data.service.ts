@@ -14,6 +14,8 @@ import {
   venueKey,
   type MarketFeatures,
   type MarketTicker,
+  type NivelApalancamiento,
+  type Ticker,
   type VenueCapabilities,
 } from '@crypton/shared';
 import {
@@ -265,6 +267,67 @@ export class MarketDataService implements OnModuleDestroy {
     return rasgos;
   }
 
+  /**
+   * El ticker de un par, con su marca, su bid y su ask (spec 074). Lo necesitan
+   * los agentes de IA en cada ronda y al aprobar: la entrada se calcula con el
+   * lado del libro por el que se entra.
+   *
+   * Primero el que deja el worker en Redis de lo que sigue —un bot en ese par o
+   * alguien que lo mira; los agentes declaran sus pares en
+   * `MarketStreamService`—, que es gratis y fresco. Si no está, uno pedido al
+   * venue con el adaptador público y el presupuesto por IP de siempre,
+   * cacheado unos segundos y de una sola petición en vuelo. null si no se
+   * puede: sin precio no se calcula nada.
+   */
+  async ticker(venue: Venue, symbol: string, testnet = false): Promise<Ticker | null> {
+    const compartido = await this.cache.get<Ticker>(
+      `crypton:px:${venueKey(venue, testnet)}:${symbol}`,
+    );
+    if (compartido?.bid && compartido.ask && compartido.mark) return compartido;
+    const key = `md:ticker:${venueKey(venue, testnet)}:${symbol}`;
+    const cacheado = await this.cache.get<Ticker>(key);
+    if (cacheado) return cacheado;
+    try {
+      return await this.single(key, async () => {
+        const fresco = await this.withAdapter(venue, (a) => a.getTicker(symbol), testnet);
+        await this.cache.set(key, fresco, TICKER_TTL_S);
+        return fresco;
+      });
+    } catch {
+      return null;
+    }
+  }
+
+  /**
+   * Los tramos de apalancamiento de un par (spec 074), una hora en caché:
+   * cambian con los listados, no con el precio. `[]` si el venue no los publica
+   * —la herramienta usa entonces la ficha del mercado—; null si los publica y
+   * no se han podido leer, y entonces ese par no ofrece nada: una operación
+   * dimensionada sin sus tramos podría no caber en el venue.
+   */
+  async tramos(
+    venue: Venue,
+    symbol: string,
+    testnet = false,
+  ): Promise<NivelApalancamiento[] | null> {
+    const key = `md:tiers:${venueKey(venue, testnet)}:${symbol}`;
+    const cacheado = await this.cache.get<NivelApalancamiento[]>(key);
+    if (cacheado) return cacheado;
+    try {
+      return await this.single(key, async () => {
+        const leidos = await this.withAdapter(
+          venue,
+          async (a) => (a.getLeverageTiers ? a.getLeverageTiers(symbol) : []),
+          testnet,
+        );
+        await this.cache.set(key, leidos, TRAMOS_TTL_S);
+        return leidos;
+      });
+    } catch {
+      return null;
+    }
+  }
+
   async tickers(venue?: Venue, testnet = false): Promise<MarketTicker[]> {
     const venues = venue ? [venue] : Object.values(Venue);
     const rows = await Promise.all(
@@ -493,6 +556,11 @@ export class MarketDataService implements OnModuleDestroy {
 
 const tickerKey = (venue: Venue, testnet = false): string =>
   `md:tickers:${venueKey(venue, testnet)}`;
+
+/** Un ticker pedido al venue, en segundos: lo que se tarda en recalcular una propuesta. */
+const TICKER_TTL_S = 5;
+/** Los tramos de apalancamiento de un par, en segundos. */
+const TRAMOS_TTL_S = 3600;
 
 /** Tope por llamada al venue. Por debajo del cerrojo del cron (25 s). */
 const VENUE_TIMEOUT_MS = 12_000;

@@ -17,6 +17,23 @@ de otro rompería la promesa entera del producto. Por eso lo que sigue es tan co
 | **Usuarios** | Todas las cuentas, con búsqueda por correo o nombre y filtros por estado, rol y si tienen bots. Ficha con perfil, límites de riesgo, conexiones de exchange y recuento de bots. |
 | **Bots** | Todos los bots de la plataforma, filtrables por usuario, venue, símbolo, estrategia, estado, simulación y «con error». Detalle con capital, resultado, margen, distancia a liquidación y el último error. |
 
+## La pestaña IA (specs 073 y 074)
+
+Un administrador tiene además una **quinta pestaña, «IA»**, entre Bots y Cuenta: la sección de
+inteligencia artificial de la plataforma. Para el resto de cuentas no existe —no se pinta, y su
+ruta, `/tabs/ia`, devuelve a los bots aunque se escriba a mano—. Al contrario que esta consola, va
+en la barra porque es una sección de la app y no una herramienta.
+
+Dentro viven los **agentes de IA** (spec 074): cada uno mira unos pares de una cuenta, propone
+operaciones de una sola vez, las abre cuando se aprueban y les da seguimiento. La pestaña tiene
+arriba el **interruptor global de entradas** de todos los agentes —pide motivo, como todo aquí— y
+cuatro vistas: **Agentes**, **Propuestas** (con las que esperan, que también cuenta la insignia de
+la pestaña en la barra), **Operaciones** y **Resultados**. Todo va bajo la misma guarda de
+administrador que las pantallas de esta consola: sus rutas son `admin/ai-desk/…`, con el rol en la
+clase y el rol releído de la base en todo lo que da poder, y cada administrador ve y toca **solo
+sus agentes** —el de otro responde 404, como si no existiera—. La guía entera está en
+[Agentes de IA](./agentes-ia.md).
+
 ## Lo que un administrador puede hacer
 
 Sobre una **cuenta**: deshabilitarla, rehabilitarla y cerrarle todas las sesiones.
@@ -447,13 +464,13 @@ que reescribe la configuración de un bot ajeno la rompería. Al limitarlo a bot
 administrador operando el bot de otro: es el dueño operando el suyo con una herramienta, y lo que se
 puede hacer sobre bots de terceros sigue siendo exactamente lo de antes — pausar y sacar del motor.
 
-## Las estrategias de solo administradores (specs 059 y 068)
+## Canal con IA (spec 059)
 
-Las estrategias **Canal** (`AI_CHANNEL`) y **Bot de IA** (`AI_TRADER`) **solo puede usarlas un
+La estrategia **Canal con IA** (`AI_CHANNEL`) es la única que **solo puede usar un
 administrador**, y para todos los demás no existe: no sale en la lista de estrategias, y crearla,
 previsualizarla, editarla o arrancarla responde `403`. El rol se lee de la base en cada uno de esos
 caminos, así que a quien le retiran el rol deja de poder arrancar su bot en la petición siguiente.
-Tampoco las cubren los planes, el ranking, el asesor ni el Modo IA. Sus guías están en
+Tampoco la cubren los planes, el ranking, el asesor ni el Modo IA. La guía de la estrategia está en
 [ai-channel.md](./ai-channel.md).
 
 El reparto es el del Modo IA: **el worker calcula y ejecuta; la API solo pregunta**. El modelo elige

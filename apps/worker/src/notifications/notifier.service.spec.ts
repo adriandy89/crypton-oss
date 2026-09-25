@@ -153,6 +153,11 @@ function buildEntrega(prefs: Record<string, boolean> = {}, cerrojo = true) {
       findMany: jest.fn().mockResolvedValue([]),
       findUnique: jest.fn().mockResolvedValue({ name: 'bot', symbol: 'BTC', dry_run: false }),
     },
+    aiDeskAgent: {
+      findUnique: jest
+        .fn()
+        .mockResolvedValue({ name: 'Tendencias', exchange_account: { paper: false } }),
+    },
   };
   const bus = { originId: 'worker-1', listen: jest.fn(), publish: jest.fn() };
   const leases = { tryLock: jest.fn().mockResolvedValue(cerrojo) };
@@ -188,7 +193,7 @@ function buildEntrega(prefs: Record<string, boolean> = {}, cerrojo = true) {
     return Promise.resolve();
   };
 
-  return { service, onEvent, lineas, leases, enviados, vaciar, esperas };
+  return { service, onEvent, lineas, leases, enviados, vaciar, esperas, db };
 }
 
 const deLaApi = (extra: Record<string, unknown> = {}) => ({
@@ -578,5 +583,310 @@ describe('NotifierService — el canal con IA (spec 059)', () => {
     expect(lineas()).toEqual([
       '🤖 <b>bot (BTC)</b> — La IA del canal no ha dado una respuesta válida.',
     ]);
+  });
+});
+
+/**
+ * Los avisos de los agentes de IA (spec 074). Los del agente nacen en la API y
+ * no tienen bot; los de sus operaciones los publica el bot `AGENT_TRADE`, como
+ * cualquier otro. Las propuestas y las acciones que esperan respuesta llevan
+ * botones con su vale; lo que se aplicó solo va al lote.
+ */
+describe('NotifierService — los agentes de IA (spec 074)', () => {
+  const VALE = 'fedcba9876543210fedcba9876543210';
+  const delAgente = (
+    type: string,
+    extra: Record<string, unknown> = {},
+    ts = 1_700_000_000_000,
+  ) => ({
+    userId: 'u-1',
+    type,
+    origin: 'api-7',
+    entregaForzada: true,
+    ts,
+    data: { severity: 'INFO', message: `${type} de prueba`, agentId: 'ag-1', ...extra },
+  });
+  const deSuBot = (type: string, severity = 'INFO') => ({
+    userId: 'u-1',
+    botId: 'bot-1',
+    type,
+    origin: 'worker-1',
+    ts: 1,
+    data: { severity, message: `${type} de prueba` },
+  });
+  const callbacks = (teclado: unknown): string[] =>
+    (teclado as { inline_keyboard: { callback_data: string }[][] }).inline_keyboard
+      .flat()
+      .map((b) => b.callback_data);
+
+  it('una propuesta sale sola, al momento, con su agente y los botones de ejecutar o descartar', async () => {
+    const { onEvent, enviados, lineas } = buildEntrega();
+    await onEvent(delAgente('AGENT_PROPOSAL', { propuestaId: 'p-1', vale: VALE }));
+
+    expect(lineas()).toEqual([]);
+    expect(enviados).toEqual([
+      {
+        chatId: '111',
+        text: '💡 <b>Agente «Tendencias»</b> — AGENT_PROPOSAL de prueba',
+        teclado: {
+          inline_keyboard: [
+            [
+              { text: '✅ Ejecutar', callback_data: `ag:${VALE}:si` },
+              { text: '✖ Descartar', callback_data: `ag:${VALE}:no` },
+            ],
+          ],
+        },
+      },
+    ]);
+  });
+
+  it('en la cuenta de simulación, la etiqueta lo dice', async () => {
+    const { onEvent, enviados, db } = buildEntrega();
+    db.aiDeskAgent.findUnique.mockResolvedValue({
+      name: 'Pruebas',
+      exchange_account: { paper: true },
+    });
+    await onEvent(delAgente('AGENT_PROPOSAL', { propuestaId: 'p-1', vale: VALE }));
+    expect(enviados[0].text).toContain('<b>Agente «Pruebas» · simulado</b>');
+  });
+
+  it('una acción que espera respuesta: aplicarla, descartarla o cerrar la operación', async () => {
+    const { onEvent, enviados } = buildEntrega();
+    await onEvent(
+      delAgente('AGENT_ACTION', {
+        propuestaId: 'p-1',
+        accionId: 'a-1',
+        vale: VALE,
+        accion: 'REDUCIR_MITAD',
+      }),
+    );
+    expect(enviados[0].text.startsWith('🛡 <b>Agente «Tendencias»</b>')).toBe(true);
+    expect(callbacks(enviados[0].teclado)).toEqual([
+      `ag:${VALE}:si`,
+      `ag:${VALE}:no`,
+      `ag:${VALE}:cierra`,
+    ]);
+    for (const data of callbacks(enviados[0].teclado)) expect(data.length).toBeLessThanOrEqual(64);
+  });
+
+  it('si lo que propone es cerrar, se cierra o se mantiene', async () => {
+    const { onEvent, enviados } = buildEntrega();
+    await onEvent(
+      delAgente('AGENT_ACTION', {
+        propuestaId: 'p-1',
+        accionId: 'a-1',
+        vale: VALE,
+        accion: 'CERRAR',
+      }),
+    );
+    const teclado = enviados[0].teclado as { inline_keyboard: { text: string }[][] };
+    expect(teclado.inline_keyboard).toHaveLength(1);
+    expect(teclado.inline_keyboard[0].map((b) => b.text)).toEqual(['⏹ Cerrar', '✖ Mantener']);
+    expect(callbacks(teclado)).toEqual([`ag:${VALE}:si`, `ag:${VALE}:no`]);
+  });
+
+  it('lo que se aplicó solo, sin vale, va al lote sin botones', async () => {
+    const { onEvent, enviados, lineas } = buildEntrega();
+    await onEvent(
+      delAgente('AGENT_ACTION', { propuestaId: 'p-1', accionId: 'a-1', accion: 'PROTEGER' }),
+    );
+    expect(enviados).toEqual([]);
+    expect(lineas()).toEqual(['🛡 <b>Agente «Tendencias»</b> — AGENT_ACTION de prueba']);
+  });
+
+  it('sin agente en los datos, lo que no tiene bot no se entrega', async () => {
+    const { onEvent, enviados, lineas } = buildEntrega();
+    // La pulsación de un botón va del poller a la API, no a Telegram.
+    await onEvent({
+      userId: 'u-1',
+      type: 'AGENT_DECISION_TAKEN',
+      origin: 'worker-1',
+      ts: 1,
+      data: { vale: VALE, verbo: 'si', chatId: '111' },
+    });
+    // Ni un evento de otra cosa sin bot, aunque traiga un agente.
+    await onEvent({ ...delAgente('AI_SUGGESTION'), data: { agentId: 'ag-1', message: 'x' } });
+    expect(enviados).toEqual([]);
+    expect(lineas()).toEqual([]);
+  });
+
+  it('dos propuestas del mismo agente en el mismo milisegundo piden cerrojos distintos', async () => {
+    const { onEvent, leases, enviados } = buildEntrega();
+    await onEvent(delAgente('AGENT_PROPOSAL', { propuestaId: 'p-1', vale: VALE }));
+    await onEvent(
+      delAgente('AGENT_PROPOSAL', { propuestaId: 'p-2', vale: VALE.replace('f', 'e') }),
+    );
+
+    expect(leases.tryLock.mock.calls.map((c: unknown[]) => c[0])).toEqual([
+      'notify:ag:ag-1:p-1:AGENT_PROPOSAL:1700000000000',
+      'notify:ag:ag-1:p-2:AGENT_PROPOSAL:1700000000000',
+    ]);
+    expect(enviados).toHaveLength(2);
+  });
+
+  it('la acción reparte por acción, no por operación', async () => {
+    const { onEvent, leases } = buildEntrega();
+    await onEvent(delAgente('AGENT_ACTION', { propuestaId: 'p-1', accionId: 'a-9', vale: VALE }));
+    expect(leases.tryLock).toHaveBeenCalledWith(
+      'notify:ag:ag-1:a-9:AGENT_ACTION:1700000000000',
+      expect.any(Number),
+    );
+  });
+
+  it('el segundo mensaje con botones espera su pausa detrás del primero', async () => {
+    // Dos propuestas de la misma ronda seguidas eran la ráfaga que Telegram
+    // corta con un 429.
+    const { onEvent, enviados, esperas } = buildEntrega();
+    await onEvent(delAgente('AGENT_PROPOSAL', { propuestaId: 'p-1', vale: VALE }));
+    expect(esperas).toEqual([]);
+    await onEvent(delAgente('AGENT_PROPOSAL', { propuestaId: 'p-2', vale: VALE }));
+    expect(enviados).toHaveLength(2);
+    expect(esperas).toHaveLength(1);
+    expect(esperas[0]).toBeGreaterThanOrEqual(1000);
+  });
+
+  it('y un lote detrás de un mensaje con botones, también', async () => {
+    const { onEvent, vaciar, enviados, esperas } = buildEntrega();
+    await onEvent(delAgente('AGENT_PROPOSAL', { propuestaId: 'p-1', vale: VALE }));
+    await onEvent(deSuBot('AGENT_EXIT'));
+    await vaciar();
+    expect(enviados).toHaveLength(2);
+    expect(esperas).toHaveLength(1);
+  });
+
+  it('la preferencia de agentes manda en lo suyo; lo que pone en juego una posición, riesgo', async () => {
+    const sinAgentes = buildEntrega({ agentes: false });
+    await sinAgentes.onEvent(delAgente('AGENT_PROPOSAL', { propuestaId: 'p-1', vale: VALE }));
+    await sinAgentes.onEvent(deSuBot('AGENT_ENTRY'));
+    await sinAgentes.onEvent(deSuBot('AGENT_EXIT'));
+    await sinAgentes.onEvent(deSuBot('AGENT_CIERRE_FALLIDO', 'CRITICAL'));
+    await sinAgentes.onEvent(delAgente('AGENT_PAUSED', { severity: 'WARN' }));
+    expect(sinAgentes.enviados).toEqual([]);
+    expect(sinAgentes.lineas()).toEqual([
+      '🔥 <b>bot (BTC)</b> — AGENT_CIERRE_FALLIDO de prueba',
+      '⛔ <b>Agente «Tendencias»</b> — AGENT_PAUSED de prueba',
+    ]);
+
+    const sinRiesgo = buildEntrega({ risk: false });
+    await sinRiesgo.onEvent(deSuBot('AGENT_CIERRE_FALLIDO', 'CRITICAL'));
+    await sinRiesgo.onEvent(deSuBot('AGENT_FOREIGN_POSITION', 'CRITICAL'));
+    await sinRiesgo.onEvent(delAgente('AGENT_PAUSED', { severity: 'WARN' }));
+    expect(sinRiesgo.lineas()).toEqual([]);
+  });
+
+  it('la vida de la operación va con los agentes, no con los ciclos', async () => {
+    const sinCiclos = buildEntrega({ cycles: false });
+    for (const tipo of ['AGENT_ENTRY', 'AGENT_EXIT', 'AGENT_BREAKEVEN', 'AGENT_REDUCED']) {
+      await sinCiclos.onEvent(deSuBot(tipo));
+    }
+    expect(sinCiclos.lineas()).toEqual([
+      '📥 <b>bot (BTC)</b> — AGENT_ENTRY de prueba',
+      '📤 <b>bot (BTC)</b> — AGENT_EXIT de prueba',
+      '🛡 <b>bot (BTC)</b> — AGENT_BREAKEVEN de prueba',
+      '✂️ <b>bot (BTC)</b> — AGENT_REDUCED de prueba',
+    ]);
+  });
+
+  it('la orden de salir no se notifica, y una entrada descartada solo si es grave', async () => {
+    const { onEvent, lineas } = buildEntrega();
+    await onEvent(deSuBot('AGENT_CIERRE'));
+    await onEvent(deSuBot('AGENT_ENTRY_DISCARDED', 'INFO'));
+    expect(lineas()).toEqual([]);
+    await onEvent(deSuBot('AGENT_ENTRY_DISCARDED', 'WARN'));
+    expect(lineas()).toEqual(['↩️ <b>bot (BTC)</b> — AGENT_ENTRY_DISCARDED de prueba']);
+  });
+
+  it('el agente dormido y el stop que no se ensancha van con los errores', async () => {
+    const sinErrores = buildEntrega({ errors: false });
+    await sinErrores.onEvent(delAgente('AGENT_SLEEPING', { severity: 'WARN' }));
+    await sinErrores.onEvent(deSuBot('AGENT_STOP_IGNORED', 'WARN'));
+    expect(sinErrores.lineas()).toEqual([]);
+
+    const conErrores = buildEntrega();
+    await conErrores.onEvent(delAgente('AGENT_SLEEPING', { severity: 'WARN' }));
+    expect(conErrores.lineas()).toEqual([
+      '💤 <b>Agente «Tendencias»</b> — AGENT_SLEEPING de prueba',
+    ]);
+  });
+});
+
+describe('NotifierService — los agentes en el resumen diario (spec 074)', () => {
+  function buildResumen(opciones: {
+    prefs?: Record<string, boolean>;
+    conAgentes?: boolean;
+    bots?: BotFila[];
+    agentesFallan?: boolean;
+  }) {
+    const { service, enviados, db } = build([], opciones.bots ?? []);
+    db.telegramLink.findMany.mockResolvedValue([
+      { user_id: 'u-1', chat_id: '111', prefs: opciones.prefs ?? {}, verified_at: new Date() },
+    ]);
+    const propuestas = jest
+      .fn()
+      .mockResolvedValueOnce([
+        { state: 'CERRADA', dry_run: false },
+        { state: 'RECHAZADA', dry_run: false },
+        { state: 'SOMBRA', dry_run: false },
+      ])
+      .mockResolvedValueOnce([{ realized_pnl: '12.4', r_real: '1.3', dry_run: false }])
+      .mockResolvedValueOnce([]);
+    const agentes = opciones.agentesFallan
+      ? jest.fn().mockRejectedValue(new Error('base caída'))
+      : jest.fn().mockResolvedValue(opciones.conAgentes === false ? [] : [{ user_id: 'u-1' }]);
+    Object.assign(db, {
+      aiDeskAgent: { findMany: agentes },
+      aiDeskProposal: { findMany: propuestas },
+    });
+    return { service, enviados, propuestas };
+  }
+
+  it('con agentes y sin bots, el resumen es el de los agentes', async () => {
+    const { service, enviados } = buildResumen({});
+    await service.dailyDigest();
+    expect(enviados).toHaveLength(1);
+    expect(enviados[0].text).toBe(
+      [
+        '<b>Resumen del día</b>',
+        '<b>Agentes</b>',
+        'Propuestas: 2 · operadas 1',
+        'Cerradas: 1 · <b>+12.40 (+1.30 R)</b>',
+      ].join('\n'),
+    );
+  });
+
+  it('con bots, los agentes van detrás', async () => {
+    const { service, enviados } = buildResumen({ bots: [{ status: 'RUNNING', dry_run: false }] });
+    await service.dailyDigest();
+    const lineas = enviados[0].text.split('\n');
+    expect(lineas[1]).toMatch(/^Resultado:/);
+    expect(lineas.indexOf('<b>Agentes</b>')).toBeGreaterThan(
+      lineas.indexOf('Bots: 1 operando · 0 pausados'),
+    );
+  });
+
+  it('quien apagó los avisos de agentes no los tiene en el resumen, ni se consultan', async () => {
+    const { service, enviados, propuestas } = buildResumen({ prefs: { agentes: false } });
+    await service.dailyDigest();
+    expect(enviados).toEqual([]);
+    expect(propuestas).not.toHaveBeenCalled();
+  });
+
+  it('sin agentes no se preguntan sus propuestas', async () => {
+    const { service, propuestas } = buildResumen({
+      conAgentes: false,
+      bots: [{ status: 'RUNNING', dry_run: false }],
+    });
+    await service.dailyDigest();
+    expect(propuestas).not.toHaveBeenCalled();
+  });
+
+  it('si fallan los agentes, el resumen sale igual sin ellos', async () => {
+    const { service, enviados } = buildResumen({
+      agentesFallan: true,
+      bots: [{ status: 'RUNNING', dry_run: false }],
+    });
+    await service.dailyDigest();
+    expect(enviados).toHaveLength(1);
+    expect(enviados[0].text).not.toContain('Agentes');
   });
 });

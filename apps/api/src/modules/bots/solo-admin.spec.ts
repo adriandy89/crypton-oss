@@ -63,11 +63,11 @@ describe('BotsService: los caminos que llevan a operar', () => {
     return { service, markets, risk, buscarUsuario };
   }
 
-  it('los dos bots de IA están restringidos, y nadie más', () => {
+  it('el canal y la operación de un agente están restringidos, y nadie más', () => {
     // Enumerada a proposito, y NO con `toContain`: el sentido de esta lista es
     // que esta escrita entera, para que anadirle una sea una decision y no un
-    // descuido. Al anadir el «Bot de IA» (spec 068) se actualiza aqui.
-    expect(ESTRATEGIAS_SOLO_ADMIN).toEqual([StrategyKind.AI_CHANNEL, StrategyKind.AI_TRADER]);
+    // descuido. La operacion de un agente tambien es de administradores (spec 074).
+    expect(ESTRATEGIAS_SOLO_ADMIN).toEqual([StrategyKind.AI_CHANNEL, StrategyKind.AGENT_TRADE]);
   });
 
   it('el listado la enseña solo a un administrador habilitado (spec 059)', async () => {
@@ -281,6 +281,6 @@ describe('El asesor y el ranking', () => {
     await service.recomputePeriod('DAY').catch(() => undefined);
     const where = (buscarBots.mock.calls[0] as [{ where: { strategy?: { notIn?: string[] } } }])[0]
       .where;
-    expect(where.strategy?.notIn).toEqual([StrategyKind.AI_CHANNEL, StrategyKind.AI_TRADER]);
+    expect(where.strategy?.notIn).toEqual([StrategyKind.AI_CHANNEL, StrategyKind.AGENT_TRADE]);
   });
 });

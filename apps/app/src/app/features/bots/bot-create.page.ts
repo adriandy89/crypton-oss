@@ -36,6 +36,7 @@ import {
 } from 'ionicons/icons';
 import {
   MAX_APALANCAMIENTO_POR_STOP,
+  esEstrategiaDeAgente,
   esEstrategiaSoloAdmin,
   type BotConfig,
   type FieldMeta,
@@ -152,10 +153,6 @@ const CONSENTIMIENTOS: Partial<Record<StrategyKind, string>> = {
   AI_CHANNEL:
     'Entiendo que este bot puede operar con dinero real y apalancamiento de hasta 25x, y que ' +
     'una IA decide cada entrada dentro de los límites que he puesto.',
-  AI_TRADER:
-    'Entiendo que este bot puede operar con dinero real y apalancamiento de hasta 25x, que una ' +
-    'IA elige cada operación dentro de los límites que he puesto, y que su ventaja no está ' +
-    'demostrada: arranca en «solo observar» a propósito.',
 };
 
 /**
@@ -291,6 +288,15 @@ export class BotCreatePage implements OnInit, OnDestroy {
   /** ¿Está abierta la hoja de elegir par? La hoja no guarda nada más. */
   readonly pairOpen = signal(false);
   readonly strategies = signal<StrategyDescriptor[]>([]);
+  /**
+   * Las que se pueden elegir aquí. La operación de un agente no: nace de una
+   * propuesta aprobada, con su plan recalculado, y la API la rechaza por esta
+   * vía (spec 074, R-6). Su descriptor sigue en `strategies` porque el detalle
+   * de un bot lo necesita para pintar su configuración.
+   */
+  readonly seleccionables = computed(() =>
+    this.strategies().filter((s) => !esEstrategiaDeAgente(s.kind)),
+  );
   readonly preview = signal<PreviewResult | null>(null);
   readonly busy = signal(false);
   readonly previewing = signal(false);
@@ -378,9 +384,7 @@ export class BotCreatePage implements OnInit, OnDestroy {
 
   /** Los rótulos del cálculo previo de la estrategia elegida. */
   readonly textos = computed(() =>
-    this.strategyKind() === 'AI_CHANNEL' || this.strategyKind() === 'AI_TRADER'
-      ? TEXTOS_CANAL
-      : TEXTOS_ESCALERA,
+    this.strategyKind() === 'AI_CHANNEL' ? TEXTOS_CANAL : TEXTOS_ESCALERA,
   );
 
   /** Por qué el Modo IA elegido no se puede mandar todavía, o vacío. */
@@ -1186,6 +1190,9 @@ export class BotCreatePage implements OnInit, OnDestroy {
     const state = (this.router.getCurrentNavigation()?.extras.state ??
       (history.state as unknown)) as Record<string, unknown> | undefined;
     if (!state?.['config'] || !state?.['strategy']) return;
+    // Copiar una operación de un agente no crea otra: solo la crea un agente.
+    const copiada = state['strategy'];
+    if (typeof copiada === 'string' && esEstrategiaDeAgente(copiada)) return;
 
     this.copiedFrom.set((state['copiedFrom'] as string) ?? null);
     this.strategyKind.set(state['strategy'] as StrategyKind);
@@ -1520,9 +1527,7 @@ export class BotCreatePage implements OnInit, OnDestroy {
   readonly strategyBlurb = strategyBlurb;
 
   isRisky(kind: string): boolean {
-    return (
-      kind === 'MARTINGALE' || kind === 'GRIDMART' || kind === 'AI_CHANNEL' || kind === 'AI_TRADER'
-    );
+    return kind === 'MARTINGALE' || kind === 'GRIDMART' || kind === 'AI_CHANNEL';
   }
 
   /** Las que solo ve un administrador; el servidor ya las filtra de la lista. */

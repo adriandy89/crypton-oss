@@ -284,14 +284,25 @@ se mandará al exchange.
 | **Market Maker V2** | Igual, pero el diferencial se calcula (volatilidad, libro, coste) y puede anclarse a un precio externo. | Medio |
 | **Tendencia** | Entra al romper un rango y sale con un stop por ATR que sigue al precio. La única que gana en línea recta. | **Alto** |
 | **Seguimiento de beneficio** | Una operación que deja correr el beneficio: al llegar a tu objetivo sigue al máximo y cierra al retroceder. | **Alto** |
-| **Canal** · solo administradores | Rebotes en el borde de un rango o canal de 15 min, con el apalancamiento que permite el stop (hasta 25×). El motor calcula cada operación posible y una IA elige entre ellas con palabras de una lista; sin respuesta válida no entra. | **Alto** |
-| **Bot de IA** · solo administradores | Toques del borde de una banda de Bollinger en 15 min, con el apalancamiento que permite el stop (hasta 25×). El motor calcula nueve operaciones ya validadas y quien decide elige entre ellas con enumeraciones; arranca en «solo observar» y su ventaja no está demostrada. | **Alto** |
+| **Canal con IA** · solo administradores | Rebotes en el borde de un rango o canal de 15 min, con el apalancamiento que permite el stop (hasta 25×). El motor calcula cada operación posible y una IA elige entre ellas con palabras de una lista; sin respuesta válida no entra. | **Alto** |
+| **Operación IA** · solo administradores | La operación de un agente de IA: entra una vez con un precio tope, stop y objetivos nativos desde el primer momento, y se detiene al cerrarse. No se crea a mano. | **Alto** |
 
-El **Canal** y el **Bot de IA** son las únicas que solo ve y usa un `ADMIN` (el rol se lee de la base
-al listar, crear, editar y arrancar), y las únicas que consultan a un modelo al operar. Sus guías,
-[`docs/ai-channel.md`](docs/ai-channel.md) y [`docs/ai-trader.md`](docs/ai-trader.md), cuentan el
-reparto entre el motor y la IA, la regla del apalancamiento por stop y los límites diarios; su
-interruptor global y sus variables están en [`docs/administracion.md`](docs/administracion.md).
+El **Canal con IA** y la **Operación IA** son las únicas que solo ve y usa un `ADMIN` (el rol se
+lee de la base al listar, crear, editar y arrancar). La guía del canal,
+[`docs/ai-channel.md`](docs/ai-channel.md), cuenta el reparto entre el motor y la IA, la regla del
+apalancamiento por stop y los límites diarios; su interruptor global y sus variables están en
+[`docs/administracion.md`](docs/administracion.md).
+
+### Agentes de IA
+
+La pestaña **IA** —solo la ve un administrador— tiene **agentes**: cada uno mira los pares que le
+elijas en una cuenta, analiza al cerrar cada vela, **propone operaciones** con todos sus números
+por Telegram y en la app, las abre como un bot **Operación IA** cuando se aprueban —o solo, si le
+dejas— y les da **seguimiento**, que solo puede ceñir el stop o reducir la posición. El motor
+calcula y valida cada operación posible; la IA —o un juez de reglas, gratis— solo elige entre ellas
+con palabras de una lista; al aprobar se recalcula con el precio de ahora. Y todo se **mide**,
+también lo que no se toma: la tarjeta de resultados dice si la IA distingue lo bueno de lo malo.
+Guía: [`docs/agentes-ia.md`](docs/agentes-ia.md).
 
 Cada estrategia tiene su **guía de uso** en [`docs/README.md`](docs/README.md), con
 configuraciones de ejemplo verificadas contra el código, lo que cada bot no mira
@@ -406,7 +417,9 @@ uso y tu lo envias con `/start <codigo>`. Ese paso es lo que demuestra que el
 chat es tuyo — pedir un id de chat sin mas permitiria dirigir las alertas de
 cualquiera a un chat ajeno con solo adivinar un numero.
 
-Seis categorias, con los fills **apagados** por defecto y el resumen diario
+Seis categorias —y dos mas que solo ve un administrador: el Modo IA y los
+agentes de IA, estos con los botones de sus propuestas—, con los fills
+**apagados** por defecto y el resumen diario
 encendido: un market maker genera decenas de eventos por minuto, y notificarlos
 todos entrena al usuario a silenciar el canal justo antes de que llegue el aviso
 que si habia que leer. Las rafagas se agrupan en una ventana de 4 segundos y

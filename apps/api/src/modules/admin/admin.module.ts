@@ -1,5 +1,6 @@
 import { Module } from '@nestjs/common';
 import { AiChannelModule } from '../ai-channel';
+import { AiDeskModule } from '../ai-desk';
 import { SupervisorModule } from '../supervisor';
 import { AuthModule } from '../auth';
 import { BotsModule } from '../bots';
@@ -8,6 +9,7 @@ import { AdminBotsService } from './admin-bots.service';
 import { AdminMaintenanceController } from './admin-maintenance.controller';
 import { AdminMaintenanceService } from './admin-maintenance.service';
 import { AdminAiChannelController } from './admin-ai-channel.controller';
+import { AdminAiDeskController } from './admin-ai-desk.controller';
 import { AdminAiController } from './admin-ai.controller';
 import { AdminUsersController } from './admin-users.controller';
 import { AdminUsersService } from './admin-users.service';
@@ -45,15 +47,20 @@ import { AdminUsersService } from './admin-users.service';
  * PROPIOS y el interruptor global de sus entradas. Tampoco trae adaptadores ni
  * amplía la superficie sobre bots ajenos: su servicio responde 403 a cualquier
  * bot que no sea del administrador que pregunta.
+ *
+ * `AiDeskModule` (spec 074) aporta los agentes de IA del administrador: los
+ * suyos y solo los suyos, que un agente ajeno responde 404. Tampoco trae
+ * adaptadores: sus bots los crea por `BotsService`, el camino de siempre.
  */
 @Module({
-  imports: [BotsModule, AuthModule, SupervisorModule, AiChannelModule],
+  imports: [BotsModule, AuthModule, SupervisorModule, AiChannelModule, AiDeskModule],
   controllers: [
     AdminUsersController,
     AdminBotsController,
     AdminMaintenanceController,
     AdminAiController,
     AdminAiChannelController,
+    AdminAiDeskController,
   ],
   providers: [AdminUsersService, AdminBotsService, AdminMaintenanceService],
 })

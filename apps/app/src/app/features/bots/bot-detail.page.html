@@ -257,7 +257,11 @@
              antes esta cifra salia siempre en rojo, al 3 % y al 60 %. -->
         @if (liqDist() !== null) {
           <div class="bd-risk">
-            <ui-liq-meter [pct]="b.liquidationDistancePct" [camino]="camino()" label="Aguanta una caída de" />
+            <ui-liq-meter
+              [pct]="b.liquidationDistancePct"
+              [camino]="camino()"
+              label="Aguanta una caída de"
+            />
             <p class="bd-risk-foot num">
               Liquidación estimada en <b>{{ price(b.liquidationPrice) }}</b>
               @if (b.snapshot?.mark_price) {
@@ -491,6 +495,14 @@
           <app-canal-ia-panel class="bd-card" [bot]="b" (cambiado)="recargar()" />
         }
 
+        <!-- ── Operación de un agente de IA (spec 074) ──
+             De qué propuesta nace, el plan con el que entró frente a lo de
+             ahora y lo último del seguimiento. Solo para un administrador. -->
+        @if (esOperacionIa() && esAdmin()) {
+          <h3 class="section">Operación de IA</h3>
+          <app-operacion-ia-panel class="bd-card" [botId]="b.id" (cambiado)="recargar()" />
+        }
+
         @if (b.cycle; as c) {
           <h3 class="section">Ciclo #{{ c.seq }}</h3>
           <ion-list inset="true">
@@ -526,67 +538,71 @@
         <!-- ── Ranking ──
              Va ENCIMA de las acciones y no dentro: ahí abajo viven «Arrancar» y
              «Eliminar bot», y mezclar publicar con lo destructivo invita a
-             pulsar lo que no es. -->
-        <h3 class="section">Ranking</h3>
-        @if (b.dryRun) {
-          <ui-notice tone="info">
-            Los bots en simulación no se pueden publicar: su histórico no viene de operaciones
-            reales y engañaría a quien lo copiase.
-          </ui-notice>
+             pulsar lo que no es. La operación de un agente de IA no se publica
+             ni se prueba sobre histórico (spec 074). -->
+        @if (!esOperacionIa()) {
+          <h3 class="section">Ranking</h3>
+          @if (b.dryRun) {
+            <ui-notice tone="info">
+              Los bots en simulación no se pueden publicar: su histórico no viene de operaciones
+              reales y engañaría a quien lo copiase.
+            </ui-notice>
 
-          <!-- Atajo al backtest (para todos desde el spec 004). Se llega con el
+            <!-- Atajo al backtest (para todos desde el spec 004). Se llega con el
                bot ya elegido: es el camino natural, porque quien lo pide está
                mirando este bot justo ahora. -->
-          <ion-button
-            expand="block"
-            fill="outline"
-            [routerLink]="['/backtest']"
-            [queryParams]="{ botId: b.id }"
-          >
-            <ion-icon name="flask-outline" slot="start" />
-            Probar sobre histórico
-          </ion-button>
-        } @else if (publicado()) {
-          <ui-notice tone="ok" icon="trophy-outline">
-            Publicado en el ranking · {{ b.share?.copies ?? 0 }} copia(s).
-          </ui-notice>
-          <div class="rank-act">
             <ion-button
               expand="block"
               fill="outline"
-              [disabled]="publicando()"
-              (click)="alternarPublicacion()"
+              [routerLink]="['/backtest']"
+              [queryParams]="{ botId: b.id }"
             >
-              @if (publicando()) {
-                <ion-spinner name="crescent" />
-              } @else {
-                Dejar de publicar
-              }
+              <ion-icon name="flask-outline" slot="start" />
+              Probar sobre histórico
             </ion-button>
-          </div>
-        } @else {
-          <ui-notice tone="info">
-            Se comparte la <strong>forma</strong> de la estrategia, no tu tamaño: los importes
-            viajan como proporción del capital, así que nadie ve cuánto dinero mueves. Ni tu cuenta
-            ni tus claves salen de aquí.
-            @if (demasiadoJoven()) {
-              El ranking solo lista bots con más de 6 horas de recorrido: se publicará ahora y
-              aparecerá al cumplirlas.
-            }
-          </ui-notice>
-          <div class="rank-act">
-            <ion-button expand="block" [disabled]="publicando()" (click)="alternarPublicacion()">
-              @if (publicando()) {
-                <ion-spinner name="crescent" />
-              } @else {
-                Publicar en el ranking
+          } @else if (publicado()) {
+            <ui-notice tone="ok" icon="trophy-outline">
+              Publicado en el ranking · {{ b.share?.copies ?? 0 }} copia(s).
+            </ui-notice>
+            <div class="rank-act">
+              <ion-button
+                expand="block"
+                fill="outline"
+                [disabled]="publicando()"
+                (click)="alternarPublicacion()"
+              >
+                @if (publicando()) {
+                  <ion-spinner name="crescent" />
+                } @else {
+                  Dejar de publicar
+                }
+              </ion-button>
+            </div>
+          } @else {
+            <ui-notice tone="info">
+              Se comparte la <strong>forma</strong> de la estrategia, no tu tamaño: los importes
+              viajan como proporción del capital, así que nadie ve cuánto dinero mueves. Ni tu
+              cuenta ni tus claves salen de aquí.
+              @if (demasiadoJoven()) {
+                El ranking solo lista bots con más de 6 horas de recorrido: se publicará ahora y
+                aparecerá al cumplirlas.
               }
-            </ion-button>
-          </div>
+            </ui-notice>
+            <div class="rank-act">
+              <ion-button expand="block" [disabled]="publicando()" (click)="alternarPublicacion()">
+                @if (publicando()) {
+                  <ion-spinner name="crescent" />
+                } @else {
+                  Publicar en el ranking
+                }
+              </ion-button>
+            </div>
+          }
         }
 
         <div class="actions">
-          @if (!isLive()) {
+          <!-- Una operación de un agente es de una sola vez: terminada, no vuelve. -->
+          @if (!isLive() && !esOperacionIa()) {
             <ion-button expand="block" (click)="start()">Arrancar</ion-button>
           }
           <ion-button expand="block" fill="outline" (click)="openCommands()">Acciones</ion-button>
@@ -833,7 +849,9 @@
                 }
               </ui-notice>
             }
-            <ion-button fill="clear" [disabled]="saving()" (click)="discard()">Descartar</ion-button>
+            <ion-button fill="clear" [disabled]="saving()" (click)="discard()"
+              >Descartar</ion-button
+            >
             <ion-button [disabled]="saving()" (click)="save()">
               @if (saving()) {
                 <ion-spinner name="crescent" />

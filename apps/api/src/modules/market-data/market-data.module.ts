@@ -21,6 +21,8 @@ import { MarketStreamService } from './market-stream.service';
   imports: [MarketsModule, BotsModule],
   controllers: [MarketDataController],
   providers: [MarketDataService, MarketStreamService],
-  exports: [MarketDataService],
+  // El flujo se exporta por los agentes de IA (spec 074), que declaran ahí los
+  // pares de los que necesitan el precio vivo.
+  exports: [MarketDataService, MarketStreamService],
 })
 export class MarketDataModule {}

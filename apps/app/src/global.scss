@@ -1892,3 +1892,98 @@ ion-modal.help {
     line-height: 1.55;
   }
 }
+
+/* ---------------------------------------------------------------------- *
+ * La sección de IA (spec 074)
+ *
+ * Lo que comparten sus pantallas, sus vistas y el panel del detalle de una
+ * operación: el título de sección y la rejilla clave-valor. Aquí y no en cada
+ * componente por el presupuesto de estilos por componente, como los `bd-*`.
+ * ---------------------------------------------------------------------- */
+.ia-sec {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  margin: var(--space-5) 0 var(--space-2);
+  font-family: var(--font-display);
+  font-size: 14px;
+  font-weight: 700;
+  letter-spacing: -0.015em;
+
+  &:first-child {
+    margin-top: 0;
+  }
+}
+
+.ia-kv {
+  display: grid;
+  grid-template-columns: auto 1fr;
+  gap: 6px var(--space-3);
+  margin: 0;
+  font-size: 12.5px;
+
+  dt {
+    color: var(--text-3);
+  }
+
+  dd {
+    margin: 0;
+    text-align: right;
+    color: var(--text-1);
+  }
+}
+
+.ia-nota {
+  margin: 0 0 var(--space-3);
+  font-size: 12px;
+  line-height: 1.5;
+  color: var(--text-3);
+}
+
+.ia-campo {
+  margin-bottom: var(--space-3);
+}
+
+.ia-lbl {
+  display: block;
+  margin-bottom: 6px;
+  font-size: 12px;
+  color: var(--text-2);
+}
+
+.ia-ayuda,
+.ia-err {
+  margin: 2px 0 0;
+  font-size: 11px;
+  line-height: 1.45;
+  color: var(--text-3);
+}
+
+.ia-err {
+  color: var(--pnl-down);
+}
+
+.ia-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.ia-chip {
+  padding: 6px 12px;
+  border: 1px solid rgba(46, 43, 82, 0.9);
+  border-radius: var(--radius-pill);
+  background: transparent;
+  color: var(--text-2);
+  font-size: 12.5px;
+
+  &.on {
+    border-color: var(--brand-2);
+    background: var(--surface-2);
+    color: var(--text-1);
+  }
+
+  &:disabled {
+    opacity: 0.5;
+  }
+}

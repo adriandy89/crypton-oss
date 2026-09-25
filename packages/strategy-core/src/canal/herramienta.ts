@@ -25,6 +25,7 @@ import {
   TamanoOperacion,
   TipoStop,
   Veredicto,
+  apalancamientoPorStop,
   candleSpanMs,
   maintenanceMarginRateOf,
   precioLiquidacionAislada,
@@ -41,16 +42,11 @@ import {
   type OpcionStop,
   type PlanOperacion,
   type SalidaHerramienta,
-  type ResumenTasas,
+  type TasasBase,
   type Ticker,
   type UsoDelDia,
 } from '@crypton/shared';
 import { px, qy } from '../common';
-import { dimensionar, llegaAlMinimo, tramosOrdenados } from '../dimension';
-
-// Se mudaron a `../dimension.ts` (spec 068). Se reexportan para no arrastrar a
-// sus importadores en el mismo commit que el traslado.
-export { llegaAlMinimo, tramosOrdenados };
 import { nivelTexto } from './canales';
 import type { ConfigCanal, EvidenciaMinima } from './config';
 import { costeIdaVuelta } from './costes';
@@ -134,20 +130,62 @@ export interface EntradaHerramienta {
   canal: CanalDetectado | null;
   candidatos: readonly CandidatoBase[];
   /** Tasas base por id de candidato, si se calcularon. */
-  tasas: ReadonlyMap<string, ResumenTasas>;
+  tasas: ReadonlyMap<string, TasasBase>;
   /** Apertura de la última vela cerrada de 5 min. */
   barT: number;
   ahora: number;
 }
 
+/**
+ * Lo que el dimensionado mira de la configuración, y nada más. Los agentes lo
+ * construyen desde sus límites (spec 074): así usan esta misma función sin
+ * fingir un canal entero.
+ */
+export type ConfigDimensionado = Pick<
+  ConfigCanal,
+  | 'capital'
+  | 'riesgoPct'
+  | 'topeDiarioPct'
+  | 'maxStopPct'
+  | 'costes'
+  | 'maxCosteR'
+  | 'esquemas'
+  | 'minObjetivoCoste'
+  | 'maxMargenPct'
+  | 'colchonStops'
+  | 'apalancamientoTope'
+  | 'multiploNocional'
+  | 'topeNocional'
+  | 'minRR'
+>;
+
+/** Lo que `opcionDeStop` mira de la entrada de la herramienta. */
+export interface EntradaDimensionado {
+  cfg: ConfigDimensionado;
+  market: MarketSpec;
+  saldoLibre: string;
+  historial: Pick<HistorialOperaciones, 'realizadoHoy'>;
+  niveles: readonly NivelApalancamiento[];
+  maxApalancamientoUsuario: number | null;
+  /** El ATR que marca la distancia mínima a la liquidación: 3 veces este. */
+  mercado: Pick<ContextoMercado, 'atr1h'>;
+  canal: Pick<CanalDetectado, 'tipo'> | null;
+}
+
 /** Lo que se ha perdido hoy, en % del capital (0 si se va ganando). */
-export function perdidaHoyPct(historial: HistorialOperaciones, capital: Decimal): Decimal {
+export function perdidaHoyPct(
+  historial: Pick<HistorialOperaciones, 'realizadoHoy'>,
+  capital: Decimal,
+): Decimal {
   if (!capital.gt(0)) return D(0);
   return Decimal.max(0, D(historial.realizadoHoy).neg()).div(capital).mul(100);
 }
 
 /** El riesgo en dinero de una operación: el pedido, sin pasar del margen del tope diario. */
-export function riesgoDisponible(cfg: ConfigCanal, historial: HistorialOperaciones): Decimal {
+export function riesgoDisponible(
+  cfg: Pick<ConfigCanal, 'capital' | 'riesgoPct' | 'topeDiarioPct'>,
+  historial: Pick<HistorialOperaciones, 'realizadoHoy'>,
+): Decimal {
   const porOperacion = cfg.capital.mul(cfg.riesgoPct).div(100);
   const margenDiario = cfg.capital
     .mul(cfg.topeDiarioPct.minus(perdidaHoyPct(historial, cfg.capital)))
@@ -157,7 +195,7 @@ export function riesgoDisponible(cfg: ConfigCanal, historial: HistorialOperacion
 }
 
 /** ¿Llega la evidencia del histórico a lo que pide la configuración? */
-export function evidenciaSuficiente(tasas: ResumenTasas | null, minima: EvidenciaMinima): boolean {
+export function evidenciaSuficiente(tasas: TasasBase | null, minima: EvidenciaMinima): boolean {
   if (minima === 'NO') return true;
   if (!tasas) return false;
   if (minima === 'MODERADA') return tasas.evidencia === Evidencia.MODERADA;
@@ -198,6 +236,29 @@ export function objetivosDelCanal(
   return { tp1: D(px(market, media, lado)), tp2: D(px(market, opuesto, lado)) };
 }
 
+/**
+ * El stop a `atrs` veces `atr` más allá del extremo, más medio spread,
+ * redondeado HACIA la entrada; null si no queda por encima de cero. Lo
+ * comparten el canal y los agentes (spec 074).
+ */
+export function stopDesdeExtremo(
+  market: MarketSpec,
+  ticker: Pick<Ticker, 'bid' | 'ask'>,
+  largo: boolean,
+  extremo: Decimal,
+  atr: Decimal,
+  atrs: number,
+): Decimal | null {
+  const medioSpread = D(ticker.ask).minus(ticker.bid).abs().div(2);
+  const distancia = atr.mul(atrs).plus(medioSpread);
+  const bruto = largo ? extremo.minus(distancia) : extremo.plus(distancia);
+  if (!bruto.gt(0)) return null;
+  // El stop del largo es una venta y redondea hacia arriba: un tick más cerca
+  // de la entrada, nunca más lejos. El del corto, al revés.
+  const stop = D(px(market, bruto, largo ? 'SELL' : 'BUY'));
+  return stop.gt(0) ? stop : null;
+}
+
 /** El stop de un tipo, redondeado HACIA la entrada; null si no queda por encima de cero. */
 export function precioDeStop(
   e: Pick<EntradaHerramienta, 'market' | 'ticker' | 'mercado'>,
@@ -205,16 +266,14 @@ export function precioDeStop(
   tipo: TipoStop,
   tipoCanal: TipoCanal,
 ): Decimal | null {
-  const largo = cand.lado === 'LONG';
-  const medioSpread = D(e.ticker.ask).minus(e.ticker.bid).abs().div(2);
-  const distancia = D(e.mercado.atr15m).mul(ATR_POR_STOP[tipoCanal][tipo]).plus(medioSpread);
-  const extremo = aDecimal(cand.extremo);
-  const bruto = largo ? extremo.minus(distancia) : extremo.plus(distancia);
-  if (!bruto.gt(0)) return null;
-  // El stop del largo es una venta y redondea hacia arriba: un tick más cerca
-  // de la entrada, nunca más lejos. El del corto, al revés.
-  const stop = D(px(e.market, bruto, largo ? 'SELL' : 'BUY'));
-  return stop.gt(0) ? stop : null;
+  return stopDesdeExtremo(
+    e.market,
+    e.ticker,
+    cand.lado === 'LONG',
+    aDecimal(cand.extremo),
+    D(e.mercado.atr15m),
+    ATR_POR_STOP[tipoCanal][tipo],
+  );
 }
 
 /**
@@ -254,6 +313,21 @@ export function preciosDeEntrada(
  * Los tramos del par de menor a mayor nocional. Sin tramos, o si el primero no
  * empieza en cero, rige el del mercado entero, como en `tramoDeApalancamiento`.
  */
+export function tramosOrdenados(
+  niveles: readonly NivelApalancamiento[],
+  maxMercado: number,
+  mantenimientoMercado: number,
+): NivelApalancamiento[] {
+  const orden = [...niveles].sort((a, b) => D(a.desdeNocional).comparedTo(b.desdeNocional));
+  if (orden.length === 0 || D(orden[0].desdeNocional).gt(0)) {
+    orden.unshift({
+      desdeNocional: '0',
+      maxApalancamiento: maxMercado,
+      mantenimiento: mantenimientoMercado,
+    });
+  }
+  return orden;
+}
 
 const inviable = (tipo: TipoStop, precio: string, motivo: string): OpcionStop => ({
   tipo,
@@ -287,15 +361,31 @@ const inviable = (tipo: TipoStop, precio: string, motivo: string): OpcionStop =>
 export const medioLlegaAlMinimo = (market: MarketSpec, cantidad: Decimal, tope: Decimal): boolean =>
   llegaAlMinimo(market, D(qy(market, cantidad.div(2))), tope);
 
+interface Dimension {
+  cantidad: Decimal;
+  nocional: Decimal;
+  lMin: number;
+  lMax: number;
+  mantenimiento: number;
+}
+
+/** ¿Llega la orden a los mínimos del venue? */
+export const llegaAlMinimo = (market: MarketSpec, cantidad: Decimal, precio: Decimal): boolean =>
+  cantidad.gt(0) &&
+  !(market.minQty && cantidad.lt(market.minQty)) &&
+  !(market.minNotional && cantidad.mul(precio).lt(market.minNotional));
+
 /**
  * Una opción de stop con todos sus números.
  *
  * Exportada para el test de propiedad: es aquí donde se sostienen las tres
- * garantías de la cabecera.
+ * garantías de la cabecera. Del candidato solo mira el lado, y de la entrada lo
+ * que dice `EntradaDimensionado`: así la usan también los candidatos de un
+ * agente (spec 074).
  */
 export function opcionDeStop(
-  e: EntradaHerramienta,
-  cand: CandidatoBase,
+  e: EntradaDimensionado,
+  cand: Pick<CandidatoBase, 'lado'>,
   tipo: TipoStop,
   stop: Decimal | null,
   tope: Decimal,
@@ -352,31 +442,68 @@ export function opcionDeStop(
   );
   if (!maxMargen.gt(0)) return inviable(tipo, precioStop, 'SIN_MARGEN');
 
-  // El dimensionado por tramos vive en `../dimension.ts` desde el spec 068: lo
-  // comparten esta herramienta y el motor del «Bot de IA», y una copia en cada
-  // sitio sería un sitio más donde olvidarse del siguiente arreglo.
-  const { dim: mejor, motivo } = dimensionar({
-    market,
-    niveles: e.niveles,
-    tope,
-    distanciaStop: s,
-    atr1hRelativo: D(e.mercado.atr1h).div(tope),
-    riesgo,
-    perdidaPorUnidad: porUnidad,
-    capital: cfg.capital,
-    multiploNocional: cfg.multiploNocional,
-    topeNocional: cfg.topeNocional,
-    maxMargen,
-    colchonStops: cfg.colchonStops,
-    topesApalancamiento: [
-      APALANCAMIENTO_MAXIMO,
-      cfg.apalancamientoTope,
-      e.maxApalancamientoUsuario ?? APALANCAMIENTO_MAXIMO,
-    ],
-    mantenimientoMercado: maintenanceMarginRateOf(market),
-  });
+  // El stop de mercado tiene que cerrar la posición entera de una vez.
+  const topesCantidad = [market.maxQty, market.maxMarketQty]
+    .filter((q): q is string => !!q && D(q).gt(0))
+    .map((q) => D(q));
+
+  const atr1hRelativo = D(e.mercado.atr1h).div(tope);
+  const tramos = tramosOrdenados(e.niveles, market.maxLeverage, maintenanceMarginRateOf(market));
+  let mejor: Dimension | null = null;
+  let motivo = 'APALANCAMIENTO';
+  // El tramo depende del nocional, y el nocional del apalancamiento que permite
+  // el tramo. Se calcula en cada tramo con SUS reglas y el nocional acotado a
+  // él, y se queda el mayor. Iterar hasta que casen puede oscilar entre dos.
+  for (let i = 0; i < tramos.length; i++) {
+    const tramo = tramos[i];
+    const hasta = i + 1 < tramos.length ? D(tramos[i + 1].desdeNocional) : null;
+    const lev = apalancamientoPorStop({
+      distanciaStop: s,
+      atr1hRelativo,
+      liqBufferStops: cfg.colchonStops,
+      mantenimiento: tramo.mantenimiento,
+      topes: [
+        APALANCAMIENTO_MAXIMO,
+        cfg.apalancamientoTope,
+        tramo.maxApalancamiento,
+        market.maxLeverage,
+        e.maxApalancamientoUsuario ?? APALANCAMIENTO_MAXIMO,
+      ],
+    });
+    if (lev.maximo < 1) continue;
+
+    const topes = [
+      riesgo.div(porUnidad).mul(tope),
+      cfg.capital.mul(cfg.multiploNocional),
+      cfg.capital.mul(lev.maximo),
+    ];
+    if (cfg.topeNocional) topes.push(cfg.topeNocional);
+    if (hasta) topes.push(hasta);
+    let objetivo = Decimal.min(...topes);
+    let lMin = objetivo.div(maxMargen).toDecimalPlaces(0, Decimal.ROUND_CEIL).toNumber();
+    if (lMin > lev.maximo) {
+      // Ni al máximo cabe el margen: se reduce el nocional, no se sube la palanca.
+      objetivo = maxMargen.mul(lev.maximo);
+      lMin = lev.maximo;
+    }
+    lMin = Math.max(1, lMin);
+    if (objetivo.lt(tramo.desdeNocional)) continue;
+
+    let cantidad = D(qy(market, objetivo.div(tope)));
+    for (const q of topesCantidad) if (cantidad.gt(q)) cantidad = D(qy(market, q));
+    if (hasta && cantidad.mul(tope).gte(hasta)) cantidad = cantidad.minus(market.stepSize);
+    if (!cantidad.gt(0)) {
+      motivo = 'MINIMO';
+      continue;
+    }
+    const nocional = cantidad.mul(tope);
+    if (!mejor || nocional.gt(mejor.nocional)) {
+      mejor = { cantidad, nocional, lMin, lMax: lev.maximo, mantenimiento: tramo.mantenimiento };
+    }
+  }
   if (!mejor) return inviable(tipo, precioStop, motivo);
   const { cantidad, nocional } = mejor;
+  if (!llegaAlMinimo(market, cantidad, tope)) return inviable(tipo, precioStop, 'MINIMO');
 
   const perdidaAlStop = porUnidad.mul(cantidad);
   const bandas: BandaCalculada[] = [];

@@ -5,7 +5,6 @@ import {
   AuditOutcome,
   CLAVE_INTERRUPTOR_CANAL,
   EventSeverity,
-  esEstrategiaConIntenciones,
   esEstrategiaSoloAdmin,
   interruptorCerrado,
 } from '@crypton/shared';
@@ -661,11 +660,7 @@ export class EngineService implements OnModuleInit, OnModuleDestroy {
     }
     // El tope por venue es igual: un relevo readopta lo que ya estaba dentro del
     // tope, y un bot en STOPPING solo viene a terminar de cerrar.
-    // Las DOS estrategias con contrato de intenciones cuentan contra el mismo
-    // tope, y no una cada una: el recurso escaso es el cupo de peticiones del
-    // venue por IP, no la estrategia. Repartirlo por estrategia seria volver al
-    // incidente de TICK_SLOW del spec 065 por otro camino (spec 068).
-    if (esEstrategiaConIntenciones(bot.strategy) && arranque) {
+    if (bot.strategy === 'AI_CHANNEL' && arranque) {
       this.reservarCanal(bot.id, bot.venue, bot.strategy, bot.dry_run);
     }
 

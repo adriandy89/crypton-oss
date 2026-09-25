@@ -41,6 +41,12 @@ export class MarketStreamService implements OnModuleInit, OnModuleDestroy {
   private heartbeat: ReturnType<typeof setInterval> | null = null;
   /** Lo último que se le pidió al worker, para no repetir el mismo mensaje. */
   private announced = '';
+  /**
+   * Lo que mira la propia API, por quien lo declara (spec 074): temas de precio
+   * que no son de ninguna conexión. Va en el mismo latido que lo de las
+   * pantallas, y por eso el worker lo trata igual.
+   */
+  private readonly delServidor = new Map<string, readonly string[]>();
 
   constructor(
     private readonly bus: BusService,
@@ -164,6 +170,24 @@ export class MarketStreamService implements OnModuleInit, OnModuleDestroy {
   }
 
   /**
+   * Declara los pares que la API necesita con precio vivo aunque no los mire
+   * nadie (spec 074): los de los agentes de IA, que leen bid, ask y marca en
+   * cada ronda y al aprobar. Con el interés declarado, el worker mantiene la
+   * suscripción y deja el ticker en Redis; sin él, cada lectura sería una
+   * petición al venue contra el cupo por IP que comparten los bots.
+   *
+   * Reemplaza lo que ese origen hubiera declarado antes; una lista vacía lo
+   * suelta todo. Los pares van como `VENUE:SIMBOLO`, como los de las pantallas,
+   * y pasan por el mismo filtro.
+   */
+  fijarInteresServidor(origen: string, pares: readonly string[], testnet = false): void {
+    const temas = pares.map((p) => topicFor(p, testnet)).filter(isTopic);
+    const clave = `${origen}|${testnet ? 't' : 'm'}`;
+    if (temas.length === 0) this.delServidor.delete(clave);
+    else this.delServidor.set(clave, temas);
+  }
+
+  /**
    * Le dice al worker el conjunto ENTERO de lo que alguien mira.
    *
    * Entero y no las altas y las bajas: pub/sub puede perder un mensaje, y con
@@ -172,7 +196,9 @@ export class MarketStreamService implements OnModuleInit, OnModuleDestroy {
    * el conjunto completo, el siguiente mensaje corrige cualquier deriva.
    */
   private async announce(): Promise<void> {
-    const topics = this.sse.activeTopics().sort();
+    const topics = [
+      ...new Set([...this.sse.activeTopics(), ...[...this.delServidor.values()].flat()]),
+    ].sort();
     const fingerprint = topics.join(',');
     // Se manda igual si no ha cambiado —es un latido— pero se registra solo
     // cuando cambia, para que el log sirva de algo.

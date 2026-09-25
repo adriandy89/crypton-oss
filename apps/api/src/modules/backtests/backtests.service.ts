@@ -11,6 +11,7 @@ import {
   BarPath,
   SourceMarketType,
   candleSpanMs,
+  esEstrategiaDeAgente,
   type BacktestParams,
   type BacktestResult,
   type BotConfig,
@@ -159,6 +160,14 @@ export class BacktestsService {
     // lo mismo: aquí no hay libro, ni funding, ni las otras posiciones.
     if (!bot.dry_run) {
       throw new BadRequestException('El backtest solo se lanza sobre bots de simulación.');
+    }
+    // Una operación de un agente es una operación fechada: su entrada vence en
+    // minutos y su plan salió del mercado de ese momento. Reproducirla sobre
+    // otras velas no mide nada; el agente se mide con su tarjeta (spec 074).
+    if (esEstrategiaDeAgente(bot.strategy)) {
+      throw new BadRequestException(
+        'Una operación de un agente no se reproduce: se mide con la tarjeta de su agente.',
+      );
     }
 
     const provider = this.providers[dto.source];

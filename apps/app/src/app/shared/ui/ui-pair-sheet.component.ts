@@ -1,4 +1,14 @@
-import { Component, computed, effect, inject, input, model, output, signal } from '@angular/core';
+import {
+  Component,
+  computed,
+  effect,
+  inject,
+  input,
+  model,
+  output,
+  signal,
+  untracked,
+} from '@angular/core';
 import { viewChild } from '@angular/core';
 import { IonButton, IonContent, IonIcon, IonModal, IonSearchbar } from '@ionic/angular/standalone';
 import { addIcons } from 'ionicons';
@@ -79,7 +89,7 @@ export function relevanciaDePar(row: { symbol: string; base: string }, q: string
         <ion-content class="pairbody">
           <div class="pairtop">
             <header class="pairhead">
-              <h2>Elige un par</h2>
+              <h2>{{ multiple() ? 'Elige los pares' : 'Elige un par' }}</h2>
               <button type="button" class="x" (click)="open.set(false)" aria-label="Cerrar">
                 <ion-icon name="close-outline" />
               </button>
@@ -109,8 +119,8 @@ export function relevanciaDePar(row: { symbol: string; base: string }, q: string
                   type="button"
                   class="pair"
                   role="option"
-                  [class.on]="r.symbol === symbol()"
-                  [attr.aria-selected]="r.symbol === symbol()"
+                  [class.on]="marcado(r.symbol)"
+                  [attr.aria-selected]="marcado(r.symbol)"
                   (click)="elegir(r)"
                 >
                   <span class="id">
@@ -156,6 +166,16 @@ export function relevanciaDePar(row: { symbol: string; base: string }, q: string
             </ui-empty-state>
           }
         </ion-content>
+        <!-- Varios pares (spec 074): cada toque marca o desmarca, y la hoja se
+             cierra con «Listo», que es cuando se emite la lista entera. -->
+        @if (multiple()) {
+          <footer class="pairfoot">
+            <span class="num">
+              {{ marcados().size }} elegidos{{ maximo() ? ' de ' + maximo() + ' como mucho' : '' }}
+            </span>
+            <ion-button size="small" (click)="listo()">Listo</ion-button>
+          </footer>
+        }
       </ng-template>
     </ion-modal>
   `,
@@ -330,6 +350,18 @@ export function relevanciaDePar(row: { symbol: string; base: string }, q: string
           visibility: visible;
         }
       }
+
+      .pairfoot {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: var(--space-3);
+        padding: var(--space-2) var(--space-4) calc(var(--space-2) + env(safe-area-inset-bottom));
+        border-top: 1px solid rgba(46, 43, 82, 0.6);
+        background: var(--surface-base);
+        font-size: 12px;
+        color: var(--text-2);
+      }
     `,
   ],
 })
@@ -345,7 +377,19 @@ export class UiPairSheetComponent {
   /** Emite `Market.symbol`, nunca el canónico: es lo que espera el resto del asistente. */
   readonly picked = output<string>();
 
+  /**
+   * Varios pares a la vez, para los agentes de IA (spec 074): cada toque marca
+   * o desmarca y «Listo» emite la lista entera por `pickedMany`.
+   */
+  readonly multiple = input(false);
+  /** Con varios: los ya elegidos, para empezar por ellos. */
+  readonly seleccion = input<readonly string[]>([]);
+  /** Con varios: cuántos como mucho; null, sin tope. */
+  readonly maximo = input<number | null>(null);
+  readonly pickedMany = output<string[]>();
+
   readonly query = signal('');
+  readonly marcados = signal<ReadonlySet<string>>(new Set());
 
   readonly compact = compact;
   readonly price = price;
@@ -426,7 +470,10 @@ export class UiPairSheetComponent {
     // de otra conexión, y encontrarse la lista ya filtrada por algo que uno no
     // recuerda haber escrito parece que faltan pares.
     effect(() => {
-      if (this.open()) this.query.set('');
+      if (!this.open()) return;
+      this.query.set('');
+      // Con varios, se empieza por lo que ya tiene elegido quien la abre.
+      this.marcados.set(new Set(untracked(() => this.seleccion())));
     });
   }
 
@@ -435,9 +482,35 @@ export class UiPairSheetComponent {
     void this.buscador()?.setFocus();
   }
 
+  marcado(symbol: string): boolean {
+    return this.multiple() ? this.marcados().has(symbol) : symbol === this.symbol();
+  }
+
   elegir(row: PairRow): void {
+    if (this.multiple()) {
+      const m = new Set(this.marcados());
+      if (m.has(row.symbol)) m.delete(row.symbol);
+      else {
+        const tope = this.maximo();
+        if (tope !== null && m.size >= tope) return;
+        m.add(row.symbol);
+      }
+      this.marcados.set(m);
+      return;
+    }
     this.picked.emit(row.symbol);
     // Elegir cierra la hoja: es la acción por la que se abrió.
+    this.open.set(false);
+  }
+
+  /** Con varios: la lista entera, en el orden del catálogo, y se cierra. */
+  listo(): void {
+    const m = this.marcados();
+    this.pickedMany.emit(
+      this.markets()
+        .map((x) => x.symbol)
+        .filter((s) => m.has(s)),
+    );
     this.open.set(false);
   }
 

@@ -3,13 +3,21 @@ import { ConfigService } from '@nestjs/config';
 import { Cron, CronExpression } from '@nestjs/schedule';
 import {
   ACCION_PAUSAR_CANAL,
+  AccionSeguimiento,
   D,
+  EventoAgente,
   EventoCanal,
   PREFIJO_BOTON_CANAL,
+  VerboAgente,
+  callbackAgente,
+  datosEventoAgente,
+  esEventoAgente,
   esValeCanal,
+  type DatosEventoAgente,
 } from '@crypton/shared';
 import { LeaseService } from '../engine';
 import { BUS_CHANNELS, BusService, DbService, type BusMessage } from '../libs';
+import { lineasResumenAgentes } from './resumen-agentes';
 import {
   TelegramClient,
   bienFormado,
@@ -28,6 +36,8 @@ interface TelegramPrefs {
   daily: boolean;
   /** Lo que propone o aplica el supervisor de IA (spec 046). */
   ai: boolean;
+  /** Lo que proponen y hacen los agentes de IA, con sus botones (spec 074). */
+  agentes: boolean;
 }
 
 const DEFAULT_PREFS: TelegramPrefs = {
@@ -38,6 +48,7 @@ const DEFAULT_PREFS: TelegramPrefs = {
   liquidation: true,
   daily: true,
   ai: true,
+  agentes: true,
 };
 
 /** Qué preferencia gobierna cada tipo de evento. */
@@ -96,9 +107,30 @@ const EVENT_PREF: Record<string, keyof TelegramPrefs> = {
   AI_POSICION_HUERFANA: 'risk',
   AI_OPERACION_PERDIDA: 'risk',
   AI_ENTRY_DISCARDED: 'errors',
+  // Los agentes de IA (spec 074). Su trabajo —propuestas, en qué acabaron, el
+  // seguimiento y la vida de cada operación— va con su preferencia propia: en
+  // estos bots `AGENT_EXIT` sustituye a `CYCLE_CLOSED`, y quien silencia los
+  // ciclos de un market maker no debe perder las operaciones de un agente. Lo
+  // que pone en juego una posición o para al agente va con `risk`, como en el
+  // canal; lo que dice que algo no funciona, con `errors`.
+  AGENT_PROPOSAL: 'agentes',
+  AGENT_PROPOSAL_RESULT: 'agentes',
+  AGENT_ACTION: 'agentes',
+  AGENT_ENTRY: 'agentes',
+  AGENT_EXIT: 'agentes',
+  AGENT_BREAKEVEN: 'agentes',
+  AGENT_STOP_TIGHTENED: 'agentes',
+  AGENT_REDUCED: 'agentes',
+  AGENT_PAUSED: 'risk',
+  AGENT_CIERRE_FALLIDO: 'risk',
+  AGENT_FOREIGN_POSITION: 'risk',
+  AGENT_OPERACION_PERDIDA: 'risk',
+  AGENT_SLEEPING: 'errors',
+  AGENT_STOP_IGNORED: 'errors',
+  AGENT_ENTRY_DISCARDED: 'errors',
   // `AI_DECISION` NO está: va solo a la línea de tiempo, y nace en la API sin
   // entrega forzada. `AI_CIERRE` tampoco: es la orden de salir, y el aviso con
-  // el resultado llega con `AI_EXIT`.
+  // el resultado llega con `AI_EXIT`; lo mismo `AGENT_CIERRE` con `AGENT_EXIT`.
   // `EXIT_PENDING_MIN_SIZE` NO está aquí a propósito: es informativo y se cura
   // solo en cuanto entra otra ejecución. Notificarlo sería enseñar a silenciar
   // el canal justo antes del aviso que sí había que leer.
@@ -117,6 +149,7 @@ const MIN_SEVERITY: Record<string, string[]> = {
   // Una IOC que no se llenó es INFO y se queda en la línea de tiempo; la que el
   // motor descarta por el venue o los límites es WARN y se avisa (spec 059).
   AI_ENTRY_DISCARDED: ['WARN', 'ERROR', 'CRITICAL'],
+  AGENT_ENTRY_DISCARDED: ['WARN', 'ERROR', 'CRITICAL'],
 };
 
 const ICON: Record<string, string> = {
@@ -146,6 +179,20 @@ const ICON: Record<string, string> = {
   AI_DAY_STOP: '⛔',
   AI_ENTRY_DISCARDED: '↩️',
   AI_OPERACION_PERDIDA: '🧭',
+  AGENT_PROPOSAL: '💡',
+  AGENT_PROPOSAL_RESULT: '↩️',
+  AGENT_ACTION: '🛡',
+  AGENT_ENTRY: '📥',
+  AGENT_EXIT: '📤',
+  AGENT_BREAKEVEN: '🛡',
+  AGENT_STOP_TIGHTENED: '🛡',
+  AGENT_REDUCED: '✂️',
+  AGENT_PAUSED: '⛔',
+  AGENT_SLEEPING: '💤',
+  AGENT_STOP_IGNORED: '⚠',
+  AGENT_ENTRY_DISCARDED: '↩️',
+  AGENT_FOREIGN_POSITION: '⚠',
+  AGENT_OPERACION_PERDIDA: '🧭',
   BOT_STARTED: '▶',
   BOT_PAUSED: '⏸',
   BOT_STOPPED: '⏹',
@@ -204,8 +251,10 @@ export class NotifierService implements OnModuleInit, OnModuleDestroy {
   private readonly pending = new Map<string, PendingBatch>();
   /** El último envío en curso de cada chat: los lotes salen en fila (spec 056, R-5). */
   private readonly envios = new Map<string, Promise<void>>();
-  /** Entre dos trozos del mismo lote. Telegram pide no pasar de uno por segundo por chat. */
+  /** Entre dos mensajes seguidos al mismo chat. Telegram pide no pasar de uno por segundo. */
   private readonly pausaEntreTrozosMs = PAUSA_ENTRE_TROZOS_MS;
+  /** Cuándo salió el último mensaje de cada chat, para medir esa pausa (spec 074). */
+  private readonly ultimoEnvio = new Map<string, number>();
 
   /** Cache de vinculación por usuario; evita una consulta por evento. */
   private readonly linkCache = new Map<
@@ -259,7 +308,13 @@ export class NotifierService implements OnModuleInit, OnModuleDestroy {
   }
 
   private async onEvent(message: BusMessage): Promise<void> {
-    if (!message.userId || !message.botId) return;
+    if (!message.userId) return;
+    // Los eventos de un agente de IA no tienen bot: son del agente, y traen su
+    // id en los datos (spec 074). Cualquier otro sin bot no es para aquí: las
+    // pulsaciones de los botones, por ejemplo, van del poller a la API.
+    const { botId } = message;
+    const agente = botId || !esEventoAgente(message.type) ? null : datosEventoAgente(message.data);
+    if (!botId && !agente) return;
 
     // Solo notifica el proceso que PUBLICÓ el evento.
     //
@@ -294,27 +349,31 @@ export class NotifierService implements OnModuleInit, OnModuleDestroy {
     const minima = MIN_SEVERITY[message.type];
     if (minima && !minima.includes(severity)) return;
 
-    const bot = await this.botLabel(message.botId);
+    const etiqueta = agente
+      ? await this.agentLabel(agente.agentId)
+      : await this.botLabel(botId ?? '');
     const icon = ICON[message.type] ?? (severity === 'CRITICAL' ? '🔥' : '·');
     // Recortada aquí, antes de encolarla o de mandarla sola: una línea que no cabe
     // en un mensaje lo tumba entero (spec 054).
     const line = recortar(
       bienFormado(
-        `${icon} <b>${escapeHtml(bot)}</b> — ${escapeHtml(data.message ?? message.type)}`,
+        `${icon} <b>${escapeHtml(etiqueta)}</b> — ${escapeHtml(data.message ?? message.type)}`,
       ),
     );
 
     // Se reserva lo más tarde posible: un evento que el usuario no quiere no
     // debe costar una ida y vuelta a Redis, y el camino normal —el del origen
     // propio— no pasa por aquí en absoluto.
-    if (ajeno && !(await this.reservarEntrega(message))) return;
+    if (ajeno && !(await this.reservarEntrega(message, agente))) return;
 
     // Una sugerencia con botones NO puede ir en el lote: el teclado pertenece a
     // UN mensaje, y fundirla con otras once lineas dejaria dos botones colgando
-    // de un texto que habla de otras cosas. Se manda sola y al momento.
-    const teclado = this.tecladoDe(message);
+    // de un texto que habla de otras cosas. Se manda sola y al momento, pero en
+    // la fila de su chat: dos propuestas seguidas, o una detrás de un lote, eran
+    // la ráfaga que Telegram corta con un 429 (spec 074).
+    const teclado = this.tecladoDe(message, agente);
     if (teclado) {
-      await this.client.sendMessage(link.chatId, line, teclado);
+      await this.enFila(link.chatId, [line], teclado);
       return;
     }
 
@@ -333,10 +392,18 @@ export class NotifierService implements OnModuleInit, OnModuleDestroy {
    * `tryLock` devuelve `false` con Redis caído, y aquí eso significa no
    * entregar. Es lo correcto para este camino: duplicar avisos es peor que
    * saltarse uno, y lo que se juega es un aviso, no una orden.
+   *
+   * Sin bot, la clave lleva la propuesta o la acción del agente (spec 074): una
+   * ronda puede publicar dos propuestas del mismo agente en el mismo
+   * milisegundo, y con solo el agente la segunda perdería contra la primera y
+   * no la entregaría nadie.
    */
-  private reservarEntrega(message: BusMessage): Promise<boolean> {
+  private reservarEntrega(message: BusMessage, agente: DatosEventoAgente | null): Promise<boolean> {
+    const destino = agente
+      ? `ag:${agente.agentId}:${agente.accionId ?? agente.propuestaId ?? '-'}`
+      : message.botId;
     return this.leases.tryLock(
-      `notify:${message.botId}:${message.type}:${message.ts}`,
+      `notify:${destino}:${message.type}:${message.ts}`,
       FORCED_DELIVERY_LOCK_MS,
     );
   }
@@ -348,7 +415,14 @@ export class NotifierService implements OnModuleInit, OnModuleDestroy {
    * aqui solo se copia al boton. En `callback_data` caben 64 bytes, asi que no
    * entra nada mas — ni el id del bot ni una descripcion del cambio.
    */
-  private tecladoDe(message: BusMessage): InlineKeyboard | null {
+  private tecladoDe(message: BusMessage, agente: DatosEventoAgente | null): InlineKeyboard | null {
+    // Una propuesta o una acción de un agente (spec 074). El vale lo guarda la
+    // API al proponer; el lector ya dejó fuera uno mal formado, y sin vale el
+    // aviso va al lote como cualquier otro: es el de lo que se aplicó solo.
+    if (message.type === EventoAgente.PROPUESTA || message.type === EventoAgente.ACCION) {
+      return agente?.vale ? tecladoAgente(message.type, agente.vale, agente.accion) : null;
+    }
+
     // La entrada del canal con IA lleva su botón de pausa (spec 059). El vale
     // lo guardó el worker al emitir el aviso; aquí solo se copia, y uno mal
     // formado no pinta botón: pulsarlo no serviría de nada.
@@ -410,17 +484,35 @@ export class NotifierService implements OnModuleInit, OnModuleDestroy {
     // cada aviso era una frase; los del supervisor listan ahora sus cambios
     // (spec 054), y un error del venue ya podía ser largo antes. Uno de más de
     // 4096 caracteres Telegram lo rechaza entero.
-    //
-    // Y en fila por chat, con una pausa entre trozos (spec 056, R-5): sin la fila,
-    // un envío lento dejaba que el lote siguiente se colara entre los trozos del
-    // anterior; sin la pausa, una ráfaga seguida al mismo chat es lo que Telegram
-    // corta con un 429, y el cliente no reintenta.
-    const trozos = trocear(parts);
+    await this.enFila(chatId, trocear(parts));
+  }
+
+  /**
+   * Manda unos mensajes a un chat, en fila con los demás de ese chat y con una
+   * pausa entre dos seguidos (spec 056, R-5): sin la fila, un envío lento dejaba
+   * que el lote siguiente se colara entre los trozos del anterior; sin la pausa,
+   * una ráfaga al mismo chat es lo que Telegram corta con un 429, y el cliente
+   * no reintenta.
+   *
+   * La pausa se mide desde el último mensaje que salió a ese chat, sea de un
+   * lote o de uno con botones (spec 074): antes solo había pausa entre los
+   * trozos de un mismo lote, y los mensajes con botones salían por su cuenta.
+   * El teclado, si lo hay, va en el último.
+   */
+  private async enFila(
+    chatId: string,
+    textos: readonly string[],
+    teclado?: InlineKeyboard,
+  ): Promise<void> {
     const anterior = this.envios.get(chatId) ?? Promise.resolve();
     const este = anterior.then(async () => {
-      for (const [i, texto] of trozos.entries()) {
-        if (i > 0) await this.esperar(this.pausaEntreTrozosMs);
-        await this.client.sendMessage(chatId, texto);
+      for (const [i, texto] of textos.entries()) {
+        const ultimo = this.ultimoEnvio.get(chatId);
+        const falta = ultimo === undefined ? 0 : ultimo + this.pausaEntreTrozosMs - Date.now();
+        if (falta > 0) await this.esperar(falta);
+        const conTeclado = teclado && i === textos.length - 1 ? teclado : undefined;
+        await this.client.sendMessage(chatId, texto, conTeclado);
+        this.ultimoEnvio.set(chatId, Date.now());
       }
     });
     const cola = este.catch(() => undefined);
@@ -476,6 +568,27 @@ export class NotifierService implements OnModuleInit, OnModuleDestroy {
     return label;
   }
 
+  private readonly agentNames = new Map<string, { label: string; at: number }>();
+
+  /**
+   * La etiqueta de un aviso de agente (spec 074): su nombre, y marcado si opera
+   * en la cuenta de simulación, por lo mismo que un bot simulado.
+   */
+  private async agentLabel(agentId: string): Promise<string> {
+    const cached = this.agentNames.get(agentId);
+    if (cached && Date.now() - cached.at < LABEL_TTL_MS) return cached.label;
+
+    const agente = await this.db.aiDeskAgent.findUnique({
+      where: { id: agentId },
+      select: { name: true, exchange_account: { select: { paper: true } } },
+    });
+    const label = agente
+      ? `Agente «${agente.name}»${agente.exchange_account.paper ? ' · simulado' : ''}`
+      : `Agente ${agentId.slice(0, 8)}`;
+    this.agentNames.set(agentId, { label, at: Date.now() });
+    return label;
+  }
+
   // ═══════════════════════════════════════════════════════════════
   // Resumen diario
   // ═══════════════════════════════════════════════════════════════
@@ -502,11 +615,20 @@ export class NotifierService implements OnModuleInit, OnModuleDestroy {
     const midnight = new Date();
     midnight.setHours(0, 0, 0, 0);
 
+    // Quién tiene agentes, de una vez: son pocos, y así no se pregunta por los
+    // de cada usuario que no ha creado ninguno. Un fallo aquí deja el resumen
+    // sin su sección de agentes, no sin resumen.
+    const conAgentes = await this.usuariosConAgentes().catch(() => new Set<string>());
+
     for (const link of links) {
       const prefs = { ...DEFAULT_PREFS, ...((link.prefs as object) ?? {}) };
       if (!prefs.daily || !link.chat_id) continue;
 
       try {
+        const agentes =
+          prefs.agentes && conAgentes.has(link.user_id)
+            ? await this.lineasAgentes(link.user_id, midnight).catch(() => [])
+            : [];
         // El `dry_run` de cada fila, para separar las dos cuentas. La regla de
         // la casa está escrita en `portfolio-aggregate.ts`: «el resultado de un
         // simulado es dinero que no existe y no se suma nunca al de verdad». La
@@ -530,35 +652,41 @@ export class NotifierService implements OnModuleInit, OnModuleDestroy {
 
         // Sin actividad y sin bots vivos no hay nada que contar: un mensaje
         // diario vacío solo entrena al usuario a ignorarlos.
-        if (todosCycles.length === 0 && todosBots.length === 0) continue;
+        const conBots = todosCycles.length > 0 || todosBots.length > 0;
+        if (!conBots && agentes.length === 0) continue;
 
-        const pnl = cycles.reduce((a, c) => a.plus(c.realized_pnl.toString()), D(0));
-        const fees = cycles.reduce((a, c) => a.plus(c.fees.toString()), D(0));
-        const running = bots.filter((b) => b.status === 'RUNNING').length;
-        const paused = bots.filter((b) => b.status === 'PAUSED').length;
-        const errored = bots.filter((b) => b.status === 'ERROR').length;
+        const lines = ['<b>Resumen del día</b>'];
+        if (conBots) {
+          const pnl = cycles.reduce((a, c) => a.plus(c.realized_pnl.toString()), D(0));
+          const fees = cycles.reduce((a, c) => a.plus(c.fees.toString()), D(0));
+          const running = bots.filter((b) => b.status === 'RUNNING').length;
+          const paused = bots.filter((b) => b.status === 'PAUSED').length;
+          const errored = bots.filter((b) => b.status === 'ERROR').length;
 
-        const sign = pnl.gte(0) ? '+' : '';
-        const lines = [
-          '<b>Resumen del día</b>',
-          `Resultado: <b>${sign}${pnl.toFixed(2)}</b> en ${cycles.length} ciclo(s)`,
-          `Comisiones: ${fees.toFixed(2)}`,
-          `Bots: ${running} operando · ${paused} pausados${errored ? ` · ${errored} en error` : ''}`,
-        ];
-        if (errored > 0) lines.push('⚠ Revisa los bots en error.');
-
-        // Los simulados no desaparecen del resumen, van aparte: uno que ha
-        // estado trabajando todo el día y no sale por ningún lado se lee como
-        // un bot parado.
-        if (simCycles.length > 0 || simBots.length > 0) {
-          const simPnl = simCycles.reduce((a, c) => a.plus(c.realized_pnl.toString()), D(0));
-          const simSign = simPnl.gte(0) ? '+' : '';
-          const simVivos = simBots.filter((b) => b.status === 'RUNNING').length;
+          const sign = pnl.gte(0) ? '+' : '';
           lines.push(
-            `<i>Simulado (no cuenta): ${simSign}${simPnl.toFixed(2)} en ` +
-              `${simCycles.length} ciclo(s) · ${simVivos} operando</i>`,
+            `Resultado: <b>${sign}${pnl.toFixed(2)}</b> en ${cycles.length} ciclo(s)`,
+            `Comisiones: ${fees.toFixed(2)}`,
+            `Bots: ${running} operando · ${paused} pausados${errored ? ` · ${errored} en error` : ''}`,
           );
+          if (errored > 0) lines.push('⚠ Revisa los bots en error.');
+
+          // Los simulados no desaparecen del resumen, van aparte: uno que ha
+          // estado trabajando todo el día y no sale por ningún lado se lee como
+          // un bot parado.
+          if (simCycles.length > 0 || simBots.length > 0) {
+            const simPnl = simCycles.reduce((a, c) => a.plus(c.realized_pnl.toString()), D(0));
+            const simSign = simPnl.gte(0) ? '+' : '';
+            const simVivos = simBots.filter((b) => b.status === 'RUNNING').length;
+            lines.push(
+              `<i>Simulado (no cuenta): ${simSign}${simPnl.toFixed(2)} en ` +
+                `${simCycles.length} ciclo(s) · ${simVivos} operando</i>`,
+            );
+          }
         }
+        // Las operaciones de los agentes son bots y ya cuentan arriba; esto es
+        // lo que dice de los agentes lo que no dice un ciclo (spec 074).
+        lines.push(...agentes);
 
         await this.client.sendMessage(link.chat_id, lines.join('\n'));
         // Telegram corta a unos 30 mensajes por segundo por bot. Sin pausa, un
@@ -570,4 +698,77 @@ export class NotifierService implements OnModuleInit, OnModuleDestroy {
       }
     }
   }
+
+  /** Los usuarios con algún agente, archivado o no: pudo trabajar antes de archivarse. */
+  private async usuariosConAgentes(): Promise<Set<string>> {
+    const filas = await this.db.aiDeskAgent.findMany({
+      distinct: ['user_id'],
+      select: { user_id: true },
+    });
+    return new Set(filas.map((f) => f.user_id));
+  }
+
+  /** La sección de los agentes de un usuario: lo de hoy y lo abierto ahora. */
+  private async lineasAgentes(userId: string, desde: Date): Promise<string[]> {
+    const deUsuario = { agent: { user_id: userId } };
+    const [propuestas, cerradas, abiertas] = await Promise.all([
+      this.db.aiDeskProposal.findMany({
+        where: { ...deUsuario, created_at: { gte: desde } },
+        select: { state: true, dry_run: true },
+      }),
+      this.db.aiDeskProposal.findMany({
+        where: { ...deUsuario, state: 'CERRADA', closed_at: { gte: desde } },
+        select: { realized_pnl: true, r_real: true, dry_run: true },
+      }),
+      this.db.aiDeskProposal.findMany({
+        where: { ...deUsuario, state: { in: ['EJECUTANDO', 'ABIERTA'] } },
+        select: { dry_run: true },
+      }),
+    ]);
+    return lineasResumenAgentes(
+      propuestas,
+      cerradas.map((c) => ({
+        pnl: c.realized_pnl?.toString() ?? null,
+        r: c.r_real?.toString() ?? null,
+        dry_run: c.dry_run,
+      })),
+      abiertas,
+    );
+  }
+}
+
+/**
+ * Los botones de un mensaje de agente (spec 074). Comparten el vale y cambian
+ * el verbo, así que la primera pulsación lo gasta. Una propuesta se ejecuta o
+ * se descarta; una acción de seguimiento se aplica o se descarta, y además se
+ * puede cerrar la operación entera. Si lo propuesto ya es cerrar, se cierra o
+ * se mantiene.
+ */
+export function tecladoAgente(
+  tipo: string,
+  vale: string,
+  accion?: AccionSeguimiento,
+): InlineKeyboard {
+  const boton = (text: string, verbo: VerboAgente) => ({
+    text,
+    callback_data: callbackAgente(vale, verbo),
+  });
+  if (tipo === EventoAgente.PROPUESTA) {
+    return {
+      inline_keyboard: [
+        [boton('✅ Ejecutar', VerboAgente.SI), boton('✖ Descartar', VerboAgente.NO)],
+      ],
+    };
+  }
+  if (accion === AccionSeguimiento.CERRAR) {
+    return {
+      inline_keyboard: [[boton('⏹ Cerrar', VerboAgente.SI), boton('✖ Mantener', VerboAgente.NO)]],
+    };
+  }
+  return {
+    inline_keyboard: [
+      [boton('✅ Aplicar', VerboAgente.SI), boton('✖ Descartar', VerboAgente.NO)],
+      [boton('⏹ Cerrar la operación', VerboAgente.CIERRA)],
+    ],
+  };
 }

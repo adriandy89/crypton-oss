@@ -1,0 +1,306 @@
+<ion-header class="ion-no-border">
+  <ion-toolbar>
+    <ion-buttons slot="start">
+      <ion-back-button [defaultHref]="creando ? '/tabs/ia' : '/ia/agentes/' + id" text="" />
+    </ion-buttons>
+    <ion-title>{{ creando ? 'Nuevo agente' : 'Editar agente' }}</ion-title>
+  </ion-toolbar>
+</ion-header>
+
+<ion-content>
+  <div class="pad">
+    @if (prohibido()) {
+      <app-admin-forbidden />
+    } @else if (cargando()) {
+      <div class="center"><ion-spinner name="crescent" /></div>
+    } @else {
+      @if (error(); as e) {
+        <ui-notice tone="danger">{{ e }}</ui-notice>
+      }
+
+      <!-- ── Quién es ── -->
+      <h3 class="ia-sec">Quién es</h3>
+      <p class="cuando">El nombre vale ya; la cuenta es fija tras crearlo.</p>
+      <ui-card>
+        <div class="ia-campo">
+          <ion-input
+            label="Nombre"
+            labelPlacement="stacked"
+            [maxlength]="64"
+            [value]="nombre()"
+            (ionInput)="nombre.set($any($event.target).value ?? '')"
+          />
+          @if (errorDe('nombre'); as e) {
+            <p class="ia-err">{{ e }}</p>
+          }
+        </div>
+        <div class="ia-campo">
+          <span class="ia-lbl">Cuenta</span>
+          @if (creando) {
+            <div class="ia-chips">
+              @for (c of cuentas(); track c.id) {
+                <button
+                  type="button"
+                  class="ia-chip"
+                  [class.on]="c.id === cuentaId()"
+                  (click)="elegirCuenta(c.id)"
+                >
+                  {{ c.label }} · {{ venueLabel(c.venue)
+                  }}{{ c.paper ? ' · simulación' : c.testnet ? ' · testnet' : '' }}
+                </button>
+              }
+            </div>
+            @if (!cuentas().length) {
+              <p class="ia-err">
+                No tienes ninguna conexión usable. Conecta un exchange o usa la de simulación.
+              </p>
+            }
+          } @else if (cuenta(); as c) {
+            <p class="ia-ayuda">{{ c.label }} · {{ venueLabel(c.venue) }}</p>
+          }
+          @if (real()) {
+            <p class="ia-err">Esta cuenta es de DINERO REAL.</p>
+          }
+        </div>
+      </ui-card>
+
+      <!-- ── Qué mira ── -->
+      <h3 class="ia-sec">Qué mira</h3>
+      <p class="cuando">Vale para los próximos análisis.</p>
+      <ui-card>
+        <div class="ia-campo">
+          <span class="ia-lbl">Pares · {{ pares().length }} de {{ maxPares() }} como mucho</span>
+          <div class="ia-chips">
+            @for (p of pares(); track p) {
+              <button type="button" class="ia-chip on" (click)="quitarPar(p)">{{ p }} ✕</button>
+            }
+            <button
+              type="button"
+              class="ia-chip"
+              [disabled]="!cuenta()"
+              (click)="hojaPares.set(true)"
+            >
+              + Elegir pares
+            </button>
+          </div>
+          @if (errorDe('pares'); as e) {
+            <p class="ia-err">{{ e }}</p>
+          }
+        </div>
+
+        <div class="ia-campo">
+          <span class="ia-lbl">Velas</span>
+          <ion-segment [value]="intervalo()" (ionChange)="intervalo.set($any($event.detail.value))">
+            @for (i of INTERVALOS; track i) {
+              <ion-segment-button [value]="i">{{ i }}</ion-segment-button>
+            }
+          </ion-segment>
+          <p class="ia-ayuda">Analiza al cerrar cada vela: nunca más a menudo.</p>
+          @if (errorDe('intervalo'); as e) {
+            <p class="ia-err">{{ e }}</p>
+          }
+        </div>
+
+        <div class="ia-campo">
+          <span class="ia-lbl">Qué busca</span>
+          <div class="ia-chips">
+            @for (f of FAMILIAS; track f) {
+              <button
+                type="button"
+                class="ia-chip"
+                [class.on]="familias().includes(f)"
+                (click)="alternarFamilia(f)"
+              >
+                {{ FAMILIA[f] }}
+              </button>
+            }
+          </div>
+          @for (f of familias(); track f) {
+            <p class="ia-ayuda">{{ FAMILIA[f] }}: {{ FAMILIA_AYUDA[f] }}</p>
+          }
+          @if (errorDe('familias'); as e) {
+            <p class="ia-err">{{ e }}</p>
+          }
+        </div>
+
+        <div class="ia-campo">
+          <span class="ia-lbl">Sentido</span>
+          <div class="ia-chips">
+            <button
+              type="button"
+              class="ia-chip"
+              [class.on]="lados().includes('LONG')"
+              (click)="alternarLado('LONG')"
+            >
+              Largos
+            </button>
+            <button
+              type="button"
+              class="ia-chip"
+              [class.on]="lados().includes('SHORT')"
+              (click)="alternarLado('SHORT')"
+            >
+              Cortos
+            </button>
+          </div>
+          @if (errorDe('lados'); as e) {
+            <p class="ia-err">{{ e }}</p>
+          }
+        </div>
+
+        <div class="ia-campo">
+          <span class="ia-lbl">Quién elige</span>
+          <ion-segment [value]="modo()" (ionChange)="modo.set($any($event.detail.value))">
+            <ion-segment-button value="IA">La IA</ion-segment-button>
+            <ion-segment-button value="REGLAS">Reglas</ion-segment-button>
+          </ion-segment>
+          <p class="ia-ayuda">
+            {{
+              modo() === 'REGLAS'
+                ? 'Un juez determinista elige, sin consultar al modelo ni pagar nada. Sirve de línea base.'
+                : 'El modelo elige entre las operaciones que ya calculó el motor, o ninguna. Nunca pone un número.'
+            }}
+          </p>
+        </div>
+      </ui-card>
+
+      <!-- ── Límites ── -->
+      <h3 class="ia-sec">Límites</h3>
+      <p class="cuando">Valen para las próximas operaciones: las abiertas siguen con su plan.</p>
+      <ui-card>
+        @for (k of PRINCIPALES; track k) {
+          <app-limite-campo
+            [nombre]="NOMBRES[k]"
+            [ayuda]="AYUDA[k]"
+            [valor]="textoLimite(k)"
+            [error]="errorDe('limites.' + k)"
+            (cambio)="fijarLimite(k, $event)"
+          />
+          @if (k === 'perdidaDiariaPct') {
+            <p class="ia-ayuda peor">
+              Lo peor que puede perder en un día: <b class="num">{{ peorDia() }}</b
+              >.
+            </p>
+          }
+        }
+        <ui-collapsible title="Más límites" [count]="MAS.length + 1">
+          @for (k of MAS; track k) {
+            <app-limite-campo
+              [nombre]="NOMBRES[k]"
+              [ayuda]="AYUDA[k]"
+              [valor]="textoLimite(k)"
+              [error]="errorDe('limites.' + k)"
+              (cambio)="fijarLimite(k, $event)"
+            />
+          }
+          <div class="ia-campo">
+            <ion-toggle
+              [checked]="limites().breakevenTrasTp1"
+              (ionChange)="fijarLimite('breakevenTrasTp1', $event.detail.checked)"
+            >
+              {{ NOMBRES.breakevenTrasTp1 }}
+            </ion-toggle>
+            <p class="ia-ayuda">{{ AYUDA.breakevenTrasTp1 }}</p>
+          </div>
+        </ui-collapsible>
+      </ui-card>
+
+      <!-- ── Qué hace solo ── -->
+      <h3 class="ia-sec">Qué hace solo</h3>
+      <p class="cuando">
+        Vale ya. Subir el riesgo o alejar el stop no existe: ninguna opción lo hace.
+      </p>
+      <ui-card>
+        @for (c of CLASES; track c) {
+          <div class="ia-campo">
+            <span class="ia-lbl">
+              {{ c === 'entrar' ? 'Entrar' : c === 'reducir' ? 'Reducir el riesgo' : 'Cerrar' }}
+            </span>
+            <ion-segment
+              [value]="autonomia()[c]"
+              (ionChange)="fijarAutonomia(c, $any($event.detail.value))"
+            >
+              @for (o of AUTONOMIA[c]; track o.valor) {
+                <ion-segment-button [value]="o.valor">{{ o.texto }}</ion-segment-button>
+              }
+            </ion-segment>
+          </div>
+        }
+        @if (real() && autonomia().entrar === 'AUTO') {
+          <ui-notice tone="warn">
+            Con «entra solo» abrirá operaciones con dinero real sin preguntarte, dentro de sus
+            límites.
+          </ui-notice>
+        }
+      </ui-card>
+
+      <!-- ── Presupuesto del modelo ── -->
+      <h3 class="ia-sec">Presupuesto del modelo</h3>
+      <ui-card>
+        @for (k of PRESUPUESTO; track k) {
+          <app-limite-campo
+            [nombre]="NOMBRES[k]"
+            [ayuda]="AYUDA[k]"
+            [valor]="textoLimite(k)"
+            [error]="errorDe('limites.' + k)"
+            (cambio)="fijarLimite(k, $event)"
+          />
+        }
+        <p class="ia-ayuda">
+          Las propuestas y los avisos llegan por Telegram si lo tienes conectado, con la preferencia
+          «Agentes de IA».
+        </p>
+      </ui-card>
+
+      <!-- ── Guardar ── -->
+      <h3 class="ia-sec">Guardar</h3>
+      <ui-card>
+        @if (!creando) {
+          <p class="ia-ayuda">
+            Guardar descarta las propuestas que estaban esperando: se calcularon con lo de antes.
+          </p>
+        }
+        <div class="ia-campo">
+          <ion-input
+            label="Motivo"
+            labelPlacement="stacked"
+            placeholder="Queda en la bitácora"
+            [maxlength]="200"
+            [value]="motivo()"
+            (ionInput)="motivo.set($any($event.target).value ?? '')"
+          />
+        </div>
+        @if (pideConsentimiento()) {
+          <div class="ia-campo">
+            <ion-checkbox
+              labelPlacement="end"
+              [checked]="consentimiento()"
+              (ionChange)="consentimiento.set($event.detail.checked)"
+            >
+              Entiendo que este agente opera con DINERO REAL
+            </ion-checkbox>
+            @if (errorDe('consentimiento'); as e) {
+              <p class="ia-err">{{ e }}</p>
+            }
+          </div>
+        }
+        <ion-button expand="block" class="guardar" [disabled]="!puedeGuardar()" (click)="guardar()">
+          @if (guardando()) {
+            <ion-spinner name="crescent" />
+          } @else {
+            {{ creando ? 'Crear el agente' : 'Guardar' }}
+          }
+        </ion-button>
+      </ui-card>
+    }
+  </div>
+
+  <ui-pair-sheet
+    [markets]="mercados()"
+    [multiple]="true"
+    [seleccion]="pares()"
+    [maximo]="maxPares()"
+    [(open)]="hojaPares"
+    (pickedMany)="pares.set($event)"
+  />
+</ion-content>

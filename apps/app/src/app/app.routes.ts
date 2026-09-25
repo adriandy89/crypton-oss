@@ -45,6 +45,15 @@ export const routes: Routes = [
         loadComponent: () =>
           import('./features/markets/markets-list.page').then((m) => m.MarketsListPage),
       },
+      // La sección de IA (spec 073), la única pestaña que no ve todo el mundo:
+      // solo un ADMIN. Va DENTRO del shell, al contrario que la administración
+      // de abajo, porque no es una herramienta sino una sección, y el usuario la
+      // quiere en la barra. `adminGuard` es comodidad, igual que allí.
+      {
+        path: 'ia',
+        canActivate: [adminGuard],
+        loadComponent: () => import('./features/ia/ia.page').then((m) => m.IaPage),
+      },
       {
         path: 'account',
         loadComponent: () => import('./features/account/account.page').then((m) => m.AccountPage),
@@ -107,6 +116,39 @@ export const routes: Routes = [
     path: 'security',
     canActivate: [authGuard],
     loadComponent: () => import('./features/account/security.page').then((m) => m.SecurityPage),
+  },
+
+  // Los agentes de IA (spec 074): el editor y los detalles, a pantalla completa
+  // como el asistente de bots —a medio configurar no se debe poder saltar de
+  // pestaña—. Solo ADMIN; como en la consola, `adminGuard` es comodidad y
+  // quien manda es el `RolesGuard` del servidor. Agrupación sin componente,
+  // por lo mismo que la de la consola de abajo.
+  {
+    path: 'ia',
+    canActivate: [authGuard, adminGuard],
+    children: [
+      {
+        path: 'agentes/nuevo',
+        loadComponent: () =>
+          import('./features/ia/agente-editor.page').then((m) => m.AgenteEditorPage),
+      },
+      {
+        path: 'agentes/:id',
+        loadComponent: () =>
+          import('./features/ia/agente-detalle.page').then((m) => m.AgenteDetallePage),
+      },
+      {
+        path: 'agentes/:id/editar',
+        loadComponent: () =>
+          import('./features/ia/agente-editor.page').then((m) => m.AgenteEditorPage),
+      },
+      {
+        path: 'propuestas/:id',
+        loadComponent: () =>
+          import('./features/ia/propuesta-detalle.page').then((m) => m.PropuestaDetallePage),
+      },
+      { path: '', redirectTo: '/tabs/ia', pathMatch: 'full' },
+    ],
   },
 
   // El backtest, para cualquier usuario sobre sus bots simulados (spec 004). Fuera

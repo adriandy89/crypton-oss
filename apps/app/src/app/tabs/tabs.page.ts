@@ -1,13 +1,28 @@
-import { Component, inject } from '@angular/core';
-import { IonIcon, IonLabel, IonTabBar, IonTabButton, IonTabs } from '@ionic/angular/standalone';
+import { Component, computed, inject } from '@angular/core';
+import {
+  IonBadge,
+  IonIcon,
+  IonLabel,
+  IonTabBar,
+  IonTabButton,
+  IonTabs,
+} from '@ionic/angular/standalone';
 import { addIcons } from 'ionicons';
-import { gridOutline, personOutline, pieChartOutline, statsChartOutline } from 'ionicons/icons';
+import {
+  gridOutline,
+  hardwareChipOutline,
+  personOutline,
+  pieChartOutline,
+  statsChartOutline,
+} from 'ionicons/icons';
+import { AuthService } from '../core/auth';
 import { StreamService } from '../core/services';
+import { AgentesIaService } from '../core/services/agentes-ia.service';
 
 @Component({
   selector: 'app-tabs',
   standalone: true,
-  imports: [IonTabs, IonTabBar, IonTabButton, IonIcon, IonLabel],
+  imports: [IonTabs, IonTabBar, IonTabButton, IonIcon, IonLabel, IonBadge],
   template: `
     <!-- Sin <ion-router-outlet> dentro: en Ionic 8 <ion-tabs> ya ES el outlet.
          Declarar uno aparte crea un SEGUNDO outlet, vacio y posicionado sobre
@@ -37,6 +52,22 @@ import { StreamService } from '../core/services';
                datos que se ven pueden estar desactualizados y conviene saberlo. -->
           <span class="dot" [class.live]="stream.connected()"></span>
         </ion-tab-button>
+
+        <!-- La sección de IA (spec 073): solo existe para un administrador, que
+             por eso es el único con cinco pestañas. Su icono no es el de las
+             chispas a propósito: ese ya marca el Modo IA y las recomendaciones
+             del asesor, y la sección no es ninguna de las dos. -->
+        @if (esAdmin()) {
+          <ion-tab-button tab="ia" href="/tabs/ia">
+            <ion-icon name="hardware-chip-outline" />
+            <ion-label>IA</ion-label>
+            <!-- Las propuestas de los agentes que esperan a una persona (spec 074):
+                 caducan en minutos, y hay que verlas sin ir a buscarlas. -->
+            @if (agentes.pendientes() > 0) {
+              <ion-badge color="primary">{{ agentes.pendientes() }}</ion-badge>
+            }
+          </ion-tab-button>
+        }
 
         <ion-tab-button tab="account" href="/tabs/account">
           <ion-icon name="person-outline" />
@@ -73,8 +104,19 @@ import { StreamService } from '../core/services';
 })
 export class TabsPage {
   readonly stream = inject(StreamService);
+  readonly agentes = inject(AgentesIaService);
+  private readonly auth = inject(AuthService);
+
+  /** Reactivo: si el rol cambia con la app abierta, la pestaña aparece o se va sola. */
+  readonly esAdmin = computed(() => this.auth.user()?.role === 'ADMIN');
 
   constructor() {
-    addIcons({ pieChartOutline, statsChartOutline, gridOutline, personOutline });
+    addIcons({
+      pieChartOutline,
+      statsChartOutline,
+      gridOutline,
+      hardwareChipOutline,
+      personOutline,
+    });
   }
 }

@@ -156,6 +156,17 @@ export interface DesiredState {
    * una pausa.
    */
   pausar?: string;
+  /**
+   * Detener el bot, con el motivo: la estrategia ha terminado (spec 074).
+   *
+   * Es de las operaciones de una sola vez: cerrada la posición, vencida la
+   * entrada o con una posición ajena en el par, el bot no tiene nada más que
+   * hacer. El motor cancela TODO lo suyo —también un stop, que ya no protege
+   * nada suyo—, NO toca ninguna posición, lo para y lo suelta. Rearrancarlo a
+   * mano no lo hace volver a entrar: la estrategia lo decide otra vez en su
+   * primer tick.
+   */
+  detener?: string;
 }
 
 /** Estado del ciclo en curso (abierto → take profit → cooldown → siguiente). */

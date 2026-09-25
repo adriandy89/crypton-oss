@@ -70,8 +70,8 @@ describe('fidelityWarnings', () => {
  *
  * El codigo ya decia en un comentario que «los market makers son los que mas
  * pierden con un plan() por vela», y luego anadia avisos propios para tendencia,
- * seguimiento, canal y bot de IA — y no para los dos que ese mismo comentario
- * senalaba como los peor reproducidos.
+ * seguimiento y canal — y no para los dos que ese mismo comentario senalaba
+ * como los peor reproducidos.
  *
  * El resultado practico: un usuario corre un backtest de market maker, ve
  * numeros rojos, y concluye que la estrategia no funciona. Medido, un MM V2

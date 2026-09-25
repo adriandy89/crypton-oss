@@ -20,7 +20,6 @@ import {
   type LimitesExternos,
   type PlanOperacion,
   type Position,
-  type SalidaHerramienta,
 } from '@crypton/shared';
 import { vaciarCacheAnalisis } from '../canal/analisis';
 import { DEFAULTS_CANAL } from '../canal/config';
@@ -741,9 +740,7 @@ function decisionIa(
   eleccion: Partial<EleccionOperacion> = {},
 ): DecisionIa {
   const sol = oferta();
-  // `snapshot` es la unión de ofertas desde el spec 068: cada estrategia tiene
-  // la suya y aquí se sabe cuál es.
-  const candidato = (sol.snapshot as SalidaHerramienta).candidatos[0];
+  const candidato = sol.snapshot.candidatos[0];
   return {
     intentId: 'ia-7',
     estado: EstadoIntencion.DECIDIDA,
@@ -872,7 +869,7 @@ describe('AI_CHANNEL: en plano, modo IA', () => {
       expiresAt: BAR_T + CINCO_MIN + 60_000,
       huella: plan.solicitudIa?.snapshot.huella,
     });
-    expect((plan.solicitudIa?.snapshot as SalidaHerramienta).candidatos).toHaveLength(1);
+    expect(plan.solicitudIa?.snapshot.candidatos).toHaveLength(1);
   });
 
   it('con una decisión válida, entra con los números de su elección', () => {
@@ -968,7 +965,7 @@ describe('AI_CHANNEL: en plano, modo IA', () => {
     const completo = { tamano: TamanoOperacion.COMPLETO, confianza: NivelConfianza.MEDIA };
     const plan = s.plan(enPlano({ decisionIa: decisionIa({}, completo) }));
     expect(plan.orders).toEqual([expect.objectContaining({ qty: '6.662' })]);
-    expect((plan.decision?.plan as PlanOperacion).eleccion).toMatchObject({
+    expect(plan.decision?.plan?.eleccion).toMatchObject({
       tamano: TamanoOperacion.MEDIO,
       confianza: NivelConfianza.MEDIA,
     });
@@ -979,7 +976,7 @@ describe('AI_CHANNEL: en plano, modo IA', () => {
       enPlano({ decisionIa: decisionIa({}, { tamano: TamanoOperacion.COMPLETO }) }),
     );
     expect(plan.orders).toEqual([expect.objectContaining({ qty: '13.324' })]);
-    expect((plan.decision?.plan as PlanOperacion).eleccion.tamano).toBe(TamanoOperacion.COMPLETO);
+    expect(plan.decision?.plan?.eleccion.tamano).toBe(TamanoOperacion.COMPLETO);
   });
 });
 
@@ -988,13 +985,12 @@ describe('AI_CHANNEL: la vista del mercado (spec 059)', () => {
 
   it('en plano deja el régimen y el canal, con el primer toque', () => {
     const plan = s.plan(enPlano());
-    const oferta = plan.solicitudIa?.snapshot as SalidaHerramienta;
-    const canal = oferta?.canal;
+    const canal = plan.solicitudIa?.snapshot.canal;
     if (!canal) throw new Error('sin canal');
     expect(vistaCanalDe(plan.scratchPatch)).toEqual({
       barT: BAR_T,
-      regimen: oferta.mercado.regimen,
-      sentido: oferta.mercado.sentido,
+      regimen: plan.solicitudIa?.snapshot.mercado.regimen,
+      sentido: plan.solicitudIa?.snapshot.mercado.sentido,
       canal: {
         tipo: canal.tipo,
         calidad: canal.calidad,

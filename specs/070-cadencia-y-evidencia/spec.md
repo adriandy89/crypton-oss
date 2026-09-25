@@ -1,5 +1,9 @@
 # Spec 070 — Que el modelo evalúe más, y con mejor evidencia
 
+> **Retirado por el [spec 072](../072-retirar-bot-de-ia/spec.md) (2026-09-24).** El código de este
+> spec ya no existe. Las mediciones siguen valiendo —el modelo no discriminaba, y un minuto es
+> aritméticamente imposible— y por eso se conserva.
+
 **Tipo**: cambio · **Rama**: `spec/070-cadencia-y-evidencia` · **Depende de**: 069
 
 ## De dónde sale

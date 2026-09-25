@@ -90,9 +90,10 @@ que no cumple.
 - **Recomendación**: 1× o 2× en todo lo que retenga inventario; nunca más de 3× en las que promedian a la
   baja. Un market maker gana céntimos muchas veces: multiplicar el riesgo por diez para ganar los mismos
   céntimos no compensa.
-- **Las excepciones son el [Canal](./ai-channel.md) y el [Bot de IA](./ai-trader.md)**: su apalancamiento sale del stop de cada
+- **La excepción es el [Canal con IA](./ai-channel.md)**: su apalancamiento sale del stop de cada
   operación, hasta 25×, con la liquidación siempre a tres stops o más. Allí el apalancamiento no cambia
-  lo que se pierde al stop; lo que manda es el riesgo por operación.
+  lo que se pierde al stop; lo que manda es el riesgo por operación. Igual en la
+  [Operación IA](./agent-trade.md) de los agentes, con su propio tope (10× de fábrica).
 - **Aislado frente a cruzado**: la rejilla neutral y los dos market makers vienen en **cruzado**; una
   posición perdedora en cruzado arrastra el saldo de los otros bots de la cuenta. Aislado si quieres
   compartimentar. No se puede cambiar después.
@@ -113,8 +114,8 @@ precio medio real y con la dirección de la posición real. Se dispara aunque la
 | Parar y cerrar · Pánico | ❌ Lo cancela **después** de que el cierre haya salido; si el exchange no acepta el cierre, el stop se queda y el bot pasa a pausado avisando en CRITICAL |
 
 **Dónde ponerlo**: en escaleras, por debajo del último escalón; en rejillas, por debajo del precio inferior;
-en un DCA, donde reconocerías que la tesis falló. **Tendencia, el Canal y el Bot de IA ponen el suyo** y no leen
-este campo. Su tamaño mínimo se mide sobre la posición al precio de
+en un DCA, donde reconocerías que la tesis falló. **Tendencia, el Canal con IA y la Operación IA ponen el
+suyo** y no leen este campo. Su tamaño mínimo se mide sobre la posición al precio de
 marca, así que cabe siempre que la posición supere el mínimo del par.
 
 Cada evento que deja la posición abierta termina diciendo si queda red: «El stop loss sigue vivo en el
@@ -165,8 +166,8 @@ del exchange antes de dejar un bot con inventario varios días, y cuenta con ell
 | [Market Maker V2](./market-maker-v2.md) | no vas a poner tu comisión real |
 | [Tendencia](./trend-follow.md) | necesitas ver operaciones a menudo, el par lleva meses de lado, o no aguantas que falle seis de cada diez veces |
 | [Seguimiento de beneficio](./trailing-profit.md) | el par va y viene sin ir a ningún sitio, no piensas poner stop loss, o esperabas una sola operación (este bot vuelve a entrar al cerrar) |
-| [Canal](./ai-channel.md) | el par va en tendencia, no has pasado el backtest por tramos ni la simulación, no tienes Telegram con las guardas de riesgo encendidas, o no has puesto horas sin entradas en los datos macro |
-| [Bot de IA](./ai-trader.md) | tu cuenta paga comisión de taker (ahí está medido negativo), no lo has tenido semanas en «solo observar», o quieres encender la IA antes de haber visto en sombra que aporta algo sobre el juez de reglas |
+| [Canal con IA](./ai-channel.md) | el par va en tendencia, no has pasado el backtest por tramos ni la simulación, no tienes Telegram con las guardas de riesgo encendidas, o no has puesto horas sin entradas en los datos macro |
+| [Agentes de IA](./agentes-ia.md) | no lo has visto trabajar antes en simulación —primero en modo reglas, que no cuesta nada—, su tarjeta tiene menos de 30 casos, o vas a dejar «entrar» en automático sobre dinero real sin haber aprobado a mano las primeras |
 
 Y para **todas**: no operes a mano ni con otro bot **el mismo par en la misma cuenta**: el exchange
 combina las posiciones y el bot deja de reconocer la suya. No dejes una rejilla con el precio muy fuera de
@@ -188,7 +189,7 @@ Se lee de más nuevo a más viejo. Lo **ámbar** (WARN) y lo **rojo** (CRITICAL)
 | `ORDER_REJECTED` «Post-only rechazada» justo tras un `FILL` | Nada: es la cotización re-queriendo el nivel mientras el precio sigue encima. |
 | `FAIR_PRICE_STALE` | El bot anclado a Binance dejó de cotizar; si es por bloqueo geográfico, cambia la fuente. |
 | `EXIT_PENDING_MIN_SIZE` | Nada: INFO; la salida se colocará cuando entren más ejecuciones. |
-| `SIN_STOP` · `AI_CIERRE_FALLIDO` (Canal con IA) | Mira el exchange ya: el stop no apareció y se cerró a mercado, o el cierre a mercado falló doce veces y hay que cerrar a mano. |
+| `SIN_STOP` · `AI_CIERRE_FALLIDO` (Canal con IA) · `AGENT_CIERRE_FALLIDO` (agentes) | Mira el exchange ya: el stop no apareció y se cerró a mercado, o el cierre a mercado falló y hay que cerrar a mano. |
 
 La lista completa con su significado, en [comandos, guardas y eventos](./comandos-guardas-y-eventos.md#4-los-eventos-de-la-bitácora).
 

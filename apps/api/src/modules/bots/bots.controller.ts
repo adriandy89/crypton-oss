@@ -17,6 +17,7 @@ import { ApiBearerAuth, ApiOperation, ApiTags } from '@nestjs/swagger';
 import { Throttle } from '@nestjs/throttler';
 import type { Request } from 'express';
 import { Observable } from 'rxjs';
+import { esEstrategiaDeAgente } from '@crypton/shared';
 import { IdParamDto } from 'src/libs';
 import { Audit } from 'src/libs';
 import { GetUserInfo, JwtAuthGuard, type SessionUser } from '../auth';
@@ -127,6 +128,11 @@ export class BotsController {
     summary: 'Crea un bot (valida configuración, riesgo y escalera)',
   })
   create(@GetUserInfo() user: SessionUser, @Body() dto: CreateBotDto) {
+    // La operación de un agente solo la crea un agente (spec 074, R-6): por
+    // esta vía sería una operación sin propuesta, sin seguimiento y sin medida.
+    if (esEstrategiaDeAgente(dto.strategy)) {
+      throw new BadRequestException('Esta estrategia solo la crea un agente de la sección IA.');
+    }
     return this.bots.create(user.id, dto);
   }
 

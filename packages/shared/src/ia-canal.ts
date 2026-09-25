@@ -1,9 +1,4 @@
 import type { PositionSide } from './enums';
-// Import de SOLO TIPOS, y por eso el ciclo con `ia-trader.ts` es inocuo:
-// TypeScript los borra al compilar y no queda dependencia en tiempo de
-// ejecución. Las dos uniones de abajo viven aquí porque es aquí donde están
-// `SolicitudIa` y `MarcaDecision`, que es lo que de verdad se amplía.
-import type { EspacioTrader, PlanTrader, VeredictoTrader } from './ia-trader';
 
 /**
  * El vocabulario del canal con IA (`AI_CHANNEL`, specs 058-059).
@@ -208,15 +203,6 @@ export const MotivoConsulta = {
   OFERTA: 'OFERTA',
   /** Menos confianza de la que pide el bot. */
   CONFIANZA: 'CONFIANZA',
-  /**
-   * El enrutado dice que sí pero una puerta de contexto lo veta (spec 069).
-   *
-   * Es propio del «Bot de IA»: sus tres preguntas de contexto se hacen en
-   * aislamiento justamente para poder discrepar del enrutado. No es un fallo
-   * —es la estadística de calibración que dice si las preguntas sirven de algo—
-   * y por eso tiene su propia línea en vez de contarse como «oferta».
-   */
-  DESACUERDO: 'DESACUERDO',
   /** Modo sombra: la decisión se registra y no se ejecuta. */
   SOMBRA: 'SOMBRA',
   /** El modelo no contestó: error, tiempo agotado, negativa o respuesta cortada. */
@@ -454,32 +440,13 @@ export interface CanalDetectado {
   r2: number | null;
 }
 
-export interface ResumenTasas {
+export interface TasasBase {
   n: number;
   aciertos: number;
   rMedio: number;
   /** Límite inferior de Wilson al 95 % del acierto. */
   wilsonInferior: number;
   evidencia: Evidencia;
-}
-
-export interface TasasBase extends ResumenTasas {
-  /**
-   * Las mismas tasas, pero solo de los toques con un **estiramiento parecido**
-   * al de ahora (spec 070).
-   *
-   * Existe por una medición incómoda: sobre 498 decisiones reales, el rasgo que
-   * mejor predecía el resultado era el estiramiento —y en dirección
-   * contraintuitiva, cuanto más estirado peor—, y el modelo lo ignoraba por
-   * completo. Decírselo seria meterle nuestro prior; darle la evidencia
-   * condicionada le deja descubrirlo a él, que es lo que corresponde.
-   *
-   * `null` cuando no hay muestra suficiente: una tasa de cuatro casos no es una
-   * tasa, es una anécdota con decimales.
-   */
-  similares: ResumenTasas | null;
-  /** El estiramiento con el que se filtraron, en ATR. */
-  estiramientoRef: number;
 }
 
 /** Una banda de apalancamiento con lo que supone. */
@@ -543,7 +510,7 @@ export interface CandidatoOperacion {
   tp1: string;
   tp2: string;
   stops: OpcionStop[];
-  tasas: ResumenTasas | null;
+  tasas: TasasBase | null;
   /** Por qué no es elegible, si no lo es. */
   descartes: string[];
 }
@@ -617,37 +584,17 @@ export interface DecisionGuardada extends EleccionOperacion {
  * La elección que se ejecuta: la confianza solo puede REDUCIR el tamaño.
  *
  * Por debajo de `ALTA`, la mitad. La aplican la API al decidir y la estrategia
- * al usar la decisión, que es la segunda línea de defensa.
+ * al usar la decisión, que es la segunda línea de defensa. Es genérica porque
+ * la elección de un agente sigue la misma regla (spec 074): del canal solo
+ * mira la confianza y el tamaño.
  */
-export function eleccionEfectiva(e: EleccionOperacion): EleccionOperacion {
+export function eleccionEfectiva<T extends Pick<EleccionOperacion, 'confianza' | 'tamano'>>(
+  e: T,
+): T {
   return e.confianza === NivelConfianza.ALTA || e.tamano === TamanoOperacion.MEDIO
     ? e
     : { ...e, tamano: TamanoOperacion.MEDIO };
 }
-
-/**
- * Lo que eligió quien decide, sea cual sea la estrategia.
- *
- * El canal elige un candidato con sus parámetros; el «Bot de IA» emite un
- * veredicto sobre un único montaje (spec 069). Las dos formas viven en la misma
- * columna, así que quien las lee tiene que estrecharlas.
- */
-export type EleccionDecision = EleccionOperacion | VeredictoTrader;
-
-/**
- * ¿La elección es la del canal?
- *
- * Generoso hacia el canal a propósito, por el mismo incidente que `esPlanCanal`:
- * las dos formas comparten `stop`, `objetivo`, `tamano` y `confianza`, y leer
- * una del canal como si fuera del «Bot de IA» revienta al buscarle una `accion`
- * que no tiene. Se mira por las claves, nunca por el nombre de la estrategia:
- * así una intención viva de un bot al que le cambiaron la estrategia no se lee
- * de una forma por otra.
- */
-export const esEleccionCanal = (e: EleccionDecision): e is EleccionOperacion =>
-  typeof e === 'object' &&
-  e !== null &&
-  ('opcion' in e || 'apalancamiento' in e || 'veredicto' in e);
 
 /** La intención vigente del bot, tal y como la ve la estrategia. */
 export interface DecisionIa {
@@ -656,66 +603,18 @@ export interface DecisionIa {
   origen: OrigenDecision;
   barT: number;
   huella: string;
-  eleccion: EleccionDecision | null;
+  eleccion: EleccionOperacion | null;
   motivo: string | null;
   expiresAt: number;
   cycleSeq: number;
 }
 
 /** Lo que el worker escribe como `SOLICITADA` y la API consulta (059). */
-/**
- * Lo que una estrategia le ofrece a quien decide.
- *
- * Cada una tiene su forma: el canal ofrece candidatos con opciones, el «Bot de
- * IA» ofrece una matriz de nueve celdas (spec 068). El lazo de intenciones no
- * mira dentro — lo guarda como JSON y se lo devuelve a su estrategia—, así que
- * la unión es aquí y no hay que tocarlo a él para añadir la siguiente.
- */
-export type OfertaDecision = SalidaHerramienta | EspacioTrader;
-
-/** El plan que sale de una decisión. También uno por estrategia. */
-export type PlanDecision = PlanOperacion | PlanTrader;
-
-/**
- * ¿La oferta es la del canal?
- *
- * Las dos estrategias guardan la suya en la misma columna, así que quien la
- * lee tiene que estrecharla. Se distingue por una clave que solo tiene una de
- * las dos, no por el nombre de la estrategia: así un cambio de estrategia con
- * una intención viva no lee una forma por otra.
- */
-export const esOfertaCanal = (o: OfertaDecision): o is SalidaHerramienta =>
-  typeof o === 'object' && o !== null && 'candidatos' in o;
-
-/**
- * Ídem para el plan.
- *
- * Mira **las dos** claves que solo tiene el canal, no una. Con una sola, un
- * plan del canal al que le faltara justo esa se leía como del «Bot de IA» y
- * reventaba al buscarle un veredicto que no tiene. Es barato ser generoso aquí.
- */
-export const esPlanCanal = (p: PlanDecision): p is PlanOperacion =>
-  typeof p === 'object' && p !== null && ('eleccion' in p || 'setup' in p);
-
-/**
- * El identificador de lo elegido, sea cual sea la estrategia.
- *
- * El lazo de intenciones lo guarda en `bot_ai_intents.candidato_id` para poder
- * comparar decisiones entre modelos sin tener que saber de qué estrategia son.
- * El canal tiene candidatos con id; el «Bot de IA» tiene una celda de su
- * matriz, que se nombra por sus dos enumeraciones.
- */
-export const candidatoDe = (p: PlanDecision): string =>
-  esPlanCanal(p) ? p.candidatoId : `${p.veredicto.stop}|${p.veredicto.objetivo}`;
-
-/** Lo que se guarda como «decisión»: la elección del canal o el veredicto. */
-export const decisionDe = (p: PlanDecision): unknown => (esPlanCanal(p) ? p.eleccion : p.veredicto);
-
 export interface SolicitudIa {
   barT: number;
   huella: string;
   expiresAt: number;
-  snapshot: OfertaDecision;
+  snapshot: SalidaHerramienta;
 }
 
 /** Un objetivo de beneficio de la operación. */
@@ -769,7 +668,7 @@ export interface MarcaDecision {
   intentId: string;
   estado: typeof EstadoIntencion.ACEPTADA | typeof EstadoIntencion.RECHAZADA;
   motivo: MotivoRechazo | null;
-  plan: PlanDecision | null;
+  plan: PlanOperacion | null;
 }
 
 /**

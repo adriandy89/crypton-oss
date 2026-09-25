@@ -1,5 +1,9 @@
 # 068 — El «Bot de IA»: el motor, medible sin gastar una llamada
 
+> **Retirado por el [spec 072](../072-retirar-bot-de-ia/spec.md) (2026-09-24).** El usuario pidió
+> quitar el «Bot de IA» y el uso de TypeSafe enteros, y el código de este spec ya no existe. Se
+> conserva como constancia de lo que se decidió y se midió.
+
 Estado: `cerrado sin desplegar` (CA-5 y CA-6 se cumplen, CA-4 no; ver `findings.md`) · Tipo: `cambio` · Rama: `spec/068-bot-de-ia-motor`
 
 ## Objetivo

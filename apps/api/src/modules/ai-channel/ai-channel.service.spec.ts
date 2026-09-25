@@ -50,17 +50,8 @@ interface Lazo {
 
 type Donde = Record<string, unknown>;
 
-/**
- * `where` de Prisma, incluido el filtro POR RELACION (`bot: { strategy }`), que
- * el codigo usa desde el spec 069 para que cada lazo sonde solo lo suyo. Un
- * doble que lo ignorara daria verde a un filtro que en produccion no filtra.
- */
-function coincide(f: Intencion, where: Donde, bot?: Record<string, unknown>): boolean {
+function coincide(f: Intencion, where: Donde): boolean {
   return Object.entries(where).every(([k, v]) => {
-    if (k === 'bot') {
-      const cond = v as Record<string, unknown>;
-      return Object.entries(cond).every(([campo, valor]) => bot?.[campo] === valor);
-    }
     const actual = f[k];
     if (v instanceof Date) return actual instanceof Date && actual.getTime() === v.getTime();
     if (v && typeof v === 'object') {
@@ -146,7 +137,7 @@ function montar(o: Opciones = {}) {
       updateMany: jest.fn(async ({ where, data }: { where: Donde; data: Donde }) => {
         let count = 0;
         for (const f of intenciones.values()) {
-          if (coincide(f, where, bot)) {
+          if (coincide(f, where)) {
             Object.assign(f, data);
             count++;
           }
@@ -168,7 +159,7 @@ function montar(o: Opciones = {}) {
           orderBy: { created_at: 'asc' | 'desc' };
         }) =>
           [...intenciones.values()]
-            .filter((f) => coincide(f, where, bot))
+            .filter((f) => coincide(f, where))
             .sort(
               (a, b) =>
                 (a.created_at.getTime() - b.created_at.getTime()) *
@@ -178,7 +169,7 @@ function montar(o: Opciones = {}) {
             .map((f) => ({ id: f.id })),
       ),
       findFirst: jest.fn(async ({ where }: { where: Donde }) => {
-        const f = [...intenciones.values()].find((x) => coincide(x, where, bot));
+        const f = [...intenciones.values()].find((x) => coincide(x, where));
         return f ? { id: f.id } : null;
       }),
     },

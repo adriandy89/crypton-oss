@@ -18,6 +18,12 @@ export interface TelegramPrefs {
    * «propone y espera»: sus sugerencias no llegarían a ninguna parte.
    */
   ai: boolean;
+  /**
+   * Lo que proponen y hacen los agentes de IA (spec 074), con los botones de
+   * sus propuestas. Solo para un administrador, como `ai`. Apagado, las
+   * propuestas siguen en la sección IA de la app.
+   */
+  agentes: boolean;
 }
 
 export interface TelegramStatus {

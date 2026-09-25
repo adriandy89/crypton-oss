@@ -58,7 +58,8 @@ export function liqTone(
  * es lo que se pinta, con esos mismos umbrales.
  */
 export const liqPorCamino = (strategy: string | null | undefined): boolean =>
-  strategy === 'AI_CHANNEL' || strategy === 'AI_TRADER';
+  // La operación de un agente mide su liquidación igual: contra su stop (spec 074).
+  strategy === 'AI_CHANNEL' || strategy === 'AGENT_TRADE';
 
 export const CAMINO_WARN_PCT = 100 / 3;
 export const CAMINO_DANGER_PCT = 200 / 3;

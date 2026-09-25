@@ -39,7 +39,11 @@ const ADX_TENDENCIA = 25;
 const ADX_TENDENCIA_FUERTE = 40;
 const ADX_TOLERANCIA = 2;
 
-interface IndicadoresHora {
+/**
+ * Las medidas del régimen sobre una serie. Se llaman «de hora» porque el canal
+ * las toma de 1 h; los agentes las toman de su propio intervalo (spec 074).
+ */
+export interface IndicadoresHora {
   adx: Float64Array;
   masDi: Float64Array;
   menosDi: Float64Array;
@@ -50,7 +54,7 @@ interface IndicadoresHora {
   atrLargo: Float64Array;
 }
 
-function indicadoresHora(h1: SerieNumerica): IndicadoresHora {
+export function indicadoresHora(h1: SerieNumerica): IndicadoresHora {
   const a = adx(h1.h, h1.l, h1.c, 14);
   return {
     adx: a.adx,
@@ -64,7 +68,7 @@ function indicadoresHora(h1: SerieNumerica): IndicadoresHora {
   };
 }
 
-function medidasEn(ind: IndicadoresHora, j: number, chop15m: number): MedidasRegimen | null {
+export function medidasEn(ind: IndicadoresHora, j: number, chop15m: number): MedidasRegimen | null {
   if (j < 3) return null;
   const m: MedidasRegimen = {
     adx: ind.adx[j],

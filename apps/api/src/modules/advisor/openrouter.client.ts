@@ -80,7 +80,12 @@ export interface RespuestaModelo {
   fallo: FalloModelo | null;
 }
 
-export interface PeticionCanal {
+/**
+ * Lo que se pide cuando el modelo tiene que ELEGIR entre opciones que ya
+ * calculó el motor: el canal con IA (spec 059) y los agentes (spec 074). El
+ * mensaje de sistema es fijo, para la caché; la oferta cambia en cada llamada.
+ */
+export interface PeticionDecision {
   esquema: { name: string; schema: Record<string, unknown> };
   system: string;
   usuario: string;
@@ -88,12 +93,16 @@ export interface PeticionCanal {
   limiteMs: number;
 }
 
-export interface RespuestaCanal extends RespuestaModelo {
+export interface RespuestaDecision extends RespuestaModelo {
   latenciaMs: number;
   modelo: string;
 }
 
-/** Cómo se cachea el prompt del canal: una hora, cinco minutos o nada. */
+/** Los nombres con los que nacieron, en el canal (spec 059). */
+export type PeticionCanal = PeticionDecision;
+export type RespuestaCanal = RespuestaDecision;
+
+/** Cómo se cachea el prompt de una decisión: una hora, cinco minutos o nada. */
 export type CachePrompt = '1h' | '5m' | 'off';
 export type EsfuerzoRazonamiento = 'low' | 'medium' | 'high';
 
@@ -146,6 +155,21 @@ interface Pedido {
 }
 
 /**
+ * Lo que distingue una carga de decisión de otra (spec 074): su interruptor
+ * —hecho clave, que vale '' con él apagado—, su modelo, su esfuerzo, su caché
+ * y su línea en la factura.
+ */
+interface CargaDecision {
+  clave: string;
+  modelo: string;
+  esfuerzo: EsfuerzoRazonamiento;
+  cache: CachePrompt;
+  /** Solo para los mensajes de log. */
+  que: string;
+  titulo: string;
+}
+
+/**
  * El primer origen de `PUBLIC_APP_URL`, y solo si se puede mandar tal cual.
  *
  * Dos motivos, y ninguno es teorico:
@@ -186,6 +210,20 @@ export class OpenRouterClient {
   private readonly channelModel: string;
   private readonly channelEffort: EsfuerzoRazonamiento;
   private readonly channelCache: CachePrompt;
+  /**
+   * Los agentes de IA (spec 074), la cuarta carga. Eligen, como el canal, entre
+   * operaciones ya calculadas, pero sobre varios pares a la vez y para
+   * operaciones sueltas que abre y sigue un agente. Otro interruptor y otra
+   * línea en la factura: uno se tiene que poder apagar sin tocar el otro.
+   *
+   * OJO con los nombres: `agentKey` y `agentModel` son del SUPERVISOR (el Modo
+   * IA, spec 046), que se llamó «agente» antes de que estos existieran. Lo de
+   * aquí se llama `desk`, como el módulo `ai-desk` y sus variables `AI_DESK_*`.
+   */
+  private readonly deskKey: string;
+  private readonly deskModel: string;
+  private readonly deskEffort: EsfuerzoRazonamiento;
+  private readonly deskCache: CachePrompt;
 
   constructor(private readonly config: ConfigService) {
     // Se lee con `get` y NO con `requireSecret`: sin clave la API tiene que
@@ -229,6 +267,23 @@ export class OpenRouterClient {
       this.logger.warn(
         'AI_CHANNEL_ENABLE está activo pero falta OPENROUTER_API_KEY: ' +
           'los bots del canal con IA no abrirán ninguna operación.',
+      );
+    }
+
+    const deskEnabled = this.config.get<string>('AI_DESK_ENABLE', 'false') === 'true';
+    this.deskKey = deskEnabled ? apiKey : '';
+    // Sin caída al modelo de los otros tres, por lo mismo que el supervisor.
+    this.deskModel = this.config.get<string>('AI_DESK_MODEL', 'anthropic/claude-sonnet-5');
+    this.deskEffort = this.enLista(
+      'AI_DESK_REASONING',
+      ESFUERZOS,
+      'medium',
+    ) as EsfuerzoRazonamiento;
+    this.deskCache = this.enLista('AI_DESK_PROMPT_CACHE', CACHES, '1h') as CachePrompt;
+    if (deskEnabled && !apiKey) {
+      this.logger.warn(
+        'AI_DESK_ENABLE está activo pero falta OPENROUTER_API_KEY: ' +
+          'los agentes en modo IA no propondrán nada; los de REGLAS, sí.',
       );
     }
 
@@ -276,6 +331,19 @@ export class OpenRouterClient {
   /** El modelo del canal: va en cada intención, como el del supervisor. */
   get canalModelo(): string {
     return this.channelModel;
+  }
+
+  /**
+   * Si los agentes de IA pueden llamar (spec 074). Independiente de los otros
+   * tres, y NO es `agentAvailable`, que es el del supervisor.
+   */
+  get agentesDisponible(): boolean {
+    return this.deskKey !== '';
+  }
+
+  /** El modelo de los agentes: va en cada ronda, como el del canal en su intención. */
+  get agentesModelo(): string {
+    return this.deskModel;
   }
 
   /**
@@ -369,22 +437,65 @@ export class OpenRouterClient {
    * oferta, que cambia en cada llamada, va detrás, en el del usuario.
    */
   async decidirCanal(p: PeticionCanal): Promise<RespuestaCanal> {
+    return this.decidir(
+      {
+        clave: this.channelKey,
+        modelo: this.channelModel,
+        esfuerzo: this.channelEffort,
+        cache: this.channelCache,
+        que: 'decision del canal',
+        titulo: 'Crypton AI channel',
+      },
+      p,
+    );
+  }
+
+  /**
+   * Pide al modelo que elija, en una ronda de un agente, entre las operaciones
+   * que calculó el motor para sus pares, o que diga qué hacer con una que ya
+   * está abierta (spec 074).
+   *
+   * La misma petición que la del canal con otra carga: su interruptor, su
+   * modelo, su esfuerzo, su caché y su título en el panel de OpenRouter.
+   */
+  async decidirAgente(p: PeticionDecision): Promise<RespuestaDecision> {
+    return this.decidir(
+      {
+        clave: this.deskKey,
+        modelo: this.deskModel,
+        esfuerzo: this.deskEffort,
+        cache: this.deskCache,
+        que: 'decision de un agente',
+        titulo: 'Crypton AI desk',
+      },
+      p,
+    );
+  }
+
+  /**
+   * Una decisión entre opciones ya calculadas, por la carga que la pide.
+   *
+   * Sacada del cuerpo de `decidirCanal` al llegar los agentes (spec 074): lo
+   * que cambia de una a otra es la carga, y dos copias de este cuerpo acabarían
+   * distintas en lo que no se mira.
+   */
+  private async decidir(carga: CargaDecision, p: PeticionDecision): Promise<RespuestaDecision> {
     const inicio = Date.now();
-    if (!this.canalDisponible) {
+    if (carga.clave === '') {
       return {
         contenido: null,
         uso: null,
         fallo: 'SIN_CLAVE',
         latenciaMs: 0,
-        modelo: this.channelModel,
+        modelo: carga.modelo,
       };
     }
-    const cache = marcadorCache(this.channelCache);
+    const cache = marcadorCache(carga.cache);
     const r = await this.pedir({
       cuerpo: {
-        model: this.channelModel,
+        model: carga.modelo,
         max_tokens: MAX_TOKENS,
-        reasoning: { effort: this.channelEffort, exclude: true },
+        reasoning: { effort: carga.esfuerzo, exclude: true },
         response_format: {
           type: 'json_schema',
           json_schema: { name: p.esquema.name, strict: true, schema: p.esquema.schema },
@@ -398,12 +509,12 @@ export class OpenRouterClient {
           { role: 'user', content: p.usuario },
         ],
       },
-      que: 'decision del canal',
-      titulo: 'Crypton AI channel',
-      clave: this.channelKey,
+      que: carga.que,
+      titulo: carga.titulo,
+      clave: carga.clave,
       limiteMs: Math.min(p.limiteMs, TIMEOUT_MS),
     });
-    return { ...r, latenciaMs: Date.now() - inicio, modelo: this.channelModel };
+    return { ...r, latenciaMs: Date.now() - inicio, modelo: carga.modelo };
   }
 
   /**
@@ -561,9 +672,9 @@ export class OpenRouterClient {
       // gasto aparece como «desconocido», que es justo lo que no quieres cuando
       // hay que averiguar quien se esta comiendo el saldo.
       'HTTP-Referer': this.referer,
-      // Distingue las dos cargas en el panel de OpenRouter. Es la forma barata
-      // de ver por separado lo que gasta el asesor y lo que gasta el supervisor
-      // sin abrir una segunda cuenta.
+      // Distingue las cargas en el panel de OpenRouter. Es la forma barata de
+      // ver por separado lo que gasta el asesor, el supervisor, el canal y los
+      // agentes sin abrir una segunda cuenta.
       'X-Title': titulo,
     };
   }
@@ -632,7 +743,8 @@ export class OpenRouterClient {
     } else if (res.status === 402) {
       this.logger.error(
         'OpenRouter rechaza la llamada por saldo insuficiente: recarga la cuenta. Mientras, ' +
-          'el asistente usa reglas y ni el Modo IA ni el canal con IA deciden nada.',
+          'el asistente usa reglas y ni el Modo IA, ni el canal con IA, ni los agentes en ' +
+          'modo IA deciden nada.',
       );
     } else if (res.status === 429) {
       this.logger.warn(`OpenRouter está limitando el ritmo (${que}).`);

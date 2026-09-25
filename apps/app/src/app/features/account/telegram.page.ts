@@ -75,6 +75,19 @@ const FILA_IA: (typeof PREF_ROWS)[number] = {
     'solo. Si lo apagas, los bots en «propone y espera» dejan de revisarse.',
 };
 
+/**
+ * Los avisos de los agentes de IA (spec 074), también solo para quien puede
+ * crearlos. A diferencia del Modo IA, apagarlos no deja nada sin decidir: las
+ * propuestas se pueden aprobar desde la sección IA.
+ */
+const FILA_AGENTES: (typeof PREF_ROWS)[number] = {
+  key: 'agentes',
+  label: 'Agentes de IA',
+  help:
+    'Las propuestas de tus agentes, con sus botones para ejecutarlas, lo que hacen con las ' +
+    'operaciones abiertas y cómo acaban. Si lo apagas, las propuestas solo se ven en la app.',
+};
+
 @Component({
   selector: 'app-telegram',
   standalone: true,
@@ -116,7 +129,9 @@ export class TelegramPage implements OnInit {
   readonly deepLink = signal<string | null>(null);
 
   private readonly esAdmin = computed(() => this.auth.user()?.role === 'ADMIN');
-  readonly rows = computed(() => (this.esAdmin() ? [...PREF_ROWS, FILA_IA] : PREF_ROWS));
+  readonly rows = computed(() =>
+    this.esAdmin() ? [...PREF_ROWS, FILA_IA, FILA_AGENTES] : PREF_ROWS,
+  );
   readonly shortDate = shortDate;
 
   constructor() {

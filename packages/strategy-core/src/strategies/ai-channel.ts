@@ -33,7 +33,6 @@ import {
   agregarVelas,
   apalancamientoPorStop,
   eleccionEfectiva,
-  esEleccionCanal,
   maintenanceMarginRateOf,
   vistaCanalDe,
   type AvisoEstrategia,
@@ -67,11 +66,25 @@ import {
   construirOperacion,
   esElegible,
   inicioDelCanal,
-  llegaAlMinimo,
   perdidaHoyPct,
 } from '../canal/herramienta';
 import { juezDeReglas } from '../canal/juez';
 import { makeCoid } from '../client-order-id';
+import {
+  ESPERA_LLENADO_MS,
+  INDICE_CIERRE,
+  MAX_INTENTOS_CIERRE,
+  cierreAMercado,
+  entradaEnCurso,
+  leerCierre,
+  ordenStop,
+  precioBreakeven,
+  repartoDeObjetivos,
+  salidaDeSeguridad,
+  tramosDeSalida,
+  type CierreEnCurso,
+  type MotivoDeCierre,
+} from '../operacion/gestion';
 import {
   buildPreview,
   comunCon,
@@ -145,18 +158,17 @@ const leer = (config: AiChannelConfig, venue: Venue): ConfigCanal =>
 
 const QUINCE_MIN = 900_000;
 const CINCO_MIN = 300_000;
-/** Lo que se espera a que una entrada IOC aparezca como posición. */
-export const ESPERA_LLENADO_MS = 30_000;
-/** Pasado esto sin posición ni ejecución, la entrada se da por perdida. */
-const ESPERA_MAXIMA_LLENADO_MS = 5 * 60_000;
-/** Cierres a mercado: un intento cada 30 s, doce como mucho (`TAKE_PROFIT#500..511`). */
-export const INDICE_CIERRE = 500;
-export const MAX_INTENTOS_CIERRE = 12;
-const ESPERA_ENTRE_CIERRES_MS = 30_000;
-/** El stop no saltó: el precio lo ha pasado en más de esta fracción del stop. */
-const STOP_NO_SALTO = 0.5;
-/** La liquidación del venue tiene que quedar al menos a medio stop detrás del stop. */
-const HOLGURA_LIQUIDACION = 0.5;
+// La gestión de la operación —esperas de llenado, cierres a mercado, stop,
+// reparto de objetivos, breakeven y salidas de seguridad— vive desde el spec 074
+// en `operacion/gestion.ts`, que comparte con la operación de un agente. Se
+// reexporta lo que ya se importaba desde aquí, para no mover a nadie más.
+export {
+  ESPERA_LLENADO_MS,
+  INDICE_CIERRE,
+  MAX_INTENTOS_CIERRE,
+  tramosDeSalida,
+  type CierreEnCurso,
+};
 /** Un canal inclinado admite tendencia a favor mientras el ADX no pase de aquí. */
 const ADX_INCLINADO = 40;
 /** Al 1,5× del tope diario, pausa con reanudación manual. */
@@ -760,12 +772,6 @@ export interface OperacionGuardada {
   stopBreakeven?: string;
 }
 
-export interface CierreEnCurso {
-  motivo: string;
-  intentos: number;
-  ultimoEn: number;
-}
-
 const esObjeto = (v: unknown): v is Record<string, unknown> =>
   typeof v === 'object' && v !== null && !Array.isArray(v);
 
@@ -774,15 +780,6 @@ function leerOperacion(v: unknown): OperacionGuardada | null {
   const plan = v['plan'] as unknown as PlanOperacion;
   if (typeof plan.stop !== 'string' || !Array.isArray(plan.objetivos)) return null;
   return v as unknown as OperacionGuardada;
-}
-
-function leerCierre(v: unknown): CierreEnCurso | null {
-  if (!esObjeto(v) || typeof v['motivo'] !== 'string') return null;
-  return {
-    motivo: v['motivo'],
-    intentos: Number(v['intentos'] ?? 0),
-    ultimoEn: Number(v['ultimoEn'] ?? 0),
-  };
 }
 
 // ── Con posición ────────────────────────────────────────────────────────────
@@ -794,36 +791,7 @@ function leerCierre(v: unknown): CierreEnCurso | null {
  */
 const RECORRIDO_STOP_HUERFANA = D(2).div(3);
 
-/** Los tramos de salida de la operación para la posición que llegó a haber. */
-export function tramosDeSalida(
-  market: MarketSpec,
-  op: OperacionGuardada,
-  maximo: Decimal,
-): { precio: string; cantidad: Decimal }[] {
-  const [tp1, tp2] = op.plan.objetivos;
-  const todo = [{ precio: tp1.precio, cantidad: maximo }];
-  if (!tp2 || !D(op.plan.cantidad).gt(0)) return todo;
-  // La misma proporción que el plan, sobre lo que de verdad se llenó.
-  // Multiplicando antes de dividir: 31,257 × (18,754 / 31,257) no da 18,754
-  // exacto, y el redondeo a la baja se comería un paso.
-  const primera = D(qy(market, maximo.mul(tp1.cantidad).div(op.plan.cantidad)));
-  const segunda = maximo.minus(primera);
-  if (
-    !llegaAlMinimo(market, primera, D(tp1.precio)) ||
-    !llegaAlMinimo(market, segunda, D(tp2.precio))
-  ) {
-    return todo;
-  }
-  return [
-    { precio: tp1.precio, cantidad: primera },
-    { precio: tp2.precio, cantidad: segunda },
-  ];
-}
-
-interface Salida {
-  motivo: string;
-  mensaje: string;
-}
+type Salida = MotivoDeCierre;
 
 /** Las velas de 15 min del contexto; con estructura de 5, construidas con ellas. */
 function velasDe15(ctx: BotContext): readonly { t: number; c: string }[] | undefined {
@@ -843,35 +811,11 @@ function motivoDeSalida(
   stop: Decimal,
   analisis: ResultadoAnalisis | null,
 ): Salida | null {
-  const marca = D(ctx.ticker.mark);
   if (ctx.now >= op.plan.venceEn) {
     return { motivo: 'TIEMPO', mensaje: `pasaron ${c.maxVelasOperacion} velas de 15 min` };
   }
-  const s = D(op.plan.distanciaStop).mul(STOP_NO_SALTO);
-  if (largo ? marca.lt(stop.mul(D(1).minus(s))) : marca.gt(stop.mul(D(1).plus(s)))) {
-    return {
-      motivo: 'STOP_NO_SALTO',
-      mensaje: `el precio pasó el stop ${stop.toFixed()} y no saltó`,
-    };
-  }
-  const pos = ctx.position;
-  if (pos?.liquidationPrice && D(pos.liquidationPrice).gt(0)) {
-    const liq = D(pos.liquidationPrice);
-    const holgura = D(pos.entryPrice).mul(op.plan.distanciaStop).mul(HOLGURA_LIQUIDACION);
-    const tope = largo ? stop.minus(holgura) : stop.plus(holgura);
-    if (largo ? liq.gt(tope) : liq.lt(tope)) {
-      return {
-        motivo: 'LIQUIDACION',
-        mensaje: `el venue pone la liquidación en ${liq.toFixed()}, demasiado cerca del stop`,
-      };
-    }
-  }
-  if (pos && Number.isFinite(pos.leverage) && pos.leverage > op.plan.apalancamiento + 0.5) {
-    return {
-      motivo: 'APALANCAMIENTO',
-      mensaje: `el venue informa ${pos.leverage}x y la operación pidió ${op.plan.apalancamiento}x`,
-    };
-  }
+  const seguridad = salidaDeSeguridad(ctx, op, largo, stop);
+  if (seguridad) return seguridad;
   if (!analisis) return null;
   const velas15 = velasDe15(ctx);
   const atr = Number(analisis.salida.mercado.atr15m);
@@ -894,56 +838,6 @@ function motivoDeSalida(
     return { motivo: 'REGIMEN', mensaje: 'el mercado ha pasado a tendencia en contra' };
   }
   return null;
-}
-
-const ordenStop = (
-  ctx: BotContext,
-  seq: number,
-  lado: 'BUY' | 'SELL',
-  precio: string,
-  cantidad: Decimal,
-): DesiredOrder => ({
-  clientOrderId: makeCoid(ctx.botId, seq, LevelKind.STOP_LOSS, 0),
-  levelKind: LevelKind.STOP_LOSS,
-  levelIndex: 0,
-  side: lado,
-  type: 'MARKET',
-  price: precio,
-  triggerPrice: precio,
-  qty: qy(ctx.market, cantidad),
-  reduceOnly: true,
-});
-
-function cierreAMercado(
-  ctx: BotContext,
-  seq: number,
-  lado: 'BUY' | 'SELL',
-  cantidad: Decimal,
-  previo: CierreEnCurso | null,
-  motivo: string,
-): { immediate: DesiredOrder[]; cierre: CierreEnCurso; agotado: boolean } {
-  const cierre = previo ?? { motivo, intentos: 0, ultimoEn: 0 };
-  if (cierre.intentos >= MAX_INTENTOS_CIERRE) return { immediate: [], cierre, agotado: true };
-  if (ctx.now - cierre.ultimoEn < ESPERA_ENTRE_CIERRES_MS) {
-    return { immediate: [], cierre, agotado: false };
-  }
-  const indice = INDICE_CIERRE + cierre.intentos;
-  return {
-    immediate: [
-      {
-        clientOrderId: makeCoid(ctx.botId, seq, LevelKind.TAKE_PROFIT, indice),
-        levelKind: LevelKind.TAKE_PROFIT,
-        levelIndex: indice,
-        side: lado,
-        type: 'MARKET',
-        price: px(ctx.market, D(ctx.ticker.mark), lado),
-        qty: qy(ctx.market, cantidad),
-        reduceOnly: true,
-      },
-    ],
-    cierre: { motivo: cierre.motivo, intentos: cierre.intentos + 1, ultimoEn: ctx.now },
-    agotado: false,
-  };
 }
 
 /** Una posición sin operación guardada: stop de emergencia y aviso. */
@@ -1043,9 +937,7 @@ function conPosicion(
   if (tp1Hecho && c.breakeven && !op.stopBreakeven) {
     const entrada = D(ctx.position?.entryPrice ?? op.plan.entradaTope);
     // La entrada más lo que cuesta salir: comisión de entrada y salida a mercado.
-    const costes = D(c.costes.takerBps).mul(2).plus(c.costes.deslizamientoBps).div(10_000);
-    const bruto = largo ? entrada.mul(D(1).plus(costes)) : entrada.mul(D(1).minus(costes));
-    const be = D(px(ctx.market, bruto, lado));
+    const be = precioBreakeven(ctx.market, entrada, largo, c.costes);
     const marca = D(ctx.ticker.mark);
     const mejora = largo ? be.gt(stop) : be.lt(stop);
     // Un stop del otro lado de la marca saltaría al colocarlo: se espera.
@@ -1100,33 +992,10 @@ function conPosicion(
     };
   }
 
-  // Los objetivos, repartidos DE ABAJO ARRIBA: el último tramo se queda con lo
-  // suyo y el primero con el resto.
-  //
-  // Al revés —que es como estaba— lo que faltaba se le quitaba siempre al
-  // segundo objetivo: con el primero ejecutado a medias, el primero se quedaba
-  // con TODA la posición que quedaba y el segundo se cancelaba, así que la
-  // operación cobraba entera en el objetivo corto y el recorrido bueno se
-  // regalaba. La ejecución parcial es del tramo que se estaba cobrando, no del
-  // que no ha tocado nadie (spec 062, F-22).
+  // Los objetivos, repartidos DE ABAJO ARRIBA (spec 062, F-22): ver
+  // `repartoDeObjetivos`.
   const pendientes = tp1Hecho ? tramos.slice(1) : tramos;
-  const reparto = pendientes.map((t) => ({ t, cantidad: D(0) }));
-  let restante = abs;
-  for (let i = reparto.length - 1; i >= 0; i--) {
-    const cantidad = i === 0 ? restante : Decimal.min(reparto[i].t.cantidad, restante);
-    reparto[i].cantidad = cantidad;
-    restante = restante.minus(cantidad);
-  }
-  // Un resto que no llega al mínimo del venue no se puede colocar solo: se suma
-  // al tramo de al lado, o esa parte de la posición se quedaría sin objetivo.
-  if (
-    reparto.length === 2 &&
-    reparto[0].cantidad.gt(0) &&
-    !llegaAlMinimo(ctx.market, reparto[0].cantidad, D(reparto[0].t.precio))
-  ) {
-    reparto[1].cantidad = reparto[1].cantidad.plus(reparto[0].cantidad);
-    reparto[0].cantidad = D(0);
-  }
+  const reparto = repartoDeObjetivos(ctx.market, pendientes, abs);
   reparto.forEach(({ t, cantidad }) => {
     if (!cantidad.gt(0)) return;
     const indice = tramos.indexOf(t);
@@ -1376,15 +1245,7 @@ function enPlano(
 
   // ── Una entrada recién enviada ─────────────────────────────────────
   if (op) {
-    const coid = makeCoid(ctx.botId, seq, LevelKind.BASE, op.intento);
-    const enLibro = ctx.openOrders.some((o) => o.clientOrderId === coid);
-    const transcurrido = ctx.now - op.enviadaEn;
-    const hayLlenado = ctx.cycle.entriesFilled > 0 || ctx.cycle.averageEntry !== null;
-    if (
-      enLibro ||
-      transcurrido < ESPERA_LLENADO_MS ||
-      (hayLlenado && transcurrido < ESPERA_MAXIMA_LLENADO_MS)
-    ) {
+    if (entradaEnCurso(ctx, seq, op)) {
       return sinEntrada('Entrada enviada: esperando a que el venue la confirme.');
     }
     // La operación llegó a existir (`maximo` solo se pone con posición a la vista)
@@ -1519,20 +1380,13 @@ function enPlano(
     if (dIa.huella !== salida.huella) {
       return rechazar(MotivoRechazo.HUELLA, 'La oferta cambió desde que se consultó a la IA.');
     }
-    // Desde el spec 069 hay dos estrategias escribiendo en la misma columna, y
-    // la elección se estrecha por su forma. Una que no sea de esta no se
-    // interpreta «como se pueda»: se rechaza.
-    if (!esEleccionCanal(dIa.eleccion)) {
-      return rechazar(MotivoRechazo.OFERTA, 'La decisión guardada no es de esta estrategia.');
-    }
-    const eleccion = dIa.eleccion;
     if (
-      eleccion.veredicto === Veredicto.OPERAR &&
-      ORDEN_CONFIANZA[eleccion.confianza] < ORDEN_CONFIANZA[c.confianzaMinima]
+      dIa.eleccion.veredicto === Veredicto.OPERAR &&
+      ORDEN_CONFIANZA[dIa.eleccion.confianza] < ORDEN_CONFIANZA[c.confianzaMinima]
     ) {
       return rechazar(MotivoRechazo.OFERTA, 'La IA decidió con menos confianza de la pedida.');
     }
-    if (eleccion.veredicto !== Veredicto.OPERAR) {
+    if (dIa.eleccion.veredicto !== Veredicto.OPERAR) {
       return rechazar(MotivoRechazo.OFERTA, 'La IA no quiere operar esta vela.');
     }
     // La API ya la guarda reducida; se vuelve a aplicar por si no (spec 059).
@@ -1542,7 +1396,7 @@ function enPlano(
       seq,
       intento,
       salida,
-      eleccionEfectiva(eleccion),
+      eleccionEfectiva(dIa.eleccion),
       dIa.intentId,
       patch,
       avisos,

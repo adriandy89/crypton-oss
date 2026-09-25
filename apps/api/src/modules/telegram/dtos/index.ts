@@ -45,6 +45,16 @@ export class UpdateTelegramPrefsDto {
   @IsOptional()
   @IsBoolean()
   ai?: boolean;
+
+  /**
+   * Lo que proponen y hacen los agentes de IA (spec 074): sus propuestas con los
+   * botones para ejecutarlas, las acciones de seguimiento y la vida de cada
+   * operación. Lo que pone en juego una posición va con `risk`, como siempre.
+   * Apagado, las propuestas siguen llegando a la app.
+   */
+  @IsOptional()
+  @IsBoolean()
+  agentes?: boolean;
 }
 
 export interface TelegramPrefs {
@@ -55,6 +65,7 @@ export interface TelegramPrefs {
   liquidation: boolean;
   daily: boolean;
   ai: boolean;
+  agentes: boolean;
 }
 
 export const DEFAULT_TELEGRAM_PREFS: TelegramPrefs = {
@@ -68,4 +79,6 @@ export const DEFAULT_TELEGRAM_PREFS: TelegramPrefs = {
   // un bot suyo.
   daily: true,
   ai: true,
+  // Igual de inofensiva: solo un administrador puede crear un agente.
+  agentes: true,
 };

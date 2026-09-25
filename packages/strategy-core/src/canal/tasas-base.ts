@@ -19,7 +19,7 @@ import {
   Evidencia,
   TipoSetup,
   type CalidadCanal,
-  type ResumenTasas,
+  type TasasBase,
   type TipoCanal,
 } from '@crypton/shared';
 import { calidadSuficiente, detectarCanal, nivelesEn } from './canales';
@@ -219,26 +219,37 @@ export function etiquetasHistoricas(
   return out;
 }
 
+/**
+ * Las tasas de un grupo de resultados en R: acierto es R positivo. Es la
+ * cuenta de `resumirTasas`, aparte para que los agentes resuman sus familias
+ * con ella (spec 074). Un grupo vacío no tiene tasas.
+ */
+export function tasasDeResultados(rs: readonly number[]): TasasBase | null {
+  const n = rs.length;
+  if (n === 0) return null;
+  const aciertos = rs.filter((r) => r > 0).length;
+  return {
+    n,
+    aciertos,
+    rMedio: rs.reduce((acc, r) => acc + r, 0) / n,
+    wilsonInferior: wilsonInferior(aciertos, n),
+    evidencia: evidenciaDe(n),
+  };
+}
+
 /** Las tasas por setup y lado (`claveTasas`). */
-export function resumirTasas(etiquetas: readonly Etiqueta[]): Map<string, ResumenTasas> {
-  const grupos = new Map<string, Etiqueta[]>();
+export function resumirTasas(etiquetas: readonly Etiqueta[]): Map<string, TasasBase> {
+  const grupos = new Map<string, number[]>();
   for (const e of etiquetas) {
     const clave = claveTasas(e.setup, e.lado);
     const grupo = grupos.get(clave);
-    if (grupo) grupo.push(e);
-    else grupos.set(clave, [e]);
+    if (grupo) grupo.push(e.r);
+    else grupos.set(clave, [e.r]);
   }
-  const out = new Map<string, ResumenTasas>();
-  for (const [clave, grupo] of grupos) {
-    const n = grupo.length;
-    const aciertos = grupo.filter((e) => e.r > 0).length;
-    out.set(clave, {
-      n,
-      aciertos,
-      rMedio: grupo.reduce((acc, e) => acc + e.r, 0) / n,
-      wilsonInferior: wilsonInferior(aciertos, n),
-      evidencia: evidenciaDe(n),
-    });
+  const out = new Map<string, TasasBase>();
+  for (const [clave, rs] of grupos) {
+    const tasas = tasasDeResultados(rs);
+    if (tasas) out.set(clave, tasas);
   }
   return out;
 }
@@ -248,6 +259,6 @@ export function tasasBase(
   atr: ArrayLike<number>,
   giros: readonly Giro[],
   p: ParametrosTasas,
-): Map<string, ResumenTasas> {
+): Map<string, TasasBase> {
   return resumirTasas(etiquetasHistoricas(s, atr, giros, p));
 }

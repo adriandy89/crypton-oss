@@ -94,9 +94,14 @@ El tope depende de la tasa de mantenimiento del par: 16× en BTC de Hyperliquid 
 ese mercado antes de crear el bot; la API la repite al guardar. No es un fallo del formulario: es la red
 de la cuenta.
 
-### La regla por stop (el Canal y el Bot de IA)
+### La regla por stop (el Canal con IA y la Operación IA)
 
-El [Canal](./ai-channel.md) y el [Bot de IA](./ai-trader.md) no usan la regla del 5 %: cada operación lleva su stop desde el
+La [Operación IA](./agent-trade.md) de los agentes usa esta misma regla, con la misma función del
+motor: su apalancamiento lo calcula el agente al proponerla —y otra vez al aprobarla— con el colchón
+de tres stops y su propio tope (10× de fábrica), y la validación de la estrategia exige la
+liquidación detrás del stop con holgura. Lo que sigue se explica con el canal.
+
+El [Canal con IA](./ai-channel.md) no usa la regla del 5 %: cada operación lleva su stop desde el
 primer momento, así que la distancia a la liquidación se exige **contra ese stop**. Con `s` la
 distancia al stop en tanto por uno de la entrada y `mmr` la tasa de mantenimiento del tramo:
 
@@ -214,7 +219,7 @@ conseguía era dejar el bot pausado cuando el venue volvía. Ahora el bot **espe
 Un bot simulado aguanta además hasta 20 s con el último precio conocido, igual que uno real. Los fallos
 que **no** son del venue (un error del propio bot) siguen pausando a los cinco.
 
-**En el Canal y en el Bot de IA** cuatro guardas funcionan distinto:
+**En el Canal con IA** cuatro guardas funcionan distinto:
 
 - **Liquidación.** Se mide el **camino** de la entrada a la liquidación: a dos tercios salta
   `LIQUIDATION_NEAR` en CRITICAL y actúa «Al acercarse la liquidación», que aquí viene en **Cerrar
@@ -233,9 +238,13 @@ que **no** son del venue (un error del propio bot) siguen pausando a los cinco.
 Cada intento de cierre se lleva su propio identificador, así que uno que se ejecute a medias no
 impide el siguiente, y el aviso `SIN_STOP` se repite como mucho una vez por minuto mientras dure
 (spec 062, F-05). Con el bot **pausado**, la guarda de liquidación de las estrategias con
-apalancamiento por operación —hoy, el canal con IA— **cierra de verdad**, que es lo que promete
-«Al acercarse la liquidación»; en el resto de estrategias sigue avisando y esperándote (spec 062,
-F-12).
+apalancamiento por operación —hoy, el canal con IA y la operación de un agente— **cierra de
+verdad**, que es lo que promete «Al acercarse la liquidación»; en el resto de estrategias sigue
+avisando y esperándote (spec 062, F-12).
+
+**La Operación IA** (spec 074) hereda del canal la guarda de liquidación, el vigilante del stop y la
+protección en pausa. No tiene pérdida diaria ni caída máxima propias: sus límites del día son los de
+su agente, que se pausa entero al tocar su pérdida diaria —contando al stop lo que tiene abierto—.
 
 > ℹ️ **Semántica fijada (F-11, 2026-09-06).** El kill-switch del bot mide la **pérdida acumulada sobre el
 > capital asignado**, no la caída desde el máximo: es un tope de pérdida absoluta, y así se rotula en la
@@ -258,9 +267,9 @@ del exchange** (`withStopLoss`, [`stop-loss.ts`](../packages/strategy-core/src/s
   Lo cancela `CANCEL_ALL_ORDERS`; `STOP_AND_CLOSE` y `PANIC` lo cancelan **solo después de que el cierre
   haya salido**: si el exchange no acepta el cierre, el stop se queda, el bot pasa a pausado y lo dice en
   CRITICAL.
-- **Tendencia, el Canal y el Bot de IA ponen su propio stop** y no leen este campo: el de Tendencia sigue
-  al precio por ATR, y el del canal sale del extremo del toque. En los dos, «Stop loss (%)» no hace
-  nada.
+- **Tendencia, el Canal con IA y la Operación IA ponen su propio stop** y no leen este campo: el de
+  Tendencia sigue al precio por ATR, el del canal sale del extremo del toque y el de la operación de
+  un agente es el de su plan, que **solo se ciñe**. En los tres, «Stop loss (%)» no hace nada.
 - Si el exchange lo **rechaza**, el evento es CRITICAL una vez por forma de orden y el motor lo
   reintenta en cada revisión (no entra en cuarentena como el resto de órdenes). Un fallo **pasajero** al
   colocarlo (un corte de red) se reintenta en el mismo instante y, si tampoco sale, es CRITICAL.
@@ -295,8 +304,8 @@ Lo que la vista previa llama «peor caso» es **todos los niveles ejecutados**. 
 | Market Maker (V1 y V2) | **Valor máximo de la posición**, en cualquiera de los dos sentidos | Ese valor ÷ apalancamiento | `capital asignado` **no** dimensiona nada aquí: solo es el denominador de la pérdida diaria. |
 | Tendencia | `riesgo por operación / (multiplicador × ATR)` en cantidad, **acotado** por `capital × apalancamiento`, el margen disponible y el `Tope de exposición` | Ese notional ÷ apalancamiento | Lo que se arriesga **no** es el notional: es el `riesgo por operación`, porque el stop está puesto desde el primer momento. Si el tope recorta, se arriesga **menos** de lo declarado y la nota del bot lo dice. |
 | Seguimiento de beneficio | **capital × apalancamiento** en una sola posición, acotado por el margen disponible y el `Tope de exposición` | capital | No hay escalera: la posición entera existe desde el primer minuto. Y hasta llegar al objetivo la única red es el `stop loss`, que por eso viene puesto de fábrica (5 %). Al cerrarse **vuelve a abrir** pasada la espera. |
-| Canal | `riesgo / (distancia al stop + costes)`, acotado por `capital × nocional máximo`, `capital × apalancamiento` y el `Tope de exposición`. Es lo que cuenta como notional del bot en tus límites | notional ÷ apalancamiento, como mucho el `margen máximo` (25 % del capital) | Lo que se arriesga es el `riesgo por operación`: el stop está en el libro desde el llenado. En un hueco que salte el stop, lo más que se pierde es el margen de la operación. |
-| Bot de IA | Igual que el Canal: `riesgo / (distancia al stop + costes)`, acotado por `capital × tamaño máximo`, `capital × apalancamiento` y el `Tope de exposición` | notional ÷ apalancamiento, como mucho el `margen máximo` (25 % del capital) | Lo que se arriesga es el `riesgo por operación`. El apalancamiento es siempre el MENOR que hace caber el margen, o sea la liquidación más lejana posible, y se comprueba que queda detrás del stop antes de ofrecer la operación. |
+| Canal con IA | `riesgo / (distancia al stop + costes)`, acotado por `capital × nocional máximo`, `capital × apalancamiento` y el `Tope de exposición`. Es lo que cuenta como notional del bot en tus límites | notional ÷ apalancamiento, como mucho el `margen máximo` (25 % del capital) | Lo que se arriesga es el `riesgo por operación`: el stop está en el libro desde el llenado. En un hueco que salte el stop, lo más que se pierde es el margen de la operación. |
+| Operación IA | La cantidad de su plan: `riesgo / (distancia al stop + costes)` sobre el capital del **agente**, con sus topes de margen y de apalancamiento | El de su plan, como mucho el `margen por operación` del agente (25 % de fábrica) | Como en el canal: lo que se arriesga es 1R, y en un hueco, el margen. **Una sola vez**: al cerrarse no vuelve a abrir. Un agente abre como mucho sus `operaciones a la vez` (2 de fábrica), y su pérdida diaria cuenta lo abierto al stop. |
 
 ---
 

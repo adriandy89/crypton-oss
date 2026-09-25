@@ -421,131 +421,7 @@ export const FIELD_LABELS: Record<string, string> = {
 
   // Canal con IA (specs 058-059). Las ayudas dicen lo que hace el motor
   // (`canal/config.ts` y `ai-channel.ts`), no lo que sugiere el nombre.
-  'strategy.aiChannel.label': 'Canal',
-  // ── Bot de IA (AI_TRADER, spec 068) ──
-  'strategy.aiTrader.label': 'Bot de IA',
-  'strategy.aiTrader.description':
-    'Toques del borde de una banda: el motor calcula nueve operaciones y la IA elige.',
-  'strategy.aiTrader.decisionMode': 'Quién decide',
-  'strategy.aiTrader.decisionModeHelp':
-    'Con «reglas» decide una tabla determinista y no se gasta ninguna consulta. Con «IA» decide el modelo.',
-  'strategy.aiTrader.decisionInterval': 'Cada cuánto decide',
-  'strategy.aiTrader.decisionIntervalHelp':
-    'Marca de qué velas sale la banda, cada cuánto puede abrir y cuánto dura una operación: los ' +
-    'topes de velas se cuentan en velas de esta cadencia. 15 minutos. 1 minuto no está porque no ' +
-    'funciona: el coste de entrar y salir es fijo y el recorrido de una vela de 1 minuto no lo paga.',
-  'strategy.aiTrader.observeOnly': 'Solo observar',
-  'strategy.aiTrader.observeOnlyHelp': 'Apunta lo que haria, sin mandar ninguna orden.',
-  'strategy.aiTrader.entriesEnabled': 'Entradas activas',
-  'strategy.aiTrader.entriesEnabledHelp':
-    'Apagado, lo abierto se gestiona hasta el final pero no entra nada mas.',
-  'strategy.aiTrader.riskPerTradePct': 'Riesgo por operación',
-  'strategy.aiTrader.riskPerTradePctHelp':
-    'Del capital, lo que se pierde si salta el stop. Es lo que fija el tamano.',
-  'strategy.aiTrader.maxMarginPct': 'Margen máximo',
-  'strategy.aiTrader.maxMarginPctHelp': 'Lo mas que puede quedar inmovilizado a la vez.',
-  'strategy.aiTrader.maxNotionalMultiple': 'Tamaño máximo',
-  'strategy.aiTrader.maxNotionalMultipleHelp': 'En veces tu capital.',
-  'strategy.aiTrader.liqBufferStops': 'Distancia a la liquidación',
-  'strategy.aiTrader.liqBufferStopsHelp':
-    'En distancias de stop. Subirlo baja el apalancamiento; nunca menos de 3.',
-  'strategy.aiTrader.maxStopPct': 'Stop más ancho',
-  'strategy.aiTrader.maxStopPctHelp': 'Una operacion que pida un stop mas lejano no se ofrece.',
-  'strategy.aiTrader.maxCostPerTradeR': 'Coste máximo por operación',
-  'strategy.aiTrader.maxCostPerTradeRHelp':
-    'En fraccion de lo arriesgado: comisiones mas deslizamiento.',
-  'strategy.aiTrader.minTargetCostMultiple': 'Objetivo mínimo sobre el coste',
-  'strategy.aiTrader.minTargetCostMultipleHelp':
-    'En veces el coste de ida y vuelta. Por debajo de 15 esta medido que se pierde.',
-  'strategy.aiTrader.minRewardRisk': 'Beneficio mínimo',
-  'strategy.aiTrader.minRewardRiskHelp':
-    'Lo que tiene que pagar el objetivo, en veces lo arriesgado.',
-  'strategy.aiTrader.maxEntrySlippageR': 'Deslizamiento máximo de la entrada',
-  'strategy.aiTrader.maxEntrySlippageRHelp':
-    'Cuanto peor que la referencia puede llenarse la entrada.',
-  'strategy.aiTrader.maxSpreadFraction': 'Spread máximo',
-  'strategy.aiTrader.maxSpreadFractionHelp':
-    'En fraccion del ATR. Con un spread mas ancho no entra.',
-  'strategy.aiTrader.maxDrawdownPct': 'Caída máxima',
-  'strategy.aiTrader.maxDrawdownPctHelp': 'Al llegar, pausa. Reanudar es cosa tuya.',
-  'strategy.aiTrader.dailyProfitTargetPct': 'Objetivo de ganancia del día',
-  'strategy.aiTrader.dailyProfitTargetPctHelp': 'Al llegar deja de entrar. Cero lo apaga.',
-  'strategy.aiTrader.maxTradesPerDayHelp': 'Al llegar no entra más hasta el día siguiente. 8.',
-  'strategy.aiTrader.lossStreakCooldownMinutesHelp':
-    'El descanso que corta una racha de pérdidas. 120 minutos.',
-  'strategy.aiTrader.stopCooldownMinutesHelp':
-    'Cuánto espera tras saltar un stop, para no volver a entrar donde acaba de fallar. 30 minutos.',
-  'strategy.aiTrader.makerFeeBpsHelp':
-    'La comisión de las órdenes que esperan en el libro: el objetivo. Vacío usa la del exchange.',
-  'strategy.aiTrader.takerFeeBpsHelp':
-    'La comisión de las que cruzan el libro: la entrada y el stop. Entra en la pérdida al stop y, ' +
-    'por tanto, en el tamaño. Vacío usa la del exchange.',
-  'strategy.aiTrader.slippageBpsHelp':
-    'El deslizamiento que se supone al saltar el stop. Se suma a la pérdida: más deslizamiento, ' +
-    'menos tamaño. Vacío usa el del exchange.',
-  'strategy.aiTrader.bandPeriod': 'Velas de la banda',
-  'strategy.aiTrader.bandPeriodHelp': 'Cuantos cierres entran en su media.',
-  'strategy.aiTrader.bandSigma': 'Anchura de la banda',
-  'strategy.aiTrader.bandSigmaHelp': 'En desviaciones tipicas.',
-  'strategy.aiTrader.bandWindowBars': 'Ventana de medición',
-  'strategy.aiTrader.bandWindowBarsHelp':
-    'Velas hacia atras para medir si esto revierte de verdad.',
-  'strategy.aiTrader.touchPercentB': 'Qué cuenta como borde',
-  'strategy.aiTrader.touchPercentBHelp':
-    'En fraccion de la anchura. Cero exige tocar la banda exacta.',
-  'strategy.aiTrader.maxAdx1h': 'ADX máximo',
-  'strategy.aiTrader.maxAdx1hHelp':
-    'Por encima no se opera. Es el filtro mas valioso que tiene el bot.',
-  'strategy.aiTrader.minBandWidthAtr': 'Anchura mínima',
-  'strategy.aiTrader.minBandWidthAtrHelp':
-    'En veces el ATR. Una banda estrecha no deja sitio al objetivo.',
-  'strategy.aiTrader.maxHalfLifeBars': 'Vuelta a la media',
-  'strategy.aiTrader.maxHalfLifeBarsHelp':
-    'Lo que puede tardar el precio en volver para que cuente como reversion.',
-  'strategy.aiTrader.maxHoldBars': 'Velas por operación',
-  'strategy.aiTrader.maxHoldBarsHelp': 'Pasadas, se cierra a mercado.',
-  'strategy.aiTrader.invalidationAtr': 'Invalidación',
-  'strategy.aiTrader.invalidationAtrHelp':
-    'Cuanto tiene que alejarse el precio para dar el montaje por roto.',
-  'strategy.aiTrader.minRouteConfidence': 'Confianza mínima',
-  'strategy.aiTrader.minRouteConfidenceHelp':
-    'Por debajo, esa vela no se opera aunque la IA diga que si.',
-  'strategy.aiTrader.fullSizeConfidence': 'Confianza para entrar entero',
-  'strategy.aiTrader.fullSizeConfidenceHelp': 'Por debajo se entra con la mitad.',
-  'strategy.aiTrader.requireAgreement': 'Exigir acuerdo',
-  'strategy.aiTrader.requireAgreementHelp':
-    'Las tres preguntas de contexto tienen que acompanar a la decision.',
-  'strategy.aiTrader.minRegimeProb': 'Certeza de rango',
-  'strategy.aiTrader.minRegimeProbHelp': 'Cuanto tiene que creer la IA que el mercado da vueltas.',
-  'strategy.aiTrader.minExhaustionProb': 'Certeza de agotamiento',
-  'strategy.aiTrader.minExhaustionProbHelp':
-    'Cuanto tiene que creer que quien empujo se quedo sin fuerza.',
-  'strategy.aiTrader.minEvidenceProb': 'Certeza del histórico',
-  'strategy.aiTrader.minEvidenceProbHelp':
-    'Cuanto tiene que creer que los toques parecidos acompanan.',
-  'strategy.aiTrader.statedThreshold': 'Umbral para hacerle caso',
-  'strategy.aiTrader.statedThresholdHelp':
-    'Cuanta razon tiene que tener la IA para mandar sobre el stop y el objetivo.',
-  'strategy.aiTrader.defaultStopBucket': 'Stop por defecto',
-  'strategy.aiTrader.defaultStopBucketHelp':
-    'El que se usa cuando la IA no tiene razon clara para preferir otro.',
-  'strategy.aiTrader.defaultTargetBucket': 'Objetivo por defecto',
-  'strategy.aiTrader.defaultTargetBucketHelp': 'Igual que el stop.',
-  'strategy.aiTrader.halfSizeFallback': 'Si no cabe media posición',
-  'strategy.aiTrader.halfSizeFallbackHelp': 'O no se opera, o se entra entera.',
-  'strategy.aiTrader.wrongEnvironmentCooldownBars': 'Espera por entorno equivocado',
-  'strategy.aiTrader.wrongEnvironmentCooldownBarsHelp':
-    'Velas sin mirar cuando la IA dice que el mercado no acompana.',
-  'strategy.aiTrader.aiDailyCallBudget': 'Consultas al día',
-  'strategy.aiTrader.aiDailyCallBudgetHelp': 'Cuantas veces puede preguntarle al modelo este bot.',
-  'strategy.aiTrader.maxTradesPerDay': 'Operaciones al día',
-  'strategy.aiTrader.maxConsecutiveLosses': 'Pérdidas seguidas',
-  'strategy.aiTrader.maxConsecutiveLossesHelp': 'Al llegar, se toma un descanso.',
-  'strategy.aiTrader.lossStreakCooldownMinutes': 'Espera tras la racha',
-  'strategy.aiTrader.stopCooldownMinutes': 'Espera tras un stop',
-  'strategy.aiTrader.makerFeeBps': 'Comisión maker',
-  'strategy.aiTrader.takerFeeBps': 'Comisión taker',
-  'strategy.aiTrader.slippageBps': 'Deslizamiento',
+  'strategy.aiChannel.label': 'Canal con IA',
 
   'strategy.aiChannel.description':
     'Rebotes en el borde de un rango o canal, con el apalancamiento que permite el stop.',
@@ -693,6 +569,63 @@ export const FIELD_LABELS: Record<string, string> = {
   'strategy.aiChannel.noEntryWindowsUtcHelp':
     'HH:MM-HH:MM separadas por comas, hasta seis. Por ejemplo 12:25-12:45 alrededor de un dato ' +
     'macro.',
+
+  // Operación IA (spec 074): la operación de un agente. La crea el agente con los
+  // números de su plan; aquí solo se leen y, con la posición abierta, se ciñen.
+  'strategy.agentTrade.label': 'Operación IA',
+  'strategy.agentTrade.totalInvestment': 'Margen de la operación',
+  'strategy.agentTrade.totalInvestmentHelp':
+    'El margen aislado que inmoviliza la operación: lo más que se perdería si el precio saltara ' +
+    'más allá de la liquidación.',
+  'strategy.agentTrade.entryLimitPrice': 'Tope de entrada',
+  'strategy.agentTrade.entryLimitPriceHelp':
+    'La entrada es una orden inmediata con este precio tope: el largo nunca compra más caro y el ' +
+    'corto nunca vende más barato. Si el libro se ha ido, no entra.',
+  'strategy.agentTrade.quantity': 'Cantidad',
+  'strategy.agentTrade.quantityHelp':
+    'Lo que compra o vende la entrada, en moneda. La calculó el agente para que la pérdida al ' +
+    'stop quepa en su riesgo por operación.',
+  'strategy.agentTrade.riskAmount': 'Pérdida al stop',
+  'strategy.agentTrade.riskAmountHelp':
+    'Lo que se pierde si salta el stop, con comisiones y deslizamiento: lo que vale 1R. Solo ' +
+    'informa: el stop es el que manda.',
+  'strategy.agentTrade.stopPrice': 'Stop',
+  'strategy.agentTrade.stopPriceHelp':
+    'Orden condicional del exchange. Con la posición abierta solo se ciñe: un cambio que la aleja ' +
+    'se ignora, lo pida quien lo pida.',
+  'strategy.agentTrade.tp1Price': 'Primer objetivo',
+  'strategy.agentTrade.tp1PriceHelp':
+    'Orden límite de salida, reduce-only, con su parte de la posición.',
+  'strategy.agentTrade.tp2Price': 'Segundo objetivo',
+  'strategy.agentTrade.tp2PriceHelp':
+    'Opcional. Si está, la posición sale en dos partes; si no, entera en el primero.',
+  'strategy.agentTrade.tp1Fraction': 'Parte en el primer objetivo (%)',
+  'strategy.agentTrade.tp1FractionHelp':
+    'Con dos objetivos, la parte de la posición que sale en el primero. El resto, en el segundo.',
+  'strategy.agentTrade.breakevenAfterTp1': 'Stop a la entrada tras el primer objetivo',
+  'strategy.agentTrade.breakevenAfterTp1Help':
+    'Cobrado el primer objetivo, el stop pasa a la entrada más lo que cuesta salir: lo que queda ' +
+    'ya no puede perder.',
+  'strategy.agentTrade.trailAfterTp1': 'Seguir al precio tras el primer objetivo',
+  'strategy.agentTrade.trailAfterTp1Help':
+    'Cobrado el primer objetivo, el stop sigue al mejor precio a la distancia de abajo, y nunca ' +
+    'retrocede.',
+  'strategy.agentTrade.trailCallbackPct': 'Distancia del seguimiento (%)',
+  'strategy.agentTrade.trailCallbackPctHelp':
+    'A cuánto del mejor precio va el stop que lo sigue. Más pequeña asegura más y salta antes.',
+  'strategy.agentTrade.positionCap': 'Tope de posición',
+  'strategy.agentTrade.positionCapHelp':
+    'La posición, como mucho esto: si hay más, se reduce a mercado. Cero es cerrar. Subirlo ' +
+    'después no añade nada: la operación nunca aumenta.',
+  'strategy.agentTrade.maxHoldMinutes': 'Duración máxima (min)',
+  'strategy.agentTrade.maxHoldMinutesHelp':
+    'Pasados estos minutos desde la entrada, la operación se cierra a mercado.',
+  'strategy.agentTrade.entryDeadline': 'Plazo de la entrada',
+  'strategy.agentTrade.entryDeadlineHelp':
+    'Pasado este momento sin entrar, la operación no entra y el bot se detiene.',
+  'strategy.agentTrade.agentProposalId': 'Propuesta',
+  'strategy.agentTrade.agentProposalIdHelp':
+    'La propuesta del agente de la que nace esta operación.',
 };
 
 /**
@@ -807,18 +740,6 @@ const OPTION_LABELS_BY_FIELD: Record<string, Record<string, string>> = {
     INCLINADO: 'Inclinados',
     BANDA: 'De banda',
   },
-  'strategy.aiTrader.decisionMode': { REGLAS: 'Reglas', IA: 'IA' },
-  'strategy.aiTrader.defaultStopBucket': {
-    CENIDO: 'Ceñido',
-    MEDIDO: 'Medido',
-    HOLGADO: 'Holgado',
-  },
-  'strategy.aiTrader.defaultTargetBucket': {
-    CORTO: 'Corto',
-    EN_LA_MEDIA: 'En la media',
-    LARGO: 'Largo',
-  },
-  'strategy.aiTrader.halfSizeFallback': { NO_OPERAR: 'No operar', COMPLETO: 'Entrar entera' },
   'strategy.aiChannel.requireEvidence': { NO: 'No exigir', DEBIL: 'Débil', MODERADA: 'Moderada' },
   'strategy.aiChannel.minAiConfidence': { MEDIA: 'Media', ALTA: 'Alta' },
 };
@@ -847,6 +768,13 @@ export const GROUP_LABELS: Record<string, string> = {
  * «Microestructura» los filtros del mercado (spec 059).
  */
 const GROUP_LABELS_BY_STRATEGY: Record<string, Record<string, string>> = {
+  AGENT_TRADE: {
+    core: 'La operación',
+    risk: 'Stop y riesgo',
+    levels: 'Objetivos',
+    timing: 'Tiempos',
+    venue: 'Margen',
+  },
   AI_CHANNEL: {
     core: 'Base',
     risk: 'Riesgo',

@@ -1141,16 +1141,22 @@ export class BotsService implements OnModuleInit {
     // justo lo que se hace cuando algo va mal (spec 062, F-52). Se escribe por
     // este mismo camino, con su revisión y su evento: no hay un segundo.
     const soloApaga = apagaSeguridad(diff.changed);
+    // Lo mismo con lo que solo reduce el riesgo, cuando la estrategia sabe
+    // decirlo (spec 074): ceñir el stop de una operación de un agente o bajar su
+    // tope de posición no puede depender de que un tope del usuario siga como
+    // estaba cuando se abrió.
+    const soloReduce = strategy.soloReduceRiesgo?.(previous, next) === true;
+    const seguro = soloApaga || soloReduce;
 
     const validation = strategy.validate(next, market);
-    if (!validation.ok && !soloApaga) {
+    if (!validation.ok && !seguro) {
       throw new BadRequestException({
         message: 'La configuración nueva no es válida.',
         issues: validation.issues,
       });
     }
     // Excluyendo al propio bot del agregado: si no, contaba dos veces (001/F-42).
-    if (!soloApaga) {
+    if (!seguro) {
       await this.risk.assertWithinLimits(userId, next, market, {
         excludeBotId: id,
         reglaLiquidacion: strategy.reglaLiquidacion,

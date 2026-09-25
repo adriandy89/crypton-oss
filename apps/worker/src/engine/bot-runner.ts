@@ -5,12 +5,14 @@ import {
   Decimal,
   EstadoIntencion,
   EventoCanal,
+  EventoOperacionAgente,
   ExchangeError,
   FairPriceOrigin,
   MotivoRechazo,
   PriceSource,
   SourceMarketType,
   candleSpanMs,
+  esEstrategiaDeAgente,
   operacionCanalDe,
   type AvisoEstrategia,
   type BotConfig,
@@ -58,6 +60,11 @@ import {
 import type { AiIntentsLike } from './ai-intents.store';
 import { GUARDA_DE_LIMITES, type BotStore, type BotRecord, type RiskGuards } from './bot-store';
 import { avisoDeEntrada, eventoDeSalida, motivoDeSalida } from './canal-avisos';
+import {
+  eventoDeSalidaAgente,
+  motivoDeSalidaAgente,
+  type OrigenCierreMotor,
+} from './operacion-avisos';
 
 export type RunnerCommand =
   | 'PAUSE'
@@ -117,8 +124,8 @@ const REANCHOR_NO_APLICA: Partial<Record<StrategyKind, string>> = {
     'el seguimiento de beneficio abre una sola posición y la sigue desde el objetivo; no cuelga de un ancla.',
   AI_CHANNEL:
     'el canal con IA opera cada vez en el canal que ve en ese momento, con su stop y sus objetivos; no cuelga de un ancla.',
-  AI_TRADER:
-    'el bot de IA opera cada toque de la banda que ve en ese momento, con su stop y su objetivo; no cuelga de un ancla.',
+  AGENT_TRADE:
+    'la operación de un agente entra una vez con los precios de su plan; no cuelga de un ancla.',
 };
 
 // ── Canal con IA (spec 058) ────────────────────────────────────────────────
@@ -835,6 +842,17 @@ export class BotRunner {
   /** Desde cuándo se ve una intención viva sin operación que la sostenga. Ver `limpiarOperacionHuerfana`. */
   private huerfanaDesde: number | null = null;
 
+  // ── Operación de un agente (spec 074) ────────────────────────────────
+
+  /**
+   * Quién mandó el último cierre a mercado del motor: su dueño con un comando o
+   * una red de seguridad. Lo lee el aviso de salida de la operación de un
+   * agente para decir por qué terminó.
+   */
+  private salidaDelMotor: OrigenCierreMotor = 'MANUAL';
+  /** El último motivo de entrada descartada que se avisó, para no repetirlo en cada tick. */
+  private entradaDescartadaAvisada: string | null = null;
+
   constructor(private readonly deps: BotRunnerDeps) {
     this.paused = deps.startPaused === true;
     this.logger = new Logger(`Bot:${deps.bot.id.slice(0, 8)}`);
@@ -869,6 +887,20 @@ export class BotRunner {
   /** ¿Consume esta estrategia las intenciones del canal con IA? */
   private get esCanal(): boolean {
     return this.strategy.consumeDecisionesIa === true;
+  }
+
+  /**
+   * ¿Es la operación de un agente de IA (spec 074)?
+   *
+   * Recibe lo del canal que no depende de las intenciones de su IA —pausar, los
+   * avisos, el apalancamiento de cada entrada, los tramos y los límites de
+   * fuera, el vigilante del stop, la protección en pausa y el barrido tras
+   * cerrar—, y nada de lo que sí. Se decide por la estrategia y no por el flag
+   * de apalancamiento por operación: el runner nunca ha dado ese contexto a una
+   * estrategia que no fuese el canal, y así sigue para cualquier otra.
+   */
+  private get esOperacionDeAgente(): boolean {
+    return esEstrategiaDeAgente(this.deps.bot.strategy);
   }
 
   // ═══════════════════════════════════════════════════════════════
@@ -1161,6 +1193,7 @@ export class BotRunner {
           await this.event('RISK_GUARD_TRIPPED', 'CRITICAL', breach.reason, {
             action: 'CLOSE_ALL',
           });
+          this.salidaDelMotor = 'SEGURIDAD';
           await this.runCommand('STOP_AND_CLOSE');
           return;
         }
@@ -1179,6 +1212,7 @@ export class BotRunner {
           await this.event('RISK_GUARD_TRIPPED', 'CRITICAL', breach.reason, {
             action: 'CLOSE_ALL',
           });
+          this.salidaDelMotor = 'SEGURIDAD';
           await this.runCommand('STOP_AND_CLOSE');
         } else {
           await this.pauseForRisk(breach.reason, true);
@@ -1199,12 +1233,17 @@ export class BotRunner {
         this.requestTick();
         return;
       }
+      // Las demás estrategias con apalancamiento por operación —la de un agente—
+      // reciben los tramos y los límites de fuera, sin intenciones ni el
+      // interruptor del canal, que son del canal (spec 074).
+      const deFuera =
+        delCanal ?? (this.esOperacionDeAgente ? await this.contextoDeOperacion() : undefined);
       const ctx = this.buildContext(
         ticker,
         position,
         openOrders,
         balances[0]?.available ?? '0',
-        delCanal,
+        deFuera,
       );
       // La ventana se cierra AQUÍ y solo aquí, que es donde se planifica de
       // verdad. `buildContext` se usa también al recibir una ejecución y en
@@ -1228,6 +1267,10 @@ export class BotRunner {
         // Pausado por la propia estrategia: no se toca el libro.
         if (!delPlan) return;
         desired = delPlan;
+      } else if (this.esOperacionDeAgente) {
+        const delPlan = await this.aplicarOperacion(desired);
+        if (!delPlan) return;
+        desired = delPlan;
       }
 
       const plan = reconcile({
@@ -1242,8 +1285,14 @@ export class BotRunner {
         ownIds: new Set(ownVenueIds),
       });
 
-      await this.execute(await this.conservarStopPropio(plan, desired, cycleSeq), desired);
+      // Una estrategia que termina no conserva ningún stop: ya no protege nada
+      // suyo (ver `detenerPorEstrategia`).
+      await this.execute(
+        desired.detener ? plan : await this.conservarStopPropio(plan, desired, cycleSeq),
+        desired,
+      );
       if (this.esCanal) await this.despuesDelCanal();
+      else if (this.esOperacionDeAgente) await this.despuesDeOperacion();
 
       // «Acción al alcanzar el límite: apagar». La estrategia no puede parar el
       // bot —es una función pura—, así que lo pide por el scratch y el runner lo
@@ -1253,6 +1302,13 @@ export class BotRunner {
       const requestedStop = desired.scratchPatch?.requestStop;
       if (requestedStop === 'STOP_KEEP_POSITION') {
         await this.runCommand('STOP_KEEP_POSITION');
+        return;
+      }
+      // La estrategia ha terminado: una operación de una sola vez (spec 074).
+      // También después de ejecutar, por lo mismo que arriba: lo que el plan
+      // mandó cancelar de su ciclo anterior tiene que salir antes.
+      if (desired.detener) {
+        await this.detenerPorEstrategia(desired.detener, desired.note ?? null);
         return;
       }
 
@@ -1989,6 +2045,17 @@ export class BotRunner {
             cierre: this.cycle.scratch['cierre'],
           }
         : null;
+      // La operación de un agente, igual: con su R y por qué terminó (spec 074).
+      // El riesgo es el que declaró su configuración; el cierre en curso, el del
+      // scratch que está a punto de vaciarse.
+      const salidaAgente = this.esOperacionDeAgente
+        ? {
+            riesgo:
+              typeof this.config['riskAmount'] === 'string' ? this.config['riskAmount'] : null,
+            cierre: this.cycle.scratch['cierre'],
+            delMotor: this.salidaDelMotor,
+          }
+        : null;
       this.cycle = await this.deps.store.applyFillToCycle(this.botId, this.cycle, ours, {
         recycleLevelOnExit: this.strategy.recycleLevelOnExit === true,
         rebuysOffLevelIndexes: this.strategy.rebuysOffLevelIndexes === true,
@@ -2008,7 +2075,23 @@ export class BotRunner {
                   this.market.quote,
                 ),
             }
-          : {}),
+          : salidaAgente
+            ? {
+                eventoCierre: (cierre: { seq: number; pnl: Decimal }) =>
+                  eventoDeSalidaAgente(
+                    cierre,
+                    salidaAgente.riesgo,
+                    motivoDeSalidaAgente(
+                      id,
+                      liquidacion,
+                      salidaAgente.cierre,
+                      cierre.pnl,
+                      salidaAgente.delMotor,
+                    ),
+                    this.market.quote,
+                  ),
+              }
+            : {}),
       });
       // Ciclo nuevo: los rechazos del anterior ya no significan nada.
       if (this.cycle.scratch.cycleSeq !== before) this.quarantine.clear();
@@ -2292,15 +2375,35 @@ export class BotRunner {
     return this.modoLeido;
   }
 
+  /**
+   * Lo que una estrategia con apalancamiento por operación que no es el canal
+   * necesita además del libro: los tramos del par y los límites de fuera
+   * (spec 074). Sin intenciones ni historial, que son del canal, y sin su
+   * interruptor global: la operación de un agente ya pasó el de los agentes al
+   * aprobarse, y no espera a ninguna IA para entrar.
+   */
+  private async contextoDeOperacion(): Promise<
+    Pick<BotContext, 'nivelesApalancamiento' | 'limites'>
+  > {
+    const tramos = await this.leerTramos();
+    const limites = await this.limitesExternos(tramos, false);
+    return { ...(tramos.valor ? { nivelesApalancamiento: tramos.valor } : {}), limites };
+  }
+
   /** Lo que puede cerrar las entradas desde fuera de la configuración. */
-  private async limitesExternos(tramos: {
-    valor: NivelApalancamiento[] | null;
-    motivo: string | null;
-  }): Promise<LimitesExternos> {
+  private async limitesExternos(
+    tramos: {
+      valor: NivelApalancamiento[] | null;
+      motivo: string | null;
+    },
+    conInterruptor = true,
+  ): Promise<LimitesExternos> {
     const motivos: string[] = [];
-    let entradasPermitidas = false;
+    let entradasPermitidas = !conInterruptor;
     const interruptor = this.deps.interruptorCanal;
-    if (!interruptor) {
+    if (!conInterruptor) {
+      // Sin el interruptor del canal: no es de esta estrategia.
+    } else if (!interruptor) {
       motivos.push('este worker no lee el interruptor global');
     } else {
       try {
@@ -2503,6 +2606,100 @@ export class BotRunner {
     }
   }
 
+  /**
+   * Lo que el plan de una estrategia con apalancamiento por operación pide
+   * además de sus órdenes, sin nada de las intenciones del canal (spec 074,
+   * R-8), en el mismo orden que `aplicarCanal`:
+   *
+   *   1. Pausar, si la estrategia lo pide.
+   *   2. Sus avisos, una vez por clave.
+   *   3. El apalancamiento de la entrada, con la posición plana. Si el venue no
+   *      confirma el que se pidió, no hay entrada.
+   *
+   * Devuelve el plan que se ejecuta —sin entradas si algo no deja entrar— o
+   * null si el bot se ha pausado.
+   */
+  private async aplicarOperacion(desired: DesiredState): Promise<DesiredState | null> {
+    if (desired.pausar) {
+      await this.pauseForRisk(desired.pausar);
+      return null;
+    }
+    await this.emitirAvisos(desired.avisos);
+    if (!hayEntradas(desired)) return desired;
+    // Solo en plano: con posición, ni se toca el apalancamiento ni se entra.
+    if (this.posicionAbierta !== false) {
+      return this.descartarEntradaDeOperacion(desired, 'hay una posición abierta');
+    }
+    if (desired.apalancamiento !== undefined) {
+      const fallo = await this.fijarApalancamiento(desired.apalancamiento, desired);
+      if (fallo) return this.descartarEntradaDeOperacion(desired, fallo);
+    }
+    this.entradaDescartadaAvisada = null;
+    return desired;
+  }
+
+  /**
+   * Quita las entradas del plan y olvida la operación guardada: ya no va a
+   * salir, y dejarla haría esperar un llenado que no llegará. La estrategia lo
+   * vuelve a intentar mientras su entrada valga, así que el aviso sale una vez
+   * por motivo y no en cada intento.
+   */
+  private async descartarEntradaDeOperacion(
+    desired: DesiredState,
+    motivo: string,
+  ): Promise<DesiredState> {
+    if (this.cycle.scratch['op'] != null) {
+      this.cycle = { ...this.cycle, scratch: { ...this.cycle.scratch, op: null } };
+      await this.deps.store.saveCycleScratch(this.botId, this.cycle.scratch);
+    }
+    if (this.entradaDescartadaAvisada !== motivo) {
+      this.entradaDescartadaAvisada = motivo;
+      await this.event(
+        EventoOperacionAgente.ENTRADA_DESCARTADA,
+        'WARN',
+        `Entrada descartada: ${motivo}.`,
+      ).catch(() => undefined);
+    }
+    return sinEntradas(desired, `Entrada descartada: ${motivo}.`);
+  }
+
+  /**
+   * Lo que se mira tras ejecutar el plan de una operación: el vigilante del
+   * stop y, mientras la entrada está en vuelo o falta el stop, un tick pronto.
+   * La entrada está en vuelo mientras la operación guardada no haya visto
+   * posición (`maximo`): después, lo que queda es esperar a que se barra la
+   * ejecución de su cierre, y eso no necesita prisa.
+   */
+  private async despuesDeOperacion(): Promise<void> {
+    await this.vigilarStop();
+    const op = this.cycle.scratch['op'] as { maximo?: string } | null | undefined;
+    this.programarVigilancia(op != null && op.maximo === undefined);
+  }
+
+  /**
+   * La estrategia ha terminado (spec 074): una operación de una sola vez que se
+   * cerró, que no llegó a entrar o que encontró una posición ajena en su par.
+   *
+   * Se cancela TODO lo propio —también un stop: ya no protege nada suyo, y
+   * sobre una posición ajena podría cerrarla— y no se toca ninguna posición. El
+   * bot queda parado y se suelta. Rearrancarlo no lo hace volver a entrar: la
+   * estrategia lo decide otra vez en su primer tick y vuelve a pedir esto.
+   */
+  private async detenerPorEstrategia(motivo: string, nota: string | null): Promise<void> {
+    this.paused = true;
+    await this.caducarIntenciones();
+    await this.cancelOwnOrders();
+    await this.cambiarEstadoSinCaida('STOPPED');
+    await this.event(
+      'BOT_STOPPED',
+      'INFO',
+      `La estrategia ha terminado (${motivo})${nota ? `: ${nota}` : '.'} Bot parado; ` +
+        this.notaDePosicion,
+      { motivo },
+    ).catch(() => undefined);
+    this.deps.onDetach(this.botId, `la estrategia terminó (${motivo})`);
+  }
+
   /** Lo que se mira tras ejecutar el plan del canal. */
   private async despuesDelCanal(): Promise<void> {
     const op = this.cycle.scratch['op'] as { plan?: { intentId?: string } } | null | undefined;
@@ -2572,6 +2769,7 @@ export class BotRunner {
           'se cierra a mercado.',
       ).catch(() => undefined);
     }
+    this.salidaDelMotor = 'SEGURIDAD';
     const cerrada = await this.closePositionAtMarket('posición sin stop');
     if (!cerrada && avisar) {
       // Sin culpar al exchange: el cierre puede no haber salido del motor, y el
@@ -2610,7 +2808,13 @@ export class BotRunner {
           position,
           openOrders,
           saldo,
-          await this.contextoDelCanal(),
+          // La operación de un agente, con el suyo: sin intenciones ni el
+          // interruptor del canal (spec 074).
+          this.esCanal
+            ? await this.contextoDelCanal()
+            : this.esOperacionDeAgente
+              ? await this.contextoDeOperacion()
+              : undefined,
         );
         const stops = this.strategy.plan(ctx).orders.filter((o) => o.levelKind === 'STOP_LOSS');
         for (const stop of stops) await this.place(stop, 'stop con el bot pausado');
@@ -2813,7 +3017,12 @@ export class BotRunner {
 
   /** Punto de entrada público: serializa el comando contra los ticks. */
   handleCommand(command: RunnerCommand, payload?: unknown): Promise<void> {
-    return this.exclusive(() => this.runCommand(command, payload));
+    return this.exclusive(() => {
+      // Un comando que llega de fuera lo pidió una persona (o la API por ella):
+      // si cierra la posición, la salida es suya (spec 074).
+      this.salidaDelMotor = 'MANUAL';
+      return this.runCommand(command, payload);
+    });
   }
 
   private async runCommand(command: RunnerCommand, payload?: unknown): Promise<void> {
@@ -3073,7 +3282,13 @@ export class BotRunner {
       // soltado no la recoge nadie: el ciclo se queda abierto y la intención del
       // canal viva, que veta toda entrada cuando el bot vuelva a arrancar
       // (spec 062, F-04). Esta es la última oportunidad de barrerla.
-      if (this.esCanal && (command === 'STOP_AND_CLOSE' || command === 'PANIC')) {
+      //
+      // También en la operación de un agente: sin esa ejecución no hay R, y la
+      // propuesta se quedaría abierta en la API (spec 074, R-8).
+      if (
+        (this.esCanal || this.esOperacionDeAgente) &&
+        (command === 'STOP_AND_CLOSE' || command === 'PANIC')
+      ) {
         await this.sweepFills(true);
       }
       // El bot ha dejado de operar: que el motor lo suelte. Sin esto el runner

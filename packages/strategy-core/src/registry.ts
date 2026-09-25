@@ -7,8 +7,8 @@ import {
 } from '@crypton/shared';
 import { camposEfectivos, invalidPreview, toResult, validateMeta } from './common';
 import type { Strategy } from './types';
+import { agentTrade } from './strategies/agent-trade';
 import { aiChannel } from './strategies/ai-channel';
-import { aiTrader } from './strategies/ai-trader';
 import { gridClassic } from './strategies/grid-classic';
 import { gridmart } from './strategies/gridmart';
 import { marketMaker } from './strategies/market-maker';
@@ -83,7 +83,7 @@ const REGISTRY: Record<StrategyKind, Strategy<any>> = {
   [StrategyKind.TREND_FOLLOW]: conValidacionGenerica(trendFollow),
   [StrategyKind.TRAILING_PROFIT]: conValidacionGenerica(trailingProfit),
   [StrategyKind.AI_CHANNEL]: conValidacionGenerica(aiChannel),
-  [StrategyKind.AI_TRADER]: conValidacionGenerica(aiTrader),
+  [StrategyKind.AGENT_TRADE]: conValidacionGenerica(agentTrade),
 };
 
 export function getStrategy(kind: StrategyKind): Strategy<BotConfig> {

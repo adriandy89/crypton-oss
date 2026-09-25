@@ -13,6 +13,7 @@ describe('RetentionService', () => {
       $executeRaw: jest.fn().mockResolvedValue(0),
       botAiDecision: { updateMany: jest.fn().mockResolvedValue({ count: 0 }) },
       botAiIntent: { updateMany: jest.fn().mockResolvedValue({ count: 0 }) },
+      aiDeskRound: { updateMany: jest.fn().mockResolvedValue({ count: 0 }) },
     };
     const leases = { tryLock: jest.fn().mockResolvedValue(true) };
     const config = {
@@ -55,6 +56,7 @@ describe('RetentionService — el expediente del Modo IA (spec 046)', () => {
       $executeRaw: jest.fn().mockResolvedValue(0),
       botAiDecision: { updateMany },
       botAiIntent: { updateMany: jest.fn().mockResolvedValue({ count: 0 }) },
+      aiDeskRound: { updateMany: jest.fn().mockResolvedValue({ count: 0 }) },
     };
     const leases = { tryLock: jest.fn().mockResolvedValue(true) };
     const config = {
@@ -103,6 +105,7 @@ describe('RetentionService — la herramienta del canal con IA (spec 059)', () =
       $executeRaw: jest.fn().mockResolvedValue(0),
       botAiDecision: { updateMany: jest.fn().mockResolvedValue({ count: 0 }) },
       botAiIntent: { updateMany: intents },
+      aiDeskRound: { updateMany: jest.fn().mockResolvedValue({ count: 0 }) },
     };
     const leases = { tryLock: jest.fn().mockResolvedValue(true) };
     const config = {
@@ -148,5 +151,48 @@ describe('RetentionService — la herramienta del canal con IA (spec 059)', () =
     const { svc, intents } = build(0);
     await svc.purge();
     expect(intents).not.toHaveBeenCalled();
+  });
+});
+
+describe('RetentionService — lo que vio cada ronda de los agentes (spec 074)', () => {
+  const DIA = 86_400_000;
+
+  function build(aiDays: number | null = null) {
+    const rondas = jest.fn().mockResolvedValue({ count: 4 });
+    const db = {
+      $executeRaw: jest.fn().mockResolvedValue(0),
+      botAiDecision: { updateMany: jest.fn().mockResolvedValue({ count: 0 }) },
+      botAiIntent: { updateMany: jest.fn().mockResolvedValue({ count: 0 }) },
+      aiDeskRound: { updateMany: rondas },
+    };
+    const leases = { tryLock: jest.fn().mockResolvedValue(true) };
+    const config = {
+      get: (k: string, d: unknown) =>
+        k === 'RETENTION_AI_DOSSIER_DAYS' && aiDays != null ? aiDays : d,
+    };
+    return { svc: new RetentionService(db as never, leases as never, config as never), rondas };
+  }
+
+  it('vacía lo que vio la ronda, con la retención del expediente, sin borrar la fila', async () => {
+    const { svc, rondas } = build(30);
+    const antes = Date.now();
+
+    await svc.purge();
+
+    expect(rondas).toHaveBeenCalledTimes(1);
+    const args = rondas.mock.calls[0][0] as {
+      where: { created_at: { lt: Date }; snapshot: unknown };
+      data: Record<string, unknown>;
+    };
+    expect(Object.keys(args.data)).toEqual(['snapshot']);
+    expect(args.where.snapshot).toBeDefined();
+    expect(args.where.created_at.lt.getTime()).toBeGreaterThanOrEqual(antes - 30 * DIA);
+    expect(args.where.created_at.lt.getTime()).toBeLessThanOrEqual(Date.now() - 30 * DIA);
+  });
+
+  it('a 0 no toca nada', async () => {
+    const { svc, rondas } = build(0);
+    await svc.purge();
+    expect(rondas).not.toHaveBeenCalled();
   });
 });

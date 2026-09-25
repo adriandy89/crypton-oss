@@ -5,13 +5,9 @@ import {
   MotivoRechazo,
   OrigenDecision,
   VIDA_VALE_CANAL_S,
-  candidatoDe,
   claveValeCanal,
-  decisionDe,
   eleccionDe,
-  veredictoDe,
   type DecisionIa,
-  type EleccionDecision,
   type MarcaDecision,
   type SolicitudIa,
   type ValeCanal,
@@ -87,19 +83,6 @@ const esUnicidad = (e: unknown): boolean => (e as { code?: string } | null)?.cod
  */
 export { eleccionDe };
 
-/**
- * La elección, sea de la estrategia que sea (spec 069).
- *
- * Desde que hay dos bots que consultan a un modelo, la misma columna guarda dos
- * formas: la del canal —un candidato con sus parámetros— y la del «Bot de IA»
- * —un veredicto sobre un único montaje—. Se prueban las dos y se devuelve la
- * que encaje; son excluyentes, así que no hay que saber de qué bot es la fila.
- * Este lazo NO mira dentro de una decisión para nada más: la estrategia que la
- * pidió es la que sabe leerla.
- */
-const decisionGuardadaDe = (json: unknown): EleccionDecision | null =>
-  eleccionDe(json) ?? veredictoDe(json);
-
 @Injectable()
 export class AiIntentStore implements AiIntentsLike {
   constructor(
@@ -120,7 +103,7 @@ export class AiIntentStore implements AiIntentsLike {
       origen: fila.origen as OrigenDecision,
       barT: fila.bar_t.getTime(),
       huella: fila.huella,
-      eleccion: decisionGuardadaDe(fila.decision),
+      eleccion: eleccionDe(fila.decision),
       motivo: fila.motivo,
       expiresAt: fila.expires_at.getTime(),
       cycleSeq: fila.cycle_seq,
@@ -179,7 +162,7 @@ export class AiIntentStore implements AiIntentsLike {
           where: { id: intentId, bot_id: botId, estado: EstadoIntencion.DECIDIDA },
           data: {
             estado: EstadoIntencion.ACEPTADA,
-            candidato_id: candidatoDe(plan),
+            candidato_id: plan.candidatoId,
             plan: plan as never,
             motivo: null,
           },
@@ -224,9 +207,9 @@ export class AiIntentStore implements AiIntentsLike {
         kind: ENTRADA,
         origen: OrigenDecision.REGLAS,
         estado: marca.estado,
-        candidato_id: candidatoDe(plan),
+        candidato_id: plan.candidatoId,
         huella: plan.huella,
-        decision: decisionDe(plan) as never,
+        decision: plan.eleccion as never,
         plan: plan as never,
         motivo: marca.motivo,
         expires_at: new Date(plan.barT + PLAZO_TRAS_CIERRE_MS),

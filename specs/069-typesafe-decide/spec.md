@@ -1,5 +1,9 @@
 # Spec 069 — TypeSafe decide
 
+> **Retirado por el [spec 072](../072-retirar-bot-de-ia/spec.md) (2026-09-24).** El usuario pidió
+> quitar el «Bot de IA» y el uso de TypeSafe enteros, y el código de este spec ya no existe: ni el
+> cliente, ni el lazo, ni `TYPESAFE_AI_API_KEY`. Se conserva como constancia de lo que se decidió.
+
 **Tipo**: cambio · **Rama**: `spec/069-typesafe-decide` · **Depende de**: 068
 
 ## El problema

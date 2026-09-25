@@ -279,14 +279,27 @@ export class RiskService {
    * quien tiene el lease y las conexiones. Si la API cancelara por su cuenta,
    * dos procesos estarían operando el mismo bot a la vez.
    */
-  async killSwitch(userId: string): Promise<{ affected: number }> {
+  async killSwitch(userId: string): Promise<{ affected: number; agentesPausados: number }> {
     const result = await this.db.bot.updateMany({
       where: { user_id: userId, status: { in: ['STARTING', 'RUNNING', 'PAUSED'] } },
       data: { status: 'STOPPING' },
     });
+    // Y sus agentes de IA se pausan (spec 074, R-27): parar los bots y dejar a
+    // los agentes proponiendo o abriendo operaciones nuevas un minuto después
+    // sería un kill-switch con una puerta trasera. Lo que esperaba respuesta se
+    // descarta. Se reanudan a mano, como toda pausa de un agente.
+    const agentes = await this.db.aiDeskAgent.updateMany({
+      where: { user_id: userId, state: 'ACTIVO' },
+      data: { state: 'PAUSADO', pause_reason: 'KILL_SWITCH' },
+    });
+    await this.db.aiDeskProposal.updateMany({
+      where: { agent: { user_id: userId }, state: 'PROPUESTA' },
+      data: { state: 'DESCARTADA', reason: 'AGENTE_PAUSADO', decided_at: new Date() },
+    });
     this.logger.warn(
-      `Kill-switch del usuario ${userId}: ${result.count} bot(s) marcados para parar`,
+      `Kill-switch del usuario ${userId}: ${result.count} bot(s) marcados para parar y ` +
+        `${agentes.count} agente(s) de IA en pausa`,
     );
-    return { affected: result.count };
+    return { affected: result.count, agentesPausados: agentes.count };
   }
 }

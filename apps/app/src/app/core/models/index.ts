@@ -60,7 +60,7 @@ export type StrategyKind =
   | 'TREND_FOLLOW'
   | 'TRAILING_PROFIT'
   | 'AI_CHANNEL'
-  | 'AI_TRADER';
+  | 'AGENT_TRADE';
 
 export interface SessionUser {
   id: string;

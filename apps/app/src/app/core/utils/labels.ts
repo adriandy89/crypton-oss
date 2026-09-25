@@ -52,8 +52,8 @@ export const STRATEGY_LABELS: Record<StrategyKind, string> = {
   MARKET_MAKER_V2: 'Market maker V2',
   TREND_FOLLOW: 'Tendencia',
   TRAILING_PROFIT: 'Seguimiento de beneficio',
-  AI_CHANNEL: 'Canal',
-  AI_TRADER: 'Bot de IA',
+  AI_CHANNEL: 'Canal con IA',
+  AGENT_TRADE: 'Operación IA',
 };
 
 /**
@@ -77,9 +77,9 @@ export const STRATEGY_BLURBS: Record<StrategyKind, string> = {
   TRAILING_PROFIT:
     'Una operacion que deja correr el beneficio: al llegar a tu objetivo sigue al maximo y cierra al retroceder.',
   AI_CHANNEL:
-    'Rebotes en el borde de un rango o canal, con el apalancamiento que permite el stop. Puede dejar que una IA elija entre operaciones ya calculadas.',
-  AI_TRADER:
-    'Toques del borde de una banda, con el apalancamiento que permite el stop. El motor calcula nueve operaciones posibles y la IA elige entre ellas.',
+    'Rebotes en el borde de un rango o canal, con el apalancamiento que permite el stop. Una IA elige entre operaciones ya calculadas.',
+  AGENT_TRADE:
+    'La operación de un agente de IA: entra una vez, con stop y objetivos nativos, y se detiene al cerrarse.',
 };
 
 /** Las dos estrategias que llevan ficha de market making. */

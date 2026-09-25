@@ -89,11 +89,15 @@ export class RetentionService {
       const commands = await this.purgeCommands(commandDays);
       const dossiers = await this.purgeAiDossiers(aiDays);
       const herramientas = await this.purgeAiSnapshots(aiDays);
-      if (snapshots + events + audit + portfolio + commands + dossiers + herramientas > 0) {
+      const rondas = await this.purgeAgentSnapshots(aiDays);
+      if (
+        snapshots + events + audit + portfolio + commands + dossiers + herramientas + rondas >
+        0
+      ) {
         this.logger.log(
           `Purga: ${snapshots} snapshot(s), ${events} evento(s), ${audit} registro(s) de actividad, ` +
-            `${portfolio} fila(s) de cartera, ${commands} comando(s), ${dossiers} expediente(s) de IA ` +
-            `y ${herramientas} herramienta(s) del canal.`,
+            `${portfolio} fila(s) de cartera, ${commands} comando(s), ${dossiers} expediente(s) de IA, ` +
+            `${herramientas} herramienta(s) del canal y ${rondas} ronda(s) de agentes.`,
         );
       }
     } catch (e) {
@@ -135,6 +139,24 @@ export class RetentionService {
     if (days <= 0) return 0;
     const cutoff = new Date(Date.now() - days * 86_400_000);
     const { count } = await this.db.botAiIntent.updateMany({
+      where: { created_at: { lt: cutoff }, snapshot: { not: Prisma.DbNull } },
+      data: { snapshot: Prisma.DbNull },
+    });
+    return count;
+  }
+
+  /**
+   * Vacía lo que vio cada ronda vieja de los agentes (spec 074), con la misma
+   * retención que el expediente del Modo IA y la herramienta del canal.
+   *
+   * Lo de una ronda de entrada son unos kilobytes por par, una por vela del
+   * intervalo. La FILA se queda —qué se eligió, con qué modelo y a qué coste—, y
+   * los candidatos no se tocan: son los que miden al agente en su tarjeta.
+   */
+  private async purgeAgentSnapshots(days: number): Promise<number> {
+    if (days <= 0) return 0;
+    const cutoff = new Date(Date.now() - days * 86_400_000);
+    const { count } = await this.db.aiDeskRound.updateMany({
       where: { created_at: { lt: cutoff }, snapshot: { not: Prisma.DbNull } },
       data: { snapshot: Prisma.DbNull },
     });

@@ -236,6 +236,36 @@ la misma salida.
 | `AI_OPERACION_PERDIDA` (WARN) | Operación cerrada fuera del bot | Su ejecución no la vio nadie —cierre a mano, ADL, worker caído—: el ciclo se da por terminado y el bot vuelve a operar. **Ese resultado no entra en el tope diario ni en la caída máxima**: compruébalo en el exchange. |
 | `AI_FAILED` (WARN) | La IA no pudo actuar | Cinco fallos seguidos del modelo: ese bot deja de consultar seis horas y no abre nada. |
 
+### Agentes de IA (solo administradores)
+
+Los de los [agentes de IA](./agentes-ia.md). Todos empiezan por `AGENT_`, nunca por `AI_`. Los
+del **agente** no tienen bot —los emite la API— y llegan por Telegram con la preferencia «Agentes
+de IA»; los de la **operación** los emite su bot [Operación IA](./agent-trade.md), como cualquier
+evento de bot.
+
+| Evento | De quién | Qué hacer |
+|---|---|---|
+| `AGENT_PROPOSAL` | Agente | Una propuesta: con «Ejecutar» y «Descartar» si se decide a mano (WARN en cuenta real). Si entra sola, dice que entra. |
+| `AGENT_PROPOSAL_RESULT` | Agente | Pulsaste «Ejecutar» y no se abrió: dice por qué —el precio se movió, ya no cabía…—. En ERROR, una avería al crear o arrancar el bot. |
+| `AGENT_ACTION` | Agente | Una acción del seguimiento: «Aplicar» y «Descartar» si te la propone; si la aplicó sola, lo que hizo. |
+| `AGENT_PAUSED` | Agente | Pausado por su pérdida diaria, o por el *kill switch*. No vuelve solo: reanúdalo tú. |
+| `AGENT_SLEEPING` | Agente | Cinco fallos seguidos del modelo: seis horas sin consultar. Lo abierto sigue su curso. |
+| `AGENT_ENTRY` (INFO) | Operación | Entró, con su precio y su cantidad. |
+| `AGENT_EXIT` | Operación | Salió, con su resultado en la moneda y en R y cómo: objetivo, stop, stop protegido, tiempo, seguimiento, seguridad, a mano o liquidación (en WARN). |
+| `AGENT_BREAKEVEN` (INFO) | Operación | Primer objetivo cobrado: el stop, a la entrada más costes. |
+| `AGENT_STOP_TIGHTENED` (INFO) | Operación | El stop se ciñó. |
+| `AGENT_STOP_IGNORED` (WARN) | Operación | Alguien pidió **alejar** el stop con la posición abierta; se ignoró. Revisa quién. |
+| `AGENT_REDUCED` | Operación | La posición se redujo hasta su tope. |
+| `AGENT_ENTRY_DISCARDED` | Operación | La entrada no se llenó en su plazo (INFO) o el exchange no aceptó el apalancamiento (WARN). No entra, y el bot se para. |
+| `AGENT_CIERRE` (INFO) | Operación | La estrategia ordena cerrar a mercado; el resultado llega con `AGENT_EXIT`. |
+| `AGENT_CIERRE_FALLIDO` (CRITICAL) | Operación | El cierre a mercado falló: **cierra a mano**. El stop sigue puesto. |
+| `AGENT_FOREIGN_POSITION` (CRITICAL) | Operación | Una posición en el par que no es de la operación: no la toca y se para. |
+| `AGENT_OPERACION_PERDIDA` (WARN) | Operación | Cerrada fuera del bot sin que nadie viera la ejecución: queda sin R. Compruébalo en el exchange. |
+
+Sobre el bot de una operación los **comandos** son los de siempre: `PAUSE` y `STOP_KEEP_POSITION`
+conservan el stop nativo; `STOP_AND_CLOSE` —el «Cerrar a mercado» de la pestaña IA— cierra y
+cancela el stop y los objetivos. **No se vuelve a arrancar**: una operación es de una sola vez.
+
 ### La nota del bot
 
 Además de los eventos, cada estrategia escribe una **nota** en cada revisión (la ves en el resumen del

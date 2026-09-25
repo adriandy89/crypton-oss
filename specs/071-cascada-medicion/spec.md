@@ -3,6 +3,11 @@
 **Tipo**: medición · **Rama**: `spec/071-cascada-medicion` · **Depende de**: 069, 070
 **Resultado**: ⛔ **NEGATIVO** — el edge no sobrevive a 400 días. No se construye el 072.
 
+> **La primera parte se retiró con el [spec 072](../072-retirar-bot-de-ia/spec.md) (2026-09-24)**,
+> que usó el número que esta dejaba libre para quitar el «Bot de IA» y TypeSafe: el detector de
+> cascadas (`trader/cascada.ts`) y la primitiva `score` ya no existen. La segunda —la revisión del
+> Market Maker V2— sigue vigente entera.
+
 > **Este spec no construye una estrategia.** No toca el motor, ni la configuración, ni Prisma, ni
 > añade un `StrategyKind`. Produce un número y una decisión. La estrategia es el spec 072, y solo se
 > escribe si este pasa.
