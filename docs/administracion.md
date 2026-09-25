@@ -540,7 +540,7 @@ Pausar cancela los objetivos y deja **solo el stop** en el exchange.
 | `AI_CHANNEL_ENABLE` | `false` | El interruptor del servidor. Con `false` no se llama a nadie. Usa `OPENROUTER_API_KEY` |
 | `AI_CHANNEL_MODEL` | `anthropic/claude-sonnet-5` | El modelo |
 | `AI_CHANNEL_REASONING` | `medium` | Esfuerzo de razonamiento (`low`, `medium` o `high`) |
-| `AI_CHANNEL_TIMEOUT_MS` | `20000` | Plazo de cada llamada, con tope en 25.000 |
+| `AI_CHANNEL_TIMEOUT_MS` | `90000` | Plazo de cada llamada, con tope en 120.000. Manda casi siempre lo que queda de la solicitud, que caduca un minuto después del cierre: con el de fábrica el modelo aprovecha ese minuto entero. Lo que no llega caduca sin contar como fallo, pero se cobra |
 | `AI_CHANNEL_DAILY_LIMIT` | `48` | Consultas al día por bot. Manda el menor entre esto y el campo del bot |
 | `AI_CHANNEL_GLOBAL_DAILY_LIMIT` | `400` | Consultas al día de toda la plataforma |
 | `AI_CHANNEL_PROMPT_CACHE` | `1h` | Caché de la parte fija del prompt: `1h`, `5m` u `off` |

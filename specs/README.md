@@ -193,6 +193,7 @@ ante un 429 se paran sin reintentar. A `findings.md` va solo la evidencia resumi
 | 073 | [La seccion de IA, solo para administradores](073-seccion-ia/spec.md) | cambio | hecho, fase 1 (la pestana «IA», su ruta con `adminGuard` y la pantalla vacia, que llena el 074; faltan CA-1 y CA-2, las comprobaciones del usuario) | `spec/073-seccion-ia` |
 | 074 | [Agentes de IA: analizan, proponen, ejecutan y siguen operaciones](074-agentes-ia/spec.md) | cambio | hecho, sin desplegar (motor, operacion `AGENT_TRADE`, runner, API, Telegram, app y guias; revisado en el 075; faltan los CA-12 a CA-14 del usuario y lo Alto y lo Medio del 075, que corrige el 076: `AI_DESK_ENABLE` apagado hasta entonces) | `spec/074-agentes-ia` |
 | 075 | [Revision del spec 074 antes de operar con dinero real](075-revision-074/spec.md) | revision | hecho (43 hallazgos: la Critica F-01 corregida dentro; lo Alto y lo Medio al 076 y lo Bajo al 077, con las 20 decisiones del usuario) | `spec/075-revision-074` |
+| 078 | [El modelo no llega a tiempo: agentes y canal](078-modelo-a-tiempo/spec.md) | cambio | hecho, antes del 076 (nace del primer agente real: con razonamiento medium el plazo de 20 s, topado en 25, cortaba cada ronda y se cobraba; plazo propio de 90 s, lo manual fuera de la peticion, el seguimiento cae al juez sin modelo —la decision 4 del 075—, la ronda fallida guarda sus candidatos y el coste desconocido se dice; faltan CA-8 y CA-9) | `spec/078-modelo-a-tiempo` |
 
 ### Solo en esta edicion
 

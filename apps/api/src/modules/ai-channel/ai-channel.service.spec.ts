@@ -270,6 +270,7 @@ function montar(o: Opciones = {}) {
   const modelo = {
     canalDisponible: o.canalDisponible ?? true,
     canalModelo: 'anthropic/claude-sonnet-5',
+    canalEsfuerzo: 'medium',
     decidirCanal: jest.fn(async (_p: PeticionCanal) => llamadaBuena()),
   };
   const bots = { command: jest.fn(async () => ({ accepted: true, command: 'PAUSE' })) };
@@ -372,7 +373,10 @@ describe('AiChannelService: la consulta', () => {
     expect(esquema.properties.opcion.enum).toEqual(['A', 'B', 'NINGUNA']);
     expect(peticion.system).toBe(systemPromptCanal());
     expect(peticion.usuario).toContain('Opción A: REBOTE, largo');
-    expect(peticion.limiteMs).toBe(20_000);
+    // Con 90 s de fábrica (spec 078) manda lo que queda de la solicitud: el
+    // modelo aprovecha el minuto entero menos el margen, no 20 s.
+    expect(peticion.limiteMs).toBeLessThanOrEqual(60_000 - MARGEN_ESCRITURA_MS);
+    expect(peticion.limiteMs).toBeGreaterThan(60_000 - MARGEN_ESCRITURA_MS - 1_000);
 
     // El lazo del bot.
     expect(m.lazos.get(BOT)).toMatchObject({
@@ -410,10 +414,29 @@ describe('AiChannelService: la consulta', () => {
     m.solicitar('int-1', 15_000);
     await m.servicio.atender('int-1');
     const { limiteMs } = m.modelo.decidirCanal.mock.calls[0][0];
-    // Tope de 25 s en la configuración; el plazo manda: 15 s menos el margen.
+    // El plazo de la solicitud manda sobre el configurado: 15 s menos el margen.
     expect(limiteMs).toBeLessThanOrEqual(15_000 - MARGEN_ESCRITURA_MS);
     expect(limiteMs).toBeGreaterThan(15_000 - MARGEN_ESCRITURA_MS - 1_000);
-    expect(m.servicio.plazoLlamadaMs).toBe(25_000);
+    expect(m.servicio.plazoLlamadaMs).toBe(60_000);
+  });
+
+  it('el plazo configurado: 90 s de fábrica, con tope de 120 s (spec 078)', () => {
+    expect(montar().servicio.plazoLlamadaMs).toBe(90_000);
+    expect(montar({ entorno: { AI_CHANNEL_TIMEOUT_MS: '200000' } }).servicio.plazoLlamadaMs).toBe(
+      120_000,
+    );
+  });
+
+  it('avisa al arrancar si el plazo no deja terminar al razonamiento (spec 078)', () => {
+    const corto = montar({ entorno: { AI_CHANNEL_TIMEOUT_MS: '20000' } });
+    expect(corto.servicio.avisoPlazo()).toContain('AI_CHANNEL_TIMEOUT_MS=20000');
+    expect(corto.servicio.avisoPlazo()).toContain('medium');
+    expect(montar().servicio.avisoPlazo()).toBeNull();
+    // Apagado no se llama a nadie: nada que avisar.
+    const apagado = montar({
+      entorno: { AI_CHANNEL_ENABLE: 'false', AI_CHANNEL_TIMEOUT_MS: '20000' },
+    });
+    expect(apagado.servicio.avisoPlazo()).toBeNull();
   });
 
   it('dos réplicas, una llamada', async () => {
@@ -766,7 +789,10 @@ describe('AiChannelService: lo que responde el modelo', () => {
       'La IA no respondió a tiempo: la solicitud llegó tarde.',
     );
 
-    const entero = montar();
+    // Entero: un plazo configurado que cabe en lo que queda de la solicitud. Con
+    // los 90 s de fábrica no pasa nunca —la solicitud vive un minuto—, así que un
+    // tiempo agotado caduca sin contar, y se cobra (spec 078).
+    const entero = montar({ entorno: { AI_CHANNEL_TIMEOUT_MS: '20000' } });
     entero.modelo.decidirCanal.mockResolvedValue(sinRespuesta('TIEMPO'));
     entero.solicitar('int-1', 60_000);
     await expect(entero.servicio.atender('int-1')).resolves.toMatchObject({

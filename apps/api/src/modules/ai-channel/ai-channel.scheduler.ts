@@ -44,6 +44,10 @@ export class AiChannelScheduler implements OnModuleInit {
       );
     });
     this.logger.log('IA del canal activa');
+    // Un plazo que no deja terminar al modelo se ve aquí, al desplegar, y no en
+    // la primera solicitud cortada y cobrada (spec 078).
+    const aviso = this.canal.avisoPlazo();
+    if (aviso) this.logger.warn(aviso);
   }
 
   /** El worker ha escrito una solicitud: se busca por bot y vela. */

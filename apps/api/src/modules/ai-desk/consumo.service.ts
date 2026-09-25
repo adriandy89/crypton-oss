@@ -1,5 +1,13 @@
 import { Injectable, Logger } from '@nestjs/common';
-import { D, EventSeverity, EventoAgente, MotivoRonda, type LimitesAgente } from '@crypton/shared';
+import {
+  D,
+  EventSeverity,
+  EventoAgente,
+  MotivoRonda,
+  PAUSA_FALLOS_AGENTE_MS,
+  TOPE_FALLOS_AGENTE,
+  type LimitesAgente,
+} from '@crypton/shared';
 import { CacheService, DbService } from 'src/libs';
 import { AiDeskConfig } from './ai-desk.config';
 import { AiDeskAvisosService } from './avisos.service';
@@ -9,9 +17,6 @@ import {
   diaDelCupoAgentes,
 } from './interruptores.service';
 
-/** Fallos seguidos del modelo antes de dormir las consultas del agente (R-16). */
-export const TOPE_FALLOS_AGENTE = 5;
-export const PAUSA_FALLOS_AGENTE_MS = 6 * 3_600_000;
 const DIA_MS = 86_400_000;
 
 /** Lo que el consumo mira de un agente. */

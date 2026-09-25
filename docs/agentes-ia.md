@@ -87,7 +87,7 @@ así «0,5 % por operación» dice lo mismo el día que la cuenta ha ganado y el
 | Espera tras un stop | 60 min | En ese par. |
 | Pérdidas seguidas | 3 → 240 min de pausa | Corta las entradas del agente. |
 | Consultas al día | 120 | El servidor tiene su propio tope, y manda el menor. |
-| Gasto al día | 5 USD | En el modelo. |
+| Gasto al día | 5 USD | En el modelo, con lo que OpenRouter dice que costó cada llamada. Una llamada cortada por tiempo se cobra entera y no dice cuánto: la app la cuenta aparte, «sin coste conocido», y este tope no la ve. La acota el de consultas, que se cuenta antes de llamar (spec 078). |
 
 La validación cruzada impide lo que se contradice: una pérdida diaria menor que el riesgo de una
 operación, más operaciones a la vez que al día, o márgenes que sumen más del 100 % del capital.
@@ -138,7 +138,10 @@ consultar, con un solo aviso (R-16). En modo **reglas** decide un juez determini
 nada; es también la línea base con la que se compara a la IA.
 
 «Analizar ahora», en el detalle del agente, hace una ronda fuera del reloj con las mismas barreras.
-Una por minuto: cada una puede costar una consulta.
+La app la enseña «analizando…» en cuanto empieza y avisa al terminar: el modelo puede tardar hasta
+el plazo de `AI_DESK_TIMEOUT_MS` (90 s de fábrica), y esperarlo dentro de la petición la cortaría.
+Entre dos del mismo agente pasa como poco un minuto más ese plazo: cada una puede costar una
+consulta. «Revisar ahora», en una operación, funciona igual.
 
 ---
 
@@ -184,8 +187,13 @@ ofrece lo que ciñe o reduce, la API lo vuelve a mirar contra la configuración 
 estrategia no ensancha su stop aunque se lo pidan. Un test de propiedad lo fija.
 
 - **Un bot pausado por una persona no se toca.** Ni uno parado o en error.
-- **Pausar el agente no para el seguimiento**: reducir el riesgo nunca se corta. Tampoco lo corta el
-  interruptor global de entradas.
+- **Pausar el agente no para el seguimiento**, ni el interruptor global de entradas.
+- **Sin modelo, decide el juez de reglas** (spec 078): si el modelo falla o no responde a tiempo, si
+  el agente duerme tras sus fallos, si no quedan consultas o no hay clave, la vela no se salta. El
+  juez solo elige entre lo que la autonomía ya ofrece, que solo reduce el riesgo, y la ronda lo dice
+  («sin modelo»). Un fallo del modelo sigue contando para dormirlo.
+- El seguimiento sí se para con `AI_DESK_ENABLE` apagado o con el bot pausado. El stop y los
+  objetivos siguen en el exchange igual: no dependen de él.
 - Con una acción esperando respuesta no se pregunta otra.
 
 ---
@@ -262,7 +270,8 @@ agentes, con lo real y lo simulado por separado. Todos los tipos empiezan por `A
 | Variable | De fábrica | Qué hace |
 |---|---|---|
 | `AI_DESK_ENABLE` | `false` | Apagado, no corre ninguna ronda, tampoco en modo reglas. Lo que caduca y lo que se concilia sigue corriendo. |
-| `AI_DESK_MODEL` · `AI_DESK_REASONING` · `AI_DESK_PROMPT_CACHE` · `AI_DESK_TIMEOUT_MS` | `anthropic/claude-sonnet-5` · `medium` · `1h` · `20000` | El modelo y cómo se le llama. |
+| `AI_DESK_MODEL` · `AI_DESK_REASONING` · `AI_DESK_PROMPT_CACHE` | `anthropic/claude-sonnet-5` · `medium` · `1h` | El modelo y cómo se le llama. |
+| `AI_DESK_TIMEOUT_MS` | `90000` | Plazo de cada llamada, con tope en 120 000. Con `medium` el modelo puede pensar 4000 tokens antes de responder: con menos de 90 s se corta, y **una llamada cortada se cobra entera**. Por debajo de lo que pide el razonamiento (`low` 45 000, `medium` 90 000, `high` 120 000) la API lo avisa al arrancar. |
 | `AI_DESK_DAILY_LIMIT` · `AI_DESK_GLOBAL_DAILY_LIMIT` | 200 · 600 | Consultas al día por agente y en toda la plataforma. |
 | `AI_DESK_CONCURRENCY` · `AI_DESK_SWEEP_MAX` | 2 · 5 | Rondas a la vez, y agentes por barrido. |
 | `AI_DESK_PROPOSAL_TTL_MIN` · `AI_DESK_ACTION_TTL_MIN` | 15 · 30 | Lo que vive una propuesta y una acción esperando. |

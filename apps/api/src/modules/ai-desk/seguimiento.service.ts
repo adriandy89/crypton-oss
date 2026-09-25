@@ -69,6 +69,13 @@ const MAX_BRUTO = 2_000;
 /** Quién dispara un seguimiento. */
 export type DisparadorRonda = DisparadorSeguimiento;
 
+/** Lo que dejó una ronda de seguimiento, para quien la lanzó. */
+export interface ResultadoSeguimiento {
+  rondaId: string;
+  estado: EstadoRondaAgente;
+  motivo: MotivoRonda;
+}
+
 /** En qué acabó decidir una acción, para quien lo pidió. */
 /** La forma vive en shared: la app la lee tal cual. */
 export type ResultadoAccion = ResultadoAccionAgente;
@@ -186,9 +193,24 @@ export class AiDeskSeguimientoService {
     propuestaId: string,
     disparador: DisparadorRonda,
     ahora = Date.now(),
-  ): Promise<{ rondaId: string; estado: EstadoRondaAgente; motivo: MotivoRonda } | null> {
+  ): Promise<ResultadoSeguimiento | null> {
+    const iniciada = await this.iniciarSeguimiento(propuestaId, disparador, ahora);
+    return iniciada ? iniciada.fin : null;
+  }
+
+  /**
+   * Reserva el hueco y crea la fila EN_CURSO; `fin` corre la ronda y suelta el
+   * hueco al terminar. Como la de entrada, para que «Revisar ahora» responda sin
+   * esperar al modelo (spec 078).
+   */
+  private async iniciarSeguimiento(
+    propuestaId: string,
+    disparador: DisparadorRonda,
+    ahora: number,
+  ): Promise<{ rondaId: string; fin: Promise<ResultadoSeguimiento> } | null> {
     if (this.enCurso >= this.cfg.concurrencia) return null;
     this.enCurso++;
+    let suelta = true;
     try {
       const op = await this.leerOperacion(propuestaId);
       if (!op || op.state !== EstadoPropuestaAgente.ABIERTA) return null;
@@ -213,18 +235,36 @@ export class AiDeskSeguimientoService {
         if ((e as { code?: string }).code === 'P2002') return null;
         throw e;
       }
-      try {
-        return await this.ronda(rondaId, op, intervalo, disparador, ahora);
-      } catch (e) {
-        this.logger.error(`Seguimiento ${rondaId} de ${propuestaId}: ${(e as Error).message}`);
-        return this.cerrar(rondaId, EstadoRondaAgente.FALLIDA, MotivoRonda.ERROR);
-      }
+      const fin = this.correr(rondaId, op, intervalo, disparador, ahora).finally(() => {
+        this.enCurso--;
+      });
+      suelta = false;
+      return { rondaId, fin };
     } finally {
-      this.enCurso--;
+      if (suelta) this.enCurso--;
     }
   }
 
-  /** «Revisar ahora», desde la app: una por minuto y operación, y solo propia. */
+  private async correr(
+    rondaId: string,
+    op: Operacion,
+    intervalo: IntervaloAgente,
+    disparador: DisparadorRonda,
+    ahora: number,
+  ): Promise<ResultadoSeguimiento> {
+    try {
+      return await this.ronda(rondaId, op, intervalo, disparador, ahora);
+    } catch (e) {
+      this.logger.error(`Seguimiento ${rondaId} de ${op.id}: ${(e as Error).message}`);
+      return this.cerrar(rondaId, EstadoRondaAgente.FALLIDA, MotivoRonda.ERROR);
+    }
+  }
+
+  /**
+   * «Revisar ahora», desde la app: solo sobre una operación propia y abierta.
+   * Responde con la ronda EN_CURSO y la deja terminar aparte, con un cerrojo de
+   * un minuto más el plazo del modelo, como «Analizar ahora» (spec 078).
+   */
   async revisarAhora(adminId: string, propuestaId: string): Promise<RondaVista> {
     const suya = await this.db.aiDeskProposal.findFirst({
       where: { id: propuestaId, agent: { user_id: adminId } },
@@ -235,22 +275,27 @@ export class AiDeskSeguimientoService {
       throw new HttpException('La operación no está abierta.', HttpStatus.CONFLICT);
     }
     const libre = await this.cache
-      .setnx(`ai-desk:revisar:${propuestaId}`, 1, 60)
+      .setnx(`ai-desk:revisar:${propuestaId}`, 1, this.cfg.cerrojoManualS)
       .catch(() => false);
     if (!libre) {
       throw new HttpException(
-        'Espera un minuto entre dos revisiones de la misma operación.',
+        'Esta operación ya tiene una revisión en curso o recién hecha: espera un poco.',
         HttpStatus.TOO_MANY_REQUESTS,
       );
     }
-    const r = await this.rondaSeguimiento(propuestaId, 'MANUAL');
-    if (!r) {
+    const iniciada = await this.iniciarSeguimiento(propuestaId, 'MANUAL', Date.now());
+    if (!iniciada) {
       throw new ServiceUnavailableException(
         'Ahora mismo hay demasiadas revisiones en curso. Vuelve a intentarlo en un momento.',
       );
     }
+    const { rondaId, fin } = iniciada;
+    // Con `catch`: una promesa sin manejar tumba el proceso entero en Node (001/F-07).
+    void fin.catch((e: Error) =>
+      this.logger.warn(`Seguimiento ${rondaId} de ${propuestaId} sin terminar: ${e.message}`),
+    );
     const fila = await this.db.aiDeskRound.findUnique({
-      where: { id: r.rondaId },
+      where: { id: rondaId },
       select: SELECT_RONDA_VISTA,
     });
     if (!fila) throw new NotFoundException('Ronda no encontrada.');
@@ -268,11 +313,18 @@ export class AiDeskSeguimientoService {
       this.cerrar(rondaId, EstadoRondaAgente.SALTADA, motivo, extra);
     const agente = op.agent;
     const ia = modoDe(agente) === ModoDecision.IA;
+    /**
+     * Por qué, en modo IA, decide el juez en vez del modelo, o null (spec 078,
+     * decisión 4 del 075). Sin modelo el seguimiento no se salta la vela: el
+     * juez solo puede elegir lo que ya ofrece la autonomía, y eso solo reduce el
+     * riesgo. Las ENTRADAS no hacen esto: sin respuesta válida no hay entrada.
+     */
+    let sinModelo: string | null = null;
 
     // Las barreras. No mira el interruptor global de entradas: reducir el riesgo
     // nunca se corta. Ni si el agente está en pausa: eso corta entradas.
     if (!this.cfg.encendido) return saltar(MotivoRonda.IA_APAGADA);
-    if (ia && !this.modelo.agentesDisponible) return saltar(MotivoRonda.IA_APAGADA);
+    if (ia && !this.modelo.agentesDisponible) sinModelo = 'SIN_CLAVE';
     if (
       agente.user.role !== DUENO_DE_AGENTES.role ||
       agente.user.disabled !== DUENO_DE_AGENTES.disabled
@@ -281,7 +333,7 @@ export class AiDeskSeguimientoService {
     }
     if (agente.state === EstadoAgente.ARCHIVADO) return saltar(MotivoRonda.AGENTE);
     if (ia && agente.sleeping_until && agente.sleeping_until.getTime() > ahora) {
-      return saltar(MotivoRonda.DORMIDO);
+      sinModelo ??= MotivoRonda.DORMIDO;
     }
     // Un bot pausado por una persona no se toca (R-23); parado o en error, tampoco.
     if (!op.bot || op.bot.status !== 'RUNNING') return saltar(MotivoRonda.BOT);
@@ -322,10 +374,14 @@ export class AiDeskSeguimientoService {
     let accion: AccionSeguimiento = juezSeguimiento(estado, opciones);
     let respuesta: RespuestaModeloSeguimiento | null = null;
     let llamada: RespuestaDecision | null = null;
+    let fallo: string | null = null;
+    let bruto: string | null = null;
     const juez = accion;
-    if (ia) {
+    if (ia && sinModelo === null) {
       const cupo = await this.consumo.cupo(agente, leerLimitesAgente(agente.limits), ahora);
-      if (cupo) return saltar(cupo, conVista);
+      if (cupo) sinModelo = cupo;
+    }
+    if (ia && sinModelo === null) {
       const acciones = opciones.map((o) => o.accion);
       const plan = planDe(op);
       llamada = await this.modelo.decidirAgente({
@@ -335,35 +391,42 @@ export class AiDeskSeguimientoService {
         limiteMs: this.cfg.plazoLlamadaMs,
       });
       const coste = llamada.uso?.coste ?? null;
-      const columnas = this.columnasLlamada(llamada);
       if (llamada.contenido === null || llamada.fallo !== null) {
-        const fallo = llamada.fallo ?? 'VACIA';
-        await this.consumo.anotar(agente, coste, `MODELO:${fallo}`, ahora);
-        return this.cerrar(rondaId, EstadoRondaAgente.FALLIDA, MotivoRonda.MODELO, {
-          ...conVista,
-          ...columnas,
-          decision: { fallo, juez },
-        });
+        fallo = llamada.fallo ?? 'VACIA';
+        sinModelo = `MODELO:${fallo}`;
+      } else {
+        respuesta = parseSeguimiento(llamada.contenido, acciones);
+        if (!respuesta) {
+          fallo = 'CONTRATO';
+          sinModelo = fallo;
+          bruto = recortarSinPartir(llamada.contenido, MAX_BRUTO);
+        } else {
+          accion = accionEfectiva(respuesta);
+        }
       }
-      respuesta = parseSeguimiento(llamada.contenido, acciones);
-      if (!respuesta) {
-        await this.consumo.anotar(agente, coste, 'CONTRATO', ahora);
-        return this.cerrar(rondaId, EstadoRondaAgente.FALLIDA, MotivoRonda.CONTRATO, {
-          ...conVista,
-          ...columnas,
-          decision: {
-            fallo: 'CONTRATO',
-            juez,
-            bruto: recortarSinPartir(llamada.contenido, MAX_BRUTO),
-          },
-        });
-      }
-      await this.consumo.anotar(agente, coste, null, ahora);
-      accion = accionEfectiva(respuesta);
+      // El fallo sigue contando en la racha: a los cinco seguidos el agente duerme.
+      await this.consumo.anotar(agente, coste, sinModelo, ahora);
     }
 
-    const decision = { accion, juez, respuesta } as never;
-    const columnas = { ...conVista, ...this.columnasLlamada(llamada), decision };
+    // Con el uso de la llamada: cuánto pensó el modelo y si el plazo le basta
+    // (spec 078). Y, si decidió el juez en su lugar, por qué.
+    const decision = {
+      accion,
+      juez,
+      respuesta,
+      uso: llamada?.uso ?? null,
+      ...(sinModelo ? { sinModelo } : {}),
+      ...(fallo ? { fallo } : {}),
+      ...(bruto ? { bruto } : {}),
+    } as never;
+    // Sin la huella si decidió el juez por falta de modelo: la barrera de la
+    // huella solo mira rondas COMPLETADA, y con ella la vela siguiente no
+    // volvería a preguntar al modelo por el mismo expediente.
+    const columnas = {
+      ...(sinModelo ? { snapshot: conVista.snapshot } : conVista),
+      ...this.columnasLlamada(llamada),
+      decision,
+    };
     const opcion = opciones.find((o) => o.accion === accion);
     if (accion === AccionSeguimiento.MANTENER || !opcion?.clase) {
       return this.cerrar(rondaId, EstadoRondaAgente.COMPLETADA, MotivoRonda.MANTENER, columnas);

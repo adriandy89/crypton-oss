@@ -142,6 +142,7 @@ export function revisionVista(f: FilaRevision): RevisionVista {
     juez: accionDe(d['juez']),
     respuesta: respuestaSeguimientoDe(d['respuesta']),
     fallo: typeof d['fallo'] === 'string' ? d['fallo'] : null,
+    sinModelo: typeof d['sinModelo'] === 'string' ? d['sinModelo'] : null,
   };
 }
 

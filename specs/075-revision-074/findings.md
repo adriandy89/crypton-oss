@@ -557,7 +557,7 @@ Un cuestionario con las decisiones pendientes; cada una manda sobre la propuesta
 | 1 | F-01 se corrige dentro del 075 | `a0116c9` |
 | 2 | Un spec 076 con **todo lo Alto y lo Medio** (F-02 a F-24) | 076 |
 | 3 | La pausa diaria salta con **lo realizado más lo abierto al stop ≥ 90 % del tope** (pregunta 2) | 076, F-05 |
-| 4 | Sin modelo —dormido, sin cupo o sin clave—, el seguimiento **cae al juez de reglas** (pregunta 3) | 076 |
+| 4 | Sin modelo —dormido, sin cupo o sin clave—, el seguimiento **cae al juez de reglas** (pregunta 3) | **hecho en el 078**, adelantado del 076 (también con un fallo del modelo) |
 | 5 | **Sin caída máxima por bot** en `AGENT_TRADE`; la pérdida diaria de la cuenta sigue (pregunta 4) | 076 |
 | 6 | El recálculo al aprobar **nunca da más cantidad ni nocional** que lo propuesto (pregunta 7) | 076 |
 | 7 | El R real **sobre lo que se llenó** (pregunta 5) | 076, F-32 |

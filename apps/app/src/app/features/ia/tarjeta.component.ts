@@ -38,7 +38,12 @@ import {
       }
       @if (consultas() !== null) {
         <dt>Coste de la IA</dt>
-        <dd class="num">{{ consultas() }} consultas · {{ money(coste(), 3) }} $</dd>
+        <dd class="num">
+          {{ consultas() }} consultas · {{ money(coste(), 3) }} $
+          @if (consultasSinCoste() > 0) {
+            · {{ consultasSinCoste() }} sin coste conocido
+          }
+        </dd>
       }
     </dl>
 
@@ -96,6 +101,8 @@ export class IaTarjetaComponent {
   /** Lo que costó preguntar al modelo; sin ello no se enseña la línea. */
   readonly consultas = input<number | null>(null);
   readonly coste = input<string>('0');
+  /** Las que no trajeron coste: una cortada se cobra y no dice cuánto (spec 078). */
+  readonly consultasSinCoste = input<number>(0);
 
   readonly textoDe = textoDe;
   readonly ladoTexto = ladoTexto;

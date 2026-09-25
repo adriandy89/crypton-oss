@@ -175,15 +175,18 @@ describe('la IA del canal: la petición', () => {
     expect(sistema['cache_control']).toEqual({ type: 'ephemeral', ttl: '1h' });
   });
 
-  it('el plazo es el de quien llama, nunca más de 25 s', async () => {
+  it('el plazo es el de quien llama, hasta 120 s (spec 078)', async () => {
     const plazo = jest.spyOn(AbortSignal, 'timeout');
     try {
       const c = new OpenRouterClient(configCon(ENCENDIDO));
-      await c.decidirCanal(peticion({ limiteMs: 60_000 }));
+      await c.decidirCanal(peticion({ limiteMs: 90_000 }));
+      await c.decidirCanal(peticion({ limiteMs: 200_000 }));
       await c.decidirCanal(peticion({ limiteMs: 7_000 }));
-      expect(plazo.mock.calls[0][0]).toBeLessThanOrEqual(25_000);
-      expect(plazo.mock.calls[0][0]).toBeGreaterThan(24_000);
-      expect(plazo.mock.calls[1][0]).toBeLessThanOrEqual(7_000);
+      expect(plazo.mock.calls[0][0]).toBeLessThanOrEqual(90_000);
+      expect(plazo.mock.calls[0][0]).toBeGreaterThan(89_000);
+      expect(plazo.mock.calls[1][0]).toBeLessThanOrEqual(120_000);
+      expect(plazo.mock.calls[1][0]).toBeGreaterThan(119_000);
+      expect(plazo.mock.calls[2][0]).toBeLessThanOrEqual(7_000);
     } finally {
       plazo.mockRestore();
     }

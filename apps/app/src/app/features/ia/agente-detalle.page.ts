@@ -19,13 +19,16 @@ import {
   IonTitle,
   IonToolbar,
 } from '@ionic/angular/standalone';
-import type {
-  AgenteVista,
-  DetalleAgente,
-  LimitesAgente,
-  ListaOperaciones,
-  ListaPropuestas,
-  RondaVista,
+import {
+  EstadoRondaAgente,
+  PAUSA_FALLOS_AGENTE_MS,
+  TOPE_FALLOS_AGENTE,
+  type AgenteVista,
+  type DetalleAgente,
+  type LimitesAgente,
+  type ListaOperaciones,
+  type ListaPropuestas,
+  type RondaVista,
 } from '@crypton/shared';
 import { NOMBRES_LIMITES_AGENTE } from '@crypton/strategy-core';
 import { AgentesIaService } from '../../core/services/agentes-ia.service';
@@ -36,12 +39,13 @@ import {
   FAMILIA,
   INSIGNIA_AGENTE,
   MOTIVO_PAUSA,
-  MOTIVO_RONDA,
   ladoTexto,
   porcentaje,
   reloj,
   textoDe,
   textoEleccionAgente,
+  textoFalloModelo,
+  textoRonda,
 } from '../../core/utils/agentes-ia';
 import { AgentesAccionesService } from '../../shared/ia/agentes-acciones.service';
 import { UiBadgeComponent, UiCardComponent, UiNoticeComponent } from '../../shared/ui';
@@ -196,7 +200,15 @@ const ORDEN_LIMITES: readonly (keyof LimitesAgente)[] = [
               }
               @if (a.fallos > 0) {
                 <dt>Fallos seguidos</dt>
-                <dd>{{ a.fallos }}{{ a.ultimoError ? ' · ' + a.ultimoError : '' }}</dd>
+                <dd>
+                  {{ a.fallos }} de {{ TOPE_FALLOS_AGENTE
+                  }}{{ a.ultimoError ? ' · ' + textoFalloModelo(a.ultimoError) : '' }}
+                  <br />
+                  <span class="vio"
+                    >Al {{ TOPE_FALLOS_AGENTE }}.º seguido deja de consultar
+                    {{ horasPausaFallos }} h.</span
+                  >
+                </dd>
               }
             </dl>
           </ui-card>
@@ -220,7 +232,12 @@ const ORDEN_LIMITES: readonly (keyof LimitesAgente)[] = [
                 <dd class="num">{{ d.uso.rachaPerdidas }}</dd>
               }
               <dt>Consultas al modelo</dt>
-              <dd class="num">{{ a.consultasHoy }} · {{ money(a.costeHoy, 3) }} $</dd>
+              <dd class="num">
+                {{ a.consultasHoy }} · {{ money(a.costeHoy, 3) }} $
+                @if (a.consultasSinCoste > 0) {
+                  · {{ a.consultasSinCoste }} sin coste conocido
+                }
+              </dd>
             </dl>
           </ui-card>
 
@@ -250,7 +267,7 @@ const ORDEN_LIMITES: readonly (keyof LimitesAgente)[] = [
             @for (r of d.rondas; track r.id) {
               <p class="rev">
                 <span class="num">{{ shortDate(r.creadaEn) }}</span> ·
-                <b>{{ textoDe(MOTIVO_RONDA, r.motivo) || r.estado }}</b>
+                <b>{{ textoRonda(r) }}</b>
                 @if (r.eleccion) {
                   · {{ textoEleccionAgente(r.eleccion) }}
                 }
@@ -322,18 +339,23 @@ export class AgenteDetallePage implements OnInit {
   readonly ahora = reloj();
 
   readonly textoDe = textoDe;
+  readonly textoRonda = textoRonda;
+  readonly textoFalloModelo = textoFalloModelo;
+  readonly TOPE_FALLOS_AGENTE = TOPE_FALLOS_AGENTE;
+  readonly horasPausaFallos = PAUSA_FALLOS_AGENTE_MS / 3_600_000;
   readonly venueLabel = venueLabel;
   readonly shortDate = shortDate;
   readonly money = money;
   readonly porcentaje = porcentaje;
   readonly textoEleccionAgente = textoEleccionAgente;
   readonly MOTIVO_PAUSA = MOTIVO_PAUSA;
-  readonly MOTIVO_RONDA = MOTIVO_RONDA;
   readonly NOMBRES_LIMITES_AGENTE = NOMBRES_LIMITES_AGENTE;
   readonly ORDEN_LIMITES = ORDEN_LIMITES;
 
   private readonly id = this.route.snapshot.paramMap.get('id') ?? '';
   private turno = 0;
+  /** Para dejar de esperar una ronda al salir de la pantalla. */
+  private abierta = true;
 
   readonly insignia = computed(() => {
     const a = this.detalle()?.agente;
@@ -341,6 +363,7 @@ export class AgenteDetallePage implements OnInit {
   });
 
   ngOnInit(): void {
+    this.destroyRef.onDestroy(() => (this.abierta = false));
     void this.cargar();
     this.servicio.cambios
       .pipe(takeUntilDestroyed(this.destroyRef))
@@ -412,15 +435,29 @@ export class AgenteDetallePage implements OnInit {
   }
 
   async analizar(a: AgenteVista): Promise<void> {
-    await this.hacer(() => this.acciones.analizar(a));
+    const r = await this.hacer(() => this.acciones.analizar(a));
+    // El servidor responde en cuanto la ronda existe, y el modelo puede tardar
+    // hasta su plazo: se recarga hasta verla terminada (spec 078).
+    if (r?.estado === EstadoRondaAgente.EN_CURSO) {
+      await this.acciones.esperarRonda(
+        r.id,
+        'Análisis',
+        async () => {
+          await this.cargar();
+          return this.detalle()?.rondas;
+        },
+        () => this.abierta,
+      );
+    }
   }
 
-  private async hacer(f: () => Promise<unknown>): Promise<void> {
-    if (this.ocupado()) return;
+  private async hacer<T>(f: () => Promise<T>): Promise<T | null> {
+    if (this.ocupado()) return null;
     this.ocupado.set(true);
     try {
-      await f();
+      const r = await f();
       await this.cargar();
+      return r;
     } finally {
       this.ocupado.set(false);
     }

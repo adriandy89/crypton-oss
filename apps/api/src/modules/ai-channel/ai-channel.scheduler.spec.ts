@@ -1,3 +1,4 @@
+import { Logger } from '@nestjs/common';
 import { Subject } from 'rxjs';
 import type { BusMessage } from 'src/libs';
 import { AiChannelScheduler } from './ai-channel.scheduler';
@@ -33,6 +34,7 @@ function montar() {
     pendientes: jest.fn(async (n: number) => ['a', 'b', 'c'].slice(0, n)),
     caducarVencidas: jest.fn(async () => 3),
     canjearPausa: jest.fn(async () => 'PAUSADO'),
+    avisoPlazo: jest.fn((): string | null => null),
   };
   const s = new AiChannelScheduler(bus as never, cache as never, canal as never);
   const mensaje = (m: Partial<BusMessage>): BusMessage => ({
@@ -118,5 +120,21 @@ describe('AiChannelScheduler', () => {
     m.emitir('crypton:bot-events', m.mensaje({ type: 'AI_CHANNEL_PAUSE', data: { vale: 'w' } }));
     await esperar();
     expect(m.canal.canjearPausa).toHaveBeenCalledTimes(2);
+  });
+
+  it('avisa al arrancar si el plazo del modelo no deja terminar al razonamiento (spec 078)', async () => {
+    const aviso = jest.spyOn(Logger.prototype, 'warn').mockImplementation(() => undefined);
+    try {
+      const m = montar();
+      m.canal.avisoPlazo.mockReturnValueOnce('AI_CHANNEL_TIMEOUT_MS=20000 con razonamiento medium');
+      await m.s.onModuleInit();
+      expect(aviso).toHaveBeenCalledWith('AI_CHANNEL_TIMEOUT_MS=20000 con razonamiento medium');
+
+      aviso.mockClear();
+      await montar().s.onModuleInit();
+      expect(aviso).not.toHaveBeenCalled();
+    } finally {
+      aviso.mockRestore();
+    }
   });
 });

@@ -99,7 +99,19 @@ interface Opciones {
   configStop?: string;
   cantidad?: string;
   respuesta?: Record<string, unknown> | null;
+  /** Si hay clave del modelo para los agentes. */
+  modelo?: boolean;
 }
+
+/** Lo que devuelve el cliente de una llamada que respondió. */
+const USO = {
+  tokensEntrada: 1800,
+  tokensSalida: 300,
+  tokensCacheLeidos: 1500,
+  tokensCacheEscritos: 0,
+  tokensRazonamiento: 250,
+  coste: '0.002',
+};
 
 function montar(o: Opciones = {}) {
   const agente = {
@@ -167,6 +179,27 @@ function montar(o: Opciones = {}) {
     },
     aiDeskRound: {
       create: jest.fn(async () => ({ id: 'r-1' })),
+      // La fila como está AHORA: EN_CURSO hasta que la ronda se cierra.
+      findUnique: jest.fn(async () => {
+        const cerrada = rondas[rondas.length - 1];
+        return {
+          id: 'r-1',
+          kind: 'SEGUIMIENTO',
+          bar_t: new Date(AHORA),
+          trigger: 'MANUAL',
+          state: cerrada?.['state'] ?? 'EN_CURSO',
+          reason: cerrada?.['reason'] ?? null,
+          decision_mode: agente.decision_mode,
+          created_at: new Date(AHORA),
+          finished_at: null,
+          model: null,
+          latency_ms: null,
+          cost: null,
+          decision: null,
+          snapshot: null,
+          proposals: [],
+        };
+      }),
       update: jest.fn(async ({ data }: { data: Record<string, unknown> }) => {
         rondas.push(data);
         return {};
@@ -245,7 +278,7 @@ function montar(o: Opciones = {}) {
     })),
   };
   const modelo = {
-    agentesDisponible: true,
+    agentesDisponible: o.modelo ?? true,
     decidirAgente: jest.fn(async (_p: unknown) => ({
       contenido:
         o.respuesta === null
@@ -260,7 +293,8 @@ function montar(o: Opciones = {}) {
               texto: 'Asegurar.',
               ...(o.respuesta ?? {}),
             }),
-      uso: { coste: '0.002' },
+      // Como el cliente real: un tiempo agotado no trae uso ni coste (spec 078).
+      uso: o.respuesta === null ? null : USO,
       fallo: o.respuesta === null ? 'TIEMPO' : null,
       latenciaMs: 900,
       modelo: 'x/y',
@@ -290,10 +324,18 @@ function montar(o: Opciones = {}) {
   );
   estadoMock.mockReturnValue({ ...ESTADO, ...(o.estado ?? {}) });
   opcionesMock.mockReturnValue(OPCIONES);
-  return { svc, db, bots, avisos, modelo, consumo, acciones, rondas, operacion };
+  return { svc, db, cache, bots, avisos, modelo, consumo, acciones, rondas, operacion };
 }
 
 const cierre = (m: ReturnType<typeof montar>) => m.rondas[m.rondas.length - 1];
+
+/** Deja correr lo que se lanzó sin esperar, hasta que se cumpla la condición. */
+async function hasta(condicion: () => boolean): Promise<void> {
+  for (let i = 0; i < 200 && !condicion(); i++) {
+    await new Promise((r) => setImmediate(r));
+  }
+  expect(condicion()).toBe(true);
+}
 
 beforeEach(() => {
   estadoMock.mockReset();
@@ -414,26 +456,129 @@ describe('AiDeskSeguimientoService — decidir y actuar', () => {
     expect((await baja.svc.rondaSeguimiento('p-1', 'INTERVALO', AHORA))?.motivo).toBe('MANTENER');
     expect(baja.bots.updateConfig).not.toHaveBeenCalled();
   });
+});
 
-  it('sin respuesta del modelo: FALLIDA y cuenta en la racha; sin cupo, no se llama', async () => {
-    const m = montar({ agente: { decision_mode: 'IA' }, respuesta: null });
-    expect(await m.svc.rondaSeguimiento('p-1', 'INTERVALO', AHORA)).toMatchObject({
-      estado: 'FALLIDA',
-      motivo: 'MODELO',
-    });
-    expect(m.consumo.anotar).toHaveBeenCalledWith(
+describe('AiDeskSeguimientoService — sin modelo decide el juez (spec 078, decisión 4 del 075)', () => {
+  // La idea debilitada con 1,2 R a favor: el juez protege, y reducir es automático.
+  const IA = { decision_mode: 'IA' };
+  const DEBIL = { tesis: 'DEBILITADA' as const, rAhora: 1.2 };
+
+  it.each<[string, Opciones, string, boolean, string | null]>([
+    ['el modelo no respondió a tiempo', { respuesta: null }, 'MODELO:TIEMPO', true, 'TIEMPO'],
+    [
+      'respondió fuera del contrato',
+      { respuesta: { accion: 'VOLAR' } },
+      'CONTRATO',
+      true,
+      'CONTRATO',
+    ],
+    [
+      'el agente duerme tras sus fallos',
+      { agente: { ...IA, sleeping_until: new Date(AHORA + 60_000) } },
+      'DORMIDO',
+      false,
+      null,
+    ],
+    ['no hay clave del modelo', { modelo: false }, 'SIN_CLAVE', false, null],
+  ])('%s: aplica lo del juez, sin huella', async (_, opciones, sinModelo, llama, fallo) => {
+    const m = montar({ agente: IA, estado: DEBIL, ...opciones });
+    const r = await m.svc.rondaSeguimiento('p-1', 'INTERVALO', AHORA);
+    expect(r).toMatchObject({ estado: 'COMPLETADA', motivo: 'ACCION' });
+    // Lo del juez, por el camino de siempre: se aplica porque reducir es automático.
+    expect(m.acciones.get('a-1')).toMatchObject({ action: 'PROTEGER', state: 'APLICADA' });
+    expect(m.bots.updateConfig).toHaveBeenCalled();
+    expect(m.modelo.decidirAgente).toHaveBeenCalledTimes(llama ? 1 : 0);
+    const decision = cierre(m)['decision'] as Record<string, unknown>;
+    expect(decision).toMatchObject({ accion: 'PROTEGER', juez: 'PROTEGER', sinModelo });
+    expect(decision['fallo'] ?? null).toBe(fallo);
+    // Sin huella: la vela siguiente vuelve a preguntar al modelo.
+    expect(cierre(m)).not.toHaveProperty('huella');
+  });
+
+  it('un fallo del modelo sigue contando en la racha; dormido o sin clave no se anota nada', async () => {
+    const tiempo = montar({ agente: IA, estado: DEBIL, respuesta: null });
+    await tiempo.svc.rondaSeguimiento('p-1', 'INTERVALO', AHORA);
+    expect(tiempo.consumo.anotar).toHaveBeenCalledWith(
       expect.anything(),
-      '0.002',
+      null,
       'MODELO:TIEMPO',
       AHORA,
     );
+    const dormido = montar({
+      agente: { ...IA, sleeping_until: new Date(AHORA + 60_000) },
+      estado: DEBIL,
+    });
+    await dormido.svc.rondaSeguimiento('p-1', 'INTERVALO', AHORA);
+    expect(dormido.consumo.anotar).not.toHaveBeenCalled();
+  });
 
-    const sinCupo = montar({ agente: { decision_mode: 'IA' } });
-    sinCupo.consumo.cupo.mockResolvedValueOnce('CUPO_AGENTE' as never);
-    expect((await sinCupo.svc.rondaSeguimiento('p-1', 'INTERVALO', AHORA))?.motivo).toBe(
-      'CUPO_AGENTE',
+  it('sin cupo tampoco se llama, y decide el juez', async () => {
+    const m = montar({ agente: IA, estado: DEBIL });
+    m.consumo.cupo.mockResolvedValueOnce('CUPO_AGENTE' as never);
+    const r = await m.svc.rondaSeguimiento('p-1', 'INTERVALO', AHORA);
+    expect(r).toMatchObject({ estado: 'COMPLETADA', motivo: 'ACCION' });
+    expect(m.modelo.decidirAgente).not.toHaveBeenCalled();
+    expect(cierre(m)['decision']).toMatchObject({ sinModelo: 'CUPO_AGENTE' });
+  });
+
+  it('con la idea intacta, el juez mantiene: nada que hacer, aunque no haya modelo', async () => {
+    const m = montar({ agente: IA, respuesta: null });
+    const r = await m.svc.rondaSeguimiento('p-1', 'INTERVALO', AHORA);
+    expect(r).toMatchObject({ estado: 'COMPLETADA', motivo: 'MANTENER' });
+    expect(m.db.aiDeskAction.create).not.toHaveBeenCalled();
+  });
+
+  it('con el modelo respondiendo, la ronda sí guarda su huella', async () => {
+    const m = montar({ agente: IA, estado: DEBIL });
+    await m.svc.rondaSeguimiento('p-1', 'INTERVALO', AHORA);
+    expect(cierre(m)['huella']).toEqual(expect.any(String));
+    expect(cierre(m)['decision']).not.toHaveProperty('sinModelo');
+  });
+});
+
+describe('AiDeskSeguimientoService — el plazo del modelo (spec 078)', () => {
+  it('pide con el plazo configurado, y la decisión guarda lo que gastó y pensó el modelo', async () => {
+    const m = montar({ agente: { decision_mode: 'IA' } });
+    await m.svc.rondaSeguimiento('p-1', 'INTERVALO', AHORA);
+    const peticion = m.modelo.decidirAgente.mock.calls[0][0] as { limiteMs: number };
+    expect(peticion.limiteMs).toBe(90_000);
+    expect((cierre(m)['decision'] as Record<string, unknown>)['uso']).toEqual(USO);
+  });
+});
+
+describe('AiDeskSeguimientoService — «Revisar ahora» no espera al modelo (spec 078)', () => {
+  it('responde con la ronda en curso, la termina aparte y suelta su hueco al acabar', async () => {
+    const m = montar({ agente: { decision_mode: 'IA' } });
+    let responder: (v: unknown) => void = () => undefined;
+    m.modelo.decidirAgente.mockImplementationOnce(
+      () =>
+        new Promise((r) => {
+          responder = r;
+        }) as never,
     );
-    expect(sinCupo.modelo.decidirAgente).not.toHaveBeenCalled();
+    const vista = await m.svc.revisarAhora('u-1', 'p-1');
+    expect(vista).toMatchObject({ id: 'r-1', estado: 'EN_CURSO' });
+    expect(m.cache.setnx).toHaveBeenCalledWith('ai-desk:revisar:p-1', 1, 150);
+
+    await hasta(() => m.modelo.decidirAgente.mock.calls.length === 1);
+    expect(m.svc.huecos).toBe(1);
+    responder({
+      contenido: JSON.stringify({
+        accion: 'MANTENER',
+        tesis: 'INTACTA',
+        confianza: 'ALTA',
+        motivo1: 'NINGUNO',
+        motivo2: 'NINGUNO',
+        motivo3: 'NINGUNO',
+        texto: 'Sigue.',
+      }),
+      uso: USO,
+      fallo: null,
+      latenciaMs: 95_000,
+      modelo: 'x/y',
+    });
+    await hasta(() => m.svc.huecos === 2);
+    expect(cierre(m)).toMatchObject({ state: 'COMPLETADA', reason: 'MANTENER' });
   });
 });
 

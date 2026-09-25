@@ -35,6 +35,20 @@ const perilla = (profile: string) => ({
   rationale: 'Porque sí.',
 });
 
+const FEATURES = {
+  mark: 64000,
+  volAnnualPct: 70,
+  atrPct1h: 0.6,
+  atrPct1d: 4,
+  rangePct30: 30,
+  posInRange: 0.5,
+  trendPct: 1,
+  trend: 'LATERAL' as const,
+  efficiency: 0.3,
+  worstDayPct: -7,
+  tickBps: 1,
+};
+
 describe('cliente del modelo', () => {
   describe('apagado por defecto', () => {
     it('sin clave ni interruptor no esta disponible', () => {
@@ -341,6 +355,33 @@ describe('el supervisor y el asesor son independientes (spec 046)', () => {
       const init = fetchSpy.mock.calls[0][1];
       expect(new Headers(init?.headers).get('Authorization')).toBe('Bearer sk-or-x');
     } finally {
+      fetchSpy.mockRestore();
+    }
+  });
+
+  it('el asesor y el supervisor siguen en 25 s: el tope de 120 s es solo de las decisiones (spec 078)', async () => {
+    // El asesor responde a alguien que mira la pantalla, dentro de una petición
+    // HTTP; subirle el tope con el de los agentes lo haría chocar con el proxy.
+    const c = new OpenRouterClient(
+      configCon({ ...clave, AI_ADVISOR_ENABLE: 'true', AI_AGENT_ENABLE: 'true' }),
+    );
+    const fetchSpy = jest.spyOn(globalThis, 'fetch').mockImplementation(
+      async () =>
+        new Response(JSON.stringify({ choices: [{ message: { content: '{}' } }] }), {
+          status: 200,
+        }),
+    );
+    const plazo = jest.spyOn(AbortSignal, 'timeout');
+    try {
+      await c.revisar({ name: 'x', schema: {} }, 'sys', 'user');
+      await c.knobsFor('MARTINGALE', 'BTC', FEATURES);
+      expect(plazo.mock.calls).toHaveLength(2);
+      for (const [ms] of plazo.mock.calls) {
+        expect(ms).toBeLessThanOrEqual(25_000);
+        expect(ms).toBeGreaterThan(24_000);
+      }
+    } finally {
+      plazo.mockRestore();
       fetchSpy.mockRestore();
     }
   });

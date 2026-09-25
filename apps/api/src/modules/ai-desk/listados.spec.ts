@@ -298,6 +298,29 @@ describe('accionVista y revisionVista', () => {
       snapshot: null,
     };
     expect(revisionVista(parada)).toMatchObject({ operacion: null, accion: null, coste: '0.0012' });
+    expect(revisionVista(fila).sinModelo).toBeNull();
+  });
+
+  it('una revisión que decidió el juez por falta de modelo lo dice (spec 078)', () => {
+    const fila = {
+      id: 'r-2',
+      trigger: 'INTERVALO',
+      state: 'COMPLETADA',
+      reason: 'MANTENER',
+      decision_mode: 'IA',
+      created_at: T,
+      model: 'x/y',
+      cost: null,
+      decision: {
+        accion: 'MANTENER',
+        juez: 'MANTENER',
+        respuesta: null,
+        sinModelo: 'MODELO:TIEMPO',
+        fallo: 'TIEMPO',
+      },
+      snapshot: { estado: ESTADO, opciones: [] },
+    };
+    expect(revisionVista(fila)).toMatchObject({ sinModelo: 'MODELO:TIEMPO', fallo: 'TIEMPO' });
   });
 
   it('estadoOperacionDe exige cada campo', () => {

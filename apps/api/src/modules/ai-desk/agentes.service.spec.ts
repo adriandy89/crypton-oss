@@ -176,7 +176,10 @@ function montar(opciones: { rol?: string; disabled?: boolean; catalogo?: string[
       updateMany: jest.fn(async () => ({ count: 0 })),
     },
     bot: { findMany: jest.fn(async () => []) },
-    aiDeskRound: { findMany: jest.fn(async () => []) },
+    aiDeskRound: {
+      findMany: jest.fn(async () => []),
+      groupBy: jest.fn(async (): Promise<{ agent_id: string; _count: { _all: number } }[]> => []),
+    },
   };
   const markets = {
     getSpec: jest.fn(async (_v: string, s: string) => {
@@ -425,6 +428,29 @@ describe('AiDeskAgentesService — resumen y detalle', () => {
     const r = await svc.resumen(ADMIN);
     expect(r.agentes).toHaveLength(2);
     expect([r.vivas, r.pendientes, r.maxPares]).toEqual([1, 3, 12]);
+  });
+
+  it('cuenta las consultas de hoy sin coste conocido: una cortada se cobra y no dice cuánto (spec 078)', async () => {
+    const { svc, db } = montar();
+    const a = await svc.crear(ADMIN, crearDto());
+    const b = await svc.crear(ADMIN, crearDto({ nombre: 'Otro' }));
+    db.aiDeskRound.groupBy.mockResolvedValueOnce([{ agent_id: a.id, _count: { _all: 2 } }]);
+    const antes = Date.now();
+    const r = await svc.resumen(ADMIN);
+    const de = (id: string) => r.agentes.find((x) => x.id === id)?.consultasSinCoste;
+    expect([de(a.id), de(b.id)]).toEqual([2, 0]);
+    // Las del día UTC que llamaron al modelo y no trajeron coste, de entrada y de seguimiento.
+    const dia = new Date(Math.floor(antes / 86_400_000) * 86_400_000);
+    expect(db.aiDeskRound.groupBy).toHaveBeenCalledWith({
+      by: ['agent_id'],
+      where: {
+        agent_id: { in: expect.arrayContaining([a.id, b.id]) as string[] },
+        created_at: { gte: dia },
+        model: { not: null },
+        cost: null,
+      },
+      _count: { _all: true },
+    });
   });
 
   it('el detalle trae el uso del día frente a los límites y el peor día', async () => {

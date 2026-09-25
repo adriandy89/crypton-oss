@@ -64,9 +64,23 @@ export class AiDeskConfig {
     return this.num('AI_DESK_SWEEP_MAX', 5, 1, 100);
   }
 
-  /** El plazo de una llamada, con el tope de 25 s del transporte. */
+  /**
+   * El plazo de una llamada, con el tope de 120 s del transporte para las
+   * decisiones. 90 s de fábrica (spec 078): con `medium` el modelo puede pensar
+   * 4000 tokens, y con los 20 s de antes cada ronda se cortaba y se cobraba.
+   */
   get plazoLlamadaMs(): number {
-    return this.num('AI_DESK_TIMEOUT_MS', 20_000, 1_000, 25_000);
+    return this.num('AI_DESK_TIMEOUT_MS', 90_000, 1_000, 120_000);
+  }
+
+  /**
+   * Lo que dura el cerrojo de lo que se lanza a mano —«Analizar ahora»,
+   * «Revisar ahora»—, en segundos: un minuto entre dos, más lo que puede
+   * tardar el modelo, para que el segundo clic no pague una llamada con la
+   * primera aún en vuelo (spec 078).
+   */
+  get cerrojoManualS(): number {
+    return 60 + Math.ceil(this.plazoLlamadaMs / 1_000);
   }
 
   /** Lo que vive una propuesta de entrada sin respuesta, en minutos. */

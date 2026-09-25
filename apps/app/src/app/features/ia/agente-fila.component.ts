@@ -37,6 +37,9 @@ const PARES_A_LA_VISTA = 4;
       <p class="l2 num">
         {{ a.vivas }} {{ a.vivas === 1 ? 'viva' : 'vivas' }} · {{ a.pendientes }} esperando ·
         {{ a.consultasHoy }} consultas hoy ({{ money(a.costeHoy, 3) }} $)
+        @if (a.consultasSinCoste > 0) {
+          · {{ a.consultasSinCoste }} sin coste conocido
+        }
         @if (a.motivoPausa) {
           · {{ textoDe(MOTIVO_PAUSA, a.motivoPausa) }}
         } @else if (a.proximaRonda && a.estado === 'ACTIVO') {

@@ -73,7 +73,12 @@ import { IaTarjetaComponent } from './tarjeta.component';
                 <ui-badge size="sm">archivado</ui-badge>
               }
             </div>
-            <app-ia-tarjeta [tarjeta]="a.tarjeta" [consultas]="a.consultas" [coste]="a.coste" />
+            <app-ia-tarjeta
+              [tarjeta]="a.tarjeta"
+              [consultas]="a.consultas"
+              [coste]="a.coste"
+              [consultasSinCoste]="a.consultasSinCoste"
+            />
           </ui-collapsible>
         }
       }

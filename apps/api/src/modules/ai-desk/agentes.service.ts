@@ -104,7 +104,7 @@ export class AiDeskAgentesService {
     const cuentas = await this.cuentas(filas.map((f) => f.id));
     const ahora = Date.now();
     const agentes = filas.map((f) =>
-      agenteVista(f, cuentas.get(f.id) ?? { vivas: 0, pendientes: 0 }, interruptores, ahora),
+      agenteVista(f, cuentas.get(f.id) ?? SIN_CUENTAS, interruptores, ahora),
     );
     return {
       interruptores,
@@ -134,12 +134,7 @@ export class AiDeskAgentesService {
     ]);
     const limites = leerLimitesAgente(fila.limits);
     return {
-      agente: agenteVista(
-        fila,
-        cuentas.get(id) ?? { vivas: 0, pendientes: 0 },
-        interruptores,
-        ahora,
-      ),
+      agente: agenteVista(fila, cuentas.get(id) ?? SIN_CUENTAS, interruptores, ahora),
       uso: usoDelDia(historial, limites),
       peorDia: peorDiaAgente(limites),
       rondas: rondas.map(rondaVista),
@@ -369,19 +364,16 @@ export class AiDeskAgentesService {
   private async vista(fila: FilaAgente): Promise<AgenteVista> {
     const [interruptores, cuentas]: [InterruptoresAgentes, Map<string, Cuentas>] =
       await Promise.all([this.interruptores.interruptores(), this.cuentas([fila.id])]);
-    return agenteVista(
-      fila,
-      cuentas.get(fila.id) ?? { vivas: 0, pendientes: 0 },
-      interruptores,
-      Date.now(),
-    );
+    return agenteVista(fila, cuentas.get(fila.id) ?? SIN_CUENTAS, interruptores, Date.now());
   }
 
   /** Operaciones vivas y propuestas pendientes de cada agente. */
   private async cuentas(ids: readonly string[]): Promise<Map<string, Cuentas>> {
     const out = new Map<string, Cuentas>();
     if (ids.length === 0) return out;
-    const [vivas, pendientes] = await Promise.all([
+    // El día UTC, como los contadores de uso del agente.
+    const hoy = new Date(Math.floor(Date.now() / 86_400_000) * 86_400_000);
+    const [vivas, pendientes, sinCoste] = await Promise.all([
       this.db.aiDeskProposal.groupBy({
         by: ['agent_id'],
         where: { agent_id: { in: [...ids] }, state: { in: [...PROPUESTAS_VIVAS] } },
@@ -396,12 +388,28 @@ export class AiDeskAgentesService {
         },
         _count: { _all: true },
       }),
+      // Las consultas de hoy que llamaron al modelo y no trajeron coste —una
+      // cortada por tiempo se cobra entera y no dice cuánto—, de entrada y de
+      // seguimiento: gastan del mismo cupo (spec 078).
+      this.db.aiDeskRound.groupBy({
+        by: ['agent_id'],
+        where: {
+          agent_id: { in: [...ids] },
+          created_at: { gte: hoy },
+          model: { not: null },
+          cost: null,
+        },
+        _count: { _all: true },
+      }),
     ]);
-    const de = (id: string): Cuentas => out.get(id) ?? { vivas: 0, pendientes: 0 };
+    const de = (id: string): Cuentas => out.get(id) ?? SIN_CUENTAS;
     for (const id of ids) out.set(id, de(id));
     for (const g of vivas) out.set(g.agent_id, { ...de(g.agent_id), vivas: g._count._all });
     for (const g of pendientes) {
       out.set(g.agent_id, { ...de(g.agent_id), pendientes: g._count._all });
+    }
+    for (const g of sinCoste) {
+      out.set(g.agent_id, { ...de(g.agent_id), sinCoste: g._count._all });
     }
     return out;
   }
@@ -519,4 +527,8 @@ export class AiDeskAgentesService {
 interface Cuentas {
   vivas: number;
   pendientes: number;
+  /** Consultas de hoy sin coste conocido (spec 078). */
+  sinCoste: number;
 }
+
+const SIN_CUENTAS: Cuentas = { vivas: 0, pendientes: 0, sinCoste: 0 };

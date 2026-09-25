@@ -19,7 +19,7 @@ import {
   IonTitle,
   IonToolbar,
 } from '@ionic/angular/standalone';
-import type { DetallePropuesta, PropuestaVista } from '@crypton/shared';
+import { EstadoRondaAgente, type DetallePropuesta, type PropuestaVista } from '@crypton/shared';
 import { AgentesIaService } from '../../core/services/agentes-ia.service';
 import { errorText, price, qty, shortDate, signed } from '../../core/utils';
 import {
@@ -30,7 +30,6 @@ import {
   FAMILIA,
   MOTIVO_MODELO,
   MOTIVO_PROPUESTA,
-  MOTIVO_RONDA,
   RESULTADO_HIPOTETICO,
   RIESGO_MODELO,
   SALIDA,
@@ -42,6 +41,7 @@ import {
   textoDe,
   tonoPropuesta,
   textoEleccionAgente,
+  textoRonda,
   tonoR,
 } from '../../core/utils/agentes-ia';
 import { AccionItemComponent } from '../../shared/ia/accion-item.component';
@@ -247,7 +247,7 @@ import { AdminForbiddenComponent } from '../admin/admin-forbidden.component';
               <p class="rev">
                 <span class="num">{{ shortDate(r.creadaEn) }}</span> ·
                 {{ textoDe(DISPARADOR, r.disparador) }} ·
-                {{ textoDe(MOTIVO_RONDA, r.motivo) || r.estado }}
+                {{ textoRonda(r) }}
                 @if (r.accion && r.accion !== 'MANTENER') {
                   · eligió {{ textoDe(ACCION, r.accion) }}
                 }
@@ -346,6 +346,7 @@ export class PropuestaDetallePage implements OnInit {
   readonly ahora = reloj(5_000);
 
   readonly textoDe = textoDe;
+  readonly textoRonda = textoRonda;
   readonly ladoTexto = ladoTexto;
   readonly shortDate = shortDate;
   readonly price = price;
@@ -362,7 +363,6 @@ export class PropuestaDetallePage implements OnInit {
   readonly FAMILIA = FAMILIA;
   readonly MOTIVO_MODELO = MOTIVO_MODELO;
   readonly MOTIVO_PROPUESTA = MOTIVO_PROPUESTA;
-  readonly MOTIVO_RONDA = MOTIVO_RONDA;
   readonly RIESGO_MODELO = RIESGO_MODELO;
   readonly SALIDA = SALIDA;
   readonly TESIS = TESIS;
@@ -370,6 +370,8 @@ export class PropuestaDetallePage implements OnInit {
 
   private readonly id = this.route.snapshot.paramMap.get('id') ?? '';
   private turno = 0;
+  /** Para dejar de esperar una ronda al salir de la pantalla. */
+  private abierta = true;
 
   readonly titulo = computed(() => {
     const p = this.detalle()?.propuesta;
@@ -385,6 +387,7 @@ export class PropuestaDetallePage implements OnInit {
   });
 
   ngOnInit(): void {
+    this.destroyRef.onDestroy(() => (this.abierta = false));
     void this.cargar();
     this.servicio.cambios
       .pipe(takeUntilDestroyed(this.destroyRef))
@@ -430,19 +433,33 @@ export class PropuestaDetallePage implements OnInit {
   }
 
   async revisar(p: PropuestaVista): Promise<void> {
-    await this.hacer(() => this.acciones.revisar(p));
+    const r = await this.hacer(() => this.acciones.revisar(p));
+    // El servidor responde en cuanto la ronda existe, y el modelo puede tardar
+    // hasta su plazo: se recarga hasta verla terminada (spec 078).
+    if (r?.estado === EstadoRondaAgente.EN_CURSO) {
+      await this.acciones.esperarRonda(
+        r.id,
+        'Revisión',
+        async () => {
+          await this.cargar();
+          return this.detalle()?.seguimiento;
+        },
+        () => this.abierta,
+      );
+    }
   }
 
   async cerrar(p: PropuestaVista): Promise<void> {
     await this.hacer(() => this.acciones.cerrar(p));
   }
 
-  private async hacer(f: () => Promise<unknown>): Promise<void> {
-    if (this.ocupado()) return;
+  private async hacer<T>(f: () => Promise<T>): Promise<T | null> {
+    if (this.ocupado()) return null;
     this.ocupado.set(true);
     try {
-      await f();
+      const r = await f();
       await this.cargar();
+      return r;
     } finally {
       this.ocupado.set(false);
     }

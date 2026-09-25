@@ -91,6 +91,10 @@ export class AiDeskScheduler implements OnModuleInit {
       }
     });
     this.logger.log('Agentes de IA escuchando');
+    // Un plazo que no deja terminar al modelo se ve aquí, al desplegar, y no en
+    // la primera ronda cortada y cobrada (spec 078).
+    const aviso = this.rondas.avisoPlazo();
+    if (aviso) this.logger.warn(aviso);
   }
 
   /**

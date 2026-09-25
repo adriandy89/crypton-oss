@@ -34,15 +34,81 @@ const OPENROUTER_URL = 'https://openrouter.ai/api/v1/chat/completions';
  * Tope de tokens de la respuesta.
  *
  * Holgado a proposito: con razonamiento, lo que el modelo piensa cuenta contra
- * este mismo tope. OpenRouter traduce `effort: 'low'` en un presupuesto de
- * razonamiento del 20 % de este numero —1600 tokens— y exige que el tope sea
+ * este mismo tope. OpenRouter traduce el esfuerzo en un presupuesto de
+ * razonamiento que es una parte de este numero —el 20 % con `low`, 1600 tokens;
+ * el 50 % con `medium`, 4000; el 80 % con `high`, 6400— y exige que el tope sea
  * ESTRICTAMENTE mayor que ese presupuesto. La salida util son ~600 tokens, asi
  * que sobra sitio para las dos cosas.
+ *
+ * Ese presupuesto se piensa, se tarda en pensar y se cobra aunque `exclude`
+ * lo oculte. Por eso el plazo de una llamada no se puede fijar sin mirar el
+ * esfuerzo: ver `plazoRecomendadoMs` (spec 078).
  */
 const MAX_TOKENS = 8_000;
 
-/** Por debajo del interceptor global de 80 s, dejando margen al plan B. */
+/**
+ * El plazo del asesor y del supervisor. Por debajo del interceptor global de
+ * 80 s, dejando margen al plan B: el asesor responde dentro de una petición
+ * HTTP, a alguien que está mirando la pantalla.
+ */
 const TIMEOUT_MS = 25_000;
+
+/**
+ * El tope de una DECISIÓN —el canal con IA y los agentes—, que no responde a
+ * nadie que espere: corre aparte, una vez por vela (spec 078).
+ *
+ * Hasta el 078 compartían los 25 s del asesor, y con `medium` el modelo no
+ * llegaba a terminar: cada ronda se cortaba a los 20 s de su plazo y se cobraba
+ * entera igualmente, porque una petición sin streaming que se aborta sigue
+ * generándose en el proveedor. Incidente del 2026-09-25, el primer agente real.
+ */
+export const TOPE_DECISION_MS = 120_000;
+
+/** La parte de `max_tokens` que OpenRouter reserva al razonamiento, por esfuerzo. */
+const PARTE_RAZONAMIENTO: Readonly<Record<EsfuerzoRazonamiento, number>> = {
+  low: 0.2,
+  medium: 0.5,
+  high: 0.8,
+};
+
+/**
+ * El plazo que se recomienda para cada esfuerzo, con el razonamiento entero
+ * más la respuesta y la cola del proveedor. Es una recomendación para avisar,
+ * no un tope: nada se corta por ella.
+ */
+const PLAZO_RECOMENDADO_MS: Readonly<Record<EsfuerzoRazonamiento, number>> = {
+  low: 45_000,
+  medium: 90_000,
+  high: TOPE_DECISION_MS,
+};
+
+/** Los tokens que puede pensar el modelo antes de responder con este esfuerzo. */
+export function presupuestoRazonamiento(esfuerzo: EsfuerzoRazonamiento): number {
+  return Math.round(MAX_TOKENS * PARTE_RAZONAMIENTO[esfuerzo]);
+}
+
+export function plazoRecomendadoMs(esfuerzo: EsfuerzoRazonamiento): number {
+  return PLAZO_RECOMENDADO_MS[esfuerzo];
+}
+
+/**
+ * El aviso de arranque de una carga cuyo plazo no deja terminar al modelo, o
+ * null. Con él, el incidente del 078 se habría visto en el log al desplegar en
+ * vez de en la primera ronda.
+ */
+export function avisoPlazo(
+  variable: string,
+  plazoMs: number,
+  esfuerzo: EsfuerzoRazonamiento,
+): string | null {
+  const recomendado = plazoRecomendadoMs(esfuerzo);
+  if (plazoMs >= recomendado) return null;
+  return (
+    `${variable}=${plazoMs} con razonamiento ${esfuerzo}: el modelo puede pensar hasta ` +
+    `${presupuestoRazonamiento(esfuerzo)} tokens antes de responder y el plazo se le queda ` +
+    `corto. Cada llamada cortada se cobra entera. Se recomiendan al menos ${recomendado} ms.`
+  );
+}
 
 interface RespuestaOpenRouter {
   choices?: {
@@ -164,6 +230,8 @@ interface CargaDecision {
   modelo: string;
   esfuerzo: EsfuerzoRazonamiento;
   cache: CachePrompt;
+  /** Lo más que se espera, pida lo que pida quien llama (spec 078). */
+  topeMs: number;
   /** Solo para los mensajes de log. */
   que: string;
   titulo: string;
@@ -346,6 +414,16 @@ export class OpenRouterClient {
     return this.deskModel;
   }
 
+  /** Con qué esfuerzo razonan los agentes: de él depende el plazo que necesitan (spec 078). */
+  get agentesEsfuerzo(): EsfuerzoRazonamiento {
+    return this.deskEffort;
+  }
+
+  /** Con qué esfuerzo razona el canal. */
+  get canalEsfuerzo(): EsfuerzoRazonamiento {
+    return this.channelEffort;
+  }
+
   /**
    * Una variable que solo admite unos valores. Uno que no está en la lista no
    * se usa: se avisa y se queda el valor por defecto, que es lo prudente.
@@ -443,6 +521,7 @@ export class OpenRouterClient {
         modelo: this.channelModel,
         esfuerzo: this.channelEffort,
         cache: this.channelCache,
+        topeMs: TOPE_DECISION_MS,
         que: 'decision del canal',
         titulo: 'Crypton AI channel',
       },
@@ -465,6 +544,7 @@ export class OpenRouterClient {
         modelo: this.deskModel,
         esfuerzo: this.deskEffort,
         cache: this.deskCache,
+        topeMs: TOPE_DECISION_MS,
         que: 'decision de un agente',
         titulo: 'Crypton AI desk',
       },
@@ -512,7 +592,7 @@ export class OpenRouterClient {
       que: carga.que,
       titulo: carga.titulo,
       clave: carga.clave,
-      limiteMs: Math.min(p.limiteMs, TIMEOUT_MS),
+      limiteMs: Math.min(p.limiteMs, carga.topeMs),
     });
     return { ...r, latenciaMs: Date.now() - inicio, modelo: carga.modelo };
   }

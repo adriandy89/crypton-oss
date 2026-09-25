@@ -124,7 +124,8 @@ describe('AiDeskListadosService', () => {
       },
     ]);
     m.db.aiDeskRound.groupBy.mockResolvedValue([
-      { agent_id: 'ag-real', _count: { _all: 3 }, _sum: { cost: dec('0.012000') } },
+      // Tres llamadas y dos con coste: la otra se cortó, se cobró y no dijo cuánto (spec 078).
+      { agent_id: 'ag-real', _count: { _all: 3, cost: 2 }, _sum: { cost: dec('0.012000') } },
     ]);
 
     const r = await m.servicio.resultados('u-1');
@@ -132,15 +133,27 @@ describe('AiDeskListadosService', () => {
     expect(r.real?.elegidas).toMatchObject({ n: 1, rMedio: 1.5 });
     expect(r.simulado).toMatchObject({ resultado: '150', operaciones: { n: 2, rMedio: 0.75 } });
     expect(r.simulado?.elegidas.n).toBe(0);
-    expect(r.agentes.map((a) => [a.agenteId, a.real, a.archivado, a.consultas, a.coste])).toEqual([
-      ['ag-real', true, false, 3, '0.012'],
-      ['ag-sim', false, false, 0, '0'],
-      ['ag-test', false, true, 0, '0'],
+    expect(
+      r.agentes.map((a) => [
+        a.agenteId,
+        a.real,
+        a.archivado,
+        a.consultas,
+        a.coste,
+        a.consultasSinCoste,
+      ]),
+    ).toEqual([
+      ['ag-real', true, false, 3, '0.012', 1],
+      ['ag-sim', false, false, 0, '0', 0],
+      ['ag-test', false, true, 0, '0', 0],
     ]);
     expect(r.agentes[1].tarjeta.resultado).toBe('100');
     // Solo los candidatos que se pudieron medir, y solo las rondas que llamaron al modelo.
     expect(llamadas(m.db.aiDeskCandidate.findMany)[0].where).toMatchObject({
       agent_id: { in: ['ag-real', 'ag-sim', 'ag-test'] },
+      // Los de una ronda FALLIDA se guardan, pero no dicen si la IA discrimina:
+      // no eligió ninguno porque no llegó a decidir (spec 078).
+      round: { state: { not: 'FALLIDA' } },
     });
     expect(llamadas(m.db.aiDeskRound.groupBy)[0].where).toEqual({
       agent_id: { in: ['ag-real', 'ag-sim', 'ag-test'] },

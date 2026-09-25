@@ -1,7 +1,14 @@
 import { DestroyRef, inject, signal, type Signal } from '@angular/core';
 import { HttpErrorResponse } from '@angular/common/http';
-import type { EleccionAgente, ErrorAgente, InsigniaAgente, LimitesAgente } from '@crypton/shared';
+import type {
+  EleccionAgente,
+  ErrorAgente,
+  InsigniaAgente,
+  LimitesAgente,
+  RondaVista,
+} from '@crypton/shared';
 import type { BadgeTone } from '../../shared/ui/ui-badge.component';
+import { FALLO_MODELO, textoDe } from './canal-ia';
 import { money, signed } from './format';
 
 /**
@@ -151,7 +158,7 @@ export const MOTIVO_RONDA: Mapa = {
   GASTO: 'sin presupuesto del modelo hoy',
   NINGUNA: 'prefirió no operar',
   OFERTA: 'lo elegido ya no valía',
-  MODELO: 'el modelo no respondió',
+  MODELO: 'sin respuesta válida del modelo',
   CONTRATO: 'respuesta fuera del contrato',
   BOT: 'el bot no está en marcha',
   PENDIENTE: 'ya había una acción esperando',
@@ -161,6 +168,41 @@ export const MOTIVO_RONDA: Mapa = {
   ACCION: 'propuso o aplicó un cambio',
   ERROR: 'error inesperado',
 };
+
+/**
+ * El estado de una ronda, para cuando aún no tiene motivo: la que se lanza a
+ * mano se ve EN_CURSO mientras el modelo piensa (spec 078).
+ */
+export const ESTADO_RONDA: Mapa = {
+  EN_CURSO: 'analizando…',
+  COMPLETADA: 'completada',
+  SALTADA: 'saltada',
+  FALLIDA: 'fallida',
+};
+
+/**
+ * Un fallo del modelo o el motivo por el que no se le preguntó, en palabras:
+ * «MODELO:TIEMPO», «CONTRATO», «DORMIDO», un cupo… (spec 078).
+ */
+export function textoFalloModelo(codigo: string | null): string {
+  if (!codigo) return '';
+  const c = codigo.startsWith('MODELO:') ? codigo.slice('MODELO:'.length) : codigo;
+  return FALLO_MODELO[c] ?? MOTIVO_RONDA[c] ?? c;
+}
+
+/**
+ * Una ronda en pocas palabras: su motivo o, si aún no lo tiene, su estado; y
+ * por qué falló el modelo, o por qué decidió el juez en su lugar (spec 078).
+ */
+export function textoRonda(
+  r: Pick<RondaVista, 'estado' | 'motivo'> & { fallo?: string | null; sinModelo?: string | null },
+): string {
+  const base = textoDe(MOTIVO_RONDA, r.motivo) || textoDe(ESTADO_RONDA, r.estado);
+  if (r.sinModelo) return `${base} · decidió el juez: ${textoFalloModelo(r.sinModelo)}`;
+  // Fuera del contrato ya lo dice el motivo: no se repite.
+  if (r.fallo && r.fallo !== r.motivo) return `${base}: ${textoFalloModelo(r.fallo)}`;
+  return base;
+}
 
 /** Por qué un par o un candidato no ofreció nada. */
 export const DESCARTE: Mapa = {

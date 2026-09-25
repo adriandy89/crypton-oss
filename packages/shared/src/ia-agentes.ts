@@ -361,6 +361,14 @@ export const OPCION_NINGUNA = 'NINGUNA';
  */
 export const MAX_OFERTA_AGENTE = 8;
 
+/**
+ * Fallos seguidos del modelo antes de dormir las consultas de un agente, y lo
+ * que duerme (spec 074, R-16). Viven aquí y no en la API para que la app pueda
+ * decir «1 de 5» y lo que pasa al llegar (spec 078).
+ */
+export const TOPE_FALLOS_AGENTE = 5;
+export const PAUSA_FALLOS_AGENTE_MS = 6 * 3_600_000;
+
 /** La etiqueta de cada puesto de la oferta: `A`, `B`… El modelo no ve ids. */
 export const LETRAS_OFERTA: readonly string[] = ['A', 'B', 'C', 'D', 'E', 'F', 'G', 'H'];
 

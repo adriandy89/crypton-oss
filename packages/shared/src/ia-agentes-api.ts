@@ -74,6 +74,11 @@ export interface AgenteVista {
   /** Consultas al modelo y su coste de hoy (UTC). */
   consultasHoy: number;
   costeHoy: string;
+  /**
+   * Las de hoy que no trajeron coste: una llamada cortada por tiempo se cobra
+   * entera y no dice cuánto, así que `costeHoy` se queda corto (spec 078).
+   */
+  consultasSinCoste: number;
   /** Operaciones vivas y propuestas esperando a una persona. */
   vivas: number;
   pendientes: number;
@@ -248,6 +253,11 @@ export interface RevisionVista {
   juez: AccionSeguimiento | null;
   respuesta: RespuestaModeloSeguimiento | null;
   fallo: string | null;
+  /**
+   * Por qué, en modo IA, decidió el juez en lugar del modelo —`MODELO:TIEMPO`,
+   * `CONTRATO`, `DORMIDO`, un cupo o `SIN_CLAVE`—, o null (spec 078).
+   */
+  sinModelo: string | null;
 }
 
 /** Una propuesta con todo lo suyo: lo que vio, y su seguimiento. */
@@ -283,6 +293,8 @@ export interface ResultadosAgente {
   /** Consultas al modelo desde que existe, y su coste en USD. */
   consultas: number;
   coste: string;
+  /** Las que no trajeron coste, así que `coste` se queda corto (spec 078). */
+  consultasSinCoste: number;
 }
 
 /**

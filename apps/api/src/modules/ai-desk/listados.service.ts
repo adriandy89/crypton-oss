@@ -3,6 +3,7 @@ import { Prisma } from '@crypton/db';
 import {
   D,
   EstadoPropuestaAgente,
+  EstadoRondaAgente,
   TipoRondaAgente,
   type DetallePropuesta,
   type ListaOperaciones,
@@ -174,9 +175,16 @@ export class AiDeskListadosService {
     if (agentes.length === 0) return { real: null, simulado: null, agentes: [] };
     const ids = agentes.map((a) => a.id);
     const [candidatos, propuestas, consumo] = await Promise.all([
-      // Solo los que se pudieron medir: los demás no dicen nada.
+      // Solo los que se pudieron medir: los demás no dicen nada. Y no los de una
+      // ronda FALLIDA: se guardan para medir la población, pero ahí no se eligió
+      // ninguno porque el modelo no llegó a decidir, y contarlos como «no
+      // elegidos» ensuciaría si la IA discrimina (spec 078).
       this.db.aiDeskCandidate.findMany({
-        where: { agent_id: { in: ids }, outcome: { not: Prisma.DbNull } },
+        where: {
+          agent_id: { in: ids },
+          outcome: { not: Prisma.DbNull },
+          round: { state: { not: EstadoRondaAgente.FALLIDA } },
+        },
         select: { agent_id: true, eligible: true, chosen: true, outcome: true },
       }),
       this.db.aiDeskProposal.findMany({
@@ -196,7 +204,8 @@ export class AiDeskListadosService {
       this.db.aiDeskRound.groupBy({
         by: ['agent_id'],
         where: { agent_id: { in: ids }, model: { not: null } },
-        _count: { _all: true },
+        // `cost` cuenta las que trajeron coste: el resto se cortó y no dijo cuánto.
+        _count: { _all: true, cost: true },
         _sum: { cost: true },
       }),
     ]);
@@ -234,6 +243,7 @@ export class AiDeskListadosService {
         tarjeta: tarjetaAgente(c, p),
         consultas: uso?._count._all ?? 0,
         coste: D(uso?._sum.cost?.toString() ?? '0').toFixed(),
+        consultasSinCoste: uso ? uso._count._all - uso._count.cost : 0,
       };
     });
     const tarjeta = (g: typeof juntas.real): TarjetaAgente | null =>

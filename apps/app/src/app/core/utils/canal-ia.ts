@@ -146,8 +146,11 @@ export function textoEleccion(e: EleccionOperacion | null): string {
   ].join(' · ');
 }
 
-/** Por qué no sirvió la respuesta del modelo (`FalloModelo` y el contrato). */
-const FALLO_MODELO: Readonly<Record<string, string>> = {
+/**
+ * Por qué no sirvió la respuesta del modelo (`FalloModelo` y el contrato). Lo
+ * usan también los agentes de IA (spec 078).
+ */
+export const FALLO_MODELO: Readonly<Record<string, string>> = {
   SIN_CLAVE: 'sin clave del modelo',
   HTTP: 'error del servicio del modelo',
   TIEMPO: 'tiempo agotado',

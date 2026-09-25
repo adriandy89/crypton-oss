@@ -12,7 +12,7 @@ import {
 import { takeUntilDestroyed } from '@angular/core/rxjs-interop';
 import { RouterLink } from '@angular/router';
 import { IonButton, IonSpinner } from '@ionic/angular/standalone';
-import type { DetallePropuesta } from '@crypton/shared';
+import { EstadoRondaAgente, type DetallePropuesta } from '@crypton/shared';
 import { AgentesIaService } from '../../core/services/agentes-ia.service';
 import { errorText, price, shortDate } from '../../core/utils';
 import { TESIS, reloj, rTexto, textoDe } from '../../core/utils/agentes-ia';
@@ -125,8 +125,11 @@ export class OperacionIaPanelComponent implements OnInit {
   });
 
   private turno = 0;
+  /** Para dejar de esperar una ronda al cerrar el panel. */
+  private abierta = true;
 
   ngOnInit(): void {
+    this.destroyRef.onDestroy(() => (this.abierta = false));
     void this.cargar();
     this.servicio.cambios
       .pipe(takeUntilDestroyed(this.destroyRef))
@@ -157,7 +160,21 @@ export class OperacionIaPanelComponent implements OnInit {
 
   async revisar(): Promise<void> {
     const p = this.detalle()?.propuesta;
-    if (p) await this.hacer(() => this.acciones.revisar(p));
+    if (!p) return;
+    const r = await this.hacer(() => this.acciones.revisar(p));
+    // El servidor responde en cuanto la ronda existe, y el modelo puede tardar
+    // hasta su plazo: se recarga hasta verla terminada (spec 078).
+    if (r?.estado === EstadoRondaAgente.EN_CURSO) {
+      await this.acciones.esperarRonda(
+        r.id,
+        'Revisión',
+        async () => {
+          await this.recargar();
+          return this.detalle()?.seguimiento;
+        },
+        () => this.abierta,
+      );
+    }
   }
 
   async cerrar(): Promise<void> {
@@ -165,12 +182,13 @@ export class OperacionIaPanelComponent implements OnInit {
     if (p) await this.hacer(() => this.acciones.cerrar(p));
   }
 
-  private async hacer(f: () => Promise<unknown>): Promise<void> {
-    if (this.ocupado()) return;
+  private async hacer<T>(f: () => Promise<T>): Promise<T | null> {
+    if (this.ocupado()) return null;
     this.ocupado.set(true);
     try {
-      await f();
+      const r = await f();
       await this.recargar();
+      return r;
     } finally {
       this.ocupado.set(false);
     }

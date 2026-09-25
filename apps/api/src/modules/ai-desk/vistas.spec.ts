@@ -64,7 +64,7 @@ function fila(extra: Partial<FilaAgente> = {}): FilaAgente {
 }
 
 const vista = (f: FilaAgente, i = INTERRUPTORES) =>
-  agenteVista(f, { vivas: 1, pendientes: 2 }, i, AHORA);
+  agenteVista(f, { vivas: 1, pendientes: 2, sinCoste: 1 }, i, AHORA);
 
 describe('agenteVista', () => {
   it('el agente entero, con su uso de hoy y su pastilla', () => {
@@ -95,6 +95,8 @@ describe('agenteVista', () => {
       ultimoError: null,
       consultasHoy: 7,
       costeHoy: '0.042',
+      // Una de las siete se cortó: se cobró, y su coste no se sabe (spec 078).
+      consultasSinCoste: 1,
       vivas: 1,
       pendientes: 2,
       insignia: 'ACTIVO',

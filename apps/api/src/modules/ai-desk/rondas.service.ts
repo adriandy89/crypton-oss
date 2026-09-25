@@ -47,7 +47,7 @@ import {
   type PuestoOferta,
 } from '@crypton/strategy-core';
 import { CacheService, DbService } from 'src/libs';
-import { OpenRouterClient, type RespuestaDecision } from '../advisor/openrouter.client';
+import { OpenRouterClient, avisoPlazo, type RespuestaDecision } from '../advisor/openrouter.client';
 import { RiskService } from '../risk/risk.service';
 import { AiDeskConfig } from './ai-desk.config';
 import { AiDeskAgentesService, DUENO_DE_AGENTES } from './agentes.service';
@@ -76,6 +76,16 @@ export interface ResultadoRonda {
 
 /** Quién lanza una ronda de entrada: el reloj o una persona desde la app. */
 export type DisparadorEntrada = 'INTERVALO' | 'MANUAL';
+
+/**
+ * Los dos relojes de una ronda: `ahora`, el instante con el que decide —el del
+ * barrido que la lanzó—, e `inicio`, el reloj de verdad al empezar, para contar
+ * lo que ha tardado cuando hace falta (spec 078).
+ */
+interface RelojRonda {
+  ahora: number;
+  inicio: number;
+}
 
 const SELECT_RONDA = {
   id: true,
@@ -162,19 +172,47 @@ export class AiDeskRondasService {
   }
 
   /**
-   * Una ronda de entrada. null si no le toca a esta réplica: no hay hueco, el
-   * agente no existe o la ronda de esa vela ya la hizo otra.
-   *
-   * El hueco se reserva ANTES del primer `await`: dos llamadas en el mismo
-   * instante no pueden pasar las dos por un hueco que solo es de una.
+   * El aviso de arranque si el plazo no deja terminar al modelo, o null (spec
+   * 078). Apagado o sin clave no se llama a nadie, y no hay nada que avisar.
+   */
+  avisoPlazo(): string | null {
+    if (!this.cfg.encendido || !this.modelo.agentesDisponible) return null;
+    return avisoPlazo('AI_DESK_TIMEOUT_MS', this.cfg.plazoLlamadaMs, this.modelo.agentesEsfuerzo);
+  }
+
+  /**
+   * Una ronda de entrada, hasta que termina. null si no le toca a esta
+   * réplica: no hay hueco, el agente no existe o la ronda de esa vela ya la
+   * hizo otra.
    */
   async rondaEntrada(
     agentId: string,
     disparador: DisparadorEntrada,
     ahora = Date.now(),
   ): Promise<ResultadoRonda | null> {
+    const iniciada = await this.iniciarEntrada(agentId, disparador, ahora);
+    return iniciada ? iniciada.fin : null;
+  }
+
+  /**
+   * Reserva el hueco y crea la fila EN_CURSO; `fin` corre la ronda y suelta el
+   * hueco al terminar. Partida así para que «Analizar ahora» pueda responder
+   * sin esperar al modelo (spec 078).
+   *
+   * El hueco se reserva ANTES del primer `await`: dos llamadas en el mismo
+   * instante no pueden pasar las dos por un hueco que solo es de una.
+   */
+  private async iniciarEntrada(
+    agentId: string,
+    disparador: DisparadorEntrada,
+    ahora: number,
+  ): Promise<{ rondaId: string; fin: Promise<ResultadoRonda> } | null> {
     if (this.enCurso >= this.cfg.concurrencia) return null;
     this.enCurso++;
+    // El reloj de verdad, para contar lo que tarda la ronda: `ahora` puede ser
+    // el del barrido que la lanzó.
+    const inicio = Date.now();
+    let suelta = true;
     try {
       const agente = await this.leerAgente(agentId);
       if (!agente) return null;
@@ -200,21 +238,43 @@ export class AiDeskRondasService {
         if ((e as { code?: string }).code === 'P2002') return null;
         throw e;
       }
-      try {
-        return await this.ronda(rondaId, agente, intervalo, barT, ahora);
-      } catch (e) {
-        this.logger.error(`Ronda ${rondaId} del agente ${agentId}: ${(e as Error).message}`);
-        return this.cerrar(rondaId, EstadoRondaAgente.FALLIDA, MotivoRonda.ERROR);
-      }
+      const reloj = { ahora, inicio };
+      const fin = this.correr(rondaId, agente, intervalo, barT, reloj).finally(() => {
+        this.enCurso--;
+      });
+      suelta = false;
+      return { rondaId, fin };
     } finally {
-      this.enCurso--;
+      if (suelta) this.enCurso--;
+    }
+  }
+
+  private async correr(
+    rondaId: string,
+    agente: AgenteRonda,
+    intervalo: IntervaloAgente,
+    barT: number,
+    reloj: RelojRonda,
+  ): Promise<ResultadoRonda> {
+    try {
+      return await this.ronda(rondaId, agente, intervalo, barT, reloj);
+    } catch (e) {
+      this.logger.error(`Ronda ${rondaId} del agente ${agente.id}: ${(e as Error).message}`);
+      return this.cerrar(rondaId, EstadoRondaAgente.FALLIDA, MotivoRonda.ERROR);
     }
   }
 
   /**
    * «Analizar ahora», desde la app (R-24): una ronda de entrada fuera del
-   * reloj, con las mismas barreras. Una por minuto y agente: cada una puede
-   * costar una llamada al modelo. Solo sobre un agente propio.
+   * reloj, con las mismas barreras. Solo sobre un agente propio.
+   *
+   * Responde con la ronda EN_CURSO en cuanto existe y la deja terminar aparte
+   * (spec 078): el modelo puede tardar hasta su plazo, y esperarlo dentro de la
+   * petición chocaba con el proxy (60 s) y con el interceptor global (80 s)
+   * mientras la ronda seguía corriendo. La app recarga hasta verla terminada.
+   *
+   * El cerrojo dura un minuto más el plazo del modelo: cada ronda puede costar
+   * una llamada, y dos clics seguidos no deben pagar dos en vuelo.
    */
   async analizarAhora(adminId: string, agentId: string): Promise<RondaVista> {
     const suyo = await this.db.aiDeskAgent.findFirst({
@@ -222,21 +282,28 @@ export class AiDeskRondasService {
       select: { id: true },
     });
     if (!suyo) throw new NotFoundException('Agente no encontrado.');
-    const libre = await this.cache.setnx(`ai-desk:manual:${agentId}`, 1, 60).catch(() => false);
+    const libre = await this.cache
+      .setnx(`ai-desk:manual:${agentId}`, 1, this.cfg.cerrojoManualS)
+      .catch(() => false);
     if (!libre) {
       throw new HttpException(
-        'Espera un minuto entre dos análisis del mismo agente.',
+        'Este agente ya tiene un análisis en curso o recién hecho: espera un poco.',
         HttpStatus.TOO_MANY_REQUESTS,
       );
     }
-    const r = await this.rondaEntrada(agentId, 'MANUAL');
-    if (!r) {
+    const iniciada = await this.iniciarEntrada(agentId, 'MANUAL', Date.now());
+    if (!iniciada) {
       throw new ServiceUnavailableException(
         'Ahora mismo hay demasiados análisis en curso. Vuelve a intentarlo en un momento.',
       );
     }
+    const { rondaId, fin } = iniciada;
+    // Con `catch`: una promesa sin manejar tumba el proceso entero en Node (001/F-07).
+    void fin.catch((e: Error) =>
+      this.logger.warn(`Ronda ${rondaId} del agente ${agentId} sin terminar: ${e.message}`),
+    );
     const fila = await this.db.aiDeskRound.findUnique({
-      where: { id: r.rondaId },
+      where: { id: rondaId },
       select: SELECT_RONDA_VISTA,
     });
     if (!fila) throw new NotFoundException('Ronda no encontrada.');
@@ -254,8 +321,9 @@ export class AiDeskRondasService {
     agente: AgenteRonda,
     intervalo: IntervaloAgente,
     barT: number,
-    ahora: number,
+    reloj: RelojRonda,
   ): Promise<ResultadoRonda> {
+    const { ahora } = reloj;
     const saltar = (motivo: MotivoRonda, extra: Record<string, unknown> = {}) =>
       this.cerrar(rondaId, EstadoRondaAgente.SALTADA, motivo, extra);
     const ia = modoDe(agente) === ModoDecision.IA;
@@ -374,6 +442,9 @@ export class AiDeskRondasService {
       if (cupo) return saltar(cupo, conSalida);
       const consulta = await this.consultar(agente, salida, oferta, limites, ahora);
       if (consulta.fallo !== null) {
+        // Sin elección, pero con lo que vio y lo que habría elegido el juez: sin
+        // sus candidatos, esa vela se perdía para la medición (spec 078).
+        await this.guardarCandidatos(deRonda, salida, oferta, null, juez);
         return this.cerrar(
           rondaId,
           EstadoRondaAgente.FALLIDA,
@@ -403,7 +474,7 @@ export class AiDeskRondasService {
       pares,
       decision,
       columnas,
-      ahora,
+      reloj,
     );
   }
 
@@ -458,8 +529,9 @@ export class AiDeskRondasService {
     pares: readonly ParAgente[],
     decision: Decision,
     columnas: Record<string, unknown>,
-    ahora: number,
+    reloj: RelojRonda,
   ): Promise<ResultadoRonda> {
+    const { ahora } = reloj;
     const eleccion = decision.eleccion;
     const puesto = oferta.find((p) => p.candidato.id === eleccion?.candidatoId);
     // El mercado del par, el mismo que acaba de leer la ronda.
@@ -513,7 +585,10 @@ export class AiDeskRondasService {
         // Lo que no es dinero de verdad —simulación o testnet— no se suma nunca
         // al que sí lo es.
         dry_run: !real,
-        expires_at: new Date(ahora + vidaMs),
+        // Desde que la propuesta existe, no desde que empezó la ronda: una
+        // llamada larga al modelo se comería su vida (spec 078). El vale de
+        // Telegram, que dura `vidaMs` desde ahora, caduca con ella.
+        expires_at: new Date(ahora + (Date.now() - reloj.inicio) + vidaMs),
       },
       select: { id: true },
     });
@@ -692,9 +767,13 @@ const sinNada = (simbolo: string, descarte: string): SalidaAgentePar => ({
 const modoDe = (a: { decision_mode: string }): ModoDecision =>
   a.decision_mode === ModoDecision.REGLAS ? ModoDecision.REGLAS : ModoDecision.IA;
 
-/** Lo que se guarda de la decisión: sin la llamada entera, que ya tiene sus columnas. */
+/**
+ * Lo que se guarda de la decisión: sin la llamada entera, que ya tiene sus
+ * columnas, pero con su uso —tokens de entrada, de salida y de razonamiento—:
+ * sin él no se sabe cuánto piensa el modelo ni si el plazo le basta (spec 078).
+ */
 function jsonDe(d: Decision & { efecto?: EfectoAccion }): never {
-  const { llamada: _llamada, ...resto } = d;
+  const { llamada, ...resto } = d;
   // Frontera Prisma-JSON: un objeto plano y serializable.
-  return resto as never;
+  return { ...resto, uso: llamada?.uso ?? null } as never;
 }

@@ -1,5 +1,12 @@
 import { ConfigService } from '@nestjs/config';
-import { OpenRouterClient, type PeticionDecision } from './openrouter.client';
+import {
+  OpenRouterClient,
+  TOPE_DECISION_MS,
+  avisoPlazo,
+  plazoRecomendadoMs,
+  presupuestoRazonamiento,
+  type PeticionDecision,
+} from './openrouter.client';
 
 /**
  * La llamada de los agentes de IA (spec 074).
@@ -196,15 +203,21 @@ describe('los agentes de IA: la petición', () => {
     expect(sistemaDe(cuerpo)['cache_control']).toEqual({ type: 'ephemeral', ttl: '1h' });
   });
 
-  it('el plazo es el de quien llama, nunca más de 25 s', async () => {
+  it('el plazo es el de quien llama, hasta 120 s (spec 078)', async () => {
+    // Con 25 s de tope, el razonamiento `medium` —hasta 4000 tokens— no cabía:
+    // cada ronda se cortaba a los 20 s y se cobraba entera igualmente.
     const plazo = jest.spyOn(AbortSignal, 'timeout');
     try {
       const c = new OpenRouterClient(configCon(ENCENDIDO));
-      await c.decidirAgente(peticion({ limiteMs: 60_000 }));
+      await c.decidirAgente(peticion({ limiteMs: 90_000 }));
+      await c.decidirAgente(peticion({ limiteMs: 200_000 }));
       await c.decidirAgente(peticion({ limiteMs: 7_000 }));
-      expect(plazo.mock.calls[0][0]).toBeLessThanOrEqual(25_000);
-      expect(plazo.mock.calls[0][0]).toBeGreaterThan(24_000);
-      expect(plazo.mock.calls[1][0]).toBeLessThanOrEqual(7_000);
+      expect(plazo.mock.calls[0][0]).toBeLessThanOrEqual(90_000);
+      expect(plazo.mock.calls[0][0]).toBeGreaterThan(89_000);
+      expect(plazo.mock.calls[1][0]).toBeLessThanOrEqual(TOPE_DECISION_MS);
+      expect(plazo.mock.calls[1][0]).toBeGreaterThan(TOPE_DECISION_MS - 1_000);
+      expect(plazo.mock.calls[2][0]).toBeLessThanOrEqual(7_000);
+      expect(TOPE_DECISION_MS).toBe(120_000);
     } finally {
       plazo.mockRestore();
     }
@@ -220,5 +233,41 @@ describe('los agentes de IA: la petición', () => {
     const r = await new OpenRouterClient(configCon(ENCENDIDO)).decidirAgente(peticion());
     expect(r).toMatchObject({ contenido: null, fallo: 'TRUNCADA' });
     expect(r.uso?.coste).toBe('0.0042');
+  });
+});
+
+describe('el plazo que necesita el razonamiento (spec 078)', () => {
+  it('el presupuesto es el que reserva OpenRouter sobre max_tokens: 20, 50 y 80 %', () => {
+    expect(presupuestoRazonamiento('low')).toBe(1_600);
+    expect(presupuestoRazonamiento('medium')).toBe(4_000);
+    expect(presupuestoRazonamiento('high')).toBe(6_400);
+  });
+
+  it('el plazo recomendado crece con el esfuerzo y nunca pasa del tope', () => {
+    expect(plazoRecomendadoMs('low')).toBe(45_000);
+    expect(plazoRecomendadoMs('medium')).toBe(90_000);
+    expect(plazoRecomendadoMs('high')).toBe(TOPE_DECISION_MS);
+  });
+
+  it('avisa con los dos números cuando el plazo no deja terminar, y solo entonces', () => {
+    // El incidente: 20 s con `medium`.
+    const aviso = avisoPlazo('AI_DESK_TIMEOUT_MS', 20_000, 'medium');
+    expect(aviso).toContain('AI_DESK_TIMEOUT_MS=20000');
+    expect(aviso).toContain('4000 tokens');
+    expect(aviso).toContain('90000');
+    expect(avisoPlazo('AI_DESK_TIMEOUT_MS', 90_000, 'medium')).toBeNull();
+    expect(avisoPlazo('AI_DESK_TIMEOUT_MS', 45_000, 'low')).toBeNull();
+    expect(avisoPlazo('AI_DESK_TIMEOUT_MS', 44_999, 'low')).not.toBeNull();
+    expect(avisoPlazo('AI_CHANNEL_TIMEOUT_MS', 120_000, 'high')).toBeNull();
+    expect(avisoPlazo('AI_CHANNEL_TIMEOUT_MS', 90_000, 'high')).toContain('high');
+  });
+
+  it('cada carga dice su esfuerzo', () => {
+    const c = new OpenRouterClient(
+      configCon({ ...ENCENDIDO, AI_DESK_REASONING: 'low', AI_CHANNEL_REASONING: 'high' }),
+    );
+    expect(c.agentesEsfuerzo).toBe('low');
+    expect(c.canalEsfuerzo).toBe('high');
+    expect(new OpenRouterClient(configCon(ENCENDIDO)).agentesEsfuerzo).toBe('medium');
   });
 });

@@ -5,10 +5,10 @@ import {
   herramientaAgente,
   type HistorialAgente,
 } from '@crypton/strategy-core';
-import type { SalidaAgente } from '@crypton/shared';
+import { TOPE_FALLOS_AGENTE, type SalidaAgente } from '@crypton/shared';
 import { AiDeskConfig } from './ai-desk.config';
 import { BAR_T, candidatoDePrueba, planDePrueba, salidaDePrueba } from './agentes.fixture-spec';
-import { AiDeskConsumoService, TOPE_FALLOS_AGENTE } from './consumo.service';
+import { AiDeskConsumoService } from './consumo.service';
 import { AiDeskRondasService } from './rondas.service';
 
 /**
@@ -62,6 +62,16 @@ interface Opciones {
   maxBots?: number | null;
 }
 
+/** Lo que devuelve el cliente de una llamada que respondió. */
+const USO = {
+  tokensEntrada: 3000,
+  tokensSalida: 420,
+  tokensCacheLeidos: 2500,
+  tokensCacheEscritos: 0,
+  tokensRazonamiento: 380,
+  coste: '0.004',
+};
+
 const respuestaModelo = (extra: Record<string, unknown> = {}) =>
   JSON.stringify({
     opcion: 'A',
@@ -113,6 +123,8 @@ function montar(o: Opciones = {}) {
   const db = {
     aiDeskAgent: {
       findUnique: jest.fn(async () => agente),
+      // El dueño, para «Analizar ahora».
+      findFirst: jest.fn(async () => ({ id: agente.id })),
       update: jest.fn(async () => ({ failures: 0 })),
       updateMany: jest.fn(async () => ({ count: 1 })),
     },
@@ -128,6 +140,8 @@ function montar(o: Opciones = {}) {
       findFirst: jest.fn(async () =>
         o.huellaPrevia === undefined ? null : { huella: o.huellaPrevia },
       ),
+      // La fila como está AHORA: EN_CURSO hasta que la ronda se cierra.
+      findUnique: jest.fn(async () => filaRonda(rondas[rondas.length - 1])),
     },
     aiDeskProposal: {
       create: jest.fn(async () => ({ id: 'p-1' })),
@@ -165,13 +179,18 @@ function montar(o: Opciones = {}) {
   const agentes = { historial: jest.fn(async () => ({ ...HISTORIAL, ...(o.historial ?? {}) })) };
   const modelo = {
     agentesDisponible: o.modelo ?? true,
-    decidirAgente: jest.fn(async (_peticion: unknown) => ({
-      contenido: o.contenido === undefined ? respuestaModelo() : o.contenido,
-      uso: { coste: '0.004' },
-      fallo: o.contenido === null ? 'TIEMPO' : null,
-      latenciaMs: 1234,
-      modelo: 'x/y',
-    })),
+    agentesEsfuerzo: 'medium',
+    decidirAgente: jest.fn(async (_peticion: unknown) => {
+      const falla = o.contenido === null;
+      return {
+        contenido: o.contenido === undefined ? respuestaModelo() : o.contenido,
+        // Como el cliente real: un tiempo agotado no trae uso ni coste (spec 078).
+        uso: falla ? null : USO,
+        fallo: falla ? 'TIEMPO' : null,
+        latenciaMs: 1234,
+        modelo: 'x/y',
+      };
+    }),
   };
   const avisos = {
     agente: jest.fn(async () => undefined),
@@ -199,6 +218,33 @@ function montar(o: Opciones = {}) {
 
 /** Lo que se escribió al cerrar la ronda. */
 const cierre = (m: ReturnType<typeof montar>) => m.rondas[m.rondas.length - 1];
+
+/** La fila de la ronda con lo último que se escribió en ella, o recién creada. */
+const filaRonda = (cerrada?: Record<string, unknown>) => ({
+  id: 'r-1',
+  kind: 'ENTRADA',
+  bar_t: new Date(BAR_T),
+  trigger: 'MANUAL',
+  state: cerrada?.['state'] ?? 'EN_CURSO',
+  reason: cerrada?.['reason'] ?? null,
+  decision_mode: 'IA',
+  created_at: new Date(AHORA),
+  finished_at: null,
+  model: null,
+  latency_ms: null,
+  cost: null,
+  decision: null,
+  snapshot: null,
+  proposals: [],
+});
+
+/** Deja correr lo que se lanzó sin esperar, hasta que se cumpla la condición. */
+async function hasta(condicion: () => boolean): Promise<void> {
+  for (let i = 0; i < 200 && !condicion(); i++) {
+    await new Promise((r) => setImmediate(r));
+  }
+  expect(condicion()).toBe(true);
+}
 
 beforeEach(() => {
   herramienta.mockReset();
@@ -380,8 +426,9 @@ describe('AiDeskRondasService — la decisión y la propuesta', () => {
         state: 'PROPUESTA',
         reason: null,
         dry_run: false,
-        // Nunca más que el intervalo, ni que el TTL: 15 min de fábrica.
-        expires_at: new Date(AHORA + 15 * 60_000),
+        // Nunca más que el intervalo, ni que el TTL: 15 min de fábrica, contados
+        // desde que la propuesta existe (lo fija «la vida de la propuesta…»).
+        expires_at: expect.any(Date) as Date,
       }),
       select: { id: true },
     });
@@ -545,5 +592,125 @@ describe('AiDeskRondasService — los fallos del modelo', () => {
     m.agentes.historial.mockRejectedValueOnce(new Error('se cayó la base'));
     const r = await m.svc.rondaEntrada('ag-1', 'INTERVALO', AHORA);
     expect(r).toMatchObject({ estado: 'FALLIDA', motivo: 'ERROR' });
+  });
+});
+
+describe('AiDeskRondasService — el plazo del modelo (spec 078)', () => {
+  it('pide con el plazo configurado: 90 s de fábrica', async () => {
+    const m = montar();
+    await m.svc.rondaEntrada('ag-1', 'INTERVALO', AHORA);
+    const peticion = m.modelo.decidirAgente.mock.calls[0][0] as { limiteMs: number };
+    expect(peticion.limiteMs).toBe(90_000);
+  });
+
+  it('la decisión guarda lo que gastó y lo que pensó el modelo', async () => {
+    const m = montar({ contenido: respuestaModelo({ opcion: 'NINGUNA' }) });
+    await m.svc.rondaEntrada('ag-1', 'INTERVALO', AHORA);
+    expect((cierre(m)['decision'] as Record<string, unknown>)['uso']).toEqual(USO);
+  });
+
+  it('un tiempo agotado no trae coste: la ronda lo deja sin importe, no a cero', async () => {
+    const m = montar({ contenido: null });
+    await m.svc.rondaEntrada('ag-1', 'INTERVALO', AHORA);
+    expect(cierre(m)).toMatchObject({ reason: 'MODELO', model: 'x/y', cost: null });
+    expect((cierre(m)['decision'] as Record<string, unknown>)['uso']).toBeNull();
+  });
+
+  it('avisa al arrancar si el plazo no deja terminar al razonamiento', () => {
+    const corto = montar({ env: { AI_DESK_TIMEOUT_MS: '20000' } });
+    expect(corto.svc.avisoPlazo()).toContain('AI_DESK_TIMEOUT_MS=20000');
+    expect(corto.svc.avisoPlazo()).toContain('medium');
+    expect(montar().svc.avisoPlazo()).toBeNull();
+    // Apagado, o sin clave, no se llama a nadie: nada que avisar.
+    expect(
+      montar({ env: { AI_DESK_ENABLE: 'false', AI_DESK_TIMEOUT_MS: '20000' } }).svc.avisoPlazo(),
+    ).toBeNull();
+    expect(
+      montar({ modelo: false, env: { AI_DESK_TIMEOUT_MS: '20000' } }).svc.avisoPlazo(),
+    ).toBeNull();
+  });
+});
+
+describe('AiDeskRondasService — «Analizar ahora» no espera al modelo (spec 078)', () => {
+  it('responde con la ronda en curso, la termina aparte y suelta su hueco al acabar', async () => {
+    // Con 90 s de plazo, esperar dentro de la petición chocaría con el proxy (60 s)
+    // y con el interceptor global (80 s), mientras la ronda seguía corriendo.
+    const m = montar();
+    let responder: (v: unknown) => void = () => undefined;
+    m.modelo.decidirAgente.mockImplementationOnce(
+      () =>
+        new Promise((r) => {
+          responder = r;
+        }) as never,
+    );
+    const vista = await m.svc.analizarAhora('u-1', 'ag-1');
+    expect(vista).toMatchObject({ id: 'r-1', estado: 'EN_CURSO' });
+
+    // El hueco sigue ocupado mientras el modelo piensa.
+    await hasta(() => m.modelo.decidirAgente.mock.calls.length === 1);
+    expect(m.svc.huecos).toBe(1);
+    responder({
+      contenido: respuestaModelo({ opcion: 'NINGUNA' }),
+      uso: USO,
+      fallo: null,
+      latenciaMs: 95_000,
+      modelo: 'x/y',
+    });
+    await hasta(() => m.svc.huecos === 2);
+    expect(cierre(m)).toMatchObject({ state: 'COMPLETADA', reason: 'NINGUNA' });
+  });
+
+  it('el cerrojo dura un minuto más el plazo: dos clics no pagan dos llamadas en vuelo', async () => {
+    const m = montar();
+    await m.svc.analizarAhora('u-1', 'ag-1');
+    expect(m.cache.setnx).toHaveBeenCalledWith('ai-desk:manual:ag-1', 1, 150);
+    await hasta(() => m.svc.huecos === 2);
+  });
+
+  it('la vida de la propuesta se cuenta desde que existe, no desde que empezó la ronda', async () => {
+    let reloj = 1_000_000;
+    const now = jest.spyOn(Date, 'now').mockImplementation(() => reloj);
+    try {
+      const m = montar();
+      m.modelo.decidirAgente.mockImplementationOnce(async () => {
+        reloj += 90_000;
+        return {
+          contenido: respuestaModelo(),
+          uso: USO,
+          fallo: null,
+          latenciaMs: 90_000,
+          modelo: 'x/y',
+        };
+      });
+      await m.svc.rondaEntrada('ag-1', 'INTERVALO', AHORA);
+      expect(m.db.aiDeskProposal.create).toHaveBeenCalledWith(
+        expect.objectContaining({
+          data: expect.objectContaining({ expires_at: new Date(AHORA + 90_000 + 15 * 60_000) }),
+        }),
+      );
+    } finally {
+      now.mockRestore();
+    }
+  });
+});
+
+describe('AiDeskRondasService — la ronda fallida guarda lo que vio (spec 078)', () => {
+  it.each<[string, Opciones]>([
+    ['sin respuesta del modelo', { contenido: null }],
+    ['fuera del contrato', { contenido: respuestaModelo({ opcion: 'Z' }) }],
+  ])('%s: sus candidatos quedan, sin elegido y con el del juez', async (_, opciones) => {
+    // Sin ellos, esa vela se perdía para medir si quien elige distingue lo bueno.
+    const m = montar(opciones);
+    const r = await m.svc.rondaEntrada('ag-1', 'INTERVALO', AHORA);
+    expect(r?.estado).toBe('FALLIDA');
+    const filas = (
+      m.db.aiDeskCandidate.createMany.mock.calls[0] as unknown as [
+        { data: Record<string, unknown>[] },
+      ]
+    )[0].data;
+    expect(filas.map((f) => [f['symbol'], f['letter'], f['chosen'], f['judge_choice']])).toEqual([
+      ['BTC', 'A', false, true],
+      ['ETH', 'B', false, false],
+    ]);
   });
 });

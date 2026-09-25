@@ -133,7 +133,7 @@ function usoDeHoy(f: Pick<FilaAgente, 'usage_day' | 'calls_today' | 'cost_today'
 
 export function agenteVista(
   f: FilaAgente,
-  cuentas: { vivas: number; pendientes: number },
+  cuentas: { vivas: number; pendientes: number; sinCoste: number },
   interruptores: InterruptoresAgentes,
   ahora: number,
 ): AgenteVista {
@@ -164,6 +164,7 @@ export function agenteVista(
     fallos: f.failures,
     ultimoError: f.last_error,
     ...usoDeHoy(f, ahora),
+    consultasSinCoste: cuentas.sinCoste,
     vivas: cuentas.vivas,
     pendientes: cuentas.pendientes,
     insignia: insigniaAgente(

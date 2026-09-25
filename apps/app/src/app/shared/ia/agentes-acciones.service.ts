@@ -1,18 +1,24 @@
 import { Injectable, inject } from '@angular/core';
 import { AlertController } from '@ionic/angular/standalone';
-import type {
-  AccionVista,
-  AgenteVista,
-  PropuestaVista,
-  ResultadoAccionAgente,
-  ResultadoDecisionAgente,
-  RondaVista,
+import {
+  EstadoRondaAgente,
+  type AccionVista,
+  type AgenteVista,
+  type PropuestaVista,
+  type ResultadoAccionAgente,
+  type ResultadoDecisionAgente,
+  type RondaVista,
 } from '@crypton/shared';
 import { ToastService } from '../../core/services';
 import { AgentesIaService } from '../../core/services/agentes-ia.service';
 import { errorText } from '../../core/utils';
-import { ACCION, MOTIVO_RONDA, ladoTexto, textoDe } from '../../core/utils/agentes-ia';
+import { ACCION, ladoTexto, textoDe, textoRonda } from '../../core/utils/agentes-ia';
 import { AVISO_SIN_MOTIVO, CAMPO_MOTIVO, motivoValido } from '../bot/motivo';
+
+/** Cada cuánto se mira si una ronda lanzada a mano ya terminó (spec 078). */
+const SONDEO_RONDA_MS = 4_000;
+/** Lo más que se espera: el plazo del modelo tiene tope de 120 s. */
+const ESPERA_RONDA_MAX_MS = 3 * 60_000;
 
 /**
  * Lo que se hace con un agente, una propuesta o una acción, con su
@@ -79,15 +85,47 @@ export class AgentesAccionesService {
     return this.accion(() => this.api.cerrar(p.id), null);
   }
 
-  /** Una ronda de seguimiento ahora. */
+  /**
+   * Una ronda de seguimiento ahora. Vuelve EN_CURSO en cuanto existe: el
+   * modelo puede tardar hasta su plazo (spec 078). Quien la lanza la sigue con
+   * `esperarRonda`.
+   */
   async revisar(p: PropuestaVista): Promise<RondaVista | null> {
     try {
       const r = await this.api.revisar(p.id);
-      await this.toast.show(`Revisada: ${textoDe(MOTIVO_RONDA, r.motivo) || r.estado}.`);
+      await this.toast.show(
+        r.estado === EstadoRondaAgente.EN_CURSO
+          ? 'Revisando la operación: el resultado saldrá aquí en cuanto termine.'
+          : `Revisada: ${textoRonda(r)}.`,
+      );
       return r;
     } catch (e) {
       await this.toast.error(errorText(e));
       return null;
+    }
+  }
+
+  /**
+   * Espera a que termine una ronda lanzada a mano y avisa de cómo acabó (spec
+   * 078). Recarga cada pocos segundos mientras siga EN_CURSO, hasta un tope y
+   * solo mientras la pantalla siga abierta. `recargar` devuelve las rondas que
+   * enseña la pantalla, ya recargadas.
+   */
+  async esperarRonda(
+    rondaId: string,
+    que: string,
+    recargar: () => Promise<readonly Pick<RondaVista, 'id' | 'estado' | 'motivo'>[] | undefined>,
+    abierta: () => boolean,
+  ): Promise<void> {
+    const limite = Date.now() + ESPERA_RONDA_MAX_MS;
+    while (Date.now() < limite) {
+      await new Promise((r) => setTimeout(r, SONDEO_RONDA_MS));
+      if (!abierta()) return;
+      const r = (await recargar())?.find((x) => x.id === rondaId);
+      if (r && r.estado !== EstadoRondaAgente.EN_CURSO) {
+        await this.toast.show(`${que}: ${textoRonda(r)}.`);
+        return;
+      }
     }
   }
 
@@ -141,11 +179,18 @@ export class AgentesAccionesService {
     return this.agente(() => this.api.archivar(a.id, reason), 'Agente archivado.');
   }
 
-  /** Una ronda de entrada ahora, fuera del reloj. */
+  /**
+   * Una ronda de entrada ahora, fuera del reloj. Vuelve EN_CURSO en cuanto
+   * existe (spec 078); quien la lanza la sigue con `esperarRonda`.
+   */
   async analizar(a: AgenteVista): Promise<RondaVista | null> {
     try {
       const r = await this.api.analizar(a.id);
-      await this.toast.show(`Análisis: ${textoDe(MOTIVO_RONDA, r.motivo) || r.estado}.`);
+      await this.toast.show(
+        r.estado === EstadoRondaAgente.EN_CURSO
+          ? 'Analizando: el resultado saldrá en «Últimos análisis» en cuanto termine.'
+          : `Análisis: ${textoRonda(r)}.`,
+      );
       return r;
     } catch (e) {
       await this.toast.error(errorText(e));

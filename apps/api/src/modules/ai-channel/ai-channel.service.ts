@@ -24,7 +24,7 @@ import {
 } from '@crypton/shared';
 import { leerConfigCanal, type ConfigCanal } from '@crypton/strategy-core';
 import { AuditService, BUS_CHANNELS, BusService, CacheService, DbService } from 'src/libs';
-import { OpenRouterClient } from '../advisor/openrouter.client';
+import { OpenRouterClient, avisoPlazo } from '../advisor/openrouter.client';
 import { BotsService } from '../bots/bots.service';
 import { esquemaDecision, parseDecision, recortarSinPartir, validarEleccion } from './contrato';
 import { ofertaDe, renderHerramienta, type OfertaCanal } from './herramienta';
@@ -155,9 +155,26 @@ export class AiChannelService {
     return this.num('AI_CHANNEL_CONCURRENCY', 4, 1, 32);
   }
 
-  /** El plazo de una llamada, con el tope de 25 s del transporte. */
+  /**
+   * El plazo de una llamada, con el tope de 120 s del transporte para las
+   * decisiones. 90 s de fábrica (spec 078), como los agentes: con 20 s el
+   * razonamiento `medium` no cabía.
+   *
+   * En el canal manda casi siempre otra cosa: la solicitud caduca un minuto
+   * después del cierre de la vela (`expiresAt` en `strategies/ai-channel.ts`), y
+   * la llamada se recorta a lo que quede menos el margen de escritura. Con esto
+   * el modelo aprovecha el minuto entero en vez de 20 s. Lo que aun así no
+   * llegue, caduca con `PLAZO` y no cuenta como fallo, pero se cobra: con
+   * `medium` pasa a veces, y el usuario lo aceptó así (spec 078).
+   */
   get plazoLlamadaMs(): number {
-    return this.num('AI_CHANNEL_TIMEOUT_MS', 20_000, 1_000, 25_000);
+    return this.num('AI_CHANNEL_TIMEOUT_MS', 90_000, 1_000, 120_000);
+  }
+
+  /** El aviso de arranque si el plazo no deja terminar al modelo, o null (spec 078). */
+  avisoPlazo(): string | null {
+    if (!this.encendido) return null;
+    return avisoPlazo('AI_CHANNEL_TIMEOUT_MS', this.plazoLlamadaMs, this.modelo.canalEsfuerzo);
   }
 
   get limiteBot(): number {

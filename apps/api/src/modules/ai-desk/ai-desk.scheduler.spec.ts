@@ -1,3 +1,4 @@
+import { Logger } from '@nestjs/common';
 import { Subject } from 'rxjs';
 import type { BusMessage } from 'src/libs';
 import { AiDeskScheduler } from './ai-desk.scheduler';
@@ -37,6 +38,7 @@ function montar(cerrojo = true, opciones: { encendido?: boolean; huecos?: number
   const rondas = {
     huecos: opciones.huecos ?? 2,
     rondaEntrada: jest.fn(async () => null),
+    avisoPlazo: jest.fn((): string | null => null),
   };
   const seguimiento = {
     huecos: 0,
@@ -189,6 +191,24 @@ describe('AiDeskScheduler — el bus', () => {
       'b-BOT_STOPPED',
       'b-LIQUIDATED',
     ]);
+  });
+});
+
+describe('AiDeskScheduler — el arranque (spec 078)', () => {
+  it('avisa en el log si el plazo del modelo no deja terminar al razonamiento', async () => {
+    const aviso = jest.spyOn(Logger.prototype, 'warn').mockImplementation(() => undefined);
+    try {
+      const m = montar();
+      m.rondas.avisoPlazo.mockReturnValueOnce('AI_DESK_TIMEOUT_MS=20000 con razonamiento medium');
+      await m.s.onModuleInit();
+      expect(aviso).toHaveBeenCalledWith('AI_DESK_TIMEOUT_MS=20000 con razonamiento medium');
+
+      aviso.mockClear();
+      await montar().s.onModuleInit();
+      expect(aviso).not.toHaveBeenCalled();
+    } finally {
+      aviso.mockRestore();
+    }
   });
 });
 
